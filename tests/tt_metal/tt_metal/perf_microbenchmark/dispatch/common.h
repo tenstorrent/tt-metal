@@ -17,18 +17,337 @@ extern bool debug_g;
 extern bool use_coherent_data_g;
 extern uint32_t dispatch_buffer_page_size_g;
 extern CoreCoord first_worker_g;
-extern CoreRange all_workers_g;
 extern uint32_t min_xfer_size_bytes_g;
 extern uint32_t max_xfer_size_bytes_g;
 extern bool send_to_all_g;
 extern bool perf_test_g;
 
-struct one_worker_data_t {
+struct one_core_data_t {
+    CoreType core_type;
+    CoreCoord logical_core;
+    CoreCoord phys_core;
+    int bank_id;
+    int bank_offset;
     vector<bool> valid;
     vector<uint32_t> data;
 };
 
-typedef unordered_map<CoreCoord, unordered_map<uint32_t, one_worker_data_t>> worker_data_t;
+class DeviceData {
+ private:
+    bool banked;  // TODO banked and unbanked tests still don't play nicely together
+    int amt_written;
+    // 10 is a hack...bigger than any core_type
+    uint32_t base_data_addr[10];
+    uint32_t base_result_data_addr[10];
+    unordered_map<CoreCoord, unordered_map<uint32_t, one_core_data_t>> all_data;
+
+    // Validate a single core's worth of results vs expected
+    bool validate_one_core(Device *device, const one_core_data_t& one_core_data,
+                           const uint32_t start_index, uint32_t result_addr);
+
+    void prepopulate_dram(Device *device, uint32_t size_words);
+
+ public:
+    DeviceData(Device *device, CoreRange workers,
+               uint32_t l1_data_addr, uint32_t dram_data_addr, uint32_t pcie_data_addr,
+               bool is_banked, uint32_t dram_data_size_words);
+
+    // Add expected data to a core
+    void push_one(CoreCoord core, int bank, uint32_t datum);
+    void push_one(CoreCoord core, uint32_t datum);
+    void push_range(const CoreRange& cores, uint32_t datum, bool is_mcast);
+
+    // Add invalid data
+    void pad(CoreCoord core, int bank, uint32_t alignment);
+
+    // Some tests write to the same address across multiple cores
+    // This takes those core types and pads any that are "behind" with invalid data
+    void relevel(CoreType core_type);
+
+    // Clear data between tests
+    void reset();
+    uint32_t get_base_result_addr(CoreType core_type);
+    uint32_t get_result_data_addr(CoreCoord core, int bank_id = 0);
+
+    bool validate(Device *device);
+
+    int size() { return amt_written; }
+    int size(CoreCoord core, int bank_id = 0) { return this->all_data[core][bank_id].data.size(); }
+
+    unordered_map<CoreCoord, unordered_map<uint32_t, one_core_data_t>>& get_data() { return this->all_data; }
+
+    CoreType get_core_type(CoreCoord core) { return this->all_data[core][0].core_type; }
+    uint32_t size_at(CoreCoord core, int bank_id);
+    uint32_t at(CoreCoord core, int bank_id, uint32_t addr);
+};
+
+DeviceData::DeviceData(Device *device,
+                       CoreRange workers,
+                       uint32_t l1_data_addr, uint32_t dram_data_addr, uint32_t pcie_data_addr,
+                       bool is_banked,
+                       uint32_t dram_data_size_words) {
+
+    this->base_data_addr[static_cast<int>(CoreType::WORKER)] = l1_data_addr;
+    this->base_data_addr[static_cast<int>(CoreType::PCIE)] = pcie_data_addr;
+    this->base_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
+    this->base_result_data_addr[static_cast<int>(CoreType::WORKER)] = l1_data_addr;
+    this->base_result_data_addr[static_cast<int>(CoreType::PCIE)] = pcie_data_addr;
+    this->base_result_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
+
+    this->banked = is_banked;
+    this->amt_written = 0;
+
+    // Always populate DRAM
+    auto num_banks = device->num_banks(BufferType::DRAM);
+    for (int bank_id = 0; bank_id < num_banks; bank_id++) {
+        auto dram_channel = device->dram_channel_from_bank_id(bank_id);
+        CoreCoord phys_core = device->core_from_dram_channel(dram_channel);
+        int32_t bank_offset = device->bank_offset(BufferType::DRAM, bank_id);
+        this->all_data[phys_core][bank_id] = one_core_data_t();
+        this->all_data[phys_core][bank_id].logical_core = phys_core;
+        this->all_data[phys_core][bank_id].phys_core = phys_core;
+        this->all_data[phys_core][bank_id].core_type = CoreType::DRAM;
+        this->all_data[phys_core][bank_id].bank_id = bank_id;
+        this->all_data[phys_core][bank_id].bank_offset = bank_offset;
+    }
+
+    // TODO: make banked L1 tests play nicely w/ non-banked L1 tests
+    if (is_banked) {
+        num_banks = device->num_banks(BufferType::L1);
+        for (int bank_id = 0; bank_id < num_banks; bank_id++) {
+            CoreCoord core = device->logical_core_from_bank_id(bank_id);
+            CoreCoord phys_core = device->worker_core_from_logical_core(core);
+            int32_t bank_offset = device->bank_offset(BufferType::L1, bank_id);
+            this->all_data[core][bank_id] = one_core_data_t();
+            this->all_data[core][bank_id].logical_core = core;
+            this->all_data[core][bank_id].phys_core = phys_core;
+            this->all_data[core][bank_id].core_type = CoreType::WORKER;
+            this->all_data[core][bank_id].bank_id = bank_id;
+            this->all_data[core][bank_id].bank_offset = bank_offset;
+        }
+    } else {
+        for (uint32_t y = workers.start.y; y <= workers.end.y; y++) {
+            for (uint32_t x = workers.start.x; x <= workers.end.x; x++) {
+                CoreCoord core = {x, y};
+                CoreCoord phys_core = device->worker_core_from_logical_core(core);
+                this->all_data[core][0] = one_core_data_t();
+                this->all_data[core][0].logical_core = core;
+                this->all_data[core][0].phys_core = phys_core;
+                this->all_data[core][0].core_type = CoreType::WORKER;
+                this->all_data[core][0].bank_id = 0;
+                this->all_data[core][0].bank_offset = 0;
+            }
+        }
+    }
+
+    prepopulate_dram(device, dram_data_size_words);
+}
+
+// Populate interleaved DRAM with data for later readback.  Can we extended to L1 if needed.
+void DeviceData::prepopulate_dram(Device *device, uint32_t size_words) {
+
+    uint32_t num_dram_banks = device->num_banks(BufferType::DRAM);
+
+    for (int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
+        auto offset = device->bank_offset(BufferType::DRAM, bank_id);
+        auto dram_channel = device->dram_channel_from_bank_id(bank_id);
+        auto bank_core = device->core_from_dram_channel(dram_channel);
+        one_core_data_t& data = this->all_data[bank_core][bank_id];
+
+        // Generate random or coherent data per bank of specific size.
+        for (uint32_t i = 0; i < size_words; i++) {
+            uint32_t datum = (use_coherent_data_g) ? (((bank_id & 0xFF) << 24) | i) : std::rand();
+
+            // Note: don't bump amt_written
+            data.data.push_back(datum);
+            data.valid.push_back(true);
+
+            if (i < 10) {
+                log_debug(tt::LogTest, "{} - bank_id: {:2d} core: {} offset: 0x{:08x} using i: {:2d} datum: 0x{:08x}",
+                    __FUNCTION__, bank_id, bank_core.str(), offset, i, datum);
+            }
+        }
+
+        // Write to device once per bank (appropriate core and offset)
+        tt::Cluster::instance().write_core(static_cast<const void*>(&data.data[0]),
+            data.data.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), bank_core),
+            this->base_data_addr[static_cast<int>(CoreType::DRAM)] + offset);;
+
+        this->base_result_data_addr[static_cast<int>(CoreType::DRAM)] =
+            this->base_data_addr[static_cast<int>(CoreType::DRAM)] + data.data.size() * sizeof(uint32_t);
+    }
+}
+
+void DeviceData::push_one(CoreCoord core, int bank, uint32_t datum) {
+    this->amt_written++;
+    TT_ASSERT(this->all_data.find(core) != this->all_data.end());
+    this->all_data[core][bank].data.push_back(datum);
+    this->all_data[core][bank].valid.push_back(true);
+}
+
+void DeviceData::push_one(CoreCoord core, uint32_t datum) {
+    this->amt_written++;
+    TT_ASSERT(this->all_data.find(core) != this->all_data.end());
+    this->all_data[core][0].data.push_back(datum);
+    this->all_data[core][0].valid.push_back(true);
+}
+
+void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool is_mcast) {
+
+    bool counted = false;
+    for (auto y = cores.start.y; y <= cores.end.y; y++) {
+        for (auto x = cores.start.x; x <= cores.end.x; x++) {
+            CoreCoord core = {x, y};
+            if (this->all_data.find(core) != this->all_data.end()) {
+                if (not counted || not is_mcast) {
+                    this->amt_written++;
+                    counted = true;
+                }
+                TT_ASSERT(this->all_data.find(core) != this->all_data.end());
+                this->all_data[core][0].data.push_back(datum);
+                this->all_data[core][0].valid.push_back(true);
+            }
+        }
+    }
+}
+
+inline uint32_t padded_size(uint32_t size, uint32_t alignment) {
+    return (size + alignment - 1) / alignment * alignment;
+}
+
+void DeviceData::pad(CoreCoord core, int bank, uint32_t alignment) {
+    uint32_t padded = padded_size(this->all_data[core][bank].data.size(), alignment / sizeof(uint32_t));
+    this->all_data[core][bank].data.resize(padded);
+    this->all_data[core][bank].valid.resize(padded); // pushes false
+}
+
+// Some tests write to the same address across multiple cores
+// This takes cores that match core_type and pads any that are "behind" with invalid data
+void DeviceData::relevel(CoreType core_type) {
+    size_t max = 0;
+    for (auto & [coord, bank_device_data] : this->all_data) {
+        for (auto & [bank, one_core_data] : bank_device_data) {
+            if (one_core_data.core_type == core_type && one_core_data.data.size() > max) {
+                max = one_core_data.data.size();
+            }
+        }
+    }
+    for (auto & [coord, bank_device_data] : this->all_data) {
+        for (auto & [bank, one_core_data] : bank_device_data) {
+            if (one_core_data.core_type == core_type) {
+                one_core_data.data.resize(max);
+                one_core_data.valid.resize(max); // fills with false
+            }
+        }
+    }
+}
+
+// Result expected results
+void DeviceData::reset() {
+    this->amt_written = 0;
+    for (auto& [coord, bank_device_data] : this->all_data) {
+        for (auto & [bank, one_core_data] : bank_device_data) {
+            CoreType core_type = one_core_data.core_type;
+            uint32_t default_size_bytes = this->base_result_data_addr[static_cast<int>(core_type)] - this->base_data_addr[static_cast<int>(core_type)];
+            one_core_data.valid.resize(default_size_bytes / sizeof(uint32_t));
+            one_core_data.data.resize(default_size_bytes / sizeof(uint32_t));
+        }
+    }
+}
+
+uint32_t DeviceData::get_base_result_addr(CoreType core_type) {
+    return this->base_result_data_addr[static_cast<int>(core_type)];
+}
+
+uint32_t DeviceData::get_result_data_addr(CoreCoord core, int bank_id) {
+    uint32_t base_addr = this->base_result_data_addr[static_cast<int>(this->all_data[core][bank_id].core_type)];
+    return base_addr + this->all_data[core][bank_id].data.size() * sizeof(uint32_t);
+}
+
+uint32_t DeviceData::size_at(CoreCoord core, int bank_id) {
+    return this->all_data[core][bank_id].data.size();
+}
+
+uint32_t DeviceData::at(CoreCoord core, int bank_id, uint32_t offset) {
+    return this->all_data[core][bank_id].data[offset];
+}
+
+inline bool DeviceData::validate_one_core(Device *device, const one_core_data_t& one_core_data,
+                                          const uint32_t start_index,
+                                          uint32_t result_addr) {
+    int fail_count = 0;
+    const vector<uint32_t>& dev_data = one_core_data.data;
+    const vector<bool>& dev_valid = one_core_data.valid;
+    const CoreCoord logical_core = one_core_data.logical_core;
+    const CoreCoord phys_core = one_core_data.phys_core;
+    const CoreType core_type = one_core_data.core_type;
+    const int bank_id = one_core_data.bank_id;
+    const int bank_offset = one_core_data.bank_offset;
+    uint32_t size_bytes = (dev_data.size() - start_index) * sizeof(uint32_t);
+
+    if (size_bytes == 0)  return false;
+
+    string core_string;
+    if (core_type == CoreType::WORKER) {
+        core_string = "L1";
+    } else if (core_type == CoreType::DRAM) {
+        core_string = "DRAM";
+    } else if (core_type == CoreType::PCIE) {
+        core_string = "PCIE";
+    } else {
+        tt::log_fatal("Logical core: {} physical core {} core type {}", logical_core, phys_core, core_type);
+        TT_ASSERT(0, "Core type not found");
+    }
+
+    // Read results from device and compare to expected for this core.
+    result_addr += bank_offset;
+    vector<uint32_t> results = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, result_addr, size_bytes);
+
+    log_info(tt::LogTest, "Validating {} bytes from {} bank {} log_core {}: phys_core: {} at addr: 0x{:x}",
+             size_bytes, core_string, bank_id, logical_core.str(), phys_core.str(), result_addr);
+
+    for (int i = 0; i <  size_bytes / sizeof(uint32_t); i++) {
+        int index = start_index + i;
+        if (!dev_valid[index]) continue;
+
+        if (results[i] != dev_data[index]) {
+            if (!fail_count) {
+                log_fatal(tt::LogTest, "Data mismatch - First 20 failures for logical_core: {} (physical: {})", logical_core.str(), phys_core.str());
+            }
+            log_fatal(tt::LogTest, "[{:02d}] (Fail) Expected: 0x{:08x} Observed: 0x{:08x}", i, (unsigned int)dev_data[index], (unsigned int)results[i]);
+            if (fail_count++ > 20) {
+                break;
+            }
+        } else {
+            log_debug(tt::LogTest, "[{:02d}] (Pass) Expected: 0x{:08x} Observed: 0x{:08x}", i, (unsigned int)dev_data[index], (unsigned int)results[i]);
+        }
+    }
+
+    return fail_count;
+}
+
+bool DeviceData::validate(Device *device) {
+
+    bool failed = false;
+    int count = 0;
+
+    for (const auto & [core, bank_device_data] : this->all_data) {
+        for (auto & [bank, one_core_data] : bank_device_data) {
+            if (one_core_data.data.size() == 0) continue;
+
+            const uint32_t start_index = (this->base_result_data_addr[static_cast<int>(one_core_data.core_type)] -
+                                          this->base_data_addr[static_cast<int>(one_core_data.core_type)]) / sizeof(uint32_t);
+            uint32_t result_addr = this->base_result_data_addr[static_cast<int>(one_core_data.core_type)];
+            failed |= validate_one_core(device, one_core_data, start_index, result_addr);
+            count++;
+        }
+    }
+
+    log_info(tt::LogTest, "Validated {} non-empty cores total.", count);
+
+    return !failed;
+}
+
 
 template<bool is_dram_variant,
          bool is_host_variant>
@@ -64,65 +383,6 @@ void configure_kernel_variant(
     );
 }
 
-inline void reset_worker_data(worker_data_t& awd) {
-    for (auto& it : awd) {
-        for (auto &wd : it.second) {
-            wd.second.valid.resize(0);
-            wd.second.data.resize(0);
-        }
-    }
-}
-
-// Return number of words in worker-data. Either in legacy mode which arbitrarily just looks at first worker and bank
-// and does not consider valid words, or in improved mode that iterates over all workers and counts only valid words
-// which could be slow, but was required for paged write+read test unless a global counter of bytes written is used.
-inline uint32_t worker_data_size(worker_data_t& awd, bool all_workers_valid_only = false) {
-    TT_ASSERT(awd.size() > 0, "Worker data is empty, not expected");
-    uint32_t size = 0;
-
-    if (all_workers_valid_only) {
-        for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
-            for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
-                CoreCoord core(x, y);
-                const vector<bool>& dev_valid = awd.at(core).at(0).valid;
-                // const vector<uint32_t>& dev_data = awd.at(core).at(0).data;
-                for (int i = 0; i < dev_valid.size(); i++) {
-                    if (dev_valid[i]){
-                        size++;
-                    }
-                }
-            }
-        }
-    } else {
-        auto first_worker = awd.begin()->first;
-        TT_ASSERT(awd[first_worker].size() > 0, "Worker data for core: {} is empty, not expected.", first_worker.str());
-        auto first_bank_id = awd[first_worker].begin()->first;
-        size = awd[first_worker_g][first_bank_id].data.size();
-    }
-
-    log_debug(tt::LogTest, "{} - all_workers_valid_only: {} returning size: {} words", __FUNCTION__, all_workers_valid_only, size);
-    return size;
-}
-
-inline uint32_t padded_size(uint32_t size, uint32_t alignment) {
-    return (size + alignment - 1) / alignment * alignment;
-}
-
-// Return a vector of core coordinates that are used as interleaved paged banks (L1 or DRAM)
-inline std::vector<CoreCoord> get_cores_per_bank_id(Device *device, bool is_dram){
-    uint32_t num_banks = device->num_banks(is_dram ? BufferType::DRAM : BufferType::L1);
-    std::vector<CoreCoord> bank_cores;
-
-    for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-        auto core = is_dram ?
-            device->core_from_dram_channel(device->dram_channel_from_bank_id(bank_id)) :
-            device->logical_core_from_bank_id(bank_id);
-        bank_cores.push_back(core);
-    }
-
-    return bank_cores;
-}
-
 // Specific to this test. This test doesn't use Buffers, and for Storage cores in L1 that have 2 banks, they are intended
 // to be allocated top-down and carry "negative" offsets via bank_to_l1_offset for cores that have 2 banks. This function
 // will scan through all banks bank_to_l1_offset and return the minimum required buffer addr to avoid bank_to_l1_offset
@@ -156,23 +416,18 @@ inline void generate_random_payload(vector<uint32_t>& cmds,
 
 inline void generate_random_payload(vector<uint32_t>& cmds,
                                     const CoreRange& workers,
-                                    worker_data_t& data,
-                                    uint32_t length_words) {
+                                    DeviceData& data,
+                                    uint32_t length_words,
+                                    bool is_mcast = false) {
 
     static uint32_t coherent_count = 0;
     const uint32_t bank_id = 0; // No interleaved pages here.
 
-    // Note: the dst address marches in unison regardless of weather or not a core is written to
+    // Note: the dst address marches in unison regardless of whether or not a core is written to
     for (uint32_t i = 0; i < length_words; i++) {
         uint32_t datum = (use_coherent_data_g) ? coherent_count++ : std::rand();
         cmds.push_back(datum);
-        for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
-            for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
-                CoreCoord core(x, y);
-                data[core][bank_id].data.push_back(datum);
-                data[core][bank_id].valid.push_back(workers.contains(core));
-            }
-        }
+        data.push_range(workers, datum, is_mcast);
     }
 }
 
@@ -180,7 +435,7 @@ inline void generate_random_payload(vector<uint32_t>& cmds,
 inline void generate_random_paged_payload(Device *device,
                                           CQDispatchCmd cmd,
                                           vector<uint32_t>& cmds,
-                                          worker_data_t& data,
+                                          DeviceData& data,
                                           uint32_t start_page,
                                           bool is_dram) {
 
@@ -190,10 +445,10 @@ inline void generate_random_paged_payload(Device *device,
     uint32_t words_per_page = cmd.write_paged.page_size / sizeof(uint32_t);
     log_debug(tt::LogTest, "Starting {} w/ is_dram: {} start_page: {} words_per_page: {}", __FUNCTION__, is_dram, start_page, words_per_page);
 
-    // Note: the dst address marches in unison regardless of weather or not a core is written to
+    // Note: the dst address marches in unison regardless of whether or not a core is written to
     for (uint32_t page_id = start_page; page_id < start_page + cmd.write_paged.pages; page_id++) {
 
-        // 32B alignment taken from InterleavedAddrGen. If 16B page size, pad to 32B.
+        // 32B alignment taken from InterleavedAddrGen
         const uint32_t page_size_alignment_bytes = 32;
         CoreCoord bank_core;
         uint32_t bank_id = page_id % num_banks;
@@ -206,58 +461,37 @@ inline void generate_random_paged_payload(Device *device,
             bank_core = device->logical_core_from_bank_id(bank_id);
         }
 
-        // Generate data and add to cmd for sending to device, and worker_data for correctness checking.
+        // Generate data and add to cmd for sending to device, and device_data for correctness checking.
         for (uint32_t i = 0; i < words_per_page; i++) {
             uint32_t datum = (use_coherent_data_g) ? (((page_id & 0xFF) << 24) | coherent_count++) : std::rand();
             log_debug(tt::LogTest, "{} - Setting {} page_id: {} word: {} on core: {} (bank_id: {} bank_offset: {}) => datum: 0x{:x}",
                 __FUNCTION__, is_dram ? "DRAM" : "L1", page_id, i, bank_core.str(), bank_id, bank_offset, datum);
             cmds.push_back(datum); // Push to device.
-            data[bank_core][bank_id].data.push_back(datum); // Checking
-            data[bank_core][bank_id].valid.push_back(true);
+            data.push_one(bank_core, bank_id, datum);
         }
 
-        data[bank_core][bank_id].data.resize(padded_size(data[bank_core][bank_id].data.size(), page_size_alignment_bytes / sizeof(uint32_t)));
-        data[bank_core][bank_id].valid.resize(padded_size(data[bank_core][bank_id].valid.size(), page_size_alignment_bytes / sizeof(uint32_t)));
-
+        data.pad(bank_core, bank_id, page_size_alignment_bytes);
     }
 }
 
 inline void generate_random_packed_payload(vector<uint32_t>& cmds,
                                            vector<CoreCoord>& worker_cores,
-                                           worker_data_t& data,
+                                           DeviceData& data,
                                            uint32_t size_words) {
 
     static uint32_t coherent_count = 0;
     const uint32_t bank_id = 0; // No interleaved pages here.
 
-    // Note: the dst address marches in unison regardless of weather or not a core is written to
-    for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
-        for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
-            CoreCoord core(x, y);
-            for (uint32_t i = 0; i < size_words; i++) {
-                bool contains = false;
-                for (CoreCoord worker_core : worker_cores) {
-                    if (core == worker_core) {
-                        contains = true;
-                        break;
-                    }
-                }
-                if (contains) {
-                    uint32_t datum = (use_coherent_data_g) ? ((x << 16) | (y << 24) | coherent_count++) : std::rand();
+    for (CoreCoord core : worker_cores) {
+        for (uint32_t i = 0; i < size_words; i++) {
+            uint32_t datum = (use_coherent_data_g) ? ((core.x << 16) | (core.y << 24) | coherent_count++) : std::rand();
 
-                    cmds.push_back(datum);
-                    data[core][bank_id].data.push_back(datum);
-                    data[core][bank_id].valid.push_back(true);
-                } else {
-                    data[core][bank_id].data.push_back(0xbaadf00d);
-                    data[core][bank_id].valid.push_back(false);
-                }
-            }
-
-            cmds.resize(padded_size(cmds.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
-            data[core][bank_id].data.resize(padded_size(data[core][bank_id].data.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
-            data[core][bank_id].valid.resize(padded_size(data[core][bank_id].valid.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
+            cmds.push_back(datum);
+            data.push_one(core, bank_id, datum);
         }
+
+        cmds.resize(padded_size(cmds.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
+        data.pad(core, bank_id, 16); // L1_ALIGNMENT16
     }
 }
 
@@ -331,36 +565,37 @@ inline void add_dispatcher_cmd(vector<uint32_t>& cmds,
 
 inline void add_dispatcher_cmd(vector<uint32_t>& cmds,
                                const CoreRange& workers,
-                               worker_data_t& worker_data,
+                               DeviceData& device_data,
                                CQDispatchCmd cmd,
-                               uint32_t length) {
+                               uint32_t length,
+                               bool is_mcast = false) {
 
     size_t prior_end = debug_prologue(cmds);
 
     add_bare_dispatcher_cmd(cmds, cmd);
     uint32_t length_words = length / sizeof(uint32_t);
-    generate_random_payload(cmds, workers, worker_data, length_words);
+    generate_random_payload(cmds, workers, device_data, length_words, is_mcast);
 
     debug_epilogue(cmds, prior_end);
 }
 
 inline void add_dispatcher_paged_cmd(Device *device,
                                      vector<uint32_t>& cmds,
-                                     worker_data_t& worker_data,
+                                     DeviceData& device_data,
                                      CQDispatchCmd cmd,
                                      uint32_t start_page,
                                      bool is_dram) {
 
     size_t prior_end = debug_prologue(cmds);
     add_bare_dispatcher_cmd(cmds, cmd);
-    generate_random_paged_payload(device, cmd, cmds, worker_data, start_page, is_dram);
+    generate_random_paged_payload(device, cmd, cmds, device_data, start_page, is_dram);
     debug_epilogue(cmds, prior_end);
 }
 
 inline void add_dispatcher_packed_cmd(Device *device,
                                       vector<uint32_t>& cmds,
                                       vector<CoreCoord>& worker_cores,
-                                      worker_data_t& worker_data,
+                                      DeviceData& device_data,
                                       CQDispatchCmd cmd,
                                       uint32_t size_words) {
 
@@ -373,7 +608,7 @@ inline void add_dispatcher_packed_cmd(Device *device,
     }
     cmds.resize(padded_size(cmds.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
 
-    generate_random_packed_payload(cmds, worker_cores, worker_data, size_words);
+    generate_random_packed_payload(cmds, worker_cores, device_data, size_words);
 
     debug_epilogue(cmds, prior_end);
 }
@@ -382,18 +617,18 @@ inline void add_dispatcher_packed_cmd(Device *device,
 inline void gen_bare_dispatcher_unicast_write_cmd(Device *device,
                                                   vector<uint32_t>& cmds,
                                                   CoreCoord worker_core,
-                                                  worker_data_t& worker_data,
-                                                  uint32_t dst_addr,
+                                                  DeviceData& device_data,
                                                   uint32_t length) {
 
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
+    const uint32_t bank_id = 0; // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
     cmd.write_linear.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
-    cmd.write_linear.addr = dst_addr + worker_data_size(worker_data) * sizeof(uint32_t);
+    cmd.write_linear.addr = device_data.get_result_data_addr(worker_core, bank_id);
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = 0;
 
@@ -403,8 +638,7 @@ inline void gen_bare_dispatcher_unicast_write_cmd(Device *device,
 inline void gen_dispatcher_unicast_write_cmd(Device *device,
                                              vector<uint32_t>& cmds,
                                              CoreCoord worker_core,
-                                             worker_data_t& worker_data,
-                                             uint32_t dst_addr,
+                                             DeviceData& device_data,
                                              uint32_t length) {
 
     CQDispatchCmd cmd;
@@ -415,19 +649,22 @@ inline void gen_dispatcher_unicast_write_cmd(Device *device,
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
     cmd.write_linear.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
-    cmd.write_linear.addr = dst_addr + worker_data[worker_core][bank_id].data.size() * sizeof(uint32_t);
+    cmd.write_linear.addr = device_data.get_result_data_addr(worker_core, bank_id);
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = 0;
 
-    add_dispatcher_cmd(cmds, worker_core, worker_data, cmd, length);
+    add_dispatcher_cmd(cmds, worker_core, device_data, cmd, length);
 }
 
 inline void gen_dispatcher_multicast_write_cmd(Device *device,
                                              vector<uint32_t>& cmds,
                                              CoreRange worker_core_range,
-                                             worker_data_t& worker_data,
-                                             uint32_t dst_addr,
+                                             DeviceData& device_data,
                                              uint32_t length) {
+
+    // Pad w/ blank data until all workers are at the same address
+    // TODO Hmm, ideally only need to relevel the core range
+    device_data.relevel(CoreType::WORKER);
 
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
@@ -436,37 +673,26 @@ inline void gen_dispatcher_multicast_write_cmd(Device *device,
     CoreCoord physical_end = device->physical_core_from_logical_core(worker_core_range.end, CoreType::WORKER);
     const uint32_t bank_id = 0; // No interleaved pages here.
 
-    // Sanity check that worker_data covers all cores being targeted.
-    for (uint32_t y = worker_core_range.start.y; y <= worker_core_range.end.y; y++) {
-        for (uint32_t x = worker_core_range.start.x; x <= worker_core_range.end.x; x++) {
-            CoreCoord worker(x, y);
-            TT_ASSERT(worker_data.find(worker) != worker_data.end(), "Worker core x={},y={} missing in worker_data", x, y);
-        }
-    }
-
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
     cmd.write_linear.noc_xy_addr = NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
-    cmd.write_linear.addr = dst_addr + worker_data[worker_core_range.start][bank_id].data.size() * sizeof(uint32_t);
+    cmd.write_linear.addr = device_data.get_result_data_addr(worker_core_range.start);
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = worker_core_range.size();
-    log_debug(tt::LogTest, "{} Setting addr: {} from dst_addr: {} and worker_data[{}][{}].data.size(): {}",
-        __FUNCTION__, (uint32_t) cmd.write_linear.addr, dst_addr, worker_core_range.start.str(), bank_id,
-        worker_data[worker_core_range.start][bank_id].data.size() * sizeof(uint32_t));
 
-    add_dispatcher_cmd(cmds, worker_core_range, worker_data, cmd, length);
+    add_dispatcher_cmd(cmds, worker_core_range, device_data, cmd, length, true);
 }
 
 inline void gen_dispatcher_paged_write_cmd(Device *device,
                                              vector<uint32_t>& cmds,
-                                             worker_data_t& worker_data,
+                                             DeviceData& device_data,
                                              bool is_dram,
                                              uint32_t start_page,
-                                             uint32_t dst_addr,
                                              uint32_t page_size,
                                              uint32_t pages) {
 
     const uint32_t page_size_alignment_bytes = 32;
     uint32_t num_banks = device->num_banks(is_dram ? BufferType::DRAM : BufferType::L1);
+    CoreType core_type = is_dram ? CoreType::DRAM : CoreType::WORKER;
 
     // Not safe to mix paged L1 and paged DRAM writes currently in this test since same book-keeping.
     static uint32_t prev_is_dram = -1;
@@ -481,7 +707,8 @@ inline void gen_dispatcher_paged_write_cmd(Device *device,
     // For the CMD generation, start_page is 8 bits, so much wrap around, and increase base_addr instead based on page size,
     // which assumes page size never changed between calls to this function (checked above).
     uint32_t bank_offset = align(page_size, page_size_alignment_bytes) * (start_page / num_banks);
-    uint32_t base_addr = dst_addr + bank_offset;
+    // TODO: make this take the latest address, change callers to not manage this
+    uint32_t base_addr = device_data.get_base_result_addr(core_type) + bank_offset;
     uint16_t start_page_cmd = start_page % num_banks;
 
     CQDispatchCmd cmd;
@@ -496,16 +723,18 @@ inline void gen_dispatcher_paged_write_cmd(Device *device,
     log_debug(tt::LogTest, "Adding CQ_DISPATCH_CMD_WRITE_PAGED - is_dram: {} start_page: {} start_page_cmd: {} base_addr: 0x{:x} bank_offset: 0x{:x} page_size: {} pages: {})",
         is_dram, start_page, start_page_cmd, base_addr, bank_offset, page_size, pages);
 
-    add_dispatcher_paged_cmd(device, cmds, worker_data, cmd, start_page, is_dram);
+    add_dispatcher_paged_cmd(device, cmds, device_data, cmd, start_page, is_dram);
 }
 
 
 inline void gen_dispatcher_packed_write_cmd(Device *device,
                                             vector<uint32_t>& cmds,
                                             vector<CoreCoord>& worker_cores,
-                                            worker_data_t& worker_data,
-                                            uint32_t dst_addr,
+                                            DeviceData& device_data,
                                             uint32_t size_words) {
+
+    // Pad w/ blank data until all workers are at the same address
+    device_data.relevel(CoreType::WORKER);
 
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
@@ -513,16 +742,15 @@ inline void gen_dispatcher_packed_write_cmd(Device *device,
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
     cmd.write_packed.is_multicast = 0;
     cmd.write_packed.count = worker_cores.size();
-    cmd.write_packed.addr = dst_addr + worker_data_size(worker_data) * sizeof(uint32_t);
+    cmd.write_packed.addr = device_data.get_result_data_addr(worker_cores[0]);
     cmd.write_packed.size = size_words * sizeof(uint32_t);
 
-    add_dispatcher_packed_cmd(device, cmds, worker_cores, worker_data, cmd, size_words);
+    add_dispatcher_packed_cmd(device, cmds, worker_cores, device_data, cmd, size_words);
 }
 
-inline uint32_t gen_rnd_dispatcher_packed_write_cmd(Device *device,
-                                                    vector<uint32_t>& cmds,
-                                                    worker_data_t& worker_data,
-                                                    uint32_t dst_addr) {
+inline void gen_rnd_dispatcher_packed_write_cmd(Device *device,
+                                                vector<uint32_t>& cmds,
+                                                DeviceData& device_data) {
 
     // Note: this cmd doesn't clamp to a max size which means it can overflow L1 buffer
     // However, this cmd doesn't send much data and the L1 buffer is < L1 limit, so...
@@ -536,21 +764,19 @@ inline uint32_t gen_rnd_dispatcher_packed_write_cmd(Device *device,
     }
 
     vector<CoreCoord> gets_data;
-    for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
-        for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
+    for (auto & [coord, one_worker] : device_data.get_data()) {
+        if (one_worker[0].core_type == CoreType::WORKER) {
             if (send_to_all_g || std::rand() % 2) {
-                gets_data.push_back({x, y});
+                gets_data.push_back(coord);
             }
         }
     }
     if (gets_data.size() == 0) {
-        gets_data.push_back({all_workers_g.start.x, all_workers_g.start.y});
+        gets_data.push_back(device_data.get_data().begin()->first);
     }
 
-    gen_dispatcher_packed_write_cmd(device, cmds, gets_data, worker_data,
-                                    dst_addr, xfer_size_bytes / sizeof(uint32_t));
-
-    return xfer_size_bytes;
+    gen_dispatcher_packed_write_cmd(device, cmds, gets_data, device_data,
+                                    xfer_size_bytes / sizeof(uint32_t));
 }
 
 inline void gen_dispatcher_host_write_cmd(vector<uint32_t>& cmds, uint32_t length) {
@@ -565,6 +791,18 @@ inline void gen_dispatcher_host_write_cmd(vector<uint32_t>& cmds, uint32_t lengt
     add_dispatcher_cmd(cmds, cmd, length);
 }
 
+inline void gen_bare_dispatcher_host_write_cmd(vector<uint32_t>& cmds, uint32_t length) {
+
+    CQDispatchCmd cmd;
+    memset(&cmd, 0, sizeof(CQDispatchCmd));
+
+    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
+    // Include cmd in transfer
+    cmd.write_linear_host.length = length + sizeof(CQDispatchCmd);
+
+    add_bare_dispatcher_cmd(cmds, cmd);
+}
+
 inline void gen_dispatcher_terminate_cmd(vector<uint32_t>& cmds) {
 
     CQDispatchCmd cmd;
@@ -572,101 +810,4 @@ inline void gen_dispatcher_terminate_cmd(vector<uint32_t>& cmds) {
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_TERMINATE;
     add_dispatcher_cmd(cmds, cmd, 0);
-}
-
-
-// Validate a single core's worth of results vs expected. bank_id is purely informational, can pass -1 for non-paged testing.
-inline bool validate_core_data(std::unordered_set<CoreCoord> &validated_cores, Device *device, const worker_data_t& worker_data, CoreCoord core, uint32_t base_addr, bool is_paged, uint32_t bank_id, bool is_dram) {
-
-    int fail_count = 0;
-    const vector<uint32_t>& dev_data = worker_data.at(core).at(bank_id).data;
-    const vector<bool>& dev_valid = worker_data.at(core).at(bank_id).valid;
-    uint32_t size_bytes =  dev_data.size() * sizeof(uint32_t);
-
-    // If we had SOC desc, could get core type this way. Revisit this.
-    // soc_desc.cores.at(core).type
-    auto core_type = is_dram ? CoreType::DRAM : CoreType::WORKER;
-    CoreCoord phys_core;
-    int32_t bank_offset = 0;
-
-    if (is_paged){
-        if (is_dram) {
-            auto channel = device->dram_channel_from_bank_id(bank_id);
-            phys_core = device->core_from_dram_channel(channel);
-            bank_offset = device->bank_offset(BufferType::DRAM, bank_id);
-        } else {
-            phys_core = device->physical_core_from_logical_core(core, core_type);
-            bank_offset = device->bank_offset(BufferType::L1, bank_id);
-        }
-
-        log_debug(tt::LogTest, "Paged-{} for bank_id: {} has base_addr: (0x{:x}) and DRAM bank offset: {:x})",
-            is_dram ? "DRAM" : "L1", bank_id, base_addr, bank_offset);
-
-        base_addr += bank_offset;
-    } else {
-        TT_ASSERT(core_type == CoreType::WORKER, "Non-Paged write tests expected to target L1 only for now and not DRAM.");
-        phys_core = device->physical_core_from_logical_core(core, core_type);
-    }
-
-    // Read results from device and compare to expected for this core.
-    vector<uint32_t> results = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, base_addr, size_bytes);
-
-    log_info(tt::LogTest, "Validating {} bytes from {} (paged bank_id: {}) from logical_core: {} / physical: {} at addr: 0x{:x}",
-        size_bytes, is_dram ? "DRAM" : "L1", bank_id, core.str(), phys_core.str(), base_addr);
-
-    for (int i = 0; i < dev_data.size(); i++) {
-        if (!dev_valid[i]) continue;
-        validated_cores.insert(core);
-
-        if (results[i] != dev_data[i]) {
-            if (!fail_count) {
-                log_fatal(tt::LogTest, "Data mismatch - First 20 failures for logical_core: {} (physical: {})", core.str(), phys_core.str());
-            }
-            log_fatal(tt::LogTest, "[{:02d}] (Fail) Expected: 0x{:08x} Observed: 0x{:08x}", i, (unsigned int)dev_data[i], (unsigned int)results[i]);
-            if (fail_count++ > 20) {
-                break;
-            }
-        } else {
-            log_debug(tt::LogTest, "[{:02d}] (Pass) Expected: 0x{:08x} Observed: 0x{:08x}", i, (unsigned int)dev_data[i], (unsigned int)results[i]);
-        }
-    }
-    return fail_count;
-}
-
-inline bool validate_results(Device *device, CoreRange workers, const worker_data_t& worker_data, uint64_t l1_buf_base) {
-
-    bool failed = false;
-    std::unordered_set<CoreCoord> validated_cores;
-    for (uint32_t y = workers.start.y; y <= workers.end.y; y++) {
-        for (uint32_t x = workers.start.x; x <= workers.end.x; x++) {
-            CoreCoord worker(x, y);
-            failed |= validate_core_data(validated_cores, device, worker_data, worker, l1_buf_base, false, 0, false);
-        }
-    }
-
-    log_info(tt::LogTest, "Validated {} cores total.", validated_cores.size());
-    return !failed;
-}
-
-// Validate paged writes to DRAM or L1 by iterating over just the banks/cores that are valid for the worker date based on prior writes.
-inline bool validate_results_paged(Device *device, const worker_data_t& worker_data, uint64_t l1_buf_base, bool is_dram) {
-
-    // Get banks, to be able to iterate over them in order here, since worker_data is umap.
-    auto bank_cores = get_cores_per_bank_id(device, is_dram);
-    std::unordered_set<CoreCoord> validated_cores;
-    bool failed = false;
-
-    for (int bank_id = 0; bank_id < bank_cores.size(); bank_id++) {
-        auto bank_core = bank_cores.at(bank_id);
-        if ((worker_data.find(bank_core) == worker_data.end()) ||
-            (worker_data.at(bank_core).find(bank_id) == worker_data.at(bank_core).end())) {
-            log_debug(tt::LogTest, "Skipping bank_id: {} bank_core: {} as it has no data", bank_id, bank_core.str());
-            continue;
-        }
-
-        failed |= validate_core_data(validated_cores, device, worker_data, bank_core, l1_buf_base, true, bank_id, is_dram);
-    }
-
-    log_info(tt::LogTest, "{} - Validated {} cores total.", __FUNCTION__, validated_cores.size());
-    return !failed;
 }
