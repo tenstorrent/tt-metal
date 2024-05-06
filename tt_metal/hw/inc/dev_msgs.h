@@ -132,12 +132,18 @@ struct debug_pause_msg_t {
     volatile uint8_t pad[8 - DebugNumUniqueRiscs];
 };
 
+enum watcher_enable_msg_t {
+    WatcherDisabled = 2,
+    WatcherEnabled = 3,
+};
+
 constexpr int num_riscv_per_core = 5;
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     volatile uint32_t l1_barrier;
     struct launch_msg_t launch;
     struct slave_sync_msg_t slave_sync;
+    volatile uint32_t watcher_enable;
     struct debug_status_msg_t debug_status[num_riscv_per_core];
     struct debug_sanitize_noc_addr_msg_t sanitize_noc[NUM_NOCS];
     struct debug_assert_msg_t assert_status;

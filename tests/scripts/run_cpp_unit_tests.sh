@@ -19,3 +19,6 @@ else
     env python tests/scripts/run_tt_eager.py --dispatch-mode fast
     env python tests/scripts/run_tt_metal.py --dispatch-mode fast
 fi
+
+# Tool tests use C++ unit tests so include them here.
+./tests/scripts/run_tools_tests.sh

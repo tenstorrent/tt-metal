@@ -43,6 +43,8 @@ static string logfile_name = "watcher.log";
 static FILE *logfile = nullptr;
 static std::chrono::time_point start_time = std::chrono::system_clock::now();
 static std::vector<string> kernel_names;
+static FILE *kernel_file = nullptr;
+static string kernel_file_name = "kernel_names.txt";
 
 // Flag to signal whether the watcher server has been killed due to a thrown exception.
 static std::atomic<bool> watcher_killed_due_to_error = false;
@@ -57,7 +59,7 @@ static double get_elapsed_secs() {
     return elapsed_secs.count();
 }
 
-static FILE * create_file() {
+void create_log_file() {
 
     FILE *f;
 
@@ -89,8 +91,26 @@ static FILE * create_file() {
     fprintf(f, "\tsmsg:<c>=slave run message, I/G/D for NCRISC, TRISC0, TRISC1, TRISC2\n");
     fprintf(f, "\tk_ids:<brisc id>|<ncrisc id>|<trisc id> (ID map to file at end of section)\n");
     fprintf(f, "\n");
+    fflush(f);
 
-    return f;
+    watcher::logfile = f;
+}
+
+void create_kernel_file() {
+    FILE *f;
+    const char *fmode = tt::llrt::OptionsG.get_watcher_append()? "a" : "w";
+    std::filesystem::path output_dir(tt::llrt::OptionsG.get_root_dir() + watcher::logfile_path);
+    std::filesystem::create_directories(output_dir);
+    string fname = output_dir.string() + watcher::kernel_file_name;
+    if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
+        TT_THROW("Watcher failed to create kernel name file\n");
+    }
+    watcher::kernel_names.clear();
+    watcher::kernel_names.push_back("blank");
+    fprintf(f, "0: blank\n");
+    fflush(f);
+
+    watcher::kernel_file = f;
 }
 
 static void log_running_kernels(const launch_msg_t *launch_msg) {
@@ -586,7 +606,6 @@ static void dump_core(
     std::map<int, bool>& used_kernel_names,
     Device *device,
     CoreDescriptor logical_core,
-    bool dump_all,
     bool is_active_eth_core,
     std::set<std::pair<CoreCoord, riscv_id_t>> &paused_cores
 ) {
@@ -618,7 +637,10 @@ static void dump_core(
     // Validate these first since they are used in diagnostic messages below.
     validate_kernel_ids(f, used_kernel_names, device->id(), core, &mbox_data->launch);
 
-    if (watcher::enabled) {
+    // Whether or not watcher data is available depends on a flag set on the device.
+    bool enabled = (mbox_data->watcher_enable == WatcherEnabled);
+
+    if (enabled) {
         // Dump state only gathered if device is compiled w/ watcher
         if (!tt::llrt::OptionsG.watcher_status_disabled())
             dump_debug_status(f, core, &mbox_data->launch, mbox_data->debug_status);
@@ -641,7 +663,7 @@ static void dump_core(
     if (!is_eth_core) {
         // Dump state always available
         dump_run_mailboxes(f, core, &mbox_data->launch, &mbox_data->slave_sync);
-        if (dump_all || tt::llrt::OptionsG.get_watcher_dump_all()) {
+        if (tt::llrt::OptionsG.get_watcher_dump_all()) {
             // Reading registers while running can cause hangs, only read if
             // requested explicitly
             dump_sync_regs(f, device, core);
@@ -659,7 +681,7 @@ static void dump_core(
     }
 
     // Ring buffer at the end because it can print a bunch of data
-    if (watcher::enabled) {
+    if (enabled) {
         if (!tt::llrt::OptionsG.watcher_ring_buffer_disabled())
             dump_ring_buffer(f, device, core);
     }
@@ -670,7 +692,7 @@ static void dump_core(
 }
 
 // noinline so that this fn exists to be called from dgb
-static void  __attribute__((noinline)) dump(FILE *f, bool dump_all) {
+static void  __attribute__((noinline)) dump(FILE *f) {
     for (Device* device : devices) {
         if (f != stdout && f != stderr) {
             log_info(LogLLRuntime, "Watcher checking device {}", device->id());
@@ -683,7 +705,7 @@ static void  __attribute__((noinline)) dump(FILE *f, bool dump_all) {
             for (uint32_t x = 0; x < grid_size.x; x++) {
                 CoreDescriptor logical_core = {{x, y}, CoreType::WORKER};
                 if (device->storage_only_cores().find(logical_core.coord) == device->storage_only_cores().end()) {
-                    dump_core(f, used_kernel_names, device, logical_core, dump_all, false, paused_cores);
+                    dump_core(f, used_kernel_names, device, logical_core, false, paused_cores);
                 }
             }
         }
@@ -692,9 +714,9 @@ static void  __attribute__((noinline)) dump(FILE *f, bool dump_all) {
             CoreDescriptor logical_core = {eth_core, CoreType::ETH};
             CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
             if (device->is_active_ethernet_core(eth_core)) {
-                dump_core(f, used_kernel_names, device, logical_core, dump_all, true, paused_cores);
+                dump_core(f, used_kernel_names, device, logical_core, true, paused_cores);
             } else if (device->is_inactive_ethernet_core(eth_core)) {
-                dump_core(f, used_kernel_names, device, logical_core, dump_all, false, paused_cores);
+                dump_core(f, used_kernel_names, device, logical_core, false, paused_cores);
             } else {
                 continue;
             }
@@ -703,6 +725,7 @@ static void  __attribute__((noinline)) dump(FILE *f, bool dump_all) {
         for (auto k_id : used_kernel_names) {
             fprintf(f, "k_id[%d]: %s\n", k_id.first, kernel_names[k_id.first].c_str());
         }
+        fflush(f);
 
         // Handle any paused cores, wait for user input.
         if (!paused_cores.empty()) {
@@ -797,7 +820,7 @@ static void watcher_loop(int sleep_usecs) {
             }
 
             try {
-                dump(logfile, false);
+                dump(logfile);
             } catch (std::runtime_error& e) {
                 // Depending on whether test mode is enabled, catch and stop server, or re-throw.
                 if (tt::llrt::OptionsG.get_test_mode_enabled()) {
@@ -865,12 +888,20 @@ void watcher_init(Device *device) {
     ring_buf_data->current_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
     ring_buf_data->wrapped = 0;
 
+    // Initialize watcher enable flag according to user setting.
+    std::vector<uint32_t> watcher_enable_init_val;
+    if (tt::llrt::OptionsG.get_watcher_enabled())
+        watcher_enable_init_val.push_back(WatcherEnabled);
+    else
+        watcher_enable_init_val.push_back(WatcherDisabled);
+
     // Initialize worker cores debug values
     CoreCoord grid_size = device->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
             CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
+            tt::llrt::write_hex_vec_to_core(device->id(), worker_core, watcher_enable_init_val, GET_MAILBOX_ADDRESS_HOST(watcher_enable));
             tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_status_init_val, GET_MAILBOX_ADDRESS_HOST(debug_status));
             tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_sanity_init_val, GET_MAILBOX_ADDRESS_HOST(sanitize_noc));
             tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_assert_init_val, GET_MAILBOX_ADDRESS_HOST(assert_status));
@@ -891,6 +922,14 @@ void watcher_init(Device *device) {
             continue;
         }
         CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
+        tt::llrt::write_hex_vec_to_core(
+            device->id(),
+            physical_core,
+            watcher_enable_init_val,
+            is_active_eth_core ?
+                GET_ETH_MAILBOX_ADDRESS_HOST(watcher_enable) :
+                GET_IERISC_MAILBOX_ADDRESS_HOST(watcher_enable)
+        );
         tt::llrt::write_hex_vec_to_core(
             device->id(),
             physical_core,
@@ -942,12 +981,10 @@ void watcher_attach(Device *device) {
 
     if (!watcher::enabled && tt::llrt::OptionsG.get_watcher_enabled()) {
 
-        watcher::logfile = watcher::create_file();
+        watcher::create_log_file();
         watcher::watcher_killed_due_to_error = false;
         watcher::watcher_exception_message = "";
 
-        watcher::kernel_names.clear();
-        watcher::kernel_names.push_back("blank");
         watcher::enabled = true;
 
         int sleep_usecs = tt::llrt::OptionsG.get_watcher_interval() * 1000;
@@ -986,6 +1023,10 @@ void watcher_detach(Device *old) {
                 std::fclose(watcher::logfile);
                 watcher::logfile = nullptr;
             }
+            if (watcher::kernel_file != nullptr) {
+                std::fclose(watcher::kernel_file);
+                watcher::kernel_file = nullptr;
+            }
         }
     }
 
@@ -998,9 +1039,14 @@ void watcher_detach(Device *old) {
 int watcher_register_kernel(const string& name) {
     const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
 
+    if (!watcher::kernel_file)
+        watcher::create_kernel_file();
+    int k_id = watcher::kernel_names.size();
     watcher::kernel_names.push_back(name);
+    fprintf(watcher::kernel_file, "%d: %s\n", k_id, name.c_str());
+    fflush(watcher::kernel_file);
 
-    return watcher::kernel_names.size() - 1;
+    return k_id;
 }
 
 bool watcher_server_killed_due_to_error() {
@@ -1016,7 +1062,7 @@ string watcher_server_get_exception_message() {
 }
 
 void watcher_clear_log() {
-    watcher::logfile = watcher::create_file();
+    watcher::create_log_file();
 }
 
 string watcher_get_log_file_name() {
@@ -1025,6 +1071,30 @@ string watcher_get_log_file_name() {
 
 int watcher_get_dump_count() {
     return watcher::dump_count;
+}
+
+void watcher_dump() {
+    if (!watcher::logfile)
+        watcher::create_log_file();
+    watcher::dump(watcher::logfile);
+}
+
+void watcher_read_kernel_ids_from_file() {
+    std::filesystem::path output_dir(tt::llrt::OptionsG.get_root_dir() + watcher::logfile_path);
+    string fname = output_dir.string() + watcher::kernel_file_name;
+    FILE *f;
+    if ((f = fopen(fname.c_str(), "r")) == nullptr) {
+        TT_THROW("Watcher failed to open kernel name file: {}\n", fname);
+    }
+
+    char *line = nullptr;
+    size_t len;
+    while (getline(&line, &len, f) != -1) {
+        string s(line);
+        s = s.substr(0, s.length()-1); // Strip newline
+        int k_id = stoi(s.substr(0, s.find(":"))); // Format is {k_id}: {kernel}
+        watcher::kernel_names.push_back(s.substr(s.find(":")+2));
+    }
 }
 
 } // namespace tt

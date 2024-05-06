@@ -765,6 +765,14 @@ Device *CreateDevice(
     return dev;
 }
 
+Device *CreateDeviceMinimal(
+    chip_id_t device_id) {
+    ZoneScoped;
+    Device *dev = new Device(device_id, 1, DEFAULT_L1_SMALL_SIZE, {}, true);
+    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+    return dev;
+}
+
 bool CloseDevice(Device *device) {
     ZoneScoped;
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
