@@ -12,6 +12,7 @@ import tt_lib as ttl
 from models.utility_functions import (
     comp_pcc,
 )
+from models.demos.metal_BERT_large_11.tt import custom_matmuls
 import torch
 
 
@@ -49,7 +50,7 @@ def run_bert_large_pre_softmax_bmm_test(device, dtype, in0_mem_config, in1_mem_c
         .to(device, in1_mem_config)
     )
 
-    t2 = ttl.tensor.bert_large_pre_softmax_bmm(a_t, b_t, out_mem_config)
+    t2 = custom_matmuls.bert_large_pre_softmax_bmm(a_t, b_t, out_mem_config)
 
     # Check memory of inputs and outputs
     assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type

@@ -771,18 +771,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.conv
 
-.. autofunction:: tt_lib.tensor.bert_large_fused_qkv_matmul
-
-.. autofunction:: tt_lib.tensor.bert_large_ff1_matmul
-
-.. autofunction:: tt_lib.tensor.bert_large_ff2_matmul
-
-.. autofunction:: tt_lib.tensor.bert_large_selfout_matmul
-
-.. autofunction:: tt_lib.tensor.bert_large_pre_softmax_bmm
-
-.. autofunction:: tt_lib.tensor.bert_large_post_softmax_bmm
-
 .. autofunction:: tt_lib.tensor.layernorm
 
 .. autofunction:: tt_lib.tensor.groupnorm
@@ -1077,7 +1065,7 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.imag_bw
 
 .. autofunction:: tt_lib.tensor.real_bw
-    
+
 .. autofunction:: tt_lib.tensor.complex_mul_bw
 
 .. autofunction:: tt_lib.tensor.complex_div_bw

@@ -11,6 +11,7 @@ import tt_lib as ttl
 from models.utility_functions import (
     comp_pcc,
 )
+from models.demos.metal_BERT_large_11.tt import custom_matmuls
 import torch
 import pytest
 
@@ -68,7 +69,7 @@ def run_bert_large_fused_qkv_matmul_test(
     else:
         bias_t = None
 
-    t2 = ttl.tensor.bert_large_fused_qkv_matmul(a_t, b_t, bias_t, out_mem_config)
+    t2 = custom_matmuls.bert_large_fused_qkv_matmul(a_t, b_t, bias_t, out_mem_config)
 
     # Check memory of inputs and outputs
     assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type

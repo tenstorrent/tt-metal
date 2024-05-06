@@ -10,6 +10,7 @@ from typing import Optional
 import tt_lib
 from tt_lib.utils import pad_weight
 from models.utility_functions import torch2tt_tensor
+from models.demos.metal_BERT_large_11.tt import custom_matmuls
 
 
 def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
@@ -36,7 +37,7 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
     else:
 
         def op1_qkv_fused(activation, qkv_weight, qkv_bias):
-            qkv = tt_lib.tensor.bert_large_fused_qkv_matmul(
+            qkv = custom_matmuls.bert_large_fused_qkv_matmul(
                 activation,
                 qkv_weight,
                 bias=qkv_bias,
@@ -74,7 +75,7 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
     else:
 
         def op3_bmm(Q_heads, K_T_heads):
-            qkt = tt_lib.tensor.bert_large_pre_softmax_bmm(
+            qkt = custom_matmuls.bert_large_pre_softmax_bmm(
                 Q_heads,
                 K_T_heads,
                 output_mem_config=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
@@ -116,7 +117,7 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
     else:
 
         def op5_bmm(attention_scores, V_heads):
-            weighted_activation = tt_lib.tensor.bert_large_post_softmax_bmm(
+            weighted_activation = custom_matmuls.bert_large_post_softmax_bmm(
                 attention_scores,
                 V_heads,
                 output_mem_config=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],

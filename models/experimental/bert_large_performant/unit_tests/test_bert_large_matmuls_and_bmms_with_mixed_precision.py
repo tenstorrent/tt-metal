@@ -12,6 +12,7 @@ import tt_lib as ttl
 from models.utility_functions import (
     comp_pcc,
 )
+from models.demos.metal_BERT_large_11.tt import custom_matmuls
 import torch
 import pytest
 
@@ -31,14 +32,14 @@ def run_bert_large_matmul_test(
 ):
     gelu_activation = None
 
-    if bert_large_op == ttl.tensor.bert_large_fused_qkv_matmul:
+    if bert_large_op == custom_matmuls.bert_large_fused_qkv_matmul:
         a_shape = [batch, 1, 384, 1024]
         b_shape = [1, 1, 1024, 3072]
         bias_shape = [1, 1, 1, 3072]
         bias_pad_shape = [1, 1, 32, 3072]
         expected_output_shape = [batch, 1, 384, 3072]
 
-    elif bert_large_op == ttl.tensor.bert_large_ff1_matmul:
+    elif bert_large_op == custom_matmuls.bert_large_ff1_matmul:
         if (
             in0_dtype == ttl.tensor.DataType.BFLOAT16
             and in1_dtype == ttl.tensor.DataType.BFLOAT16
@@ -58,14 +59,14 @@ def run_bert_large_matmul_test(
         bias_pad_shape = [1, 1, 32, 4096]
         expected_output_shape = [batch, 1, 384, 4096]
 
-    elif bert_large_op == ttl.tensor.bert_large_ff2_matmul:
+    elif bert_large_op == custom_matmuls.bert_large_ff2_matmul:
         a_shape = [batch, 1, 384, 4096]
         b_shape = [1, 1, 4096, 1024]
         bias_shape = [1, 1, 1, 1024]
         bias_pad_shape = [1, 1, 32, 1024]
         expected_output_shape = [batch, 1, 384, 1024]
 
-    elif bert_large_op == ttl.tensor.bert_large_selfout_matmul:
+    elif bert_large_op == custom_matmuls.bert_large_selfout_matmul:
         a_shape = [batch, 1, 384, 1024]
         b_shape = [1, 1, 1024, 1024]
         bias_shape = [1, 1, 1, 1024]
@@ -112,7 +113,7 @@ def run_bert_large_matmul_test(
     else:
         bias_t = None
 
-    if bert_large_op == ttl.tensor.bert_large_ff1_matmul:
+    if bert_large_op == custom_matmuls.bert_large_ff1_matmul:
         t2 = bert_large_op(a_t, b_t, bias_t, gelu_activation, out_mem_config, out_dtype)
     else:
         t2 = bert_large_op(a_t, b_t, bias_t, out_mem_config, out_dtype)
@@ -161,7 +162,7 @@ def run_bert_large_bmm_test(
     out_mem_config,
     device,
 ):
-    if bert_large_op == ttl.tensor.bert_large_pre_softmax_bmm:
+    if bert_large_op == custom_matmuls.bert_large_pre_softmax_bmm:
         a_shape = [batch, 16, 384, 64]
         b_shape = [batch, 16, 64, 384]
         expected_output_shape = [
@@ -171,7 +172,7 @@ def run_bert_large_bmm_test(
             384,
         ]  # No-op reshape from [batch, 16, 384, 384] in pre_softmax_bmm
 
-    elif bert_large_op == ttl.tensor.bert_large_post_softmax_bmm:
+    elif bert_large_op == custom_matmuls.bert_large_post_softmax_bmm:
         a_shape = [
             batch,
             16,
@@ -227,10 +228,10 @@ def run_bert_large_bmm_test(
     tt_host_rm = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm = tt_host_rm.to_torch()
 
-    if bert_large_op == ttl.tensor.bert_large_pre_softmax_bmm:
+    if bert_large_op == custom_matmuls.bert_large_pre_softmax_bmm:
         ref_bmm = torch.matmul(A, B).reshape(expected_output_shape)
 
-    elif bert_large_op == ttl.tensor.bert_large_post_softmax_bmm:
+    elif bert_large_op == custom_matmuls.bert_large_post_softmax_bmm:
         ref_bmm = torch.matmul(A.reshape([a_shape[0], 16, 384, 384]), B)
 
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
@@ -291,10 +292,10 @@ def run_bert_large_bmm_test(
 @pytest.mark.parametrize(
     "bert_large_op",
     (
-        ttl.tensor.bert_large_fused_qkv_matmul,
-        ttl.tensor.bert_large_ff1_matmul,
-        ttl.tensor.bert_large_ff2_matmul,
-        ttl.tensor.bert_large_selfout_matmul,
+        custom_matmuls.bert_large_fused_qkv_matmul,
+        custom_matmuls.bert_large_ff1_matmul,
+        custom_matmuls.bert_large_ff2_matmul,
+        custom_matmuls.bert_large_selfout_matmul,
     ),
     ids=["fused_qkv_bias", "ff1_bias_gelu", "ff2_bias", "selfout_bias"],
 )
@@ -374,7 +375,7 @@ def test_bert_large_matmul(
 )
 @pytest.mark.parametrize(
     "bert_large_op",
-    (ttl.tensor.bert_large_pre_softmax_bmm, ttl.tensor.bert_large_post_softmax_bmm),
+    (custom_matmuls.bert_large_pre_softmax_bmm, custom_matmuls.bert_large_post_softmax_bmm),
     ids=["pre_softmax_bmm", "post_softmax_bmm"],
 )
 def test_bert_large_bmm(

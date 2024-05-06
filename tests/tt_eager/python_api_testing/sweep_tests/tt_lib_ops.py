@@ -7,6 +7,7 @@ import tt_lib as ttl
 from functools import partial
 from models.helper_funcs import Linear as tt_Linear
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, ttl_complex_2_torch_complex
+from models.demos.metal_BERT_large_11.tt import custom_matmuls
 
 
 def setup_tt_tensor(x, device, layout, input_mem_config, dtype):
@@ -2189,37 +2190,6 @@ def eltwise_pow(
     return tt2torch_tensor(t1)
 
 
-def bert_large_fused_qkv_matmul(
-    x,
-    y,
-    z,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    a_t = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    b_t = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-
-    bias_t = (
-        ttl.tensor.Tensor(
-            z.flatten().tolist(),
-            z.shape,
-            dtype[2],
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
-        .pad([1, 1, 32, 3072], [0, 0, 0, 0], 0)
-        .to(layout[2])
-        .to(device, input_mem_config[2])
-    )
-
-    t3 = ttl.tensor.bert_large_fused_qkv_matmul(a_t, b_t, bias_t, output_mem_config=output_mem_config)
-    return tt2torch_tensor(t3)
-
-
 @setup_host_and_device
 def eltwise_bias_gelu_unary(x, *args, bias, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
@@ -2367,8 +2337,6 @@ eltwise_logical_or = make_binary_op(ttl.tensor.logical_or)
 matmul = make_binary_op(ttl.tensor.matmul)
 outer = make_binary_op(ttl.tensor.outer)
 bmm = make_binary_op(ttl.tensor.bmm)
-bert_large_pre_softmax_bmm = make_binary_op(ttl.tensor.bert_large_pre_softmax_bmm)
-bert_large_post_softmax_bmm = make_binary_op(ttl.tensor.bert_large_post_softmax_bmm)
 eltwise_bias_gelu = make_binary_op(ttl.tensor.bias_gelu)
 eltwise_nextafter = make_binary_op(ttl.tensor.nextafter)
 eltwise_isfinite = make_unary_op(ttl.tensor.isfinite)
@@ -2532,6 +2500,37 @@ def activation_swiglu(x, *args, device, dtype, layout, input_mem_config, output_
     return tt2torch_tensor(t1)
 
 
+def bert_large_fused_qkv_matmul(
+    x,
+    y,
+    z,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    a_t = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    b_t = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    bias_t = (
+        ttl.tensor.Tensor(
+            z.flatten().tolist(),
+            z.shape,
+            dtype[2],
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .pad([1, 1, 32, 3072], [0, 0, 0, 0], 0)
+        .to(layout[2])
+        .to(device, input_mem_config[2])
+    )
+
+    t3 = custom_matmuls.bert_large_fused_qkv_matmul(a_t, b_t, bias_t, output_mem_config=output_mem_config)
+    return tt2torch_tensor(t3)
+
+
 @setup_host_and_device
 def bert_large_selfout_matmul(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     if layout[2] == ttl.tensor.Layout.TILE:
@@ -2541,7 +2540,7 @@ def bert_large_selfout_matmul(x, y, z, *args, device, dtype, layout, input_mem_c
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
 
-    t3 = ttl.tensor.bert_large_selfout_matmul(t0, t1, t2, output_mem_config=output_mem_config)
+    t3 = custom_matmuls.bert_large_selfout_matmul(t0, t1, t2, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t3)
 
@@ -2555,7 +2554,7 @@ def bert_large_ff2_matmul(x, y, z, *args, device, dtype, layout, input_mem_confi
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
 
-    t3 = ttl.tensor.bert_large_ff2_matmul(t0, t1, t2, output_mem_config=output_mem_config)
+    t3 = custom_matmuls.bert_large_ff2_matmul(t0, t1, t2, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t3)
 
@@ -2569,9 +2568,27 @@ def bert_large_ff1_matmul(x, y, z, *args, device, dtype, layout, input_mem_confi
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
 
-    t3 = ttl.tensor.bert_large_ff1_matmul(t0, t1, t2, output_mem_config=output_mem_config)
+    t3 = custom_matmuls.bert_large_ff1_matmul(t0, t1, t2, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t3)
+
+
+@setup_host_and_device
+def bert_large_pre_softmax_bmm(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = custom_matmuls.bert_large_pre_softmax_bmm(t0, t1, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t2)
+
+
+@setup_host_and_device
+def bert_large_post_softmax_bmm(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = custom_matmuls.bert_large_post_softmax_bmm(t0, t1, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t2)
 
 
 @setup_host_and_device

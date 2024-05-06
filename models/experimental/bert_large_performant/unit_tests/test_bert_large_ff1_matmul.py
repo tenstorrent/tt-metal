@@ -12,6 +12,7 @@ import tt_lib as ttl
 from models.utility_functions import (
     comp_pcc,
 )
+from models.demos.metal_BERT_large_11.tt import custom_matmuls
 import torch
 import pytest
 
@@ -85,21 +86,11 @@ def run_bert_large_ff1_matmul_test(
     else:
         bias_t = None
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(12, a_t.get_legacy_shape()[0]),
-        in0_block_w=4,
-        out_subblock_h=6,
-        out_subblock_w=1,
-        per_core_M=12,
-        per_core_N=11,
-        transpose_mcast=False,
-        fused_activation=fused_activation,
-    )
-    t2 = ttl.operations.primary.matmul(
+    t2 = custom_matmuls.bert_large_ff1_matmul(
         a_t,
         b_t,
         bias=bias_t,
-        program_config=program_config,
+        fused_activation=fused_activation,
         output_mem_config=out_mem_config,
     )
     # Check memory of inputs and outputs

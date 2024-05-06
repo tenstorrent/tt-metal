@@ -7,6 +7,7 @@ import torch
 
 import tt_lib
 from tt_lib.utils import pad_weight
+from models.demos.metal_BERT_large_11.tt import custom_matmuls
 
 
 def feed_forward(
@@ -39,7 +40,7 @@ def feed_forward(
     else:
 
         def op9_MM_bias_gelu(activation, ff1_weighta, ff1_biasa):
-            output_plus_bias_act = tt_lib.tensor.bert_large_ff1_matmul(
+            output_plus_bias_act = custom_matmuls.bert_large_ff1_matmul(
                 activation,
                 ff1_weighta,
                 bias=ff1_biasa,
@@ -65,7 +66,7 @@ def feed_forward(
     else:
 
         def op10_MM_bias(activation, ff2_weighta, ff2_biasa):
-            output_plus_bias = tt_lib.tensor.bert_large_ff2_matmul(
+            output_plus_bias = custom_matmuls.bert_large_ff2_matmul(
                 activation,
                 ff2_weighta,
                 bias=ff2_biasa,

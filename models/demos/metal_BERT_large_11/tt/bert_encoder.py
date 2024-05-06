@@ -10,6 +10,7 @@ from functools import partial
 import tt_lib
 from models.demos.metal_BERT_large_11.tt.mha import TtMultiHeadAttentionModel
 from models.demos.metal_BERT_large_11.tt.ffn import TtFeedForwardModel
+from models.demos.metal_BERT_large_11.tt import custom_matmuls
 from tt_lib.utils import pad_weight
 
 
@@ -154,7 +155,7 @@ class TtBertEncoder:
         else:
 
             def op7_mm_plus_bias(mha_res, attention_output_weight, attention_output_bias):
-                mha_out = tt_lib.tensor.bert_large_selfout_matmul(
+                mha_out = custom_matmuls.bert_large_selfout_matmul(
                     mha_res,
                     attention_output_weight,
                     bias=attention_output_bias,
