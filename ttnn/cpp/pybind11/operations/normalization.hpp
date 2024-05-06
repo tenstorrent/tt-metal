@@ -32,6 +32,14 @@ void py_module(py::module& module) {
 Compute layer_norm over :attr:`input_tensor`.
     )doc");
 
+    module.def("rms_norm", &rms_norm,
+        py::arg("input_tensor"),
+        py::arg("weight"),
+        py::kw_only(),
+        py::arg("epsilon") = 1e-12,
+        R"doc(
+Compute rms_norm over :attr:`input_tensor`.
+    )doc");
 }
 
 }  // namespace normalization
