@@ -3,7 +3,7 @@ name: "Model perf regressions and output report"
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 2,7,17,20,23 * * *"
+    - cron: "0 2,7,10,14,17,20,23 * * *"
   workflow_call:
 
 jobs:
