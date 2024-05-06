@@ -70,6 +70,18 @@ Device *CreateDevice(
     const std::vector<uint32_t> &l1_bank_remap = {});
 
 /**
+ * Instantiates a device with minimal setup, used to attach to a device in a bad state.
+ *
+ * Return value: Device *
+ *
+ * | Argument   | Description                | Type            | Valid Range                       | Required |
+ * |------------|----------------------------|-----------------|-----------------------------------|----------|
+ * | device_id  | ID of the device to target| chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
+ * */
+Device *CreateDeviceMinimal(
+    chip_id_t device_id);
+
+/**
  * Resets device and closes device
  *
  * Return value: bool

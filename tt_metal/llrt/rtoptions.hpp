@@ -137,6 +137,7 @@ class RunTimeOptions {
     inline bool get_kernels_nullified() { return null_kernels; }
 
     inline bool get_clear_l1() { return clear_l1; }
+    inline void set_clear_l1(bool clear) { clear_l1 = clear; }
 
 private:
     // Helper functions to parse DPrint-specific environment vaiables.
