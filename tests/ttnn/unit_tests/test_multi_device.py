@@ -434,3 +434,16 @@ def test_4b_tensor(device_mesh):
         ),
         use_1d_systolic_array=True,
     )
+
+
+def test_slicing(device_mesh):
+    tensor = ttnn.from_torch(
+        torch.randn(1, 32, 32, 32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+    )
+    tensor = ttnn.to_device(tensor, device_mesh)
+    tensor = tensor[:, :, :, :1]
+    assert all([device_tensor.shape == tensor.shape for device_tensor in ttnn.get_device_tensors(tensor)])

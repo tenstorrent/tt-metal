@@ -612,9 +612,33 @@ Tensor Tensor::reshape(const Shape& new_shape) const {
     if (this->get_layout() == Layout::TILE) {
         TT_ASSERT(new_shape[-2] % TILE_HEIGHT == 0 && new_shape[-1] % TILE_WIDTH == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
     }
+    return std::visit(
+        [this, &new_shape](auto&& storage) -> Tensor
+        {
+            using T = std::decay_t<decltype(storage)>;
+            const auto& tensor = *this;
+            if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
+                auto updated_storage = std::get<T>(tensor.get_storage());
+                for (int i = 0; i < updated_storage.shapes.size(); i++) {
+                    updated_storage.shapes[i] = new_shape;
+                }
+                return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout());
+            }
+            if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
+                std::unordered_map<int, Shape> new_shapes;
 
-    const auto& tensor = *this;
-    return Tensor(tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout());
+                for (auto device_id : updated_storage.ordered_device_ids) {
+                    new_shapes.insert({device_id, new_shape});
+                }
+                updated_storage.shapes = new_shapes;
+                return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout());
+            } else {
+                return Tensor(tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout());
+            }
+        },
+        this->get_storage()
+    );
 }
 
 bool Tensor::is_allocated() const {

@@ -42,9 +42,6 @@ def open_device_mesh(
     Open a device with the given device_id. If the device is already open, return the existing device.
     """
     assert len(device_ids) > 0
-    if len(device_ids) == 8:
-        # Re-ordering to T3000 device-mesh configuration
-        device_ids = [0, 7, 6, 1, 2, 5, 4, 3]
 
     return ttnn._ttnn.multi_device.DeviceMesh(
         device_grid=device_grid.as_tuple(), device_ids=device_ids, l1_small_size=l1_small_size
