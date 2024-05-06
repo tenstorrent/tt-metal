@@ -45,8 +45,9 @@ struct ToLayout {
     static Tensor execute(
         const ttnn::Tensor& tensor_arg,
         const ttnn::Layout layout,
-        const std::optional<ttnn::DataType>& dtype = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<ttnn::DataType>& dtype,
+        const std::optional<ttnn::MemoryConfig>& memory_config,
+        std::variant<DeviceMesh*, Device*> device);
 };
 
 }  // namespace core

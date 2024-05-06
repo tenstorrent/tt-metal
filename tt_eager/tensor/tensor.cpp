@@ -507,16 +507,45 @@ Tensor Tensor::to(Layout target_layout, Device* worker) const {
         Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(worker, *this);
         Tensor tensor_modified_layout = Tensor({}, 1);
         worker->push_work([async_safe_tensor, tensor_modified_layout, target_layout] () mutable {
-            TT_ASSERT(async_safe_tensor.storage_type() != StorageType::DEVICE && "Bring tensor to host before converting to target layout");
+            TT_ASSERT(async_safe_tensor.storage_type() == StorageType::OWNED or async_safe_tensor.storage_type() == StorageType::BORROWED && "to(layout) must be called on host tensors with a single buffer when a single worker is specified");
             auto local_tensor = tensor_impl::to_layout_wrapper(async_safe_tensor, target_layout);
             // Populate modified layout tensor
             tensor_modified_layout.populate_buffers_and_metadata(local_tensor);
         });
         return tensor_modified_layout;
-    } else {
-        TT_ASSERT(this->storage_type() != StorageType::DEVICE && "Bring tensor to host before converting to target layout");
-        return tensor_impl::to_layout_wrapper(*this, target_layout);
     }
+    // Running without worker threads (non-async)
+    TT_ASSERT(this->storage_type() != StorageType::DEVICE or this->storage_type() != StorageType::MULTI_DEVICE && "Bring tensor to host before converting to target layout");
+    return tensor_impl::to_layout_wrapper(*this, target_layout);
+}
+
+Tensor Tensor::to(Layout target_layout, DeviceMesh* device_mesh) const {
+    ZoneScoped;
+    if (device_mesh) {
+        auto all_workers = device_mesh->get_devices();
+        auto workers = std::vector<Device*>(all_workers.begin(), all_workers.begin() + num_buffers_in_tensor(*this));
+        TT_FATAL(validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
+        Tensor tensor_modified_layout = Tensor({}, workers.size());
+        for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
+            auto& worker = workers[worker_index];
+            worker->push_work([*this, tensor_modified_layout, target_layout, worker, worker_index] () mutable {
+                TT_ASSERT(this->storage_type() == StorageType::MULTI_DEVICE_HOST && "to(layout) must be called on host tensors with MULTI_DEVICE_HOST_STORAGE when multiple workers are specified");;
+                auto shard = get_shard_for_device(*this, worker, worker_index);
+                shard = tensor_impl::to_layout_wrapper(shard, target_layout);
+                insert_buffer_and_shape_for_device(worker, shard, tensor_modified_layout, worker_index);
+                if (not (worker->id())) {
+                    tensor_modified_layout.set_shape(this->get_shape());
+                    tensor_modified_layout.set_dtype(this->get_dtype());
+                    tensor_modified_layout.set_layout(target_layout);
+                }
+                tensor_modified_layout.set_populated(worker);
+            });
+        }
+        return tensor_modified_layout;
+    }
+    // Running without worker threads (non-async)
+    TT_ASSERT(this->storage_type() != StorageType::DEVICE or this->storage_type() != StorageType::MULTI_DEVICE && "Bring tensor to host before converting to target layout");
+    return tensor_impl::to_layout_wrapper(*this, target_layout);
 }
 
 const std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }

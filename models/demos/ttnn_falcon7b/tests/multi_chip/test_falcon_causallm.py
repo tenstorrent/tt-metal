@@ -185,7 +185,9 @@ def test_falcon_causal_lm(
             # Explicitly move tensor to host ... in async mode this is faster than calling from torch directly,
             # due to parallelization of tensor shards
             tt_out = ttnn.from_device(tt_out)
-            tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=shard_dim)).squeeze(1)
+            tt_out = ttnn.to_torch(
+                tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=shard_dim), device=device_mesh
+            ).squeeze(1)
 
     elif llm_mode == "decode":
         for loop in range(num_loops):
@@ -201,7 +203,9 @@ def test_falcon_causal_lm(
                 use_cache=True,
             )
             tt_out = ttnn.from_device(tt_out)
-            tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=shard_dim)).squeeze(1)
+            tt_out = ttnn.to_torch(
+                tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=shard_dim), device=device_mesh
+            ).squeeze(1)
             tt_out = tt_out.transpose(0, 1)
 
     passed, pcc = assert_with_pcc(pytorch_out, tt_out.to(pytorch_out.dtype), expected_pcc)
@@ -209,8 +213,12 @@ def test_falcon_causal_lm(
 
     for i in range(num_layers):
         tt_layer_pres = (
-            ttnn.to_torch(tt_layer_present[i][0], mesh_composer=ConcatMeshToTensor(device_mesh, dim=0)),
-            ttnn.to_torch(tt_layer_present[i][1], mesh_composer=ConcatMeshToTensor(device_mesh, dim=0)),
+            ttnn.to_torch(
+                tt_layer_present[i][0], mesh_composer=ConcatMeshToTensor(device_mesh, dim=0), device=device_mesh
+            ),
+            ttnn.to_torch(
+                tt_layer_present[i][1], mesh_composer=ConcatMeshToTensor(device_mesh, dim=0), device=device_mesh
+            ),
         )
         if llm_mode == "prefill":
             pytorch_layer_pres = pytorch_layer_present[i]
