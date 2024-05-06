@@ -18,7 +18,7 @@
 
 
 constexpr uint32_t DEFAULT_TEST_TYPE = 0;
-constexpr uint32_t WORKER_DATA_SIZE = 768 * 1024;
+constexpr uint32_t DEVICE_DATA_SIZE = 768 * 1024;
 constexpr uint32_t MAX_PAGE_SIZE = 256 * 1024; // bigger than scratch_db_page_size
 constexpr uint32_t DRAM_PAGE_SIZE_DEFAULT = 1024;
 constexpr uint32_t DRAM_PAGES_TO_READ_DEFAULT = 16;
@@ -43,7 +43,7 @@ constexpr uint32_t DEFAULT_PACKETIZED_PATH_TIMEOUT_EN = 0;
 
 constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
 constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
-constexpr uint32_t DRAM_HACKED_BASE_ADDR = 1024 * 1024;  // don't interfere w/ fast dispatch storing our kernels...
+constexpr uint32_t DRAM_DATA_BASE_ADDR = 1024 * 1024;
 constexpr uint32_t DRAM_DATA_ALIGNMENT = 32;
 
 constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
@@ -105,21 +105,22 @@ uint32_t min_xfer_size_bytes_g = 4;
 uint32_t l1_buf_base_g;
 uint32_t prefetch_h_exec_buf_sem_addr_g;
 
+vector<uint32_t> host_data_g;
+
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
 
     if (test_args::has_command_option(input_args, "-h") ||
         test_args::has_command_option(input_args, "--help")) {
         log_info(LogTest, "Usage:");
+        log_info(LogTest, "  -t: test type: 0:Terminate 1:Smoke 2:Random 3:PCIe 4:DRAM-read 5:DRAM-write-read 6:Host (default {})", DEFAULT_TEST_TYPE);
         log_info(LogTest, "  -w: warm-up before starting timer (default disabled)");
         log_info(LogTest, "  -i: host iterations (default {})", DEFAULT_ITERATIONS);
-        log_info(LogTest, "  -packetized_timeout_en: packetized path timeout enabled (default false)");
-        log_info(LogTest, "  -packetized_en: packetized path enabled (default false)");
-        log_info(LogTest, "  -t: test type: 0:Terminate 1:Smoke 2:Random 3:PCIe 4:DRAM-read 5:DRAM-write 6:Host (default {})", DEFAULT_TEST_TYPE);
         log_info(LogTest, " -wx: right-most worker in grid (default {})", all_workers_g.end.x);
         log_info(LogTest, " -wy: bottom-most worker in grid (default {})", all_workers_g.end.y);
         log_info(LogTest, "  -b: run a \"big\" test (fills memory w/ fewer transactions) (default false)", DEFAULT_TEST_TYPE);
         log_info(LogTest, " -rb: gen data, readback and test every iteration - disable for perf measurements (default true)");
+        log_info(LogTest, "  -c: use coherent data as payload (default false)");
         log_info(LogTest, "  -d: wrap all commands in debug commands and clear DRAM to known state (default disabled)");
         log_info(LogTest, "  -hp: host huge page issue buffer size (default {})", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
         log_info(LogTest, "  -pq: prefetch queue entries (default {})", DEFAULT_PREFETCH_Q_ENTRIES);
@@ -132,7 +133,8 @@ void init(int argc, char **argv) {
         log_info(LogTest, " -dpgr: dram pages to read in dram bw test type (default: {})", DRAM_PAGES_TO_READ_DEFAULT);
         log_info(LogTest, " -spre: split prefetcher into H and D variants (default not split)");
         log_info(LogTest, " -sdis: split dispatcher into H and the other thing variants (default not split)");
-        log_info(LogTest, "  -c: use coherent data as payload (default false)");
+        log_info(LogTest, "  -packetized_timeout_en: packetized path timeout enabled (default false)");
+        log_info(LogTest, "  -packetized_en: packetized path enabled (default false)");
         log_info(LogTest, "  -x: execute commands from dram exec_buf (default 0)");
         log_info(LogTest, "-xpls: execute buffer log dram page size (default {})", DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE);
         log_info(LogTest, "  -s: seed for randomized tests (default 1)");
@@ -197,48 +199,32 @@ void dirty_host_completion_buffer(uint32_t *host_hugepage_completion_buffer) {
 // device writes the cmd back with the data
 bool validate_host_results(
     Device *device,
-    const vector<uint32_t>& cmds,
+    const vector<uint32_t>& data,
     uint32_t*& host_hugepage_completion_buffer) {
 
     log_info(tt::LogTest, "Validating data from hugepage");
 
     bool failed = false;
 
+    static int host_data_index = 0;
     uint32_t *results = (uint32_t *)host_hugepage_completion_buffer;
 
     int fail_count = 0;
     bool done = false;
-    int cmd_index = 0;
-    int host_data_index = 0;
-    while (cmd_index < cmds.size()) {
-        cmd_index += sizeof(CQPrefetchCmd) / sizeof(uint32_t);
-        CQDispatchCmd *cmd = (CQDispatchCmd *)&cmds[cmd_index];
-
-        // Validate only works for packed write linear host commands
-        TT_ASSERT(cmd->base.cmd_id == CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST);
-
-        uint32_t length = cmd->write_linear_host.length;
-        for (int i = 0; i < length / sizeof(uint32_t); i++) {
-            if (cmds[cmd_index] != results[host_data_index] && fail_count < 20) {
-                if (!failed) {
-                    tt::log_fatal("Data mismatch");
-                    fprintf(stderr, "First 20 host data failures: [idx] expected->read\n");
-                }
-
-                fprintf(stderr, "  [%02d] 0x%08x->0x%08x\n", host_data_index, (unsigned int)cmds[cmd_index], (unsigned int)results[host_data_index]);
-
-                failed = true;
-                fail_count++;
+    for (int data_index = 0; data_index < data.size(); data_index++) {
+        if (data[data_index] != results[host_data_index] && fail_count < 20) {
+            if (!failed) {
+                tt::log_fatal("Data mismatch");
+                fprintf(stderr, "First 20 host data failures: [idx] expected->read\n");
             }
 
-            host_data_index++;
-            cmd_index++;
+            fprintf(stderr, "  [%02d] 0x%08x->0x%08x\n", host_data_index, (unsigned int)data[data_index], (unsigned int)results[host_data_index]);
+
+            failed = true;
+            fail_count++;
         }
 
-        constexpr uint32_t align_cmd_words = CQ_PREFETCH_CMD_BARE_MIN_SIZE / sizeof(uint32_t);
-        cmd_index += (align_cmd_words - (cmd_index & (align_cmd_words - 1))) & (align_cmd_words - 1); // L1 alignment in words;
-        uint32_t dbps_words = dispatch_buffer_page_size_g / sizeof(uint32_t);
-        host_data_index += (dbps_words - (host_data_index & (dbps_words - 1))) & (dbps_words - 1);
+        host_data_index++;
     }
 
     host_hugepage_completion_buffer += host_data_index;
@@ -430,9 +416,9 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
 }
 
 // Model a paged read by updating worker data with interleaved/paged DRAM data, for validation later.
-void add_paged_dram_data_to_worker_data(const unordered_map<uint32_t, vector<uint32_t>>& dram_data_map,
+void add_paged_dram_data_to_device_data(Device *device,
                                   const CoreRange& workers,
-                                  worker_data_t& worker_data,
+                                  DeviceData& device_data,
                                   uint32_t start_page,
                                   uint32_t base_addr,
                                   uint32_t page_size,
@@ -449,67 +435,24 @@ void add_paged_dram_data_to_worker_data(const unordered_map<uint32_t, vector<uin
     for (uint32_t page_idx = start_page; page_idx < last_page; page_idx++) {
 
         uint32_t dram_bank_id = page_idx % num_dram_banks_g;
+        auto dram_channel = device->dram_channel_from_bank_id(dram_bank_id);
+        CoreCoord bank_core = device->core_from_dram_channel(dram_channel);
         uint32_t bank_offset = base_addr_words + page_size_words * (page_idx / num_dram_banks_g);
 
         if (page_idx == last_page - 1) page_size_words -= length_adjust_words;
         for (uint32_t j = 0; j  < page_size_words; j++) {
-            for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
-                for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
-                    CoreCoord core(x, y);
-                    worker_data[core][0].data.push_back(dram_data_map.at(dram_bank_id)[bank_offset + j]);
-                    worker_data[core][0].valid.push_back(workers.contains(core));
-                }
-            }
+            uint32_t datum = device_data.at(bank_core, dram_bank_id, bank_offset + j);
+            device_data.push_range(workers, datum, false);
         }
     }
 }
-
-// Model a paged write to DRAM by updating dram data with interleaved/paged data from worker data, for validation later.
-void add_paged_write_data_to_dram_data(Device *device,
-                                    unordered_map<uint32_t, vector<uint32_t>>& dram_data_map,
-                                    const worker_data_t& worker_data,
-                                    uint32_t start_page,
-                                    uint32_t base_addr,
-                                    uint32_t page_size,
-                                    uint32_t pages) {
-
-    uint32_t base_addr_words = base_addr / sizeof(uint32_t);
-    uint32_t page_size_words = page_size / sizeof(uint32_t);
-
-    // Get data from DRAM map, add to all workers, but only set valid for cores included in workers range.
-    TT_ASSERT(start_page < num_dram_banks_g);
-    for (uint32_t page_idx = start_page; page_idx < start_page + pages; page_idx++) {
-
-        uint32_t dram_bank_id = page_idx % num_dram_banks_g;
-        uint32_t bank_offset = base_addr_words + page_size_words * (page_idx / num_dram_banks_g);
-
-        auto dram_channel = device->dram_channel_from_bank_id(dram_bank_id);
-        auto bank_core = device->core_from_dram_channel(dram_channel);
-        log_debug(tt::LogTest, "{} - Starting base_addr: {} base_addr_words: {} page_idx: {} of pages: {} dram_bank_id: {} dram_channel: {} bank_core: {} page_size_words: {} => bank_offset: {}",
-            __FUNCTION__, base_addr, base_addr_words, page_idx, pages, dram_bank_id, dram_channel, bank_core.str(), page_size_words, bank_offset);
-
-        // Can hit this if we start off with start_page > 0.
-        TT_ASSERT(bank_offset + page_size_words <= worker_data.at(bank_core).at(dram_bank_id).data.size(),
-            "Worker data for bank core is not large enough for paged write. Make sure to start with start_page: 0.");
-
-        for (uint32_t j = 0; j  < page_size_words; j++) {
-            const uint32_t& datum = worker_data.at(bank_core).at(dram_bank_id).data.at(bank_offset + j);
-            dram_data_map.at(dram_bank_id)[bank_offset + j] = datum;
-            log_trace(tt::LogTest, "{} - Set page_idx: {} dram_bank_id: {} bank_offset: {} from base_addr: 0x{:x} => j: {} data: 0x{:x}",
-                __FUNCTION__, page_idx, dram_bank_id, bank_offset, base_addr, j, dram_data_map.at(dram_bank_id)[bank_offset + j]);
-        }
-    }
-}
-
 
 // Interleaved/Paged Read of DRAM to Worker L1
 void gen_dram_read_cmd(Device *device,
                        vector<uint32_t>& prefetch_cmds,
                        vector<uint16_t>& cmd_sizes,
-                       const unordered_map<uint32_t, vector<uint32_t>>& dram_data_map,
-                       worker_data_t& worker_data,
+                       DeviceData& device_data,
                        CoreCoord worker_core,
-                       uint32_t dst_addr,
                        uint32_t start_page,
                        uint32_t base_addr,
                        uint32_t page_size,
@@ -522,15 +465,15 @@ void gen_dram_read_cmd(Device *device,
     // Device code assumes padding to 32 bytes
     TT_ASSERT((length_adjust & 0x1f) == 0);
 
-    uint32_t worker_data_size = page_size * pages - length_adjust;
-    log_trace(tt::LogTest, "Starting {} with worker_core: {} dst_addr: 0x{:x} start_page: {} base_addr: 0x{:x} page_size: {} pages: {}. worker_data_size: 0x{:x}",
-        __FUNCTION__, worker_core.str(), dst_addr, start_page, base_addr, page_size, pages, worker_data_size);
+    uint32_t device_data_size = page_size * pages - length_adjust;
+    log_trace(tt::LogTest, "Starting {} with worker_core: {} start_page: {} base_addr: 0x{:x} page_size: {} pages: {}. device_data_size: 0x{:x}",
+        __FUNCTION__, worker_core.str(), start_page, base_addr, page_size, pages, device_data_size);
 
-    gen_bare_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, dst_addr, worker_data_size);
+    gen_bare_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, device_data_size);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
 
     auto prior_end = prefetch_cmds.size();
-    add_prefetcher_paged_read_cmd(prefetch_cmds, cmd_sizes, start_page, base_addr + DRAM_HACKED_BASE_ADDR, page_size, pages, is_dram, length_adjust);
+    add_prefetcher_paged_read_cmd(prefetch_cmds, cmd_sizes, start_page, base_addr + DRAM_DATA_BASE_ADDR, page_size, pages, is_dram, length_adjust);
 
     uint32_t new_size = (prefetch_cmds.size() - prior_end) * sizeof(uint32_t);
     TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
@@ -538,55 +481,44 @@ void gen_dram_read_cmd(Device *device,
     cmd_sizes.push_back(new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE);
 
     // Model the paged read in this function by updating worker data with interleaved/paged DRAM data, for validation later.
-    add_paged_dram_data_to_worker_data(dram_data_map, worker_core, worker_data, start_page, base_addr, page_size, pages, length_adjust);
+    add_paged_dram_data_to_device_data(device, worker_core, device_data, start_page, base_addr, page_size, pages, length_adjust);
 }
-
 
 // Interleaved/Paged Write to DRAM.
 void gen_dram_write_cmd(Device *device,
                     vector<uint32_t>& prefetch_cmds,
                     vector<uint16_t>& cmd_sizes,
-                    unordered_map<uint32_t, vector<uint32_t>>& dram_data_map,
-                    worker_data_t& worker_data,
+                    DeviceData& device_data,
                     uint32_t start_page,
-                    uint32_t base_addr,
                     uint32_t page_size,
                     uint32_t pages) {
 
     vector<uint32_t> dispatch_cmds;
     const bool is_dram = true;
-    log_trace(tt::LogTest, "Starting {} with is_dram: {} start_page: {} base_addr: {} page_size: {} pages: {}", __FUNCTION__, is_dram, start_page, base_addr, page_size, pages);
+    log_trace(tt::LogTest, "Starting {} with is_dram: {} start_page: {} page_size: {} pages: {}", __FUNCTION__, is_dram, start_page, page_size, pages);
 
-    gen_dispatcher_paged_write_cmd(device, dispatch_cmds, worker_data, is_dram, start_page, base_addr + DRAM_HACKED_BASE_ADDR, page_size, pages);
+    gen_dispatcher_paged_write_cmd(device, dispatch_cmds, device_data, is_dram, start_page, page_size, pages);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
-
-    // Model the paged write in this function by updating dram data with interleaved/paged DRAM data, for validation later.
-    add_paged_write_data_to_dram_data(device, dram_data_map, worker_data, start_page, base_addr, page_size, pages);
-
 }
-
 
 // This is pretty much a blit: copies from worker core's start of data back to the end of data
 void gen_linear_read_cmd(Device *device,
                          vector<uint32_t>& prefetch_cmds,
                          vector<uint16_t>& cmd_sizes,
-                         const unordered_map<uint32_t, vector<uint32_t>>& dram_data_map,
-                         worker_data_t& worker_data,
+                         DeviceData& device_data,
                          CoreCoord worker_core,
-                         uint32_t addr,
                          uint32_t length,
                          uint32_t offset = 0) {
 
     vector<uint32_t> dispatch_cmds;
     const uint32_t bank_id = 0; // No interleaved pages here.
 
-    gen_bare_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, addr, length);
-
+    gen_bare_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, length);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
 
     auto prior_end = prefetch_cmds.size();
+    uint32_t addr = device_data.get_base_result_addr(device_data.get_core_type(worker_core));
     add_prefetcher_linear_read_cmd(device, prefetch_cmds, cmd_sizes, worker_core, addr + offset * sizeof(uint32_t), length);
-
     uint32_t new_size = (prefetch_cmds.size() - prior_end) * sizeof(uint32_t);
     TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
     TT_ASSERT((new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
@@ -595,19 +527,7 @@ void gen_linear_read_cmd(Device *device,
     // Add linear data to worker data:
     uint32_t length_words = length / sizeof(uint32_t);
     for (uint32_t i = 0; i < length_words; i++) {
-        for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
-            for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
-                CoreCoord core(x, y);
-                if (core == worker_core) {
-                    uint32_t datum = worker_data[core][bank_id].data[offset + i];
-                    worker_data[core][bank_id].data.push_back(datum);
-                    worker_data[core][bank_id].valid.push_back(true);
-                } else {
-                    worker_data[core][bank_id].data.push_back(0);
-                    worker_data[core][bank_id].valid.push_back(false);
-                }
-            }
-        }
+        device_data.push_one(worker_core, device_data.at(worker_core, bank_id, offset + i));
     }
 }
 
@@ -647,10 +567,8 @@ void gen_dispatcher_delay_cmd(Device *device,
 void gen_paged_read_dram_test(Device *device,
                    vector<uint32_t>& prefetch_cmds,
                    vector<uint16_t>& cmd_sizes,
-                   const unordered_map<uint32_t, vector<uint32_t>>& dram_data_map,
-                   worker_data_t& worker_data,
-                   CoreCoord worker_core,
-                   uint32_t dst_addr) {
+                   DeviceData& device_data,
+                   CoreCoord worker_core) {
 
     uint32_t pages_read = 0;
     bool finished = false;
@@ -661,26 +579,25 @@ void gen_paged_read_dram_test(Device *device,
         uint32_t start_page = pages_read % num_dram_banks_g;
         uint32_t base_addr = (pages_read / num_dram_banks_g) * dram_page_size_g;
 
-        gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+        gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                           start_page, base_addr, dram_page_size_g, dram_pages_to_read_g, 0);
 
         bytes_of_data_g += dram_page_size_g * dram_pages_to_read_g;
         pages_read += dram_pages_to_read_g;
 
-        uint32_t all_valid_worker_data_size = worker_data_size(worker_data, true) * sizeof(uint32_t);
-        finished = all_valid_worker_data_size >= WORKER_DATA_SIZE;
+        uint32_t all_valid_device_data_size = device_data.size() * sizeof(uint32_t);
+        finished = all_valid_device_data_size >= DEVICE_DATA_SIZE;
     }
 }
 
 // End-To-End Paged/Interleaved Write+Read test that does the following:
 //  1. Paged Write of host data to DRAM banks by dispatcher cmd, followed by stall to avoid RAW hazard
 //  2. Paged Read of DRAM banks by prefetcher, relay data to dispatcher for linear write to L1.
-//  3. Do previous 2 steps in a loop, reading and writing new data until WORKER_DATA_SIZE bytes is written to worker core.
+//  3. Do previous 2 steps in a loop, reading and writing new data until DEVICE_DATA_SIZE bytes is written to worker core.
 void gen_paged_write_read_dram_test(Device *device,
                    vector<uint32_t>& prefetch_cmds,
                    vector<uint16_t>& cmd_sizes,
-                   unordered_map<uint32_t, vector<uint32_t>>& dram_data_map,
-                   worker_data_t& worker_data,
+                   DeviceData& device_data,
                    CoreCoord worker_core,
                    uint32_t dst_addr) {
 
@@ -691,40 +608,37 @@ void gen_paged_write_read_dram_test(Device *device,
     log_info(tt::LogTest, "Running Paged Write+Read DRAM test with num_pages: {} page_size: {} to worker_core: {}", dram_pages_to_read_g, dram_page_size_g, worker_core.str());
     while (!finished) {
 
-        uint32_t start_page = pages_written % num_dram_banks_g;                         // For paged read/write
+        // TODO: writes/reads are inconsistent on using page or page % num_dram_banks
+        uint32_t start_page = pages_written % num_dram_banks_g;
         uint32_t base_addr = (pages_written / num_dram_banks_g) * dram_page_size_g;     // For paged read/write
-        uint32_t write_addr = dst_addr + (pages_written * dram_page_size_g);            // For linear write to L1.
 
-        gen_dram_write_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data,
-                          start_page, base_addr, dram_page_size_g, dram_pages_to_read_g);
+        gen_dram_write_cmd(device, prefetch_cmds, cmd_sizes, device_data,
+                           pages_written, dram_page_size_g, dram_pages_to_read_g);
         gen_wait_and_stall_cmd(device, prefetch_cmds, cmd_sizes);
-        gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, write_addr,
+        gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                           start_page, base_addr, dram_page_size_g, dram_pages_to_read_g, 0);
-
         bytes_of_data_g += dram_page_size_g * dram_pages_to_read_g;
         pages_written += dram_pages_to_read_g;
 
-        uint32_t all_valid_worker_data_size = worker_data_size(worker_data, true) * sizeof(uint32_t);
-        finished = all_valid_worker_data_size >= WORKER_DATA_SIZE;
+        uint32_t all_valid_device_data_size = device_data.size() * sizeof(uint32_t);
+        finished = all_valid_device_data_size >= DEVICE_DATA_SIZE;
 
-        log_debug(tt::LogTest, "{} - Finished gen cmds w/ worker_data_size: 0x{:x} finished: {} pages_written: {} num_banks: {} (start_page: {} base_addr: 0x{:x} write_addr: 0x{:x})",
-            __FUNCTION__, all_valid_worker_data_size, finished, pages_written, num_dram_banks_g, start_page, base_addr, write_addr);
+        log_debug(tt::LogTest, "{} - Finished gen cmds w/ device_data_size: 0x{:x} finished: {} pages_written: {} num_banks: {} (start_page: {} base_addr: 0x{:x}",
+            __FUNCTION__, all_valid_device_data_size, finished, pages_written, num_dram_banks_g, start_page, base_addr);
     }
 }
 
 void gen_pcie_test(Device *device,
                    vector<uint32_t>& prefetch_cmds,
                    vector<uint16_t>& cmd_sizes,
-                   const unordered_map<uint32_t, vector<uint32_t>>& dram_data_map,
-                   worker_data_t& worker_data,
-                   CoreCoord worker_core,
-                   uint32_t dst_addr) {
+                   DeviceData& device_data,
+                   CoreCoord worker_core) {
 
     vector<uint32_t> dispatch_cmds;
 
-    while (worker_data_size(worker_data) * sizeof(uint32_t) < WORKER_DATA_SIZE) {
+    while (device_data.size() * sizeof(uint32_t) < DEVICE_DATA_SIZE) {
         dispatch_cmds.resize(0);
-        gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, dst_addr, pcie_transfer_size_g);
+        gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, pcie_transfer_size_g);
         add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
         bytes_of_data_g += pcie_transfer_size_g;
     }
@@ -732,9 +646,43 @@ void gen_pcie_test(Device *device,
 
 void gen_host_test(Device *device,
                    vector<uint32_t>& prefetch_cmds,
-                   vector<uint16_t>& cmd_sizes,
-                   uint32_t dst_addr) {
+                   vector<uint16_t>& cmd_sizes) {
 
+#if 0
+    constexpr uint32_t data_size = 614400;
+
+    vector<uint32_t>data;
+    for (uint32_t i = 0; i < data_size / sizeof(uint32_t); i++) {
+        data.push_back(i);
+    }
+    CoreCoord phys_worker_core = device->worker_core_from_logical_core(first_worker_g);
+    llrt::write_hex_vec_to_core(device->id(), phys_worker_core, data, l1_buf_base_g);
+    tt::Cluster::instance().l1_barrier(device->id());
+
+    host_data_g.resize(0);
+    for (int count = 0; count < 50; count++) {
+        std::vector<uint32_t> dispatch_cmds;
+        gen_bare_dispatcher_host_write_cmd(dispatch_cmds, data_size);
+        add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
+        auto prior_end = prefetch_cmds.size();
+        add_prefetcher_linear_read_cmd(device, prefetch_cmds, cmd_sizes, first_worker_g, l1_buf_base_g, data_size);
+        uint32_t new_size = (prefetch_cmds.size() - prior_end) * sizeof(uint32_t);
+        cmd_sizes.push_back(new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE);
+
+        for (auto datum : dispatch_cmds) {
+            host_data_g.push_back(datum);
+        }
+        for (auto datum : data) {
+            host_data_g.push_back(datum);
+        }
+
+        int pad = dispatch_buffer_page_size_g - ((host_data_g.size() * sizeof(uint32_t)) % dispatch_buffer_page_size_g);
+        pad = pad % dispatch_buffer_page_size_g;
+        for (int i = 0; i < pad / sizeof(uint32_t); i++) {
+            host_data_g.push_back(0xbaadf00d);
+        }
+    }
+#else
     std::vector<uint32_t> dispatch_cmds;
 
     gen_dispatcher_host_write_cmd(dispatch_cmds, 32);
@@ -751,15 +699,14 @@ void gen_host_test(Device *device,
     dispatch_cmds.resize(0);
     gen_dispatcher_host_write_cmd(dispatch_cmds, 16384);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+#endif
 }
 
 void gen_rnd_dram_paged_cmd(Device *device,
                             vector<uint32_t>& prefetch_cmds,
                             vector<uint16_t>& cmd_sizes,
-                            const unordered_map<uint32_t, vector<uint32_t>>& dram_data_map,
-                            worker_data_t& worker_data,
-                            CoreCoord worker_core,
-                            uint32_t dst_addr) {
+                            DeviceData& device_data,
+                            CoreCoord worker_core) {
 
     vector<uint32_t> dispatch_cmds;
 
@@ -767,8 +714,8 @@ void gen_rnd_dram_paged_cmd(Device *device,
     uint32_t max_page_size = big_g ? MAX_PAGE_SIZE : 4096;
     uint32_t page_size = (std::rand() % (max_page_size + 1)) & ~(DRAM_DATA_ALIGNMENT - 1);
     if (page_size < DRAM_DATA_ALIGNMENT) page_size = DRAM_DATA_ALIGNMENT;
-    uint32_t max_data = big_g ? WORKER_DATA_SIZE : WORKER_DATA_SIZE / 8;
-    uint32_t max = WORKER_DATA_SIZE - worker_data_size(worker_data) * sizeof(uint32_t);
+    uint32_t max_data = big_g ? DEVICE_DATA_SIZE : DEVICE_DATA_SIZE / 8;
+    uint32_t max = DEVICE_DATA_SIZE - device_data.size() * sizeof(uint32_t);
     max = (max > max_data) ? max_data : max;
     // start in bottom half of valid dram data to not worry about overflowing valid data
     uint32_t base_addr = (std::rand() % (DRAM_DATA_SIZE_BYTES / 2)) & ~(DRAM_DATA_ALIGNMENT - 1);
@@ -781,22 +728,21 @@ void gen_rnd_dram_paged_cmd(Device *device,
     length_adjust = (length_adjust >> 5) << 5;
     if (length_adjust > 64 * 1024) length_adjust = 63 * 1024;
 
-    if (worker_data_size(worker_data) * sizeof(uint32_t) + page_size * pages - length_adjust + l1_buf_base_g >=
+    if (device_data.size() * sizeof(uint32_t) + page_size * pages - length_adjust + l1_buf_base_g >=
         device->l1_size_per_core()) {
         // try try again
         return;
     }
 
-    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       start_page, base_addr, page_size, pages, length_adjust);
 }
 
 void gen_rnd_inline_cmd(Device *device,
                         vector<uint32_t>& prefetch_cmds,
                         vector<uint16_t>& cmd_sizes,
-                        worker_data_t& worker_data,
-                        CoreCoord worker_core,
-                        uint32_t dst_addr) {
+                        DeviceData& device_data,
+                        CoreCoord worker_core) {
 
     vector<uint32_t> dispatch_cmds;
 
@@ -815,16 +761,16 @@ void gen_rnd_inline_cmd(Device *device,
             uint32_t max_size = big_g ? max_prefetch_command_size_g : max_prefetch_command_size_g / 16;
             uint32_t max_xfer_size_16b = (max_size - cmd_size_bytes) >> 4;
             uint32_t xfer_size_16B = (std::rand() & (max_xfer_size_16b - 1));
-            // Note: this may overflow the WORKER_DATA_SIZE, but by little enough that it won't overflow L1
+            // Note: this may overflow the DEVICE_DATA_SIZE, but by little enough that it won't overflow L1
             uint32_t xfer_size_bytes = xfer_size_16B << 4;
 
-            gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data,
-                                             dst_addr, xfer_size_bytes);
+            gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data,
+                                             xfer_size_bytes);
         }
         break;
     case 1:
         // packed unicast write
-        gen_rnd_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_data, dst_addr);
+        gen_rnd_dispatcher_packed_write_cmd(device, dispatch_cmds, device_data);
         break;
     }
 
@@ -833,8 +779,7 @@ void gen_rnd_inline_cmd(Device *device,
 
 void gen_rnd_debug_cmd(vector<uint32_t>& prefetch_cmds,
                        vector<uint16_t>& cmd_sizes,
-                       worker_data_t& worker_data,
-                       uint32_t dst_addr) {
+                       DeviceData& device_data) {
 
     vector<uint32_t> rnd_payload;
     generate_random_payload(rnd_payload, std::rand() % (dispatch_buffer_page_size_g - sizeof(CQDispatchCmd)) + 1);
@@ -844,11 +789,9 @@ void gen_rnd_debug_cmd(vector<uint32_t>& prefetch_cmds,
 void gen_rnd_test(Device *device,
                   vector<uint32_t>& prefetch_cmds,
                   vector<uint16_t>& cmd_sizes,
-                  const unordered_map<uint32_t, vector<uint32_t>>& dram_data_map,
-                  worker_data_t& worker_data,
-                  uint32_t dst_addr) {
+                  DeviceData& device_data) {
 
-    while (worker_data_size(worker_data) * sizeof(uint32_t) < WORKER_DATA_SIZE) {
+    while (device_data.size() * sizeof(uint32_t) < DEVICE_DATA_SIZE) {
         // Assumes terminate is the last command...
         uint32_t cmd = std::rand() % CQ_PREFETCH_CMD_TERMINATE;
         uint32_t x = rand() % (all_workers_g.end.x - first_worker_g.x);
@@ -858,10 +801,10 @@ void gen_rnd_test(Device *device,
 
         switch (cmd) {
         case CQ_PREFETCH_CMD_RELAY_PAGED:
-            gen_rnd_dram_paged_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr);
+            gen_rnd_dram_paged_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core);
             break;
         case CQ_PREFETCH_CMD_RELAY_INLINE:
-            gen_rnd_inline_cmd(device, prefetch_cmds, cmd_sizes, worker_data, worker_core, dst_addr);
+            gen_rnd_inline_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core);
             break;
         case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
             break;
@@ -870,7 +813,7 @@ void gen_rnd_test(Device *device,
         case CQ_PREFETCH_CMD_DEBUG:
             if (!use_dram_exec_buf_g) {
                 // Splitting debug cmds not implemented for exec_bufs (yet)
-                gen_rnd_debug_cmd(prefetch_cmds, cmd_sizes, worker_data, dst_addr);
+                gen_rnd_debug_cmd(prefetch_cmds, cmd_sizes, device_data);
             }
             break;
         }
@@ -955,10 +898,8 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(Device *device,
 void gen_smoke_test(Device *device,
                     vector<uint32_t>& prefetch_cmds,
                     vector<uint16_t>& cmd_sizes,
-                    unordered_map<uint32_t, vector<uint32_t>>& dram_data_map,
-                    worker_data_t& worker_data,
-                    CoreCoord worker_core,
-                    uint32_t dst_addr) {
+                    DeviceData& device_data,
+                    CoreCoord worker_core) {
 
     vector<uint32_t> empty_payload; // don't give me grief, it is just a test
     vector<uint32_t> dispatch_cmds;
@@ -973,32 +914,32 @@ void gen_smoke_test(Device *device,
 
     // Write to worker
     dispatch_cmds.resize(0);
-    reset_worker_data(worker_data);
-    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, dst_addr, 32);
+    device_data.reset();
+    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, 32);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
     // Write to worker
     dispatch_cmds.resize(0);
-    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, dst_addr, 1026);
+    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, 1026);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
     // Write to worker
     dispatch_cmds.resize(0);
-    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, dst_addr, 8448);
+    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, 8448);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
     // Merge 4 commands in the FetchQ
     dispatch_cmds.resize(0);
-    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, dst_addr, 112);
+    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, 112);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
     dispatch_cmds.resize(0);
-    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, dst_addr, 608);
+    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, 608);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
     dispatch_cmds.resize(0);
-    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, dst_addr, 64);
+    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, 64);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
     dispatch_cmds.resize(0);
-    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, dst_addr, 96);
+    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, 96);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
     // Tests sending multiple commands w/ 1 FetchQ entry
@@ -1013,48 +954,48 @@ void gen_smoke_test(Device *device,
 
     // Read from dram, write to worker
     // start_page, base addr, page_size, pages
-    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       0, 0, 32, num_dram_banks_g, 0);
-    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       0, 0, 32, num_dram_banks_g, 0);
-    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       4, 32, 64, num_dram_banks_g, 0);
 
-    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       0, 0, 128, 128, 0);
-    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       4, 32, 2048, num_dram_banks_g + 4, 0);
-    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
-                      5, 32, 2048, num_dram_banks_g * 8 + 1, 0);
-    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
+                      5, 32, 2048, num_dram_banks_g * 3 + 1, 0);
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       3, 128, 6144, num_dram_banks_g - 1, 0);
 
-    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       0, 0, 128, 128, 32);
-    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       4, 32, 2048, num_dram_banks_g * 2, 1536);
-    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       5, 32, 2048, num_dram_banks_g * 2 + 1, 256);
-    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       3, 128, 6144, num_dram_banks_g - 1, 640);
 
     // Large pages
-    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       0, 0, scratch_db_size_g / 2 + 32, 2, 128); // just a little larger than the scratch_db, length_adjust backs into prior page
-    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       0, 0, scratch_db_size_g, 2, 0); // exactly the scratch db size
 
     // Forces length_adjust to back into prior read.  Device reads pages, shouldn't be a problem...
     uint32_t page_size = 256 + 32;
     uint32_t length = scratch_db_size_g / 2 / page_size * page_size + page_size;
-    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr,
+    gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core,
                       3, 128, page_size, length / page_size, 160);
 
     // Send inline data to (maybe) multiple cores
     dispatch_cmds.resize(0);
     vector<CoreCoord> worker_cores;
     worker_cores.push_back(first_worker_g);
-    gen_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_cores, worker_data, dst_addr, 4);
+    gen_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_cores, device_data, 4);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
     dispatch_cmds.resize(0);
@@ -1065,39 +1006,38 @@ void gen_smoke_test(Device *device,
             worker_cores.push_back(worker_core);
         }
     }
-    gen_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_cores, worker_data, dst_addr, 12);
+    gen_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_cores, device_data, 12);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
     dispatch_cmds.resize(0);
     worker_cores.resize(0);
     worker_cores.push_back(first_worker_g);
-    worker_cores.push_back({first_worker_g.x + 3, first_worker_g.y});
-    gen_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_cores, worker_data, dst_addr, 156);
+    worker_cores.push_back(all_workers_g.end);
+    gen_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_cores, device_data, 156);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
     // These tests copy data from earlier tests so can't run first
-    gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr, 32);
-    gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr, 65 * 1024);
+    gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, 32);
+    gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, 65 * 1024);
 
     // Test wait/stall
     gen_dispatcher_delay_cmd(device, prefetch_cmds, cmd_sizes, 1024 * 1024);
     dispatch_cmds.resize(0);
-    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, worker_data, dst_addr, 2048);
+    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, 1024);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
     gen_wait_and_stall_cmd(device, prefetch_cmds, cmd_sizes);
-    gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr, 32, worker_data[worker_core][0].data.size() - 32 / sizeof(uint32_t));
+    gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, 32, device_data.size_at(worker_core, 0) - 32 / sizeof(uint32_t));
 
     // Test Paged DRAM Write and Read. FIXME - Needs work - hits asserts.
-    // gen_dram_write_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, 0, 32, 64, 128);
+    // gen_dram_write_cmd(device, prefetch_cmds, cmd_sizes, device_data, 0, 32, 64, 128);
     // gen_wait_and_stall_cmd(device, prefetch_cmds, cmd_sizes);
-    // gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, worker_core, dst_addr, 0, 32, 64, 128);
+    // gen_dram_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, 0, 32, 64, 128);
 }
 
 void gen_prefetcher_cmds(Device *device,
                          vector<uint32_t>& prefetch_cmds,
                          vector<uint16_t>& cmd_sizes,
-                         unordered_map<uint32_t, vector<uint32_t>>& dram_data_map,
-                         worker_data_t& worker_data,
+                         DeviceData& device_data,
                          uint32_t dst_addr) {
 
     switch (test_type_g) {
@@ -1105,28 +1045,31 @@ void gen_prefetcher_cmds(Device *device,
         // No cmds, tests terminating - true smoke test
         break;
     case 1:
-        gen_smoke_test(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, first_worker_g, dst_addr);
+        gen_smoke_test(device, prefetch_cmds, cmd_sizes, device_data, first_worker_g);
         break;
     case 2:
-        gen_rnd_test(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, dst_addr);
+        gen_rnd_test(device, prefetch_cmds, cmd_sizes, device_data);
         break;
     case 3:
-        gen_pcie_test(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, first_worker_g, dst_addr);
+        gen_pcie_test(device, prefetch_cmds, cmd_sizes, device_data, first_worker_g);
         break;
     case 4:
-        gen_paged_read_dram_test(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, first_worker_g, dst_addr);
+        gen_paged_read_dram_test(device, prefetch_cmds, cmd_sizes, device_data, first_worker_g);
         break;
     case 5:
-        gen_paged_write_read_dram_test(device, prefetch_cmds, cmd_sizes, dram_data_map, worker_data, first_worker_g, dst_addr);
+        gen_paged_write_read_dram_test(device, prefetch_cmds, cmd_sizes, device_data, first_worker_g, dst_addr);
         break;
     case 6:
-        gen_host_test(device, prefetch_cmds, cmd_sizes, dst_addr);
+        gen_host_test(device, prefetch_cmds, cmd_sizes);
         break;
     case 7:
         log_fatal("Unknown test");
         exit(0);
         break;
     }
+
+    TT_FATAL(device_data.size() * sizeof(uint32_t) + l1_buf_base_g <= device->l1_size_per_core(),
+             "Test overflowed L1 memory");
 }
 
 void gen_terminate_cmds(vector<uint32_t>& prefetch_cmds,
@@ -1287,33 +1230,6 @@ void write_prefetcher_cmds(uint32_t iterations,
     }
 }
 
-// Populate interleaved DRAM with data for later readback.  Can we extended to L1 if needed.
-void populate_interleaved_dram(Device *device, unordered_map<uint32_t, vector<uint32_t>>& dram_data_map)
-{
-
-    num_dram_banks_g = device->num_banks(BufferType::DRAM);
-
-    for (int bank_id = 0; bank_id < num_dram_banks_g; bank_id++) {
-        auto offset = device->bank_offset(BufferType::DRAM, bank_id);
-        auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-        auto bank_core = device->core_from_dram_channel(dram_channel);
-
-        // Generate random or coherent data per bank of specific size.
-        for (uint32_t i = 0; i < DRAM_DATA_SIZE_WORDS; i++) {
-            uint32_t datum = (use_coherent_data_g) ? (((bank_id & 0xFF) << 24) | i) : std::rand();
-            dram_data_map[bank_id].push_back(datum);
-            if (i < 10) {
-                log_debug(tt::LogTest, "{} - bank_id: {:2d} core: {} offset: 0x{:08x} using i: {:2d} datum: 0x{:08x}",
-                    __FUNCTION__, bank_id, bank_core.str(), offset, i, datum);
-            }
-        }
-
-        // Write to device once per bank (appropriate core and offset)
-        tt::Cluster::instance().write_core(static_cast<const void*>(dram_data_map[bank_id].data()),
-            dram_data_map[bank_id].size() * sizeof(uint32_t), tt_cxy_pair(device->id(), bank_core), DRAM_HACKED_BASE_ADDR + offset);
-    }
-}
-
 // Clear DRAM (helpful for paged write to DRAM debug to have a fresh slate)
 void initialize_dram_banks(Device *device)
 {
@@ -1447,22 +1363,12 @@ int main(int argc, char **argv) {
 
         vector<uint32_t> cmds, terminate_cmds;
         vector<uint16_t> cmd_sizes, terminate_sizes;
-
-        worker_data_t worker_data;
-        const uint32_t bank_id = 0; // No interleaved pages here.
-        for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
-            for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
-                worker_data[CoreCoord(x,y)][bank_id] = one_worker_data_t();
-            }
-        }
+        DeviceData device_data(device, all_workers_g, l1_buf_base_g, DRAM_DATA_BASE_ADDR, 0, false, DRAM_DATA_SIZE_WORDS);
+        num_dram_banks_g = device->num_banks(BufferType::DRAM);
 
         if (debug_g) {
             initialize_dram_banks(device);
         }
-
-        // Model of interleaved DRAM memory by bank id
-        unordered_map<uint32_t, vector<uint32_t>> dram_data_map;
-        populate_interleaved_dram(device, dram_data_map);
 
         tt::Cluster::instance().l1_barrier(device->id());
         tt::Cluster::instance().dram_barrier(device->id());
@@ -1986,7 +1892,7 @@ int main(int argc, char **argv) {
 
         // Cache stuff
         gen_terminate_cmds(terminate_cmds, terminate_sizes);
-        gen_prefetcher_cmds(device, cmds, cmd_sizes, dram_data_map, worker_data, l1_buf_base_g);
+        gen_prefetcher_cmds(device, cmds, cmd_sizes, device_data, l1_buf_base_g);
         if (warmup_g) {
             log_info(tt::LogTest, "Warming up cache now...");
             run_test(1, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g);
@@ -2000,15 +1906,13 @@ int main(int argc, char **argv) {
                 initialize_device_g = true;
                 cmds.resize(0);
                 cmd_sizes.resize(0);
-                reset_worker_data(worker_data);
-                gen_prefetcher_cmds(device, cmds, cmd_sizes, dram_data_map, worker_data, l1_buf_base_g);
-                TT_FATAL(worker_data_size(worker_data) * sizeof(uint32_t) + l1_buf_base_g <= device->l1_size_per_core(),
-                         "Test overflowed L1 memory");
+                device_data.reset();
+                gen_prefetcher_cmds(device, cmds, cmd_sizes, device_data, l1_buf_base_g);
                 run_test(1, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g);
                 if (test_type_g == 6) {
-                    pass &= validate_host_results(device, cmds, host_hugepage_completion_buffer);
+                    pass &= validate_host_results(device, host_data_g, host_hugepage_completion_buffer);
                 } else {
-                    pass &= validate_results(device, all_workers_g, worker_data, l1_buf_base_g);
+                    pass &= device_data.validate(device);
                 }
                 if (!pass) {
                     break;
