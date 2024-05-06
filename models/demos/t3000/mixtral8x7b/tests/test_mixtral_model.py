@@ -123,12 +123,11 @@ def test_mixtral_model_inference(all_devices, iterations, n_layers, validation_t
         # Convert ttnn tensor to torch tensor
         tt_output_torch = ttnn.to_torch(tt_out[0]).squeeze(1).view(batch, seqlen, -1).detach().float()
 
+        # Measure PCC
         if validation_type == "pcc":
             positions = torch.LongTensor([start_pos])
             ref_output = reference_model(pt_decode_input, positions).detach().float()
 
-        # Measure PCC
-        if validation_type == "pcc":
             passing, pcc_message = comp_pcc(
                 ref_output.view(batch, seqlen, -1), tt_output_torch.view(batch, seqlen, -1), pcc
             )
@@ -146,14 +145,16 @@ def test_mixtral_model_inference(all_devices, iterations, n_layers, validation_t
             logger.info(f"Mean Top-5: {top5_acc}")
 
             ref_token_batch = ref_output.squeeze().argmax(axis=-1)
-            ref_tokens.append(ref_token_batch[0].item())
-            logger.info(f'ref_output: {"".join(tokenizer.decode(ref_tokens))}')
+            tt_token_batch = tt_output_torch.squeeze().argmax(axis=-1)
+            logger.info(f"ref_output: {tokenizer.decode(ref_token_batch[0].item())}")
+            logger.info(f"tt_output: {tokenizer.decode(tt_token_batch[0].item())}")
             pt_decode_input = embd(ref_token_batch).view(batch, seqlen, -1)
-
-        tt_token_batch = tt_output_torch.squeeze().argmax(axis=-1)
-        tt_tokens.append(tt_token_batch[0].item())
-        logger.info(f'tt_output_torch: {"".join(tokenizer.decode(tt_tokens))}')
-        tt_decode_input = embd(tt_token_batch).view(batch, seqlen, -1)
+            tt_decode_input = pt_decode_input  # teacher forcing for PCC test
+        else:
+            tt_token_batch = tt_output_torch.squeeze().argmax(axis=-1)
+            tt_tokens.append(tt_token_batch[0].item())
+            logger.info(f'tt_output_torch: {"".join(tokenizer.decode(tt_tokens))}')
+            tt_decode_input = embd(tt_token_batch).view(batch, seqlen, -1)
 
         if validation_type == "pcc":
             if passing:
