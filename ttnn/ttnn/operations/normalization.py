@@ -127,12 +127,12 @@ def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, *
     return weight * input_tensor
 
 
-@ttnn.register_operation(
-    name="ttnn.rms_norm",
-    validate_input_tensors=_rms_norm_validate_input_tensors,
-    golden_function=_golden_function,
+rms_norm = ttnn.register_operation(name="ttnn.rms_norm", is_cpp_function=True, golden_function=_golden_function)(
+    ttnn._ttnn.operations.normalization.rms_norm
 )
-def rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float = 1e-6) -> ttnn.Tensor:
+
+
+def _rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float = 1e-6) -> ttnn.Tensor:
     r"""
     rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float = 1e-6) -> ttnn.Tensor
 
