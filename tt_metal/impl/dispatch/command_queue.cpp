@@ -1312,7 +1312,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
         uint32_t page_size_to_write = padded_page_size;
         uint32_t padded_buffer_size = buffer.num_pages() * padded_page_size;
         if (write_partial_pages) {
-            TT_ASSERT(buffer.num_pages() == 1, "TODO: add support for multi-paged buffer with page size > 64KB");
+            TT_FATAL(buffer.num_pages() == 1, "TODO: add support for multi-paged buffer with page size > 64KB");
             uint32_t partial_size = dispatch_constants::BASE_PARTIAL_PAGE_SIZE;
             while (padded_buffer_size % partial_size != 0) {
                 partial_size += PCIE_ALIGNMENT;
@@ -2054,7 +2054,7 @@ void EventSynchronize(std::shared_ptr<Event> event) {
 
     while (event->device->sysmem_manager().get_last_completed_event(event->cq_id) < event->event_id) {
         if (tt::llrt::OptionsG.get_test_mode_enabled() && tt::watcher_server_killed_due_to_error()) {
-            TT_ASSERT(false, "Command Queue could not complete EventSynchronize. See {} for details.", tt::watcher_get_log_file_name());
+            TT_FATAL(false, "Command Queue could not complete EventSynchronize. See {} for details.", tt::watcher_get_log_file_name());
             return;
         }
         std::this_thread::sleep_for(std::chrono::microseconds(5));

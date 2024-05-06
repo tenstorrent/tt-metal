@@ -195,7 +195,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
     void WriteToDeviceSharded(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
         uint32_t host_buffer_size_bytes = host_buffer.size() * sizeof(uint32_t);
-        TT_ASSERT(
+        TT_FATAL(
             host_buffer_size_bytes <= buffer.size(),
             "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer", host_buffer_size_bytes, buffer.size());
 
