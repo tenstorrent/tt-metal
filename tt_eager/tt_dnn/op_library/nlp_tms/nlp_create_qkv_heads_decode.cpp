@@ -138,7 +138,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
 
         const auto& core = cores[i];
         std::vector<uint32_t> reader_runtime_args;
-        reader_runtime_args.reserve(10 + in_num_cores_x + in_num_cores_y);
+        reader_runtime_args.reserve(11 + in_num_cores_x + in_num_cores_y);
         reader_runtime_args = {
             head_size,
             num_q_heads,
@@ -151,6 +151,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
             k_start_addr,
             v_start_addr,
             in_num_cores_x,
+            in_num_cores_y
         };
         reader_runtime_args.insert(reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
         reader_runtime_args.insert(reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
@@ -163,7 +164,6 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
             num_q_heads,
             num_kv_heads,
             num_cores,
-            in_num_cores_y,
             cb_q_output,
             cb_k_output,
             cb_v_output,
