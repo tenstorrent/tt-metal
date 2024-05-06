@@ -43,6 +43,7 @@ auto generic_create_output_tensors(
 
 namespace run_operation_state {
 namespace detail {
+
 struct RunOperationState {
 
     RunOperationState() {}
@@ -96,6 +97,7 @@ inline const auto& get_composite_parent_names() {
 
 
 namespace detail {
+
 template<typename ReturnType, typename... Args>
 struct CompositeOperation {
 
@@ -392,7 +394,8 @@ void launch_op(
     const Tensors input_tensors,
     Tensors& output_tensors,
     const OptionalConstTensors optional_input_tensors = {},
-    const OptionalTensors optional_output_tensors = {}
+    const OptionalTensors optional_output_tensors = {},
+    bool enable_autoformat_device = true
 );
 
 void launch_with_autoformat(
@@ -403,7 +406,14 @@ void launch_with_autoformat(
     const OptionalTensors optional_output_tensors = {}
 );
 
-std::vector<Device*> get_workers_for_op_output(const std::vector<Tensor>&& inputs, const std::vector<std::optional<const Tensor>>&& optional_inputs = {});
+std::vector<Device*> get_workers_for_op_output(
+    const std::vector<Tensor>&& inputs,
+    const std::vector<std::optional<const Tensor>>&& optional_inputs = {},
+    bool enable_autoformat_device = true);
+
+namespace detail{
+    Device* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors = {});
+}
 
 } //namespace operation
 

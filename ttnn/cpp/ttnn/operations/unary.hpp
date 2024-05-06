@@ -40,24 +40,13 @@ inline Tensor execute(
     const Tensor& input_tensor,
     const std::vector<tt::tt_metal::UnaryWithParam>& op_chain,
     const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
-        [op_chain, memory_config](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_tensor = input_tensors.at(0);
-            bool fp32_dest_acc_en =
-                input_tensor.get_dtype() == DataType::UINT32 or
-                input_tensor.get_dtype() == DataType::INT32;  // MT: Currently only uint32/int32 is moved to DST
-                                                              // directly, fp32 is converted to fp16b
-            return operation::run(
-                EltwiseUnary{op_chain, memory_config.value_or(input_tensor.memory_config()), fp32_dest_acc_en},
-                {input_tensor});
-        },
-        {input_tensor},
-        output_tensors);
-    return output_tensors.at(0);
+    bool fp32_dest_acc_en = input_tensor.get_dtype() == DataType::UINT32 or
+                            input_tensor.get_dtype() == DataType::INT32;  // MT: Currently only uint32/int32 is moved to
+                                                                          // DST directly, fp32 is converted to fp16b
+    return operation::run(
+               EltwiseUnary{op_chain, memory_config.value_or(input_tensor.memory_config()), fp32_dest_acc_en},
+               {input_tensor})
+        .at(0);
 }
 }  // namespace detail
 
@@ -69,6 +58,15 @@ struct Unary : public EltwiseUnary {
     static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
     };
+
+
+    template <typename... Args>
+    static auto map_launch_op_args_to_execute(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        Args&&... args) {
+            return std::make_tuple(input_tensors.at(0), std::forward<Args>(args)...);
+    }
 
     static Tensor execute(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         return detail::execute(
@@ -83,6 +81,15 @@ struct Exp : public EltwiseUnary {
     static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
     };
+
+
+    template <typename... Args>
+    static auto map_launch_op_args_to_execute(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        Args&&... args) {
+            return std::make_tuple(input_tensors.at(0), std::forward<Args>(args)...);
+    }
 
     static Tensor execute(
         const Tensor& input_tensor,

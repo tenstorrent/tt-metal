@@ -17,6 +17,7 @@
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/op_library/to_layout/to_layout_op.hpp"
+#include "ttnn/op_library/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/validation.hpp"
 
@@ -154,57 +155,6 @@ inline ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) 
     }
 }
 
-inline ttnn::Tensor to_memory_config(
-    const ttnn::Tensor& tensor,
-    const ttnn::MemoryConfig& memory_config,
-    std::optional<ttnn::DataType> dtype = std::nullopt) {
-    const auto original_memory_config = ttnn::get_memory_config(tensor);
-    if (original_memory_config.has_value() && original_memory_config.value() == memory_config) {
-        return tensor;
-    }
-
-    const auto original_shape = tensor.get_shape();
-    const auto tensor_4D = unsqueeze_to_4D(tensor);
-
-    if (memory_config.is_sharded()) {
-        // to_sharded path
-        if (tensor_4D.is_sharded()) {
-            // reshard
-            const auto input_memory_config = ttnn::get_memory_config(tensor_4D);
-            const auto input_shard_spec = input_memory_config.value().shard_spec.value();
-            const auto output_shard_spec = memory_config.shard_spec.value();
-            if (tensor_4D.get_layout() == ttnn::TILE_LAYOUT ||
-                input_shard_spec.shape[1] == output_shard_spec.shape[1]) {
-                if (dtype.has_value()) {
-                    throw runtime_error("dtype cannot be specified when converting sharded tensor to sharded tensor");
-                }
-                return reshape(tt::tt_metal::reshard(tensor_4D, memory_config), original_shape);
-            } else {
-                // for row-major tensors where shard-spec[1] is different for input shard and output shard
-                return reshape(
-                    tt::tt_metal::interleaved_to_sharded(
-                        tt::tt_metal::sharded_to_interleaved(tensor_4D, ttnn::DRAM_MEMORY_CONFIG, dtype),
-                        memory_config,
-                        dtype),
-                    original_shape);
-            }
-        } else {
-            return reshape(tt::tt_metal::interleaved_to_sharded(tensor_4D, memory_config, dtype), original_shape);
-        }
-    } else {
-        // to_interleaved path
-        if (tensor_4D.is_sharded()) {
-            return reshape(
-                tt::tt_metal::sharded_to_interleaved(tensor_4D, memory_config, dtype), original_shape);
-        } else {
-            // L1 to DRAM or DRAM to L1
-            return reshape(tt::tt_metal::clone(tensor_4D, memory_config, dtype), original_shape);
-        }
-    }
-
-    return reshape(tensor_4D, original_shape);
-}
-
 inline ttnn::Tensor to_device(
     const ttnn::Tensor& tensor, Device* device, const std::optional<MemoryConfig>& memory_config) {
     return tensor.to(device, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
@@ -215,7 +165,7 @@ inline ttnn::Tensor to_device(
     return tensor.to(device_mesh, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
 }
 
-inline ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking=true) { return tensor.cpu(blocking); }
+inline ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true) { return tensor.cpu(blocking); }
 
 inline void deallocate(Tensor& tensor, bool force = true) { tensor.deallocate(force); }
 
@@ -238,6 +188,6 @@ using operations::core::squeeze_from_4D;
 using operations::core::to_device;
 using operations::core::unsqueeze_to_4D;
 
+constexpr auto to_memory_config = ttnn::register_operation<ttnn::operations::core::ToMemoryConfig>("ttnn::to_memory_config");
 constexpr auto to_layout = ttnn::register_operation<ttnn::operations::core::ToLayout>("ttnn::to_layout");
-
 }  // namespace ttnn
