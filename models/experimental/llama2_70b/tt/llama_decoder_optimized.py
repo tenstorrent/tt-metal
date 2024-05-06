@@ -228,14 +228,18 @@ class TtLlamaDecoder_optimized:
 
             rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
             # Use batch=1 because we assume all users use same rot_mat
-            rot_mat = get_rotation_mat(rot_emb, start_pos, seq_len, batch=1)
-            assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
+            rot_mat = get_rotation_mat(rot_emb, start_pos, seq_len, batch=32)
+            assert rot_mat.size() == (1, 32, self.head_dim, self.head_dim)
             rot_mats = []
             for device_id in range(self.num_devices):
                 rot_mats.append(
                     as_tensor(
-                        rot_mat.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, f"rot_mat_decode_{start_pos}", device_id
+                        rot_mat.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, f"rot_mat_decode_full_{start_pos}", device_id
                     )
+                )
+            for i in range(self.num_devices):
+                rot_mats[i] = tt_lib.tensor.interleaved_to_sharded(
+                    rot_mats[i], sharded_mem_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"]
                 )
 
             padded_layer_past_len = nearest_32(start_pos + 1)
@@ -247,11 +251,15 @@ class TtLlamaDecoder_optimized:
                 # BFLOAT16_DTYPE currently pushes faster
                 attn_masks.append(
                     as_tensor(
-                        attn_mask.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, f"attn_mask_decode_{start_pos}", device_id
+                        attn_mask.clone(),
+                        ttnn.bfloat16,
+                        ttnn.TILE_LAYOUT,
+                        f"attn_mask_decode_test_{start_pos}",
+                        device_id,
                     )
                 )
 
-            repeat_shape = (batch, 1, 1, 1)
+            repeat_shape = (1, batch, 1, 1)
             for i in range(self.num_devices):
                 attn_masks[i] = tt_lib.tensor.repeat(
                     attn_masks[i], repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]

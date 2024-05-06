@@ -577,6 +577,27 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             fused_activation=None,
             mcast_in0=False,
         )
+        model_config["ROT_MAT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=[8, 4],
+            in0_block_w=4,  # 128 // TILE_SIZE (dynamic)
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=4,
+        )
+        model_config["ROT_MAT_MM_IN1_MEMCFG"] = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_32_cores_grid,
+                [
+                    head_dim,
+                    head_dim,  # head dim
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
     else:
         # ttnn.Shape([1, 8, 128, 128])
         # ttnn.Shape([8, 128, 128, 128])
