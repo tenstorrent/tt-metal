@@ -789,6 +789,10 @@ def floor(x, *args, **kwargs):
     return torch.floor(x)
 
 
+def floordiv(x, y, *args, **kwargs):
+    return torch.floor_divide(x, y)
+
+
 def fill_bw(x, *args, **kwargs):
     grad_data = x.detach().clone()
 

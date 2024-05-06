@@ -310,6 +310,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_floor,
         "pytorch_op": pytorch_ops.floor,
     },
+    "eltwise-floordiv": {
+        "tt_lib_op": tt_lib_ops.eltwise_floordiv,
+        "pytorch_op": pytorch_ops.floordiv,
+    },
     "eltwise-square": {
         "tt_lib_op": tt_lib_ops.eltwise_square,
         "pytorch_op": pytorch_ops.square,

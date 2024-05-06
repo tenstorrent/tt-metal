@@ -1553,10 +1553,27 @@ Tensor _unary_floor(const Tensor& x, const MemoryConfig& output_mem_config) {
     value = where(lt(orig, neg(ones_like(value))), sub_unary(neg(value), 1), value);
     value = where(eq(sub(orig, value), ones_like(value)), add_unary(value, 1), value);
     value = where(logical_and(lte_unary(orig, -256), gte_unary(orig, -512)), add_unary(value, 2), value);
+    value = where(logical_or(eq_unary(x,std::nanf("")),
+                        logical_or( eq_unary(x,std::numeric_limits<float>::infinity()),  eq_unary(x, -std::numeric_limits<float>::infinity()))
+                            ), x, value); //floor(nan, inf, -inf) = nan, inf, -inf
     return value;
 }
 Tensor unary_floor(const Tensor& a, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _unary_floor)(a, output_mem_config);
+}
+
+Tensor _floordiv(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config) {
+    Tensor result = unary_floor(div(input_a, input_b, true), output_mem_config);
+    return result;
+}
+Tensor floordiv(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _floordiv)(input_a, input_b, output_mem_config);
 }
 
 // Argmax returns the index of maximum element in the tensor
