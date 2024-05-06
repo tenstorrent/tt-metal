@@ -252,7 +252,7 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Postcondition: in_cb has num_tiles consumed
     // Postcondition: out_cb has num_tiles produced
 
-    copy_tile_to_dst_init_short();
+    copy_tile_to_dst_init_short(in_cb);
 
     cb_wait_front(in_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
