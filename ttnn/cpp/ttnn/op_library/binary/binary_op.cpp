@@ -287,7 +287,8 @@ operation::ProgramWithCallbacks Binary<binary_op_type, in_place>::create_program
                     input_tensor_a,
                     input_tensor_b,
                     output_tensor,
-                    binary_op_type_to_bcast_op_math<binary_op_type>());
+                    binary_op_type_to_bcast_op_math<binary_op_type>(),
+                    false /* in-place */);
             case BinaryProgramType::BroadcastHeightMultiCore:
                 return bcast_multi_core_h(
                     input_tensor_a,

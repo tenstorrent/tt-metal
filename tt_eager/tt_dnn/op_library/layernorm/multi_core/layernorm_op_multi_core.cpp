@@ -1170,6 +1170,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             writer_kernel_ids,
             writer_mcast_sender_kernels_id,
             writer_mcast_receiver_kernels_id,
+            num_none_all_to_all_workers,
             cb_in0,
             cb_in1,
             cb_output,
@@ -1197,7 +1198,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
 
         auto& writer_sender_args_by_core = GetRuntimeArgs(program, writer_mcast_sender_kernels_id);
-        auto& writer_receiver_args_by_core = GetRuntimeArgs(program, writer_mcast_receiver_kernels_id);
+        auto& writer_receiver_args_by_core = num_none_all_to_all_workers > 0 ? GetRuntimeArgs(program, writer_mcast_receiver_kernels_id) : writer_sender_args_by_core;
 
         const auto gamma_address = gamma_tensor.has_value() ? gamma_tensor.value().buffer()->address() : 0;
         const auto beta_address = beta_tensor.has_value() ? beta_tensor.value().buffer()->address() : 0;

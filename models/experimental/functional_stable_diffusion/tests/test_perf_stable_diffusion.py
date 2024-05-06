@@ -72,43 +72,18 @@ def unsqueeze_all_params_to_4d(params):
     return params
 
 
-def tt_guide(noise_pred, guidance_scale):  # will return latents
-    noise_pred_uncond, noise_pred_text = ttnn.split(noise_pred, noise_pred.shape[0] // 2, dim=0)
-    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-    return noise_pred
-
-
-def tt_latent_expansion(latents, scheduler, sigma, device):
-    latent_model_input = ttnn.concat([latents, latents], dim=0)
-    latent_model_input = scheduler.scale_model_input(latent_model_input, sigma, device)
-    return latent_model_input
-
-
-def get_lms_coefficient(order, t, current_order, sigmas):
-    def lms_derivative(tau):
-        prod = 1.0
-        for k in range(order):
-            if current_order == k:
-                continue
-            prod *= (tau - sigmas[t - k]) / (sigmas[t - current_order] - sigmas[t - k])
-        return prod
-
-    integrated_coeff = integrate.quad(lms_derivative, sigmas[t], sigmas[t + 1], epsrel=1e-4)[0]
-
-    return integrated_coeff
-
-
 @skip_for_grayskull()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, num_inference_steps, expected_compile_time, expected_inference_time",
     [
-        (2, 2, 3600, 2.6),  # Issue 7816 Inference time
+        (2, 2, 3600, 0.28),  # Issue 7816 Inference time
     ],
 )
 def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected_compile_time, expected_inference_time):
-    disable_persistent_kernel_cache()
+    device.enable_program_cache()
+    # disable_persistent_kernel_cache()
 
     # Clear global profiler state before starting measurements
     profiler.clear()
@@ -218,6 +193,9 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
         expected_inference_time=expected_inference_time,
         comments=comment,
     )
+    assert (
+        second_iter_time < expected_inference_time
+    ), f"Expected inference time: {expected_inference_time} Actual inference time: {second_iter_time}"
     logger.info("Exit SD perf test")
 
 
