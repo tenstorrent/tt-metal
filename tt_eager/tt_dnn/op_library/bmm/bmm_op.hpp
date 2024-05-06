@@ -388,7 +388,8 @@ inline Tensor matmul(
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool untilize_out = false,
     std::optional<const CoreCoord> user_core_coord = std::nullopt,
-    std::optional<const bool> input_b_is_batched = std::nullopt) {
+    std::optional<const bool> input_b_is_batched = std::nullopt,
+    const bool needs_autoformat = false) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
     if (bias) {
@@ -399,8 +400,9 @@ inline Tensor matmul(
         output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
     }
 
-    operation::launch_op(
-        [program_config, mem_config, output_dtype, compute_kernel_config, untilize_out, user_core_coord, input_b_is_batched] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+    if (!needs_autoformat) {
+	operation::launch_op(
+		[program_config, mem_config, output_dtype, compute_kernel_config, untilize_out, user_core_coord, input_b_is_batched] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_a = input_tensors.at(0);
             const auto& input_tensor_b = input_tensors.at(1);
             auto arch = input_tensor_a.device()->arch();
@@ -413,7 +415,19 @@ inline Tensor matmul(
 	    }
             return operation::run(Matmul{matmul_program_config, broadcast_batch, mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), kernel_config_val, untilize_out}, {input_tensor_a, input_tensor_b}, optional_input_tensors);
         },
-    {input_tensor_a, input_tensor_b}, output_tensors, optional_input_tensors);
+	{input_tensor_a, input_tensor_b}, output_tensors, optional_input_tensors);
+    } else {
+	operation::launch_with_autoformat(
+		[program_config, mem_config, output_dtype, compute_kernel_config, untilize_out, user_core_coord, input_b_is_batched] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+            const auto& input_tensor_a = input_tensors.at(0);
+            const auto& input_tensor_b = input_tensors.at(1);
+	    auto arch = input_tensor_a.storage_type() == StorageType::DEVICE ? input_tensor_a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
+            auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
+            bool broadcast_batch = get_broadcast_batch(input_tensor_a, input_tensor_b, program_config);
+            return operation::run_with_autoformat(Matmul{program_config, broadcast_batch, mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), kernel_config_val, untilize_out}, {input_tensor_a, input_tensor_b}, optional_input_tensors);
+        },
+	{input_tensor_a, input_tensor_b}, output_tensors, optional_input_tensors);
+    }
     return output_tensors.at(0);
 }
 
