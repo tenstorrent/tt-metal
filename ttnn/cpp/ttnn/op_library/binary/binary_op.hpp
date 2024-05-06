@@ -91,55 +91,62 @@ struct Binary {
         return std::make_tuple(input_tensor_a, input_tensor_b);
     }
 
+
+    template <typename... Args>
+    static auto map_launch_op_args_to_execute(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        Args&&... args) {
+            return std::make_tuple(input_tensors.at(0), input_tensors.at(1), std::forward<Args>(args)...);
+    }
+
     static Tensor execute(
-        const Tensor &input_tensor_a,
-        const Tensor &input_tensor_b,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::optional<const DataType> &dtype = std::nullopt,
         std::optional<std::vector<std::string>> activations = std::nullopt) {
-        std::vector<Tensor> output_tensors = {
-            Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
-        operation::launch_op(
-            [activations, memory_config, dtype](
-                const std::vector<Tensor> &input_tensors,
-                const std::vector<std::optional<const Tensor>> &optional_input_tensors,
-                const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-                auto &&[input_tensor_a, input_tensor_b] = [](const auto &input_tensor_a_arg,
-                                                             const auto &input_tensor_b_arg) {
-                    // Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
-                    if (tt::tt_metal::compute_volume(input_tensor_a_arg.get_shape()) <
-                        tt::tt_metal::compute_volume(input_tensor_b_arg.get_shape())) {
-                        return std::make_tuple(input_tensor_b_arg, input_tensor_a_arg);
-                    }
-                    return std::make_tuple(input_tensor_a_arg, input_tensor_b_arg);
-                }(input_tensors.at(0), input_tensors.at(1));
+        auto &&[input_tensor_a, input_tensor_b] = [](const auto &input_tensor_a_arg,
+                                                        const auto &input_tensor_b_arg) {
+            // Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
+            if (tt::tt_metal::compute_volume(input_tensor_a_arg.get_shape()) <
+                tt::tt_metal::compute_volume(input_tensor_b_arg.get_shape())) {
+                return std::make_tuple(input_tensor_b_arg, input_tensor_a_arg);
+            }
+            return std::make_tuple(input_tensor_a_arg, input_tensor_b_arg);
+        }(input_tensor_a_arg, input_tensor_b_arg);
+        auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
 
-                auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
+        // TODO(arakhmati): #7731 - remove this!
+        auto input_shape_a = input_tensor_a.get_shape();
+        auto input_shape_b = input_tensor_b.get_shape();
+        if (input_shape_a.rank() == 4 and input_shape_b.rank() == 4 and input_shape_a[0] > input_shape_b[0] and
+            input_shape_a[-1] == input_shape_b[-1] and input_shape_a[-2] == input_shape_b[-2] and
+            input_shape_a[-3] == input_shape_b[-3]) {
+            tt::log_warning(tt::LogOp, "Using repeat op to broadcast batch dim");
+            Shape repeats({input_shape_a[0], 1, 1, 1});
+            input_tensor_b = repeat(input_tensor_b, repeats.value(), output_memory_config);
+        }
 
-                // TODO(arakhmati): #7731 - remove this!
-                auto input_shape_a = input_tensor_a.get_shape();
-                auto input_shape_b = input_tensor_b.get_shape();
-                if (input_shape_a.rank() == 4 and input_shape_b.rank() == 4 and input_shape_a[0] > input_shape_b[0] and
-                    input_shape_a[-1] == input_shape_b[-1] and input_shape_a[-2] == input_shape_b[-2] and
-                    input_shape_a[-3] == input_shape_b[-3]) {
-                    tt::log_warning(tt::LogOp, "Using repeat op to broadcast batch dim");
-                    Shape repeats({input_shape_a[0], 1, 1, 1});
-                    input_tensor_b = repeat(input_tensor_b, repeats.value(), output_memory_config);
-                }
-
-                return operation::run(
-                    Binary{BinaryProgramConfig{
-                        activations, output_memory_config, dtype.value_or(input_tensor_a.get_dtype())}},
-                    {input_tensor_a, input_tensor_b});
-            },
-            {input_tensor_a, input_tensor_b},
-            output_tensors);
-        return output_tensors.at(0);
+        return operation::run(
+            Binary{BinaryProgramConfig{
+                activations, output_memory_config, dtype.value_or(input_tensor_a.get_dtype())}},
+            {input_tensor_a, input_tensor_b}).at(0);
     }
 
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor &input_tensor_a, const float input_tensor_b, Args &&...args) {
         return std::make_tuple(input_tensor_a, input_tensor_b);
+    }
+
+
+    template <typename... Args>
+    static auto map_launch_op_args_to_execute(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const float scalar,
+        Args&&... args) {
+            return std::make_tuple(input_tensors.at(0), scalar, std::forward<Args>(args)...);
     }
 
     // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this

@@ -228,21 +228,20 @@ struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
         return std::make_tuple(input_tensor);
     }
 
-    static inline ttnn::Tensor execute(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
-        std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-        operation::launch_op(
-            [memory_config](
-                std::vector<Tensor> input_tensors,
-                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-                const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-                auto& input_tensor = input_tensors.at(0);
-                return operation::run(
-                    ConcatenateHeads{memory_config.value_or(input_tensor.memory_config())}, {input_tensor});
-            },
-            {input_tensor},
-            output_tensors);
-        return output_tensors.at(0);
+
+    template <typename... Args>
+    static auto map_launch_op_args_to_execute(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        Args&&... args) {
+            return std::make_tuple(input_tensors.at(0), std::forward<Args>(args)...);
     }
+
+    static inline ttnn::Tensor execute(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+        return operation::run(
+            ConcatenateHeads{memory_config.value_or(input_tensor.memory_config())}, {input_tensor}).at(0);
+    }
+
 };
 
 template <bool in_place>
@@ -262,6 +261,16 @@ struct AttentionSoftmax : public tt::operations::primary::Softmax {
         return std::make_tuple(input_tensor, attention_mask);
     }
 
+
+    template <typename... Args>
+    static auto map_launch_op_args_to_execute(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::optional<int>& head_size = std::nullopt,
+        Args&&... args) {
+            return std::make_tuple(input_tensors.at(0), head_size, optional_input_tensors.at(0) , std::forward<Args>(args)...);
+    }
+
     static ttnn::Tensor execute(
         const ttnn::Tensor& input_tensor,
         const std::optional<int>& head_size_arg = std::nullopt,
@@ -270,7 +279,7 @@ struct AttentionSoftmax : public tt::operations::primary::Softmax {
             tt::operations::primary::transformers::SoftmaxDefaultProgramConfig{},
         const std::optional<bool> causal_mask = false,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
-        auto head_size = head_size_arg.has_value() ? 1.0 / sqrt(head_size_arg.value()) : 1.0;
+        float head_size = head_size_arg.has_value() ? 1.0f / sqrt(head_size_arg.value()) : 1.0f;
         if constexpr (in_place) {
             TT_FATAL(attention_mask.has_value(), "Cannot apply divide by sqrt(head_size) using in-place version!");
         } else {

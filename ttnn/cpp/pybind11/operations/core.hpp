@@ -87,12 +87,35 @@ void py_module(py::module& module) {
 
     module.def("deallocate", &ttnn::operations::core::deallocate, py::arg("tensor"), py::arg("force") = true);
 
-    module.def(
-        "to_memory_config",
-        &ttnn::operations::core::to_memory_config,
-        py::arg("tensor"),
-        py::arg("memory_config"),
-        py::arg("dtype") = std::nullopt);
+    bind_registered_operation(
+        module,
+        ttnn::to_memory_config,
+        R"doc(to_memory_config(tensor: ttnn.Tensor, memory_config: MemoryConfig, dtype: Optional[DataType] = None) -> ttnn.Tensor
+
+            Converts a tensor to the desired mem_config, used for converting tensors to sharded tensors or interleaved, and to convert DRAM to L1 and vice versa
+
+
+            Args:
+                * :attr:`tensor`: the ttnn.Tensor
+                * :attr:`memory_config`: the desired MemoryConfig
+                * :attr:`dtype`: the optional `ttnn` data type.
+
+            Example::
+                >>> device_id = 0
+                >>> device = ttnn.open_device(device_id=device_id)
+                >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
+                >>> tensor = ttnn.to_memory_config(tensor, memory_config)
+        )doc",
+        ttnn::pybind_overload_t{
+            [](const std::decay_t<decltype(ttnn::to_memory_config)> self,
+               const ttnn::Tensor& tensor,
+               const ttnn::MemoryConfig& memory_config,
+               const std::optional<ttnn::DataType>& dtype) -> ttnn::Tensor {
+                return self(tensor, memory_config, dtype);
+               },
+               py::arg("tensor"),
+               py::arg("memory_config"),
+               py::arg("dtype") = std::nullopt});
 
     module.def(
         "reallocate",
@@ -158,7 +181,7 @@ Args:
                py::arg("dtype") = std::nullopt,
                py::arg("memory_config") = std::nullopt,
                py::arg("device") = std::nullopt});
-    
+
 }
 
 }  // namespace core
