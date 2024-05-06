@@ -135,6 +135,10 @@ namespace tt::tt_metal::detail
             py::arg().noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Shuffles [B, num_heads, S, head_dim] tensor into tensor with shape [B, 1, S, num_heads * head_dim].
         )doc");
+        m_tensor.def("nlp_concat_heads_decode", &nlp_concat_heads_decode,
+            py::arg().noconvert(), py::arg("num_heads").noconvert() = std::nullopt, R"doc(
+            Shuffles [S=1, B=32, 32(num_heads), head_dim] tensor into tensor with shape [S=1, 1, B=32, num_heads * head_dim]. num_heads should be specified and be less than 32; the op will assume the input padded num_heads to 32 and will unpad it. The output is default width sharded by num heads.
+        )doc");
 
         // Custom Resnet matmuls
         m_tensor.def("resnet_matmul", &resnet_matmul,

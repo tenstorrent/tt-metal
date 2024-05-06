@@ -121,26 +121,21 @@ std::vector<Tensor> NlpCreateHeadsDecode::create_output_tensors(const std::vecto
     auto batch = input_shape[2];
     auto num_q_heads_padded = (this->num_q_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
     auto num_kv_heads_padded = (this->num_kv_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
-    if (this->output_mem_config.is_sharded()) {
-        auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
-        auto q_shard_grid = num_cores_to_corerange_set(batch, core_grid, true);
-        ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, this->head_dim}};
-        auto q_mem_config = this->output_mem_config;
-        q_mem_config.shard_spec = q_shard_spec;
-        auto kv_shard_grid = num_cores_to_corerange_set(batch, core_grid, true);
-        ShardSpec kv_shard_spec{kv_shard_grid, {num_kv_heads_padded, this->head_dim}};
-        auto kv_mem_config = this->output_mem_config;
-        kv_mem_config.shard_spec = kv_shard_spec;
-        auto output_shapes = this->compute_output_shapes(input_tensors);
-        return {
-            create_sharded_device_tensor(output_shapes[0], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), q_mem_config),
-            create_sharded_device_tensor(output_shapes[1], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), kv_mem_config),
-            create_sharded_device_tensor(output_shapes[2], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), kv_mem_config)
-        };
-
-    } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
-    }
+    auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
+    auto q_shard_grid = num_cores_to_corerange_set(batch, core_grid, true);
+    ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, this->head_dim}};
+    auto q_mem_config = this->output_mem_config;
+    q_mem_config.shard_spec = q_shard_spec;
+    auto kv_shard_grid = num_cores_to_corerange_set(batch, core_grid, true);
+    ShardSpec kv_shard_spec{kv_shard_grid, {num_kv_heads_padded, this->head_dim}};
+    auto kv_mem_config = this->output_mem_config;
+    kv_mem_config.shard_spec = kv_shard_spec;
+    auto output_shapes = this->compute_output_shapes(input_tensors);
+    return {
+        create_sharded_device_tensor(output_shapes[0], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), q_mem_config),
+        create_sharded_device_tensor(output_shapes[1], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), kv_mem_config),
+        create_sharded_device_tensor(output_shapes[2], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), kv_mem_config)
+    };
 }
 
 operation::ProgramWithCallbacks NlpCreateHeadsDecode::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -356,6 +351,79 @@ operation::ProgramWithCallbacks NlpConcatHeads::create_program(const std::vector
 tt::stl::reflection::Attributes NlpConcatHeads::attributes() const {
     return {
         {"output_mem_config", this->output_mem_config},
+    };
+}
+
+// NLP ConcatHeads op for decode
+void NlpConcatHeadsDecode::validate(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto input_shape = input_tensor.get_legacy_shape();
+
+    // input tensor and shape
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format");
+    TT_FATAL(input_tensor.get_layout() == Layout::TILE);
+    TT_FATAL(input_shape[0] == 1, "seqlen=1 for decode");
+    TT_FATAL(input_shape[1] == 32, "currently only support 32 users");
+    TT_FATAL(input_shape[2] == 32, "currently only support 32 padded heads");
+    TT_FATAL(input_shape[2] >= this->num_heads, "head_dim must be multiple of TILE_WIDTH");
+
+    // input tensor shard spec
+    TT_FATAL(input_tensor.is_sharded());
+    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+    auto shard_spec = input_tensor.shard_spec().value();
+    TT_FATAL(shard_spec.shape[1] == input_tensor.get_legacy_shape()[-1]);
+    TT_FATAL(shard_spec.shape[0] == input_tensor.get_legacy_shape()[-2]);
+    auto shard_grid = shard_spec.grid.bounding_box().grid_size();
+    auto num_cores = shard_grid.x * shard_grid.y;
+    TT_FATAL(num_cores == input_shape[1], "num_cores must be equal to num users");
+}
+
+std::vector<Shape> NlpConcatHeadsDecode::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto input_shape = input_tensor.get_legacy_shape();
+
+    auto num_heads = this->num_heads;
+    auto sequence_length = input_shape[0];
+    auto batch = input_shape[1];
+    auto head_dim = input_shape[3];
+
+    auto hidden_dim = num_heads * head_dim;
+
+    const Shape output_shape = {sequence_length, 1, batch, hidden_dim};
+    return {output_shape};
+}
+
+std::vector<Tensor> NlpConcatHeadsDecode::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    auto num_heads = this->num_heads;
+    const auto input_shape = input_tensor.get_legacy_shape();
+    auto sequence_length = input_shape[0];
+    auto batch = input_shape[1];
+    auto head_dim = input_shape[3];
+
+    auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
+    auto shard_grid = num_cores_to_corerange_set(num_heads, core_grid, true);
+    ShardSpec shard_spec{shard_grid, {batch, head_dim}};
+    auto mem_config = tt::tt_metal::MemoryConfig{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1};
+    mem_config.shard_spec = shard_spec;
+
+    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
+}
+
+operation::ProgramWithCallbacks NlpConcatHeadsDecode::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    auto& output_tensor = output_tensors.at(0);
+
+    CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+
+    return  multi_core_nlp_concat_heads_decode(input_tensor, output_tensor, compute_with_storage_grid_size);
+}
+
+tt::stl::reflection::Attributes NlpConcatHeadsDecode::attributes() const {
+    return {
+        {"num_heads", this->num_heads},
     };
 }
 
