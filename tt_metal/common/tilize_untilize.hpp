@@ -8,8 +8,8 @@
 
 template <typename T>
 void tilize(std::vector<T>& input, uint32_t m, uint32_t n) {
-    TT_ASSERT(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
-    TT_ASSERT((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
+    TT_FATAL(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
+    TT_FATAL((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
 
     std::vector<T> tilized_input;
     tilized_input.reserve(input.size());
@@ -36,7 +36,7 @@ void tilize(std::vector<T>& input, uint32_t m, uint32_t n) {
         uint32_t row_tiles = m / TILE_HEIGHT;
         uint32_t col_tiles = n / TILE_WIDTH;
         uint32_t row_of_tiles_num_elements = TILE_HEIGHT * n;
-        TT_ASSERT((m % TILE_HEIGHT == 0) and (n % TILE_WIDTH == 0), "m and n must be divisible by 32");
+        TT_FATAL((m % TILE_HEIGHT == 0) and (n % TILE_WIDTH == 0), "m and n must be divisible by 32");
         uint32_t block_start = 0;
         for (size_t i = 0; i < num_blocks; i++) {
             uint32_t tile_start = block_start;
@@ -67,8 +67,8 @@ void tilize(std::vector<T>& input, uint32_t m, uint32_t n) {
 
 template <typename T>
 void untilize(std::vector<T>& input, uint32_t m, uint32_t n) {
-    TT_ASSERT(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
-    TT_ASSERT((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
+    TT_FATAL(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
+    TT_FATAL((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
 
     std::vector<T> untilized_input;
     untilized_input.reserve(input.size());
@@ -115,7 +115,7 @@ void untilize(std::vector<T>& input, uint32_t m, uint32_t n) {
         uint32_t row_tiles = m / TILE_HEIGHT;
         uint32_t col_tiles = n / TILE_WIDTH;
         uint32_t row_of_tiles_num_elements = TILE_HEIGHT * n;
-        TT_ASSERT((m % TILE_HEIGHT == 0) and (n % TILE_WIDTH == 0), "m and n must be divisible by 32");
+        TT_FATAL((m % TILE_HEIGHT == 0) and (n % TILE_WIDTH == 0), "m and n must be divisible by 32");
         uint32_t block_start = 0;
         for (size_t i = 0; i < num_blocks; i++) {
             uint32_t row_tile_start = block_start;

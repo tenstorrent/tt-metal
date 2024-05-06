@@ -74,7 +74,7 @@ const std::vector<CoreCoord>& metal_SocDescriptor::get_logical_ethernet_cores() 
 
 CoreCoord metal_SocDescriptor::get_physical_ethernet_core_from_logical(const CoreCoord &logical_coord) const {
     const auto &eth_chan_map = this->logical_eth_core_to_chan_map;
-    TT_ASSERT(
+    TT_FATAL(
         (eth_chan_map.find(logical_coord) != eth_chan_map.end()),
         "Bounds-Error -- Logical_core={} is outside of ethernet logical grid",
         logical_coord.str());
@@ -85,7 +85,7 @@ CoreCoord metal_SocDescriptor::get_logical_ethernet_core_from_physical(const Cor
     const auto &phys_eth_map = this->physical_ethernet_cores;
     auto it = std::find(phys_eth_map.begin(), phys_eth_map.end(), physical_coord);
 
-    TT_ASSERT(
+    TT_FATAL(
         (it != phys_eth_map.end()),
         "Bounds-Error -- Physical_core={} is outside of ethernet physical grid",
         physical_coord.str());
@@ -95,7 +95,7 @@ CoreCoord metal_SocDescriptor::get_logical_ethernet_core_from_physical(const Cor
 }
 
 CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreCoord &logical_coord) const {
-    TT_ASSERT(
+    TT_FATAL(
         (logical_coord.x < this->worker_grid_size.x) and
         (logical_coord.y < this->worker_grid_size.y),
         "Bounds-Error -- Logical_core={} is outside of logical_grid_size={}",
