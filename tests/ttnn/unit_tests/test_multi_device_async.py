@@ -115,6 +115,41 @@ def test_multi_device_replicate(pcie_device_mesh, shape, layout, memory_config):
         pcie_device_mesh.get_device(device).enable_async(False)
 
 
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
+def test_ttnn_to_multi_device_tilized_parallel(pcie_device_mesh, layout, memory_config, dtype):
+    """Test multi chip layout conversions on worker threads"""
+    from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+
+    shard_dim = 3
+    for device in pcie_device_mesh.get_device_ids():
+        pcie_device_mesh.get_device(device).enable_async(True)
+    for loop in range(20):
+        torch_tensor = torch.rand((8, 1, 1024, 1024), dtype=torch.bfloat16)
+        ttnn_tensor = ttnn.from_torch(
+            torch_tensor,
+            mesh_mapper=ShardTensorToMesh(pcie_device_mesh, dim=shard_dim),
+            layout=layout,
+            memory_config=memory_config,
+            device=pcie_device_mesh,
+        )
+        if loop < 10:
+            # Test Concat Composer
+            readback_tensor = ttnn.to_torch(
+                ttnn_tensor, mesh_composer=ConcatMeshToTensor(pcie_device_mesh, dim=shard_dim), device=pcie_device_mesh
+            )
+        else:
+            # Test Mesh Composer
+            readback_tensors = ttnn.to_torch(
+                ttnn_tensor, mesh_composer=ListMeshToTensor(pcie_device_mesh), device=pcie_device_mesh
+            )
+            readback_tensor = torch.cat(readback_tensors, dim=shard_dim)
+        assert torch.all(readback_tensor == torch_tensor)
+    for device in pcie_device_mesh.get_device_ids():
+        pcie_device_mesh.get_device(device).enable_async(False)
+
+
 @pytest.mark.parametrize("program_cache", [False, True])
 @pytest.mark.parametrize("shape", [(1, 1, 512, 512), (1, 3, 1024, 1024)])
 def test_multi_device_unary_binary_op_chain(pcie_device_mesh, program_cache, shape):

@@ -15,11 +15,13 @@ namespace operations {
 
 namespace core {
 
+
 /* static */ Tensor ToLayout::execute(
     const ttnn::Tensor& tensor_arg,
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
-    const std::optional<ttnn::MemoryConfig>& memory_config) {
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    std::variant<DeviceMesh*, Device*> device) {
     if (tensor_arg.get_layout() == layout) {
         if (dtype.has_value() and dtype.value() != tensor_arg.get_dtype()) {
             tt::log_warning(
@@ -136,11 +138,17 @@ namespace core {
     } else {
         TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting layout on host!");
         if (not requires_padding_change(layout, tensor.get_shape())) {
-            return tensor.to(layout);
-
+            if (std::holds_alternative<Device*>(device)) {
+                return std::get<Device*>(device) ? tensor.to(layout, std::get<Device*>(device)) : tensor.to(layout);
+            }
+            return std::get<DeviceMesh*>(device) ? tensor.to(layout, std::get<DeviceMesh*>(device)) : tensor.to(layout);
         } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
             tensor = unsqueeze_to_4D(tensor);
-            tensor = tensor.to(layout);
+            if (std::holds_alternative<Device*>(device)) {
+                tensor = std::get<Device*>(device) ? tensor.to(layout, std::get<Device*>(device)) : tensor.to(layout);
+            } else {
+                tensor = std::get<DeviceMesh*>(device) ? tensor.to(layout, std::get<DeviceMesh*>(device)) : tensor.to(layout);
+            }
             tensor = tensor.unpad_from_tile(tensor.get_shape().value().without_padding());
             return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape}));
 
@@ -151,7 +159,12 @@ namespace core {
             padded_4D_output_shape.push_back(tensor.get_shape()[-3]);
             padded_4D_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[-2]));
             padded_4D_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[-1]));
-            tensor = tensor.pad(padded_4D_output_shape, {0, 0, 0, 0}, 0).to(layout);
+            tensor = tensor.pad(padded_4D_output_shape, {0, 0, 0, 0}, 0);
+            if (std::holds_alternative<Device*>(device)) {
+                tensor = std::get<Device*>(device) ? tensor.to(layout, std::get<Device*>(device)) : tensor.to(layout);
+            } else{
+                tensor = std::get<DeviceMesh*>(device) ? tensor.to(layout, std::get<DeviceMesh*>(device)) : tensor.to(layout);
+            }
             return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape, padded_output_shape}));
 
         } else {
