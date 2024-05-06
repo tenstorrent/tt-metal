@@ -78,8 +78,8 @@ fi
 echo "Running test_dispatcher tests now...";
 
 # Linear Write (Unicast)
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 0 -min 256 -max 256
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 0 -min 1024 -max 1024
+./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 0 -min 256 -max 256 -wx 0 -wy 1
+./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 0 -min 1024 -max 1024 -wx 0 -wy 1
 
 # Linear Write (Multicast)
 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 1 -min 256 -max 256

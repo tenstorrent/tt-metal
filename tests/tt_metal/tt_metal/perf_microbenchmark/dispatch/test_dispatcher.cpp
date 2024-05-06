@@ -25,6 +25,9 @@ constexpr uint32_t MAX_XFER_SIZE_16B = 4 * 1024;
 constexpr uint32_t MIN_XFER_SIZE_16B = 1;
 constexpr uint32_t DEFAULT_PREFETCHER_PAGE_BATCH_SIZE = 1;
 
+constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
+constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
+
 constexpr uint32_t DEFAULT_PAGED_WRITE_PAGES = 4;
 constexpr uint32_t MAX_PAGED_WRITE_ADDR = 512 * 1024;
 constexpr uint32_t MIN_PAGED_WRITE_ADDR = 512 * 1024; // Disable randomization by default. 512 KB - 612 KB might be reasonable.
@@ -73,9 +76,9 @@ void init(int argc, char **argv) {
     if (test_args::has_command_option(input_args, "-h") ||
         test_args::has_command_option(input_args, "--help")) {
         log_info(LogTest, "Usage:");
+        log_info(LogTest, "    -t: test type, 0:uni_write 1:mcast_write 2:dram paged_write 3:l1 paged_write 4:packed_write (default {})", 0);
         log_info(LogTest, "    -w: warm-up iterations before starting timer (default {}), ", DEFAULT_WARMUP_ITERATIONS);
         log_info(LogTest, "    -i: host iterations (default {})", DEFAULT_ITERATIONS);
-        log_info(LogTest, "    -t: test type, 0:uni_write 1:mcast_write 2:packed_write (default {})", 0);
         log_info(LogTest, "   -wx: right-most worker in grid (default {})", all_workers_g.end.x);
         log_info(LogTest, "   -wy: bottom-most worker in grid (default {})", all_workers_g.end.y);
         log_info(LogTest, "    -a: send to all workers (vs random) for 1-to-N cmds (default random)");
@@ -170,12 +173,10 @@ void gen_linear_or_packed_write_test(uint32_t& cmd_count,
                                 Device *device,
                                 vector<uint32_t>& dispatch_cmds,
                                 CoreRange worker_cores,
-                                worker_data_t& worker_data,
-                                uint32_t worker_data_addr,
+                                DeviceData& device_data,
                                 uint32_t page_size) {
 
     uint32_t total_size_bytes = 0;
-    uint32_t total_data_size_bytes = 0;
     uint32_t buffer_size = prefetcher_buffer_size_g - page_size; // for terminate
     log_info(tt::LogTest, "Generating linear: {} multicast: {} Write Test with dispatch buffer page_size: {}", is_linear_write, is_linear_multicast, page_size);
 
@@ -199,18 +200,17 @@ void gen_linear_or_packed_write_test(uint32_t& cmd_count,
             if (xfer_size_bytes < min_xfer_size_bytes_g) xfer_size_bytes = min_xfer_size_bytes_g;
 
             if (is_linear_multicast) {
-                gen_dispatcher_multicast_write_cmd(device, dispatch_cmds, worker_cores, worker_data, worker_data_addr, xfer_size_bytes);
+                gen_dispatcher_multicast_write_cmd(device, dispatch_cmds, worker_cores, device_data, xfer_size_bytes);
             } else {
-                gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_cores.start, worker_data, worker_data_addr, xfer_size_bytes);
+                gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_cores.start, device_data, xfer_size_bytes);
             }
         } else {
-            xfer_size_bytes = gen_rnd_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_data, worker_data_addr);
+            gen_rnd_dispatcher_packed_write_cmd(device, dispatch_cmds, device_data);
         }
 
         uint32_t page_size_words = page_size / sizeof(uint32_t);
         dispatch_cmds.resize((dispatch_cmds.size() + page_size_words - 1) / page_size_words * page_size_words);    // pad to page
 
-        total_data_size_bytes += xfer_size_bytes;
         total_size_bytes = dispatch_cmds.size() * sizeof(uint32_t);
         cmd_count++;
     }
@@ -227,12 +227,10 @@ void gen_paged_write_test(uint32_t& cmd_count,
                         Device *device,
                         vector<uint32_t>& dispatch_cmds,
                         CoreRange worker_cores,
-                        worker_data_t& worker_data,
-                        uint32_t worker_data_addr,
+                        DeviceData& device_data,
                         uint32_t page_size) {
 
     uint32_t total_size_bytes = 0;
-    uint32_t total_data_size_bytes = 0;
     uint32_t buffer_size = prefetcher_buffer_size_g - page_size; // for terminate
     uint32_t start_page = 0;
     TT_ASSERT(is_paged_test()); // Ensure test-numbers kept up to date in this function.
@@ -256,18 +254,17 @@ void gen_paged_write_test(uint32_t& cmd_count,
             total_size_bytes += sizeof(CQDispatchCmd);
         }
 
-        log_info(tt::LogTest, "Generating paged write cmds (is_dram: {} for total_size_bytes: {} buffer_size: {} page_size_bytes: {})",
+        log_debug(tt::LogTest, "Generating paged write cmds (is_dram: {} for total_size_bytes: {} buffer_size: {} page_size_bytes: {})",
             is_dram, total_size_bytes, buffer_size, page_size_bytes);
 
-        gen_dispatcher_paged_write_cmd(device, dispatch_cmds, worker_data,
-                                        is_dram, start_page, worker_data_addr, page_size_bytes, num_pages_g);
+        gen_dispatcher_paged_write_cmd(device, dispatch_cmds, device_data,
+                                       is_dram, start_page, page_size_bytes, num_pages_g);
 
         // Offset start page by number of pages written, and use as next cmd start page to have writes to memory without gaps
         start_page += num_pages_g;
         uint32_t page_size_words = page_size / sizeof(uint32_t);
         dispatch_cmds.resize((dispatch_cmds.size() + page_size_words - 1) / page_size_words * page_size_words); // pad to page
 
-        total_data_size_bytes += page_size_bytes;
         total_size_bytes = dispatch_cmds.size() * sizeof(uint32_t);
         cmd_count++;
     }
@@ -276,36 +273,33 @@ void gen_paged_write_test(uint32_t& cmd_count,
     uint32_t page_size_words = page_size / sizeof(uint32_t);
     dispatch_cmds.resize((dispatch_cmds.size() + page_size_words - 1) / page_size_words * page_size_words); // pad to page
     cmd_count++;
-
 }
 
 // Generate Dispatcher Commands based on the type of test.
 void gen_cmds(Device *device,
               vector<uint32_t>& dispatch_cmds,
               CoreRange worker_cores,
-              worker_data_t& worker_data,
-              uint32_t worker_data_addr,
+              DeviceData& device_data,
               uint32_t page_size) {
 
     uint32_t total_size_bytes = 0;
-    uint32_t total_data_size_bytes = 0;
     uint32_t buffer_size = prefetcher_buffer_size_g - page_size; // for terminate
     uint32_t cmd_count = 0;
 
     switch (test_type_g) {
     case 0:
-        if (all_workers_g.size() != 1) TT_FATAL("Should use single core for unicast write test. Other cores ignored.");
-        gen_linear_or_packed_write_test(cmd_count, true, false, device, dispatch_cmds, worker_cores, worker_data, worker_data_addr, page_size);
+        TT_FATAL(all_workers_g.size() == 1, "Should use single core for unicast write test");
+        gen_linear_or_packed_write_test(cmd_count, true, false, device, dispatch_cmds, worker_cores, device_data, page_size);
         break;
     case 1:
-        gen_linear_or_packed_write_test(cmd_count, true, true, device, dispatch_cmds, worker_cores, worker_data, worker_data_addr, page_size);
+        gen_linear_or_packed_write_test(cmd_count, true, true, device, dispatch_cmds, worker_cores, device_data, page_size);
         break;
     case 2:
     case 3:
-        gen_paged_write_test(cmd_count, is_paged_dram_test(), device, dispatch_cmds, worker_cores, worker_data, worker_data_addr, page_size);
+        gen_paged_write_test(cmd_count, is_paged_dram_test(), device, dispatch_cmds, worker_cores, device_data, page_size);
         break;
     case 4:
-        gen_linear_or_packed_write_test(cmd_count, false, false, device, dispatch_cmds, worker_cores, worker_data, worker_data_addr, page_size);
+        gen_linear_or_packed_write_test(cmd_count, false, false, device, dispatch_cmds, worker_cores, device_data, page_size);
         break;
     }
 
@@ -380,7 +374,8 @@ int main(int argc, char **argv) {
             exit(-1);
         }
 
-        uint32_t write_buffer_addr = l1_buf_base;
+        uint32_t dram_data_addr = l1_buf_base;
+        uint32_t l1_data_addr = l1_buf_base;
 
         // Seperate Buffer space for paged write testing to not conflict with dispatch or prefetch buffers in L1
         if (paged_test) {
@@ -405,33 +400,20 @@ int main(int argc, char **argv) {
             }
 
             auto range = 1 + max_paged_write_base_addr_g - min_paged_write_base_addr_g;
-            write_buffer_addr = ((min_paged_write_base_addr_g + (std::rand() % range)) >> 4) << 4;
+            // TODO: can we make these play better w/ the non-paged tests?
+            dram_data_addr = ((min_paged_write_base_addr_g + (std::rand() % range)) >> 4) << 4;
+            l1_data_addr = ((min_paged_write_base_addr_g + (std::rand() % range)) >> 4) << 4;
         }
 
-        log_info(tt::LogTest, "Using write buffer at 0x{:x} (paged_test: {}) l1_buf_base: {:x}", write_buffer_addr, paged_test, l1_buf_base);
-
-#if 0
-        Buffer l1_buf(device, prefetcher_buffer_size_g, prefetcher_buffer_size_g, BufferType::L1, TensorMemoryLayout::SINGLE_BANK);
-#endif
-        vector<uint32_t> cmds;
-        worker_data_t worker_data;
-
-        // No need to add entries for worker cores in paged test. They will be added as needed for L1 or DRAM.
-        if (!paged_test){
-            const uint32_t bank_id = 0; // No interleaved pages here.
-            for (uint32_t y = all_workers_g.start.y; y <= all_workers_g.end.y; y++) {
-                for (uint32_t x = all_workers_g.start.x; x <= all_workers_g.end.x; x++) {
-                    worker_data[CoreCoord(x,y)][bank_id] = one_worker_data_t();
-                }
-            }
-        }
+        DeviceData device_data(device, all_workers_g, l1_data_addr, dram_data_addr, 0, paged_test, DRAM_DATA_SIZE_WORDS);
 
         if (is_paged_dram_test() && debug_g) {
             initialize_dram_banks(device);
         }
 
         // Generate commands once and write them to prefetcher core.
-        gen_cmds(device, cmds, all_workers_g, worker_data, write_buffer_addr, dispatch_buffer_page_size_g);
+        vector<uint32_t> cmds;
+        gen_cmds(device, cmds, all_workers_g, device_data, dispatch_buffer_page_size_g);
         llrt::write_hex_vec_to_core(device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
 
         constexpr uint32_t dispatch_cb_sem = 0;
@@ -504,6 +486,24 @@ int main(int argc, char **argv) {
             phys_spoof_prefetch_core,
             {0, 0});
 
+        switch (test_type_g) {
+        case 0:
+            log_info(LogTest, "Running linear unicast test");
+            break;
+        case 1:
+            log_info(LogTest, "Running linear mcast test");
+            break;
+        case 2:
+        case 3:
+            log_info(LogTest, "Running paged {} test", is_paged_dram_test() ? "DRAM" : "L1");
+            break;
+        case 4:
+            log_info(LogTest, "Running packed write unicast");
+            break;
+        case 5:
+            TT_FATAL("Unknown test type {}", test_type_g);
+        }
+
         log_info(LogTest, "Worker grid {}", all_workers_g.str());
         log_info(LogTest, "Dispatch buffer size blocks {}", std::to_string(dispatch_buffer_size_blocks_g));
         log_info(LogTest, "Dispatch buffer block size pages {}", std::to_string(dispatch_buffer_block_size_pages_g));
@@ -513,9 +513,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Dispatch buffer base {}", std::to_string(l1_buf_base));
         log_info(LogTest, "Dispatch buffer end {}", std::to_string(l1_buf_base + dispatch_buffer_page_size_g * dispatch_buffer_pages));
         log_info(LogTest, "Prefetcher CMD Buffer size {}", std::to_string(prefetcher_buffer_size_g));
-        log_info(LogTest, "Worker result data size {} bytes (single core)", std::to_string(worker_data_size(worker_data) * sizeof(uint32_t)));
-        log_info(LogTest, "Buffer addr for writes: {:x}", write_buffer_addr);
-
+        log_info(LogTest, "Worker result data total bytes written {}", std::to_string(device_data.size() * sizeof(uint32_t)));
         // Cache stuff
         for (int i = 0; i < warmup_iterations_g; i++) {
             tt_metal::detail::LaunchProgram(device, program);
@@ -525,47 +523,16 @@ int main(int argc, char **argv) {
         for (int i = 0; i < iterations_g; i++) {
             tt_metal::detail::LaunchProgram(device, program);
         }
-
         auto end = std::chrono::system_clock::now();
 
-        if (paged_test) {
-            bool is_dram = is_paged_dram_test(); // Would like to get rid of this but following function needs to know CoreType.
-            pass &= validate_results_paged(device, worker_data, write_buffer_addr, is_dram);
-        } else {
-            pass &= validate_results(device, all_workers_g, worker_data, write_buffer_addr);
-        }
+        pass &= device_data.validate(device);
 
         std::chrono::duration<double> elapsed_seconds = (end-start);
         uint32_t total_iterations = iterations_g * prefetcher_iterations_g;
         log_info(LogTest, "Ran in {}us (for total iterations: {})", elapsed_seconds.count() * 1000 * 1000, total_iterations);
         log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 /total_iterations);
         if (iterations_g > 0) {
-            float total_words = 0;
-            if (min_xfer_size_bytes_g != max_xfer_size_bytes_g) {
-                log_warning("Set max/min xfer size to match for reliable perf data");
-            }
-            switch (test_type_g) {
-            case 0:
-            case 1:
-                total_words = worker_data_size(worker_data);
-                break;
-            case 2:
-            case 3:
-                // Hacky.. for now, just compute based on pages written. Ideally iterate over all worker_data.
-                if (max_xfer_size_bytes_g == min_xfer_size_bytes_g) {
-                    total_words = (num_pages_g * max_xfer_size_bytes_g) / sizeof(uint32_t);
-                } else {
-                    log_warning("Set max_xfer_size_bytes_g to min_xfer_size_bytes_g to calculate perf accurately");
-                }
-                break;
-            case 4:
-                if (!send_to_all_g) {
-                    log_warning("Set send_to_all to true for reliable perf data");
-                }
-                total_words = worker_data_size(worker_data) * all_workers_g.size();
-                break;
-            }
-
+            float total_words = device_data.size();
             total_words *= total_iterations;
             float bw = total_words * sizeof(uint32_t) / (elapsed_seconds.count() * 1024.0 * 1024.0 * 1024.0);
             std::stringstream ss;
