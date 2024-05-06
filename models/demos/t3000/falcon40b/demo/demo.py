@@ -68,7 +68,6 @@ def preprocess_and_validate_inputs(input_prompts, tokenizer, max_seq_len, perf_m
     else:
         num_input_tokens = max_seq_len - 1
         max_length = max_seq_len
-    assert max_length == 32, "Prefill only supports 32 tokens max"
 
     tokenized_inputs = tokenizer(
         input_prompts,
@@ -213,12 +212,12 @@ def run_falcon_demo_kv(
     user_input,
     model_version,
     model_config_str_for_decode,
-    model_config,
+    model_config_str_for_prefill,
     batch_size,
     num_layers,
     max_seq_len,
     model_location_generator,
-    tt_cache_path,
+    get_tt_cache_path,
     devices,
     prefill_on_host,
     perf_mode=False,
@@ -253,6 +252,21 @@ def run_falcon_demo_kv(
 
     synchronize_devices(devices)
 
+    logger.info("Tokenizing inputs...")
+    profiler.start(f"tokenizing_inputs")
+    tokenizer = AutoTokenizer.from_pretrained(model_version)
+    prefill_ids, num_users, num_input_tokens = preprocess_and_validate_inputs(
+        input_prompts, tokenizer, max_seq_len, perf_mode
+    )
+    profiler.end(f"tokenizing_inputs")
+
+    # Update model_config for prefill
+    model_config = get_model_config(model_config_str_for_prefill, "prefill", [1, prefill_ids.shape[1]], len(devices))
+
+    tt_cache_path = get_tt_cache_path(
+        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
+    )
+
     logger.info("Moving weights (single layer) to devices; might take some time...")
     base_url = ""
     use_global_cos_sin_cache = True
@@ -277,14 +291,6 @@ def run_falcon_demo_kv(
     )  # only used for compile
     kv_cache = initialize_kv_cache(model_config, configuration, num_layers, batch_size, max_seq_len, devices)
     profiler.end(f"initializing_KV_cache")
-
-    logger.info("Tokenizing inputs...")
-    profiler.start(f"tokenizing_inputs")
-    tokenizer = AutoTokenizer.from_pretrained(model_version)
-    prefill_ids, num_users, num_input_tokens = preprocess_and_validate_inputs(
-        input_prompts, tokenizer, max_seq_len, perf_mode
-    )
-    profiler.end(f"tokenizing_inputs")
 
     # TODO: Is this safe? Disabling kernel caching disable program caching as well?
     enable_persistent_kernel_cache()
@@ -369,7 +375,7 @@ def run_falcon_demo_kv(
     del kv_cache_singlelayer
 
     # Update model_config for prefill
-    model_config = get_model_config("BFLOAT16-DRAM", "prefill", [1, 32], len(devices))  # Prefill model config
+    model_config = get_model_config(model_config_str_for_prefill, "prefill", [1, prefill_ids.shape[1]], len(devices))
 
     logger.info("Moving weights (all layers) to device; might take some time...")
     profiler.start(f"moving_to_device")
@@ -586,9 +592,11 @@ def run_falcon_demo_kv(
 
 @pytest.mark.parametrize("perf_mode", (False,))  # Option to measure perf using max seq length (with invalid outputs)
 @pytest.mark.parametrize("greedy_sampling", (False,))
+@pytest.mark.parametrize("max_seq_len", (128,))
 def test_demo(
     perf_mode,
     greedy_sampling,
+    max_seq_len,
     user_input,
     model_location_generator,
     get_tt_cache_path,
@@ -601,24 +609,16 @@ def test_demo(
     # disable_persistent_kernel_cache()
     disable_compilation_reports()
 
-    # Set it up for prefill initially and change the model_config to decode
-    model_config_str_for_decode = "BFLOAT8_B-SHARDED"  # Decode model config
-    model_config = get_model_config("BFLOAT16-DRAM", "prefill", [1, 32], num_devices)  # Prefill model config
-    model_version = model_config_entries["_name_or_path"]
-    tt_cache_path = get_tt_cache_path(
-        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-    )
-
     return run_falcon_demo_kv(
         user_input=user_input,
-        model_version=model_version,
-        model_config_str_for_decode=model_config_str_for_decode,
-        model_config=model_config,
+        model_version=model_config_entries["_name_or_path"],
+        model_config_str_for_decode="BFLOAT8_B-SHARDED",  # Decode model config
+        model_config_str_for_prefill="BFLOAT16-DRAM",  # Prefill model config
         batch_size=32,
         num_layers=model_config_entries["num_hidden_layers"],
-        max_seq_len=128,  # 1024,
+        max_seq_len=max_seq_len,
         model_location_generator=model_location_generator,
-        tt_cache_path=tt_cache_path,
+        get_tt_cache_path=get_tt_cache_path,
         devices=devices,
         prefill_on_host=False,
         perf_mode=perf_mode,
