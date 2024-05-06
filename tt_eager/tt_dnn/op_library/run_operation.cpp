@@ -417,9 +417,8 @@ OutputTensors run(
     //         TT_ASSERT(tensor.value().metadata_populated(), "Input tensors must be populated before running op.");
     //     }
     // }
-#ifdef DEBUG
+
     operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
-#endif
     if (detail::any_tensor_on_multi_device(input_tensors)) {
         return detail::decorate_device_operation(detail::run_multi_device_operation<OutputTensors>)(
             std::nullopt, operation, input_tensors, optional_input_tensors, optional_output_tensors);

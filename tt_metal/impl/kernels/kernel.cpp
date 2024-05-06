@@ -223,7 +223,7 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<u
 
     this->validate_runtime_args_size(runtime_args.size(), this->common_runtime_args_.size(), logical_core);
     auto &set_rt_args = this->core_to_runtime_args_[logical_core.x][logical_core.y];
-    TT_ASSERT(set_rt_args.empty() or set_rt_args.size() == runtime_args.size(), "Illegal Runtime Args: Number of runtime args cannot be modified!");
+    TT_FATAL(set_rt_args.empty() or set_rt_args.size() == runtime_args.size(), "Illegal Runtime Args: Number of runtime args cannot be modified!");
     set_rt_args = runtime_args;
     this->core_with_runtime_args_.insert( logical_core );
 }
@@ -236,7 +236,7 @@ void Kernel::set_common_runtime_args(const std::vector<uint32_t> &common_runtime
 
     this->validate_runtime_args_size(max_runtime_args_per_core_, common_runtime_args.size(), core_with_max_runtime_args_);
     auto &set_rt_args = this->common_runtime_args_;
-    TT_ASSERT(set_rt_args.empty() or set_rt_args.size() == common_runtime_args.size(), "Illegal Common Runtime Args: Number of common runtime args cannot be modified!");
+    TT_FATAL(set_rt_args.empty() or set_rt_args.size() == common_runtime_args.size(), "Illegal Common Runtime Args: Number of common runtime args cannot be modified!");
     set_rt_args = common_runtime_args;
 }
 

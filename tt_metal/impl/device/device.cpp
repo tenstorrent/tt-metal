@@ -1725,7 +1725,7 @@ uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id) const {
 }
 
 CoreCoord Device::core_from_dram_channel(uint32_t dram_channel) const {
-    TT_ASSERT(
+    TT_FATAL(
         dram_channel < this->num_dram_channels(),
         "Bounds-Error -- dram_channel={} is outside of num_dram_channels={}",
         dram_channel,
@@ -1832,14 +1832,14 @@ const string Device::build_kernel_target_path(JitBuildProcessorType t, int i, co
 
 HWCommandQueue& Device::hw_command_queue(size_t cq_id) {
     detail::DispatchStateCheck(true);
-    TT_ASSERT( cq_id < hw_command_queues_.size(), "cq_id {} is out of range", cq_id );
+    TT_FATAL( cq_id < hw_command_queues_.size(), "cq_id {} is out of range", cq_id );
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *hw_command_queues_[cq_id];
 }
 
 CommandQueue &Device::command_queue(size_t cq_id) {
     detail::DispatchStateCheck(using_fast_dispatch);
-    TT_ASSERT( cq_id < sw_command_queues_.size(), "cq_id {} is out of range", cq_id );
+    TT_FATAL( cq_id < sw_command_queues_.size(), "cq_id {} is out of range", cq_id );
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *sw_command_queues_[cq_id];
 }
