@@ -134,7 +134,7 @@ operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(const std
         case BcastOpParallelizationStrategy::MULTI_CORE_W:
             return bcast_multi_core_w(input_tensor_a, input_tensor_b, output_tensor, this->math_op);
         case BcastOpParallelizationStrategy::MULTI_CORE_HW:
-            return bcast_multi_core_hw(input_tensor_a, input_tensor_b, output_tensor, this->math_op);
+            return bcast_multi_core_hw(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->in_place);
         default:
             TT_THROW("Unsupported Parallelization Strategy");
     }
