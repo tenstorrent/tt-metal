@@ -794,7 +794,6 @@ def gen_tilize_with_val_padding_args(
             ]
             output_tensor_shape[-2] = nearest_32(output_tensor_shape[-2])
             output_tensor_shape[-1] = nearest_32(output_tensor_shape[-1])
-            input_tensor_start = [0, 0, 0, 0]
             pad_value = random.uniform(-100, 100)
             # Cast to bfloat16 then back to float for exact match
             pad_value = torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
@@ -802,7 +801,6 @@ def gen_tilize_with_val_padding_args(
             input_info.update(
                 {
                     "output_tensor_shape": output_tensor_shape,
-                    "input_tensor_start": input_tensor_start,
                     "pad_value": pad_value,
                 }
             )

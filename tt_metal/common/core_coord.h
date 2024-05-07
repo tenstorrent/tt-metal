@@ -254,6 +254,8 @@ class CoreRangeSet {
     CoreRangeSet(CoreRangeSet &&other) = default;
     CoreRangeSet& operator=(CoreRangeSet &&other) = default;
 
+    auto size() const { return ranges_.size();}
+
     CoreRangeSet merge ( const std::set<CoreRange> & other) const
     {
       size_t min_x = std::numeric_limits<size_t>::max(), max_x = 0, min_y = std::numeric_limits<size_t>::max(), max_y = 0;
