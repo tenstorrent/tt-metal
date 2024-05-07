@@ -8,6 +8,8 @@ import torch
 from torch import nn
 import tt_lib
 import ttnn
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+
 
 from models.experimental.llama2_70b.reference.llama.llama import Llama
 from models.experimental.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
@@ -100,7 +102,7 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
 
 
 def run_test_LlamaDecoder_inference(
-    devices,
+    t3k_device_mesh,
     batch,
     seq_len,
     pcc,
@@ -109,7 +111,9 @@ def run_test_LlamaDecoder_inference(
     emulated=False,
 ):
     # Prepare paths and devices
-    devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config, n_devices, emulated)
+    t3k_device_mesh, ckpt_dir, tokenizer_path, cache_path = get_llama_path(
+        t3k_device_mesh, model_config, n_devices, emulated
+    )
 
     # Prepare configs
     hugging_face_reference_model = Llama.build(
@@ -132,7 +136,14 @@ def run_test_LlamaDecoder_inference(
     pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(hugging_face_reference_model, UNIT_TEST_LAYER_NUM)
     # TT model -------------------------------------------------------------------------
     transformation_mat_torch = get_rot_transformation_mat(head_dim)
-    transformation_mats = [torch2tt_tensor(transformation_mat_torch.clone(), device) for device in devices]
+    transformation_mats = ttnn.as_tensor(
+        transformation_mat_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=t3k_device_mesh,
+        memory_config=model_config["DRAM_MEMCFG"],
+        mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
+    )
     if n_devices == 32:
         tt_LlamaDecoder_model = TtLlamaDecoder_galaxy(
             devices,
@@ -148,7 +159,7 @@ def run_test_LlamaDecoder_inference(
         )
     else:
         tt_LlamaDecoder_model = TtLlamaDecoder_optimized(
-            devices,
+            t3k_device_mesh,
             state_dict,
             BASE_URL,
             UNIT_TEST_LAYER_NUM,
@@ -160,9 +171,9 @@ def run_test_LlamaDecoder_inference(
             cache_path=cache_path,
         )
 
-    if not emulated:
-        for device in devices:
-            tt_lib.device.Synchronize(device)
+    # if not emulated:
+    #     for device in devices:
+    #         tt_lib.device.Synchronize(device)
 
     all_tests_pass, all_pccs = True, []
     if model_config["LLM_MODE"] == "prefill":
@@ -194,7 +205,9 @@ def run_test_LlamaDecoder_inference(
         )
 
         # TT hardware execution -------------------------------------------------------------
-        x_input, start_pos, rot_mat, attn_mask = tt_LlamaDecoder_model.prepare_inputs(tt_input, start_pos)
+        x_input, start_pos, rot_mat, attn_mask = tt_LlamaDecoder_model.prepare_inputs(
+            tt_input, start_pos, t3k_device_mesh
+        )
 
         tt_out = tt_LlamaDecoder_model(
             x_input,
@@ -203,13 +216,13 @@ def run_test_LlamaDecoder_inference(
             attn_mask,
         )
 
-        assert isinstance(tt_out, list)  # tt_out should be fractured or replicated on N devices
-        assert len(tt_out) == len(devices)
+        # assert isinstance(tt_out, list)  # tt_out should be fractured or replicated on N devices
+        # assert len(tt_out) == len(devices)
         if n_devices == 32:
             tt_out = tt2torch_tensor(tt_out[0])
         else:
-            tt_outs = [tt2torch_tensor(o) for o in tt_out]
-            tt_out = torch.cat(tt_outs, dim=-1)
+            tt_out = ttnn.from_device(tt_out)
+            tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=3))
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
         # check outputs ----------------------------------------------------------------------
@@ -253,12 +266,16 @@ def run_test_LlamaDecoder_inference(
         all_v = torch.cat(all_v, dim=0)
         tt_layer_present_all = [all_k, all_v]
     else:
-        tt_layer_present = []
-        for layer_past in tt_LlamaDecoder_model.attention.layer_past_list:
-            tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
-        # concat the pasts by heads
+        # tt_layer_present = []
+        # for layer_past in tt_LlamaDecoder_model.attention.layer_past_list:
+        #     tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
+        # # concat the pasts by heads
+        # tt_layer_present_all = [
+        #     torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
+        # ]
+        tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_LlamaDecoder_model.attention.layer_past]
         tt_layer_present_all = [
-            torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
+            ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=1)) for lp in tt_layer_present_all
         ]
 
     for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present_all):
@@ -309,19 +326,18 @@ def test_LlamaDecoder_inference(
     seq_len,
     pcc,
     n_devices,
-    all_devices,
+    t3k_device_mesh,
     emulated,
 ):
-    devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
     model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
-    if len(devices) < n_devices and not emulated:
-        pytest.skip(f"Requires at {n_devices} devices to run")
+    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
+    # if len(devices) < n_devices and not emulated:
+    #     pytest.skip(f"Requires at {n_devices} devices to run")
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     run_test_LlamaDecoder_inference(
-        devices,
+        t3k_device_mesh,
         batch,
         seq_len,
         pcc,
