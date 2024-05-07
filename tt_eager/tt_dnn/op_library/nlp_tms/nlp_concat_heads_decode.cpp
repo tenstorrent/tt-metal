@@ -41,18 +41,6 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(const Tensor 
     auto in_cores = in_shard_spec.grid;
     auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
 
-    log_debug("[xuncai] head_tiles: {}", head_tiles);
-    log_debug("[xuncai] head_size: {}", head_size);
-    log_debug("[xuncai] element_size: {}", element_size);
-    log_debug("[xuncai] sub_tile_line_bytes: {}", sub_tile_line_bytes);
-    log_debug("[xuncai] in_shard_spec: {}", in_shard_spec);
-    log_debug("[xuncai] in_cores: {}", in_cores);
-    log_debug("[xuncai] in_num_tiles: {}", in_num_tiles);
-
-    log_debug("[xuncai] q_shard_spec: {}", q_shard_spec);
-    log_debug("[xuncai] q_cores: {}", q_cores);
-    log_debug("[xuncai] q_num_tiles: {}", q_num_tiles);
-
     uint32_t q_output_cb_index = CB::c_out0;
     tt_metal::CircularBufferConfig cb_q_output_config =
         tt_metal::CircularBufferConfig(
@@ -77,13 +65,11 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(const Tensor 
     noc_x_coords.reserve(in_num_cores_x);
     for (uint32_t x = 0; x < in_num_cores_x; ++x) {
         noc_x_coords.push_back(device->worker_core_from_logical_core({x, 0}).x);
-        log_debug("[xuncai] noc_x_coords[{}]: {}", x, noc_x_coords[x]);
     }
     std::vector<uint32_t> noc_y_coords;
     noc_y_coords.reserve(in_num_cores_y);
     for (uint32_t y = 0; y < in_num_cores_y; ++y) {
         noc_y_coords.push_back(device->worker_core_from_logical_core({0, y}).y);
-        log_debug("[xuncai] noc_y_coords[{}]: {}", y, noc_y_coords[y]);
     }
 
     // We parallize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2 of a tile respectively)
