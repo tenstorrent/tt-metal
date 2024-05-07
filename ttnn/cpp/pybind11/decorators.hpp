@@ -43,13 +43,13 @@ struct pybind_overload_t {
     pybind_overload_t(function_t function, py_args_t... args) : function{function}, args{args...} {}
 };
 
-template <auto id, typename concrete_operation_t, auto... execute_template_args_t, typename... overload_t>
+template <auto id, typename concrete_operation_t, typename... overload_t>
 auto bind_registered_operation(
     py::module& module,
-    const operation_t<id, concrete_operation_t, execute_template_args_t...>& operation,
+    const operation_t<id, concrete_operation_t>& operation,
     const std::string doc,
     overload_t&&... overloads) {
-    using registered_operation_t = operation_t<id, concrete_operation_t, execute_template_args_t...>;
+    using registered_operation_t = operation_t<id, concrete_operation_t>;
 
     const auto fully_qualified_name = std::string{operation.fully_qualified_name};
 
@@ -75,15 +75,7 @@ auto bind_registered_operation(
             if constexpr (is_specialization_of<pybind_arguments_t, std::decay_t<decltype(overload)>>::value) {
                 std::apply(
                     [&py_operation](auto... args) {
-                        if constexpr (sizeof...(execute_template_args_t) > 0) {
-                            py_operation.def(
-                                "__call__",
-                                resolve_call_method<registered_operation_t>(
-                                    &concrete_operation_t::template execute<execute_template_args_t...>),
-                                args...);
-                        } else {
-                            py_operation.def("__call__", resolve_call_method<registered_operation_t>(&concrete_operation_t::execute), args...);
-                        }
+                        py_operation.def("__call__", resolve_call_method<registered_operation_t>(&concrete_operation_t::execute), args...);
                     },
                     overload.value);
             } else {
