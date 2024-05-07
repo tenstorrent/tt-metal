@@ -370,7 +370,6 @@ struct MultiDeviceHostStorage {
         MultiDeviceHostStorage() = default;
         MultiDeviceHostStorage(DistributedTensorConfig strategy_, std::vector<OwnedBuffer> buffers_, std::vector<Shape> shapes_) : strategy(strategy_), buffers(buffers_), shapes(shapes_) {}
         MultiDeviceHostStorage(MultiDeviceHostStorage &&other) {
-            strategy = other.strategy;
             buffers = other.buffers;
             shapes = other.shapes;
         }

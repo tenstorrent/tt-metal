@@ -307,37 +307,6 @@ def test_multi_device_as_tensor_api(device_mesh, layout, memory_config, dtype):
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
-def test_multi_device_as_tensor_api_sharded_tensor(device_mesh, layout, memory_config, dtype):
-    """Multidevice API: Data Parallel on matmul using cached tensor"""
-    input_tensor = torch.rand((device_mesh.get_num_devices(), 1, 32, 32), dtype=torch.bfloat16)
-
-    with tempfile.NamedTemporaryFile() as temp_file:
-        save_tensor = ttnn.as_tensor(
-            input_tensor,
-            dtype=dtype,
-            layout=layout,
-            device=device_mesh,
-            memory_config=memory_config,
-            cache_file_name=f"{temp_file.name}.weight",
-            mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
-        )
-        load_tensor = ttnn.as_tensor(
-            input_tensor,
-            dtype=dtype,
-            layout=layout,
-            device=device_mesh,
-            memory_config=memory_config,
-            cache_file_name=f"{temp_file.name}.weight",
-            mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
-        )
-        torch_loaded_tensor = ttnn.to_torch(load_tensor, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0))
-        expected_pcc = 0.98 if dtype == ttnn.bfloat4_b else 0.99
-        assert_with_pcc(input_tensor, torch_loaded_tensor, pcc=expected_pcc)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
 def test_multi_device_permute(device_mesh, layout, memory_config, dtype):
     if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
