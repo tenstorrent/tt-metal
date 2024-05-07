@@ -6,7 +6,7 @@ import pytest
 
 from models.demos.falcon7b.tests.test_falcon_end_to_end import run_test_FalconCausalLM_end_to_end
 from models.demos.falcon7b.tt.model_config import get_model_config
-from models.utility_functions import disable_compilation_reports, disable_persistent_kernel_cache
+from models.utility_functions import disable_compilation_reports, disable_persistent_kernel_cache, skip_for_grayskull
 
 
 @pytest.mark.parametrize(
@@ -28,6 +28,7 @@ from models.utility_functions import disable_compilation_reports, disable_persis
     ids=["falcon_7b"],
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
+@skip_for_grayskull()
 def test_FalconCausalLM_end_to_end_with_program_cache(
     device,
     use_program_cache,
