@@ -168,7 +168,7 @@ namespace tt::tt_metal {
             return tensor_metadata;
         }
 
-        std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, uint32_t> generate_utwh_kernel_config_tensors(const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata, const std::vector<uint32_pair_t, uint32_pair_t>& shard_boundaries, bool remote_read, Device* device) {
+        std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, uint32_t> generate_halo_kernel_config_tensors(const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool remote_read, Device* device) {
             bool is_block_sharding = false; // TODO: get this from config
             bool transpose_mcast = true;    // TODO: get this from config
             auto core_id_to_noc_coords = [is_block_sharding, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
