@@ -22,4 +22,4 @@ repos:
   rev: 23.10.1
   hooks:
     - id: black
-      language_version: python3.8
+      language_version: python3
