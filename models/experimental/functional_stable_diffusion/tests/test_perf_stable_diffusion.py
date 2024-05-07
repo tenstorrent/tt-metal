@@ -225,11 +225,11 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_perf",
-    ((8.23),),
+    ((9.89),),
 )
 def test_stable_diffusion_device_perf(expected_perf):
     subdir = "ttnn_stable_diffusion"
-    margin = 0.02
+    margin = 0.01
     batch = 1
     iterations = 1
     command = f"pytest tests/ttnn/integration_tests/stable_diffusion/test_unet_2d_condition_model.py::test_unet_2d_condition_model_512x512[batch_size=2-in_channels=4-input_height=64-input_width=64-device_l1_small_size=32768]"
