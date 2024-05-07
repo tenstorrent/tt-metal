@@ -187,21 +187,16 @@ def test_concat_head2(
     batch,
     seq_len,
     all_devices,
-    # use_program_cache,
+    use_program_cache,
 ):
     n_devices = 8
     devices = get_devices_for_t3000(all_devices, num_devices=1)
     torch.manual_seed(0)
 
-    run_test_concat_head2(
-        devices,
-        batch,
-        seq_len,
-    )
-
-    # for i in range(3):
-    #     run_test_concat_head2(
-    #         devices,
-    #         batch,
-    #         seq_len,
-    #     )
+    for i in range(3):
+        # multiple loops to test program caching
+        run_test_concat_head2(
+            devices,
+            batch,
+            seq_len,
+        )
