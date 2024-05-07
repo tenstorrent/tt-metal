@@ -3,13 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
-import argparse
 from typing import List, Optional
 from loguru import logger
 import ttnn
 import pytest
 import torch
-import json
 from tqdm import tqdm
 
 from transformers import AutoTokenizer
@@ -100,29 +98,29 @@ def run_mamba_demo(
 
     sequences: torch.Tensor = tokenizer(prompts, return_tensors="pt", padding=True).input_ids
 
-    # prefill
+    # Prefill
     prefill_iterations = sequences.shape[1] - 1
     for idx in tqdm(range(prefill_iterations), desc="Prefilling the prompt(s)..."):
         logits = model(sequences[:, idx].unsqueeze(1))
 
-    # Decode Starts
-    start = time.time()
-    token_counts = 0
+    # Decode
     total_iterations = generated_sequence_length + prefill_iterations
 
-    print("Starting decoding...")
+    logger.info("Starting decoding...")
     for idx in range(prefill_iterations, total_iterations):
         with torch.no_grad():
+            start = time.time()
             logits = model(sequences[:, idx].unsqueeze(1))
+            end = time.time()
+
         logits = apply_repetition_penalty_(logits.squeeze(1), sequences, penalty=1.2)  # Adjust penalty as needed
         probs = torch.nn.functional.softmax(logits, dim=-1)
         next_token = torch.argmax(probs, dim=-1)
-        sequences = torch.cat([sequences, next_token.unsqueeze(-1)], dim=1)
 
+        sequences = torch.cat([sequences, next_token.unsqueeze(-1)], dim=1)
         decoded = tokenizer.batch_decode(sequences, skip_special_tokens=False)
 
-        token_counts += sequences.shape[0]
-        throughput = token_counts / (time.time() - start)
+        throughput = batch_size / (end - start)
 
         if display:
             display_tokens(decoded)
