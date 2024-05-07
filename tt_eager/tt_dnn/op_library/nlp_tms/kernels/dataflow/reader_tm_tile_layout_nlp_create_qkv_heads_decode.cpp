@@ -17,8 +17,6 @@ void kernel_main() {
     uint32_t start_qkv_x                     = get_arg_val<uint32_t>(5);
     uint32_t start_qkv_y                     = get_arg_val<uint32_t>(6);
     uint32_t q_start_addr                  = get_arg_val<uint32_t>(7);
-    uint32_t k_start_addr                  = get_arg_val<uint32_t>(8);
-    uint32_t v_start_addr                  = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t ELEMENT_SIZE        = get_compile_time_arg_val(0);
     constexpr uint32_t SUBTILE_LINE_BYTES  = get_compile_time_arg_val(1);
@@ -26,10 +24,10 @@ void kernel_main() {
     constexpr uint32_t cb_id_k_out         = get_compile_time_arg_val(3);
     constexpr uint32_t cb_id_v_out         = get_compile_time_arg_val(4);
 
-    uint32_t num_x                         = get_arg_val<uint32_t>(10);
-    uint32_t num_y                         = get_arg_val<uint32_t>(11);
-    volatile tt_l1_ptr uint32_t * in0_mcast_noc_x          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(12));
-    volatile tt_l1_ptr uint32_t * in0_mcast_noc_y          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(12 + num_x));
+    uint32_t num_x                         = get_arg_val<uint32_t>(8);
+    uint32_t num_y                         = get_arg_val<uint32_t>(9);
+    volatile tt_l1_ptr uint32_t * in0_mcast_noc_x          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(10));
+    volatile tt_l1_ptr uint32_t * in0_mcast_noc_y          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(10 + num_x));
 
     // Q
     uint32_t qkv_x = start_qkv_x;

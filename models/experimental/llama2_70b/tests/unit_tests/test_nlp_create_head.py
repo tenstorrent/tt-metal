@@ -392,6 +392,7 @@ def test_create_head3(
     torch.manual_seed(0)
 
     for i in range(3):
+        # multiple loops to test program caching
         run_test_create_head3(
             devices,
             batch,

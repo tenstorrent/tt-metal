@@ -39,17 +39,17 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
     auto in_cores = in_shard_spec.grid;
     auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
 
-    log_info("[xuncai] head_tiles: {}", head_tiles);
-    log_info("[xuncai] head_size: {}", head_size);
-    log_info("[xuncai] element_size: {}", element_size);
-    log_info("[xuncai] sub_tile_line_bytes: {}", sub_tile_line_bytes);
-    log_info("[xuncai] in_shard_spec: {}", in_shard_spec);
-    log_info("[xuncai] in_cores: {}", in_cores);
-    log_info("[xuncai] in_num_tiles: {}", in_num_tiles);
+    log_debug("[xuncai] head_tiles: {}", head_tiles);
+    log_debug("[xuncai] head_size: {}", head_size);
+    log_debug("[xuncai] element_size: {}", element_size);
+    log_debug("[xuncai] sub_tile_line_bytes: {}", sub_tile_line_bytes);
+    log_debug("[xuncai] in_shard_spec: {}", in_shard_spec);
+    log_debug("[xuncai] in_cores: {}", in_cores);
+    log_debug("[xuncai] in_num_tiles: {}", in_num_tiles);
 
-    log_info("[xuncai] q_shard_spec: {}", q_shard_spec);
-    log_info("[xuncai] q_cores: {}", q_cores);
-    log_info("[xuncai] q_num_tiles: {}", q_num_tiles);
+    log_debug("[xuncai] q_shard_spec: {}", q_shard_spec);
+    log_debug("[xuncai] q_cores: {}", q_cores);
+    log_debug("[xuncai] q_num_tiles: {}", q_num_tiles);
 
     uint32_t q_output_cb_index = CB::c_out0;
     tt_metal::CircularBufferConfig cb_q_output_config =
@@ -62,9 +62,9 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
     auto k_cores = k_shard_spec.grid;
     auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
 
-    log_info("[xuncai] k_shard_spec: {}", k_shard_spec);
-    log_info("[xuncai] k_cores: {}", k_cores);
-    log_info("[xuncai] k_num_tiles: {}", k_num_tiles);
+    log_debug("[xuncai] k_shard_spec: {}", k_shard_spec);
+    log_debug("[xuncai] k_cores: {}", k_cores);
+    log_debug("[xuncai] k_num_tiles: {}", k_num_tiles);
 
     uint32_t k_output_cb_index = CB::c_out1;
     tt_metal::CircularBufferConfig cb_k_output_config =
@@ -77,9 +77,9 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
     auto v_cores = q_shard_spec.grid;
     auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
 
-    log_info("[xuncai] v_shard_spec: {}", k_shard_spec);
-    log_info("[xuncai] v_cores: {}", k_cores);
-    log_info("[xuncai] v_num_tiles: {}", k_num_tiles);
+    log_debug("[xuncai] v_shard_spec: {}", k_shard_spec);
+    log_debug("[xuncai] v_cores: {}", k_cores);
+    log_debug("[xuncai] v_num_tiles: {}", k_num_tiles);
 
     uint32_t v_output_cb_index = CB::c_out2;
     tt_metal::CircularBufferConfig cb_v_output_config =
@@ -89,8 +89,6 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
     auto cb_v_output = tt_metal::CreateCircularBuffer(program, v_cores, cb_v_output_config);
 
     uint32_t q_base_addr = input_tensor.buffer()->address();
-    uint32_t k_base_addr = q_base_addr + num_q_heads * head_tiles * single_tile_size;
-    uint32_t v_base_addr = k_base_addr + num_kv_heads * head_tiles * single_tile_size;
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) element_size,
@@ -120,25 +118,23 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
     noc_x_coords.reserve(in_num_cores_x);
     for (uint32_t x = 0; x < in_num_cores_x; ++x) {
         noc_x_coords.push_back(device->worker_core_from_logical_core({x, 0}).x);
-        log_info("[xuncai] noc_x_coords[{}]: {}", x, noc_x_coords[x]);
+        log_debug("[xuncai] noc_x_coords[{}]: {}", x, noc_x_coords[x]);
     }
     std::vector<uint32_t> noc_y_coords;
     noc_y_coords.reserve(in_num_cores_y);
     for (uint32_t y = 0; y < in_num_cores_y; ++y) {
         noc_y_coords.push_back(device->worker_core_from_logical_core({0, y}).y);
-        log_info("[xuncai] noc_y_coords[{}]: {}", y, noc_y_coords[y]);
+        log_debug("[xuncai] noc_y_coords[{}]: {}", y, noc_y_coords[y]);
     }
 
     uint32_t q_start_addr = q_base_addr;
-    uint32_t k_start_addr = k_base_addr;
-    uint32_t v_start_addr = v_base_addr;
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         uint32_t in_tile_offset_by_batch = i < 16 ? i * sub_tile_line_bytes : (i - 16) * sub_tile_line_bytes + 512*element_size;
 
         const auto& core = cores[i];
         std::vector<uint32_t> reader_runtime_args;
-        reader_runtime_args.reserve(11 + in_num_cores_x + in_num_cores_y);
+        reader_runtime_args.reserve(9 + in_num_cores_x + in_num_cores_y);
         reader_runtime_args = {
             head_size,
             num_q_heads,
@@ -148,8 +144,6 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
             0, // start_q_x
             0, // start_q_y
             q_start_addr,
-            k_start_addr,
-            v_start_addr,
             in_num_cores_x,
             in_num_cores_y
         };
@@ -195,12 +189,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
         UpdateDynamicCircularBufferAddress(program, cb_v_output, *dst_buffer_value);
 
         uint32_t q_base_addr = input_tensors[0].buffer()->address();
-        uint32_t k_base_addr = q_base_addr + num_q_heads * head_tiles * single_tile_size;
-        uint32_t v_base_addr = k_base_addr + num_kv_heads * head_tiles * single_tile_size;
-
         uint32_t q_start_addr = q_base_addr;
-        uint32_t k_start_addr = k_base_addr;
-        uint32_t v_start_addr = v_base_addr;
 
         for (uint32_t i = 0; i < num_cores; ++i) {
             uint32_t in_tile_offset_by_batch = i < 16 ? i * sub_tile_line_bytes : (i - 16) * sub_tile_line_bytes + 512*element_size;
@@ -208,8 +197,6 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
             auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[4] = in_tile_offset_by_batch;
             runtime_args[7] = q_start_addr;
-            runtime_args[8] = k_start_addr;
-            runtime_args[9] = v_start_addr;
         }
     };
 
