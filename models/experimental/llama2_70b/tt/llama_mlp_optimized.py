@@ -55,9 +55,9 @@ class TtLlamaMLP_optimized(nn.Module):
         w2_str = f"{self.layer_name}.feed_forward.w2.weight"
         w3_str = f"{self.layer_name}.feed_forward.w3.weight"
 
-        w1_dtype = ttnn.bfloat8_b
+        w1_dtype = ttnn.bfloat4_b
         w2_dtype = ttnn.bfloat8_b
-        w3_dtype = ttnn.bfloat8_b
+        w3_dtype = ttnn.bfloat4_b
 
         # Test if the all weights have been cached
         try:
@@ -65,8 +65,8 @@ class TtLlamaMLP_optimized(nn.Module):
             self.w3_list = []
             self.w2_list = []
             for i in range(self.num_devices):
-                tensor_cache_path = get_weight_cache_path(self.cache_path, w1_str, i, self.num_devices)
-                # tensor_cache_path = get_weight_cache_path_ttnn(self.cache_path, w1_str, i, self.num_devices, w1_dtype)
+                # tensor_cache_path = get_weight_cache_path(self.cache_path, w1_str, i, self.num_devices)
+                tensor_cache_path = get_weight_cache_path_ttnn(self.cache_path, w1_str, i, self.num_devices, w1_dtype)
                 self.w1_list.append(
                     tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
                         self.devices[i], self.model_config["DRAM_MEMCFG"]
@@ -81,8 +81,8 @@ class TtLlamaMLP_optimized(nn.Module):
                     )
                 )
 
-                tensor_cache_path = get_weight_cache_path(self.cache_path, w3_str, i, self.num_devices)
-                # tensor_cache_path = get_weight_cache_path_ttnn(self.cache_path, w3_str, i, self.num_devices, w3_dtype)
+                # tensor_cache_path = get_weight_cache_path(self.cache_path, w3_str, i, self.num_devices)
+                tensor_cache_path = get_weight_cache_path_ttnn(self.cache_path, w3_str, i, self.num_devices, w3_dtype)
                 self.w3_list.append(
                     tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
                         self.devices[i], self.model_config["DRAM_MEMCFG"]
@@ -208,8 +208,8 @@ class TtLlamaMLP_optimized(nn.Module):
                     self.w1_list[i],
                     program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
                     output_mem_config=block_sharded_memcfg,
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
-                    output_dtype=self.model_config["BFP8_DTYPE"],
+                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG_LOFI"],
+                    # output_dtype=self.model_config["BFP8_DTYPE"],
                 )
             )
 
@@ -220,14 +220,14 @@ class TtLlamaMLP_optimized(nn.Module):
                     self.w3_list[i],
                     program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
                     output_mem_config=block_sharded_memcfg,
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
-                    output_dtype=self.model_config["BFP8_DTYPE"],
+                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG_LOFI"],
+                    # output_dtype=self.model_config["BFP8_DTYPE"],
                 )
             )
             x[i].deallocate(True)
 
         for i in range(len(w1_outs)):
-            hidden_states.append(ttnn.mul(w1_outs[i], w3_outs[i]))
+            hidden_states.append(ttnn.mul(w1_outs[i], w3_outs[i], dtype=ttnn.bfloat8_b))
             w1_outs[i].deallocate(True)
             w3_outs[i].deallocate(True)
 
@@ -261,8 +261,8 @@ class TtLlamaMLP_optimized(nn.Module):
                     self.w1_list[i],
                     program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
                     output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                    output_dtype=self.model_config["BFP8_DTYPE"],
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+                    # output_dtype=self.model_config["BFP8_DTYPE"],
+                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
                 )
             )
         for i in range(len(x)):
@@ -272,15 +272,20 @@ class TtLlamaMLP_optimized(nn.Module):
                     self.w3_list[i],
                     program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
                     output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                    output_dtype=self.model_config["BFP8_DTYPE"],
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+                    # output_dtype=self.model_config["BFP8_DTYPE"],
+                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
                 )
             )
             x[i].deallocate(True)
 
         for i in range(len(w1_outs)):
             hidden_states.append(
-                tt_lib.tensor.mul(w1_outs[i], w3_outs[i], output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"])
+                tt_lib.tensor.mul(
+                    w1_outs[i],
+                    w3_outs[i],
+                    output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+                    output_dtype=self.model_config["BFP8_DTYPE"],
+                )
             )
             w1_outs[i].deallocate(True)
             w3_outs[i].deallocate(True)
@@ -313,7 +318,7 @@ class TtLlamaMLP_optimized(nn.Module):
                 self.w2_list[i],
                 program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
                 output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                output_dtype=self.model_config["BFP8_DTYPE"],
+                # output_dtype=self.model_config["BFP8_DTYPE"],
                 compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
             )
 

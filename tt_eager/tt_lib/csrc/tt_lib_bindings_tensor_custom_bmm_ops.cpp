@@ -148,6 +148,10 @@ namespace tt::tt_metal::detail
             py::arg().noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Shuffles [B, 1, S, 4672] fused qkv matrix into 3 heads with shapes [B, 71, S, 64], [B, 1, S, 64], and [B, 1, S, 64].
         )doc");
+        m_tensor.def("nlp_create_qkv_heads_decode", &nlp_create_qkv_heads_decode,
+            py::arg("input").noconvert(), py::arg("num_heads").noconvert(), py::arg("num_kv_heads").noconvert() = std::nullopt, py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Shuffles [1, S=1, B=32, head_dim * (num_heads + 2*num_kv_heads)] fused qkv matrix into Q, K, and V heads with shape [S, B, num_heads, head_dim] for Q and [S, B, num_kv_heads, head_dim] for K and V, where num_heads and num_kv_heads will be padded to nearest 32. Input must be sharded, B=32 and S=1.
+        )doc");
         // More general implementation, but perf might be worse since the cbs are very small and writer calls noc_async_write_barrier() a lot
         m_tensor.def("nlp_create_qkv_heads", &nlp_create_qkv_heads,
             py::arg("input").noconvert(), py::arg("input_kv").noconvert() = std::nullopt, py::arg("num_heads").noconvert(), py::arg("num_kv_heads").noconvert() = std::nullopt, py::arg("transpose_k_heads").noconvert() = true, py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
@@ -156,6 +160,10 @@ namespace tt::tt_metal::detail
         m_tensor.def("nlp_concat_heads", &nlp_concat_heads,
             py::arg().noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Shuffles [B, num_heads, S, head_dim] tensor into tensor with shape [B, 1, S, num_heads * head_dim].
+        )doc");
+        m_tensor.def("nlp_concat_heads_decode", &nlp_concat_heads_decode,
+            py::arg().noconvert(), py::arg("num_heads").noconvert() = std::nullopt, R"doc(
+            Shuffles [S=1, B=32, 32(num_heads), head_dim] tensor into tensor with shape [S=1, 1, B=32, num_heads * head_dim]. num_heads should be specified and be less than 32; the op will assume the input padded num_heads to 32 and will unpad it. The output is default width sharded by num heads.
         )doc");
 
         // Custom Resnet matmuls
