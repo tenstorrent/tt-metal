@@ -57,7 +57,7 @@ def test_t5_dense_act_dense(device, model_name, batch_size, sequence_size):
     output = functional_t5.t5_dense_act_dense(config, hidden_states, parameters)
     output = ttnn.to_torch(output)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99910
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99917
 
 
 @skip_for_wormhole_b0()
@@ -81,7 +81,7 @@ def test_t5_dense_gated_act_dense(device, model_name, batch_size, sequence_size)
     output = functional_t5.t5_dense_gated_act_dense(config, hidden_states, parameters)
     output = ttnn.to_torch(output)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9989
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99907
 
 
 @skip_for_wormhole_b0()
@@ -105,7 +105,7 @@ def test_t5_layer_ff(device, model_name, batch_size, sequence_size):
     output = functional_t5.t5_layer_ff(config, hidden_states, parameters)
     output = ttnn.to_torch(output)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9990
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99910
 
 
 @skip_for_wormhole_b0()
@@ -207,7 +207,7 @@ def test_t5_block_encoder(device, model_name, batch_size, sequence_size):
     output, _, _ = functional_t5.t5_block(config, hidden_states, is_decoder=False, parameters=parameters)
     output = ttnn.to_torch(output)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9965
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99734
 
 
 @skip_for_wormhole_b0()
@@ -244,7 +244,7 @@ def test_t5_block_decoder(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9966
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99749
 
 
 @skip_for_wormhole_b0()
@@ -279,7 +279,7 @@ def test_t5_stack_encoder(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9952
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9962
 
 
 @skip_for_wormhole_b0()
@@ -321,7 +321,7 @@ def test_t5_stack_decoder(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9948
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9963
 
 
 @skip_for_wormhole_b0()
@@ -356,4 +356,4 @@ def test_t5_for_conditional_generation(device, model_name, batch_size, sequence_
     )
     output = ttnn.to_torch(output)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9926
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9942

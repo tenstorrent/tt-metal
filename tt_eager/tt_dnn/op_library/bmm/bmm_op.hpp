@@ -396,10 +396,12 @@ inline Tensor matmul(
             const auto& input_tensor_a = input_tensors.at(0);
             const auto& input_tensor_b = input_tensors.at(1);
             auto arch = input_tensor_a.device()->arch();
-            auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
+            const auto program_config_default = is_program_config_default(program_config);
+            auto math_fidelity = program_config_default ? MathFidelity::HiFi2 : MathFidelity::LoFi;
+            auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity);
             bool broadcast_batch = get_broadcast_batch(input_tensor_a, input_tensor_b, program_config);
             auto matmul_program_config = program_config;
-	    if (is_program_config_default(program_config) && input_tensor_a.is_sharded()) {
+	    if (program_config_default && input_tensor_a.is_sharded()) {
 	        bool bmm = input_b_is_batched.value_or(false);
 	        matmul_program_config = bmm_op_utils::get_matmul_program_config(input_tensor_a, input_tensor_b, mem_config, std::nullopt, !bmm, user_core_coord, compute_kernel_config);
 	    }
@@ -411,8 +413,10 @@ inline Tensor matmul(
 		[program_config, mem_config, output_dtype, compute_kernel_config, untilize_out, user_core_coord, input_b_is_batched] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_a = input_tensors.at(0);
             const auto& input_tensor_b = input_tensors.at(1);
-	    auto arch = input_tensor_a.storage_type() == StorageType::DEVICE ? input_tensor_a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
-            auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
+	          auto arch = input_tensor_a.storage_type() == StorageType::DEVICE ? input_tensor_a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
+            const auto program_config_default = is_program_config_default(program_config);
+            auto math_fidelity = program_config_default ? MathFidelity::HiFi2 : MathFidelity::LoFi;
+            auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity);
             bool broadcast_batch = get_broadcast_batch(input_tensor_a, input_tensor_b, program_config);
             return operation::run_with_autoformat(Matmul{program_config, broadcast_batch, mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), kernel_config_val, untilize_out}, {input_tensor_a, input_tensor_b}, optional_input_tensors);
         },
