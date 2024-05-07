@@ -701,7 +701,7 @@ class Operation:
 REGISTERED_APIS = set()
 
 
-def query_operations(include_experimental=False):
+def query_registered_operations(include_experimental=False):
     sorted_operations = sorted(REGISTERED_APIS)
 
     ttnn_operations = [
