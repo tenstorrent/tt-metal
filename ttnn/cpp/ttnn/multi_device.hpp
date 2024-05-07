@@ -25,11 +25,7 @@ inline DeviceMesh open_device_mesh(const DeviceGrid& device_grid, const DeviceId
 }
 
 inline void close_device_mesh(DeviceMesh &multi_device) {
-    for (const auto& [device_id, device] : multi_device.managed_devices) {
-        tt::tt_metal::detail::DeallocateBuffers(device.get());
-        device->close();
-    }
-    multi_device.managed_devices.clear();
+    multi_device.close_devices();
 }
 
 std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
