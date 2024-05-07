@@ -915,32 +915,31 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
         return to_string<T>(to_host<T>(tensor));
     }
 
-    if (dtype == DataType::BFLOAT8_B and original_dtype == std::nullopt) {
-        // Convert to FLOAT32 tensor before printing
-        auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
-        auto input_float_data =
-            unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
-        auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-        auto float_tensor =
-            Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout());
-        return to_string<float>(float_tensor, tensor.get_dtype());
-    }
-
-    if (dtype == DataType::BFLOAT4_B and original_dtype == std::nullopt) {
-        // Convert to FLOAT32 tensor before printing
-        auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
-        auto input_float_data =
-            unpack_bfp4_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
-        auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-        auto float_tensor =
-            Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout());
-        return to_string<float>(float_tensor, tensor.get_dtype());
-    }
-
     return std::visit(
         [&](auto&& storage) -> std::string {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                if (dtype == DataType::BFLOAT8_B and original_dtype == std::nullopt) {
+                    // Convert to FLOAT32 tensor before printing
+                    auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
+                    auto input_float_data =
+                        unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+                    auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
+                    auto float_tensor =
+                        Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout());
+                    return to_string<float>(float_tensor, tensor.get_dtype());
+                }
+
+                if (dtype == DataType::BFLOAT4_B and original_dtype == std::nullopt) {
+                    // Convert to FLOAT32 tensor before printing
+                    auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
+                    auto input_float_data =
+                        unpack_bfp4_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+                    auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
+                    auto float_tensor =
+                        Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout());
+                    return to_string<float>(float_tensor, tensor.get_dtype());
+                }
                 const auto buffer = owned_buffer::get_as<T>(storage.buffer);
                 return detail::to_string(buffer, shape, dtype, layout);
             } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
