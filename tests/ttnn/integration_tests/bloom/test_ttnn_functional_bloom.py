@@ -179,7 +179,7 @@ def test_bloom(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, pcc=0.914)
+    assert_with_pcc(torch_output, output, pcc=0.924)
 
 
 @skip_for_wormhole_b0()
@@ -221,5 +221,5 @@ def test_bloom_for_question_answering(device, model_name, batch_size, sequence_s
     start_logits = output[..., 0]
     end_logits = output[..., 1]
 
-    assert_with_pcc(torch_output.start_logits, start_logits, 0.85)
+    assert_with_pcc(torch_output.start_logits, start_logits, 0.871)
     assert_with_pcc(torch_output.end_logits, end_logits, 0.895)

@@ -81,7 +81,7 @@ def test_t5_dense_gated_act_dense(device, model_name, batch_size, sequence_size)
     output = functional_t5.t5_dense_gated_act_dense(config, hidden_states, parameters)
     output = ttnn.to_torch(output)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9988
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99907
 
 
 @skip_for_wormhole_b0()

@@ -65,7 +65,7 @@ def test_bloom_for_question_answering(device, use_program_cache, ttnn_model, bat
 
     if ttnn_model == ttnn_functional_bloom:
         assert_with_pcc(torch_start_logits, tt_start_logits, 0.96677)
-        assert_with_pcc(torch_end_logits, tt_end_logits, 0.9503)
+        assert_with_pcc(torch_end_logits, tt_end_logits, 0.95177)
     elif ttnn_model == ttnn_optimized_functional_bloom:
         assert_with_pcc(torch_start_logits, tt_start_logits, 0.93999)
         assert_with_pcc(torch_end_logits, tt_end_logits, 0.88868)
