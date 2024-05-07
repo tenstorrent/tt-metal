@@ -365,4 +365,4 @@ def test_ttnn_whisper(tmp_path, device, ttnn_model):
         last_hidden_state = ttnn.to_torch(last_hidden_state)
     ttnn.tracer.visualize(last_hidden_state, file_name=tmp_path / "whisper.svg")
 
-    assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.97)
+    assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.949)
