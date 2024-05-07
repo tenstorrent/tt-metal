@@ -343,7 +343,7 @@ class TtFalconAttention:
                     self.model_config["COMPUTE_KERNEL_CONFIG"],
                     output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
-                    grid=ttnn.CoreGrid(x=8, y=4) if q_len >= 512 else ttnn.CoreGrid(x=8, y=1),
+                    grid=ttnn.CoreGrid(x=8, y=8) if q_len >= 512 else ttnn.CoreGrid(x=8, y=min(q_len // 32, 8)),
                     transpose_mcast=True,
                 )
             )
