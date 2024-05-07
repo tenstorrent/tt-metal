@@ -144,13 +144,16 @@ def _rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float 
 
 # group norm helper function
 def determine_expected_group_norm_sharded_config_and_grid_size(
-    *, device, num_channels, num_groups, input_nhw, is_height_sharded
+    *, device, num_channels, num_groups, input_nhw, is_height_sharded, is_row_major=False
 ):
     assert num_channels % num_groups == 0
     assert num_channels % 32 == 0  # TODO: remove this later
     group_size = num_channels // num_groups
     compute_with_storage_grid_size = device.compute_with_storage_grid_size()
-    device_grid_size = (compute_with_storage_grid_size.x, compute_with_storage_grid_size.y)
+    device_grid_size = [compute_with_storage_grid_size.x, compute_with_storage_grid_size.y]
+    if is_row_major:
+        device_grid_size = [compute_with_storage_grid_size.y, compute_with_storage_grid_size.x]
+
     max_num_cores = device_grid_size[0] * device_grid_size[1]
     input_nhw_paddedto32 = math.ceil(input_nhw / 32) * 32
     num_cores_nhw = find_closest_largest_divisor(
@@ -181,11 +184,18 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
             num_cores_nhw <= grid_size[0] * grid_size[1]
         ), "Error: For height sharding, num_cores_nhw must be <= grid size"
     else:
-        grid_size = [num_cores_nhw, num_cores_channels]
+        grid_size = [num_cores_channels, num_cores_nhw] if is_row_major else [num_cores_nhw, num_cores_channels]
+    shard_shape = (
+        (1, 1, gn_nhw_per_core, gn_in_channels_per_core)
+        if is_row_major
+        else (1, 1, gn_in_channels_per_core, gn_nhw_per_core)
+    )
     shard_strategy = ttnn.ShardStrategy.HEIGHT if is_height_sharded else ttnn.ShardStrategy.BLOCK
-    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR if is_height_sharded else ttnn.ShardOrientation.COL_MAJOR
+    shard_orientation = (
+        ttnn.ShardOrientation.ROW_MAJOR if is_height_sharded or is_row_major else ttnn.ShardOrientation.COL_MAJOR
+    )
     return ttnn.create_sharded_memory_config(
-        (1, 1, gn_in_channels_per_core, gn_nhw_per_core),
+        shard_shape,
         ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
         shard_strategy,
         shard_orientation,

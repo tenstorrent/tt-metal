@@ -80,6 +80,7 @@ class upsample2d:
             # enable_auto_formatting=True,
             deallocate_activation=True,
             compute_kernel_config=compute_kernel_config,
+            transpose_mcast=False,
         )
         self.output_height = self.conv.output_height
         self.output_width = self.conv.output_width

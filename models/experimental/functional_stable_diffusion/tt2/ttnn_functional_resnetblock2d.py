@@ -129,6 +129,7 @@ class resnetBlock2D:
                     conv_blocking_and_parallelization_config_override=conv1_config_override,
                     use_shallow_conv_variant=False,
                     compute_kernel_config=compute_kernel_config,
+                    transpose_mcast=False,
                     # enable_auto_formatting=(conv1_split_chunks > 1) or not group_norm_on_device,
                     # reallocate_halo_output=True,
                 )
@@ -164,6 +165,7 @@ class resnetBlock2D:
                 weights_dtype=ttnn.bfloat8_b,
                 use_shallow_conv_variant=False,
                 compute_kernel_config=compute_kernel_config,
+                transpose_mcast=False,
             )
             self.output_height = self.conv_shortcut.output_height
             self.output_width = self.conv_shortcut.output_width
@@ -204,6 +206,7 @@ class resnetBlock2D:
             use_shallow_conv_variant=False,
             deallocate_activation=True,
             compute_kernel_config=compute_kernel_config,
+            transpose_mcast=False,
         )
 
         self.groups = 32
@@ -219,6 +222,7 @@ class resnetBlock2D:
             num_groups=self.groups,
             input_nhw=batch_size * input_height * input_width,
             is_height_sharded=False,
+            is_row_major=True,
         )
         (
             self.second_gn_expected_input_sharded_memory_config,
@@ -229,6 +233,7 @@ class resnetBlock2D:
             num_groups=self.groups,
             input_nhw=batch_size * input_height * input_width,
             is_height_sharded=False,
+            is_row_major=True,
         )
 
         self.output_height = self.conv2.output_height
@@ -400,8 +405,6 @@ class resnetBlock2D:
 
         out_channels = in_channels if out_channels is None else out_channels
 
-        # print(input_tensor.shape)
-        # print(input_tensor.memory_config())
         hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         if ttnn.get_memory_config(hidden_states) != self.first_gn_expected_input_sharded_memory_config:
             hidden_states = ttnn.to_memory_config(hidden_states, self.first_gn_expected_input_sharded_memory_config)
@@ -438,6 +441,7 @@ class resnetBlock2D:
             hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
                 hidden_states, self.conv1s[0].conv.input_sharded_memory_config, hidden_states.dtype
             )
+
             hidden_states = nonlinearity(hidden_states, memory_config=ttnn.get_memory_config(hidden_states))
             hidden_states = self.conv1s[0](hidden_states)
         else:
@@ -491,7 +495,8 @@ class resnetBlock2D:
             split_hidden_states = []
 
         if temb is not None:
-            grid_size = (2, self.conv1s[0].conv.grid_size[1])
+            # TODO
+            grid_size = (2, self.conv1s[0].conv.grid_size[0])
             # num_cores = grid_size[0] * grid_size[1]
             # temb = self.reshard_to(temb, grid_size, ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED)
             temb = nonlinearity(temb, memory_config=temb.memory_config())
@@ -541,10 +546,9 @@ class resnetBlock2D:
             )
             hidden_states = ttnn.add(hidden_states, temb, memory_config=hidden_states.memory_config())
 
-        # print(hidden_states.shape)
-        # print(hidden_states.memory_config())
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         hidden_states = ttnn.to_memory_config(hidden_states, self.second_gn_expected_input_sharded_memory_config)
+
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=groups,
@@ -583,6 +587,7 @@ class resnetBlock2D:
                 input_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
                     input_tensor, self.conv_shortcut.conv.input_sharded_memory_config, hidden_states.dtype
                 )
+
             input_tensor = self.conv_shortcut(input_tensor)
 
         if ttnn.get_memory_config(input_tensor) != ttnn.get_memory_config(hidden_states):
