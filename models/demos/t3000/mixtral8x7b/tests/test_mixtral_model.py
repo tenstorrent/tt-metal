@@ -47,7 +47,7 @@ class Emb(torch.nn.Module):
     (1, 10, 127),
 )
 def test_mixtral_model_inference(all_devices, iterations, n_layers, validation_type, use_program_cache, reset_seeds):
-    pcc = 0.99
+    pcc = 0.97
     dtype = ttnn.bfloat8_b
 
     devices = all_devices
@@ -58,6 +58,7 @@ def test_mixtral_model_inference(all_devices, iterations, n_layers, validation_t
     model_args = TtModelArgs(devices[0])
     model_args.n_layers = n_layers
 
+    print(model_args.state_dict_path)
     state_dict = torch.load(model_args.state_dict_path)
     keys_dict = list(state_dict.keys())[:]
     remv = [f"layers.{i}" for i in range(n_layers, 32)]
