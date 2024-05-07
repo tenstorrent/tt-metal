@@ -235,7 +235,7 @@ import ttnn.database
 
 from ttnn.decorators import (
     register_operation,
-    query_operations,
+    query_registered_operations,
     register_pre_operation_hook,
     register_post_operation_hook,
 )
@@ -354,8 +354,6 @@ from ttnn.operations.binary import (
     logaddexp,
     logaddexp2,
     xlogy,
-    add_and_apply_activation,
-    add_and_apply_activation_,
     nextafter,
     polyval,
     maximum,

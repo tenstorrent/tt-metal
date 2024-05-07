@@ -129,6 +129,8 @@ void TensorModule(py::module &m_tensor) {
     py::implicitly_convertible<std::pair<UnaryOpType, int>, UnaryWithParam>();
     py::implicitly_convertible<std::pair<UnaryOpType, bool>, UnaryWithParam>();
 
+    m_tensor.def("string_to_unary_with_param", &string_to_unary_with_param);
+
     detail::export_enum<EmbeddingsType>(m_tensor);
 
     auto py_core_coord = py::class_<CoreCoord>(m_tensor, "CoreCoord", R"doc(

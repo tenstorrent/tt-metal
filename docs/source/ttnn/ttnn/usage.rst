@@ -350,7 +350,7 @@ Open the visualizer by running the following command:
 .. code-block:: python
 
     import ttnn
-    ttnn.query_operations()
+    ttnn.query_registered_operations()
 
 
 
