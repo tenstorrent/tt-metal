@@ -7,7 +7,7 @@ from typing import List
 from tqdm import tqdm
 import torch
 from torch import nn
-import tt_lib
+import ttnn.experimental as tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, nearest_32, profiler
 from models.experimental.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized

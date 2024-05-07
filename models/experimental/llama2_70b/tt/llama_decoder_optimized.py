@@ -6,7 +6,7 @@ from loguru import logger
 from typing import List
 import torch
 from torch import nn
-import tt_lib
+import ttnn.experimental as tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor, nearest_32
 from models.experimental.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized

@@ -4,7 +4,8 @@
 
 import torch
 from torch import nn
-import tt_lib
+import ttnn.experimental as tt_lib
+import tt_lib as ttl
 import ttnn
 from loguru import logger
 
@@ -46,7 +47,7 @@ class TtLlamaModelForGeneration:
         self.n_devices = n_devices
 
         for device in devices:
-            tt_lib.device.Synchronize(device)
+            ttl.device.Synchronize(device)
 
         del reference_model
         del state_dict
@@ -94,7 +95,7 @@ class TtLlamaModelForGeneration:
         del attn_mask
 
         for device in self.devices:
-            tt_lib.device.Synchronize(device)
+            ttl.device.Synchronize(device)
 
         logits = torch.cat([tt2torch_tensor(tt_o) for tt_o in tt_logits], -1)
         logits = logits[..., : self.params.vocab_size].float()
@@ -130,7 +131,7 @@ class TtLlamaModelForGeneration:
             del attn_mask
 
             for device in self.devices:
-                tt_lib.device.Synchronize(device)
+                ttl.device.Synchronize(device)
 
             logits = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_logits], -1)
             logits = logits[..., : self.params.vocab_size].float()  # [batch, 1, vocab_size]
