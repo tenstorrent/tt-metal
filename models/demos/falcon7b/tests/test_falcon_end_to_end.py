@@ -54,7 +54,8 @@ def run_test_FalconCausalLM_end_to_end(
     seq_len,
     kv_cache_len,
     num_layers,
-    pcc,
+    out_pcc,
+    cache_pcc,
     model_config,
     tt_cache_path,
     model_location_generator,
@@ -251,7 +252,7 @@ def run_test_FalconCausalLM_end_to_end(
         tt_out = torch.concat(tt_out)
 
     # check outputs ----------------------------------------------------------------------
-    does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
+    does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, out_pcc)
     logger.info(f"Output: {output_pcc}")
 
     reference_logits = pytorch_out.view(global_batch * seq_len, -1).float().detach().numpy()
@@ -275,17 +276,23 @@ def run_test_FalconCausalLM_end_to_end(
                 num_devices, tt_layer_present[i], kv_cache_len, end_idx_only=True
             )
 
-        does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[0], tt_layer_pres[0], pcc)
+        does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[0], tt_layer_pres[0], cache_pcc)
         logger.info(f"K Cache Layer {i}: {output_pcc}")
 
         does_pass = does_pass and does_pass2
 
-        does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[1], tt_layer_pres[1], pcc)
+        does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[1], tt_layer_pres[1], cache_pcc)
         logger.info(f"V Cache Layer {i}: {output_pcc}")
 
         does_pass = does_pass and does_pass2
 
     profiler.print()
+
+    if does_pass:
+        logger.info("Falcon Model End-to-End Passed!")
+    else:
+        logger.warning("Falcon Model End-to-End Failed!")
+        assert does_pass
 
 
 @pytest.mark.parametrize(
@@ -299,8 +306,8 @@ def run_test_FalconCausalLM_end_to_end(
     ids=["prefill_seq128", "prefill_seq1024", "decode_batch32", "decode_batch32_1024"],
 )
 @pytest.mark.parametrize(
-    "num_layers, pcc",
-    ((2, 0.98), (32, 0.86)),
+    "num_layers, out_pcc, cache_pcc",
+    ((2, 0.98, 0.98), (32, 0.86, 0.86)),
     ids=["layers_2", "layers_32"],
 )
 @pytest.mark.parametrize(
@@ -309,7 +316,6 @@ def run_test_FalconCausalLM_end_to_end(
     ids=["falcon_7b"],
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
-@skip_for_wormhole_b0(reason_str="Hangs way too often, issue #4425")
 def test_FalconCausalLM_end_to_end_with_program_cache(
     device,
     use_program_cache,
@@ -319,7 +325,8 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     seq_len,
     kv_cache_len,
     num_layers,
-    pcc,
+    out_pcc,
+    cache_pcc,
     request,
     model_config_str,
     model_location_generator,
@@ -355,7 +362,13 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
             "Single-card falcon cannot run this config on non-Grayskull: BFLOAT16-L1-falcon_7b-layers_32-decode_batch32"
         )
 
-    if is_grayskull and model_config_str == "BFLOAT16-L1" and num_layers == 32 and llm_mode == "prefill" and seq_len == 1024:
+    if (
+        is_grayskull
+        and model_config_str == "BFLOAT16-L1"
+        and num_layers == 32
+        and llm_mode == "prefill"
+        and seq_len == 1024
+    ):
         pytest.skip("#7933: Out of DRAM space error for tensor")
 
     model_config = get_model_config(model_config_str, seq_len)
@@ -374,7 +387,8 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
         seq_len,
         kv_cache_len,
         num_layers,
-        pcc,
+        out_pcc,
+        cache_pcc,
         model_config,
         tt_cache_path,
         model_location_generator,
