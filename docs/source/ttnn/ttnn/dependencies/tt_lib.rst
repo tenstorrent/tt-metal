@@ -305,6 +305,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.div
 
+.. autofunction:: tt_lib.tensor.div_no_nan
+
 .. autofunction:: tt_lib.tensor.add_unary
 
 .. autofunction:: tt_lib.tensor.sub_unary
@@ -1077,7 +1079,7 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.imag_bw
 
 .. autofunction:: tt_lib.tensor.real_bw
-    
+
 .. autofunction:: tt_lib.tensor.complex_mul_bw
 
 .. autofunction:: tt_lib.tensor.complex_div_bw
