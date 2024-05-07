@@ -12,12 +12,15 @@ from loguru import logger
 from models.utility_functions import tt2torch_tensor, comp_pcc
 
 
-def run_ssm_eltwise_mul_test(H, W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device):
+def run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device):
     torch.manual_seed(1234)
     compute_grid_size = device.compute_with_storage_grid_size()
+    batch_size = 32
+    hidden_size = 5120
+    latent_size = 32
 
-    B_shape = [1, 1, H, 32]
-    X_shape = [1, 1, H, W]
+    B_shape = [1, 1, batch_size, in0_W]
+    X_shape = [1, 1, batch_size, in1_W]
     B = torch.randn(B_shape)
     X = torch.randn(X_shape)
 
@@ -28,12 +31,15 @@ def run_ssm_eltwise_mul_test(H, W, dtype, in0_mem_config, in1_mem_config, out_me
         tt_input_tensor_B, tt_input_tensor_X, output_mem_config=out_mem_config, output_dtype=dtype
     )
 
-    assert list(tt_out.get_legacy_shape()) == [1, 1, H, 32 * W]
+    assert list(tt_out.get_legacy_shape()) == [1, 1, batch_size, latent_size * hidden_size]
 
     out = tt2torch_tensor(tt_out)
 
     # Compute reference on pytorch
-    ref_out = B.repeat(1, 1, 1, W) * X.repeat_interleave(32, dim=-1)
+    if in0_W == latent_size:
+        ref_out = B.repeat(1, 1, 1, hidden_size) * X.repeat_interleave(latent_size, dim=-1)
+    elif in0_W == latent_size * hidden_size:
+        ref_out = B * X.repeat_interleave(latent_size, dim=-1)
 
     passing_pcc, output_pcc = comp_pcc(out, ref_out, 0.9999)
     logger.debug(f"Out passing={passing_pcc}")
@@ -68,25 +74,28 @@ def run_ssm_eltwise_mul_test(H, W, dtype, in0_mem_config, in1_mem_config, out_me
     (ttl.tensor.DataType.BFLOAT16,),
 )
 @pytest.mark.parametrize(
-    "H, W",
+    "in0_W, in1_W",
     (
-        (32, 32),
         (32, 5120),
+        (32 * 5120, 5120),
+        # (32, 32*5120), # TODO: Enable this test case where in1 is already expanded
     ),
 )
-def test_ssm_eltwise_mul(H, W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device):
-    run_ssm_eltwise_mul_test(H, W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device)
+def test_ssm_eltwise_mul(in0_W, in1_W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device):
+    run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device)
 
 
 def test_ssm_eltwise_mul_with_program_cache(device, use_program_cache):
-    H, W = 32, 5120
     mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     dtype = ttl.tensor.DataType.BFLOAT16
 
     for _ in range(2):
-        run_ssm_eltwise_mul_test(H, W, dtype, mem_config, mem_config, mem_config, device)
+        in0_W, in1_W = 32, 5120
+        run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, mem_config, mem_config, mem_config, device)
+        in0_W, in1_W = 32 * 5120, 5120
+        run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, mem_config, mem_config, mem_config, device)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
 
-    assert device.num_program_cache_entries() == 1
+    assert device.num_program_cache_entries() == 2

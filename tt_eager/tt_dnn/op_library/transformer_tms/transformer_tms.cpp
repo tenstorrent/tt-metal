@@ -552,8 +552,9 @@ void SSMEltwiseMul::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL((bshape[0] == 1 and bshape[1] == 1), "Batch not supported for input b!");
     TT_FATAL((ashape[2] == TILE_HEIGHT), "Num of users must be 32 for input a!");
     TT_FATAL((bshape[2] == TILE_HEIGHT), "Num of users must be 32 for input b!");
-    TT_FATAL((ashape[3] == TILE_WIDTH), "Latent must be 32 for input a!");
-    TT_FATAL((bshape[3] % TILE_WIDTH == 0), "Hidden size must be divisible by 32 for input b!");
+    TT_FATAL((ashape[3] != bshape[3]), "Use eltwise mul for same size inputs!");
+    TT_FATAL((ashape[3] == TILE_WIDTH || ashape[3] == TILE_WIDTH * HIDDEN_SIZE), "Input a width must be 32 or 32*5120!");
+    TT_FATAL((bshape[3] == HIDDEN_SIZE || bshape[3] == TILE_WIDTH * HIDDEN_SIZE), "Input b width must be 32 or 32*5120!");
 }
 
 std::vector<Shape> SSMEltwiseMul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -562,7 +563,7 @@ std::vector<Shape> SSMEltwiseMul::compute_output_shapes(const std::vector<Tensor
     const auto shape_a = input_tensor_a.get_legacy_shape();
     const auto shape_b = input_tensor_b.get_legacy_shape();
 
-    return {Shape{shape_a[0], shape_a[1], shape_a[2], shape_a[3] * shape_b[3]}};
+    return {Shape{shape_a[0], shape_a[1], shape_a[2], TILE_WIDTH * HIDDEN_SIZE}};
 }
 
 std::vector<Tensor> SSMEltwiseMul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
@@ -575,17 +576,19 @@ operation::ProgramWithCallbacks SSMEltwiseMul::create_program(
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
+    const auto hidden_size = HIDDEN_SIZE;
 
     auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
 
     return multi_core_ssm_eltwise_mul(
-        input_tensor_a, input_tensor_b, output_tensor, device_compute_with_storage_grid_size);
+        input_tensor_a, input_tensor_b, output_tensor, hidden_size, device_compute_with_storage_grid_size);
 }
 
 tt::stl::reflection::Attributes SSMEltwiseMul::attributes() const {
     return {
         {"output_mem_config", this->output_mem_config},
         {"output_dtype", this->output_dtype},
+        {"hidden_size", this->HIDDEN_SIZE},
     };
 }
 

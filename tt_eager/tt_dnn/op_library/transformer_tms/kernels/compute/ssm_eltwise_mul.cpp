@@ -25,23 +25,26 @@ void MAIN {
 
     binary_op_init_common(cb_in0_transposed, cb_in1_bcast_row); // TODO: Is there a specific one for bcast mul?
 
-    // Transpose in0
-    cb_wait_front(cb_id_in0, onetile);
-    tile_regs_acquire();
-    tile_regs_wait();
+    #ifdef REPEAT_IN0
+        // Transpose in0
+        cb_wait_front(cb_id_in0, onetile);
+        tile_regs_acquire();
+        tile_regs_wait();
 
-    transpose_wh_init_short(cb_id_in0);
-    transpose_wh_tile(cb_id_in0, 0, 0);
+        transpose_wh_init_short(cb_id_in0);
+        transpose_wh_tile(cb_id_in0, 0, 0);
 
-    cb_reserve_back(cb_in0_transposed, onetile);
-    pack_tile(0, cb_in0_transposed);
+        cb_reserve_back(cb_in0_transposed, onetile);
+        pack_tile(0, cb_in0_transposed);
 
-    tile_regs_commit();
-    tile_regs_release();
-    cb_push_back(cb_in0_transposed, onetile);
-    cb_pop_front(cb_id_in0, onetile);
+        tile_regs_commit();
+        tile_regs_release();
+        cb_push_back(cb_in0_transposed, onetile);
+        cb_pop_front(cb_id_in0, onetile);
 
-    cb_wait_front(cb_in0_transposed, onetile);
+        cb_wait_front(cb_in0_transposed, onetile);
+    #endif
+
     for (uint32_t in1_block = 0; in1_block < in1_num_blocks; in1_block++) {
         // Transpose in1
         cb_wait_front(cb_id_in1, onetile);
@@ -61,6 +64,26 @@ void MAIN {
 
         // Receive in1 as single rows to bcast mul with in0
         for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; tile_row_id++) {
+            #ifndef REPEAT_IN0
+                // Transpose in0
+                cb_wait_front(cb_id_in0, onetile);
+                tile_regs_acquire();
+                tile_regs_wait();
+
+                transpose_wh_init_short(cb_id_in0);
+                transpose_wh_tile(cb_id_in0, 0, 0);
+
+                cb_reserve_back(cb_in0_transposed, onetile);
+                pack_tile(0, cb_in0_transposed);
+
+                tile_regs_commit();
+                tile_regs_release();
+                cb_push_back(cb_in0_transposed, onetile);
+                cb_pop_front(cb_id_in0, onetile);
+
+                cb_wait_front(cb_in0_transposed, onetile);
+            #endif
+
             cb_wait_front(cb_in1_bcast_row, onetile);
             tile_regs_acquire();
             tile_regs_wait();
@@ -74,6 +97,9 @@ void MAIN {
             tile_regs_commit();
             tile_regs_release();
             cb_push_back(cb_out_transposed, onetile);
+            #ifndef REPEAT_IN0
+                cb_pop_front(cb_in0_transposed, onetile);
+            #endif
             cb_pop_front(cb_in1_bcast_row, onetile);
 
             // Transpose output back
@@ -114,7 +140,8 @@ void MAIN {
 
         cb_pop_front(cb_in1_transposed, onetile);
     }
-
-    cb_pop_front(cb_in0_transposed, onetile);
+    #ifdef REPEAT_IN0
+        cb_pop_front(cb_in0_transposed, onetile);
+    #endif
 }
 }

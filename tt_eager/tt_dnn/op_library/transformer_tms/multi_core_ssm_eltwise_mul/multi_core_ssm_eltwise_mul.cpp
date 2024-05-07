@@ -16,7 +16,7 @@ namespace operations {
 namespace primary {
 namespace transformers {
 
-operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(const Tensor &a, const Tensor &b, Tensor& output, CoreCoord compute_with_storage_grid_size) {
+operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(const Tensor &a, const Tensor &b, Tensor& output, const uint32_t hidden_size, CoreCoord compute_with_storage_grid_size) {
 
     const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
@@ -128,12 +128,21 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(const Tensor &a, cons
         (std::uint32_t) cb_intermed3_index,
     };
 
+    std::map<string, string> ssm_eltwise_defines;
+    if (ashape[-1] == TILE_WIDTH) {
+        ssm_eltwise_defines["REPEAT_IN0"] = "1";
+
+    }
+    if (bshape[-1] == hidden_size) {
+        ssm_eltwise_defines["REPEAT_INTERLEAVE_IN1"] = "1";
+    }
+
     // Load kernels
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_ssm_eltwise_mul.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, ssm_eltwise_defines));
 
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
@@ -145,7 +154,7 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(const Tensor &a, cons
         program,
         "tt_eager/tt_dnn/op_library/transformer_tms/kernels/compute/ssm_eltwise_mul.cpp",
         all_cores,
-        tt_metal::ComputeConfig{.compile_args = compute_args}
+        tt_metal::ComputeConfig{.compile_args = compute_args, .defines = ssm_eltwise_defines}
     );
 
     // Update runtime args function
