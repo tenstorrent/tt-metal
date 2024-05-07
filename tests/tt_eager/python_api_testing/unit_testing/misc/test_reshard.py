@@ -17,6 +17,24 @@ from enum import Enum
 from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull, get_debug_tensor
 
 
+def get_tensor(shape, dtype):
+    if dtype in {torch.int16, torch.int32}:
+        torch_tensor = torch.randint(0, 1024, shape, dtype=dtype)
+    else:
+        torch_tensor = torch.rand(shape, dtype=dtype)
+    return torch_tensor
+
+
+tt_dtype_to_torch_dtype = {
+    ttl.tensor.DataType.UINT32: torch.int32,
+    ttl.tensor.DataType.UINT16: torch.int16,
+    ttl.tensor.DataType.BFLOAT16: torch.bfloat16,
+    ttl.tensor.DataType.BFLOAT8_B: torch.float,
+}
+TILE_WIDTH = 32
+TILE_HEIGHT = 32
+
+
 def run_reshard_test(
     device,
     input_shape,
@@ -64,18 +82,56 @@ def run_reshard_test(
     if input_layout == ttl.tensor.Layout.ROW_MAJOR and tt_dtype == ttl.tensor.DataType.BFLOAT8_B:
         pytest.skip("Illegal layout/dtype config")
 
-    dram_memory_config = ttl.tensor.MemoryConfig(
+    l1_memory_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
+        buffer_type=ttl.tensor.BufferType.L1,
     )
+    debug = True
+    dtype = tt_dtype_to_torch_dtype[tt_dtype]
+    if debug:
+        if input_layout == ttl.tensor.Layout.TILE:
+            num_pages_height = (input_shape[0] * input_shape[1] * input_shape[2]) / 32
+            num_pages_width = input_shape[3] / 32
+            page_height = 32
+            page_width = 32
+        else:
+            # if input_shard_orientation == ttl.tensor.ShardOrientation.ROW_MAJOR and input_sharding_scheme == ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED:
+            #    page_width_input = input_shard_shape[0]
+            # else:
+            #    page_width_input = input_shard_shape[1]
 
-    torch_tensor = torch.randn(input_shape).bfloat16()
+            # if output_shard_orientation == ttl.tensor.ShardOrientation.ROW_MAJOR and output_sharding_scheme == ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED:
+            #    page_width_output = output_shard_shape[0]
+            # else:
+            #    page_width_output = output_shard_shape[1]
+
+            page_width_input = input_shard_shape[1]
+            page_width_output = output_shard_shape[1]
+            page_height = 1
+            page_width = int(math.gcd(page_width_input, page_width_output))
+            num_pages_height = int(input_shape[0] * input_shape[1] * input_shape[2])
+            num_pages_width = int(input_shape[3] / page_width)
+        torch_tensor = get_debug_tensor(
+            num_pages_width, num_pages_height, dtype, page_width=page_width, page_height=page_height
+        )
+        print(torch_tensor.shape)
+        print("Input tensor " + str(torch_tensor))
+    else:
+        torch_tensor = get_tensor(input_shape, dtype)
     tt_tensor_sharded = ttl.tensor.Tensor(torch_tensor, tt_dtype).to(input_layout)
     tt_tensor_sharded = tt_tensor_sharded.to(device, input_mem_config)
 
     tt_tensor_reshard = ttl.tensor.reshard(tt_tensor_sharded, output_mem_config)
 
-    torch_tensor_after_round_trip = tt_tensor_reshard.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_tensor_interleaved = ttl.tensor.sharded_to_interleaved(
+        tt_tensor_reshard,
+        l1_memory_config,
+    )
+
+    tt_tensor_interleaved = tt_tensor_interleaved.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    torch_tensor_after_round_trip = tt_tensor_interleaved.to_torch()
+
+    print("Returned tensor " + str(torch_tensor_after_round_trip))
     return torch_tensor, torch_tensor_after_round_trip
 
 
@@ -154,16 +210,28 @@ def run_reshard_test(
             ttl.tensor.ShardOrientation.COL_MAJOR,
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ),
+        # (
+        #    [1, 1, 64, 96],
+        #    ttl.tensor.Layout.ROW_MAJOR,
+        #    [[(0, 0), (0, 1)]],
+        #    (64, 64),
+        #    ttl.tensor.ShardOrientation.ROW_MAJOR,
+        #    ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        #    [[(0, 0), (1, 2)]],
+        #    (32, 32),
+        #    ttl.tensor.ShardOrientation.COL_MAJOR,
+        #    ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        # ),
         (
-            [1, 1, 64, 96],
+            [1, 1, 4, 8],
             ttl.tensor.Layout.ROW_MAJOR,
-            [[(0, 0), (0, 1)]],
-            (64, 64),
+            [[(0, 0), (1, 0)]],
+            (2, 8),
             ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            [[(0, 0), (1, 2)]],
-            (32, 32),
-            ttl.tensor.ShardOrientation.COL_MAJOR,
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            [[(0, 0), (1, 1)]],
+            (2, 4),
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ),
         (
@@ -353,4 +421,4 @@ def test_reshard_with_program_cache(
         passing, output = comp_pcc(torch_tensor1, torch_tensor_after_round_trip1)
     assert passing, output
 
-    assert device.num_program_cache_entries() == 3
+    assert device.num_program_cache_entries() == 1

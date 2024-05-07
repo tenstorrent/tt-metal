@@ -46,7 +46,10 @@ inline std::tuple< std::vector< std::vector<uint32_t> > , std::vector<std::array
                                                     const TensorMemoryLayout & layout,
                                                     const std::array<uint32_t, 2> & page_shape,
                                                     const std::array<uint32_t, 2> &shard_shape,
-                                                    const std::array<uint32_t, 2> & tensor2d_size)
+                                                    const std::array<uint32_t, 2> & tensor2d_size,
+                                                    std::optional< CoreCoord > grid,
+                                                    bool row_wise
+                                                    )
 {
 
 
@@ -71,7 +74,7 @@ inline std::tuple< std::vector< std::vector<uint32_t> > , std::vector<std::array
             }
         }
     }
-    else if(layout == TensorMemoryLayout::WIDTH_SHARDED or layout == TensorMemoryLayout::BLOCK_SHARDED) {
+    else if(layout == TensorMemoryLayout::WIDTH_SHARDED or (layout == TensorMemoryLayout::BLOCK_SHARDED and row_wise)) {
         uint32_t i_offset = 0;
         uint32_t j_offset = 0;
         uint32_t num_shard_columns = div_up(tensor2d_size[1], shard_in_pages[1]);
@@ -102,6 +105,40 @@ inline std::tuple< std::vector< std::vector<uint32_t> > , std::vector<std::array
             else{
                 shard_in_row++;
                 j_offset += shard_in_pages[1];
+            }
+        }
+    }
+    else if(layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        uint32_t i_offset = 0;
+        uint32_t j_offset = 0;
+        uint32_t num_shard_columns = div_up(tensor2d_size[1], shard_in_pages[1]);
+        uint32_t shard_in_row = 0;
+        TT_ASSERT(grid.has_value());
+        TT_ASSERT(not row_wise);
+        for(uint32_t shard_idx_x=0; shard_idx_x<grid.value().x; shard_idx_x++) {
+            for(uint32_t shard_idx_y=0; shard_idx_y<grid.value().y; shard_idx_y++) {
+                uint32_t shard_idx = shard_idx_y*grid.value().x + shard_idx_x;
+                ret_vec[shard_idx].reserve(pages_per_shard);
+                uint32_t host_idx = 0;
+                uint32_t i = 0;
+                uint32_t j = 0;
+                for(i=i_offset; i<(shard_in_pages[0] + i_offset); i++) {
+                    for(j=j_offset; j<(shard_in_pages[1] + j_offset) and (j < (tensor2d_size[1])); j++) {
+                        uint32_t host_page = i*tensor2d_size[1] + j;
+                        ret_vec[shard_idx].push_back(host_page);
+                        host_idx++;
+                    }
+                }
+                ret_shard_shape[shard_idx] = {i - i_offset, j - j_offset};
+                if(((shard_in_row + 1) == (num_shard_columns))) {
+                    shard_in_row = 0;
+                    j_offset = 0;
+                    i_offset += shard_in_pages[0];
+                }
+                else{
+                    shard_in_row++;
+                    j_offset += shard_in_pages[1];
+                }
             }
         }
     }
@@ -148,7 +185,12 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer, std::option
 
     uint32_t num_dev_pages = shard_spec.size() * num_cores;
     uint32_t num_host_pages = buffer.num_pages() * num_pages_multiplier;
-    auto [core_host_page_indices, shard_shape] = core_to_host_pages(num_dev_pages, shard_spec.size(), num_cores, buffer.buffer_layout(), shard_spec.page_shape, shard_spec.shape(), shard_spec.tensor2d_shape);
+
+    std::optional<CoreCoord> block_grid = std::nullopt;
+    if(buffer.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        block_grid = shard_spec.grid().ranges().begin()->grid_size();
+    }
+    auto [core_host_page_indices, shard_shape] = core_to_host_pages(num_dev_pages, shard_spec.size(), num_cores, buffer.buffer_layout(), shard_spec.page_shape, shard_spec.shape(), shard_spec.tensor2d_shape, block_grid, row_major);
     bool width_block_shard_with_padding = ((buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED or buffer.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED) and
             num_dev_pages != num_host_pages);
 

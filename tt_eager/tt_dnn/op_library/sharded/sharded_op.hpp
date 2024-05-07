@@ -11,6 +11,8 @@
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 
+#define L1_ADDRESS_ALIGNMENT 16
+
 namespace tt {
 
 namespace tt_metal {

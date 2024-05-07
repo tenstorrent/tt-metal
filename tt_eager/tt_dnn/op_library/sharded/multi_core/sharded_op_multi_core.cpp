@@ -94,10 +94,10 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
     uint32_t scratch_cb_index = CB::c_in1;
     uint32_t out_cb_index = input_cb_index;
     uint32_t num_input_units = num_units_per_shard;
-    uint32_t output_page_size = align(output_unit_size, ADDRESS_ALIGNMENT);
+    uint32_t output_page_size = align(output_unit_size, L1_ADDRESS_ALIGNMENT);
     if (convert_df) {
         out_cb_index = CB::c_out0;
-        uint32_t input_page_size = align(input_unit_size, ADDRESS_ALIGNMENT);
+        uint32_t input_page_size = align(input_unit_size, L1_ADDRESS_ALIGNMENT);
         tt_metal::CircularBufferConfig input_cb_out_config =
             tt_metal::CircularBufferConfig(num_input_units * input_page_size, {{input_cb_index, input_cb_data_format}})
                 .set_page_size(input_cb_index, input_page_size);
@@ -242,7 +242,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
                     }
                 }
             }
-            uint32_t padded_shard_width = align(shard_width, ADDRESS_ALIGNMENT);
+            uint32_t padded_shard_width = align(shard_width, L1_ADDRESS_ALIGNMENT);
             bool aligned = src_is_dram ? curr_idx_w % DRAM_ALIGNMENT == 0 : true;
             uint32_t aligned_width_offset, aligned_shard_width, aligned_offset;
             if (!aligned) {
@@ -359,7 +359,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
     uint32_t src0_cb_index = CB::c_in0;
     uint32_t out_cb_index = src0_cb_index;
     uint32_t num_input_units = num_units_per_shard;
-    uint32_t input_page_size = align(input_unit_size, ADDRESS_ALIGNMENT);
+    uint32_t input_page_size = align(input_unit_size, L1_ADDRESS_ALIGNMENT);
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_units * input_page_size, {{src0_cb_index, input_cb_data_format}})
             .set_page_size(src0_cb_index, input_page_size)
@@ -367,7 +367,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
     if (convert_df) {
         out_cb_index = CB::c_out0;
-        uint32_t output_page_size = align(output_unit_size, ADDRESS_ALIGNMENT);
+        uint32_t output_page_size = align(output_unit_size, L1_ADDRESS_ALIGNMENT);
         tt_metal::CircularBufferConfig output_cb_out_config =
             tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
                 .set_page_size(out_cb_index, output_page_size);
@@ -505,7 +505,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
                     }
                 }
             }
-            uint32_t padded_shard_width = align(shard_width, ADDRESS_ALIGNMENT);
+            uint32_t padded_shard_width = align(shard_width, L1_ADDRESS_ALIGNMENT);
             tt_metal::SetRuntimeArgs(
                 program,
                 unary_writer_kernel_id,
@@ -585,6 +585,7 @@ inline std::tuple< uint32_t, std::unordered_map<CoreCoord, std::vector<PageStrid
     auto output_shard_spec = output_buffer->shard_spec();
     uint32_t input_num_host_pages_multiplier = 1;
     if(input.get_layout() == Layout::ROW_MAJOR) {
+        uint32_t input_page_width, output_page_width;
         page_width = get_greatest_common_factor(input_buffer->shard_spec().page_shape[1], output_buffer->shard_spec().page_shape[1]);
         std::array<uint32_t, 2> page_shape = {1, page_width};
 
@@ -613,11 +614,14 @@ inline std::tuple< uint32_t, std::unordered_map<CoreCoord, std::vector<PageStrid
 
     auto num_pages = std::min<uint32_t>(output_shard_to_host_mapping.size(), input_num_host_pages);
 
+    auto output_cores = output_buffer_page_mapping.all_cores_;
+
     // First get output_core to vector< pair<input_core, input_page> (num_pages_in_output)
-    std::unordered_map<CoreCoord, std::vector< std::optional<std::pair<CoreCoord, uint32_t> >>> output_core_to_vector_input_core_page;
+    std::vector<std::vector< std::optional<std::pair<CoreCoord, uint32_t> >>> output_core_to_vector_input_core_page(output_cores.size());
 
     for (uint32_t output_page_id = 0; output_page_id < num_pages; output_page_id++) {
-        auto output_core = output_buffer_page_mapping.all_cores_[output_buffer_page_mapping.dev_page_to_core_mapping_[output_page_id]];
+        auto output_core_id = output_buffer_page_mapping.dev_page_to_core_mapping_[output_page_id];
+        TT_ASSERT(output_core_id < output_cores.size());
         auto host_page = output_shard_to_host_mapping[output_page_id];
         std::optional<std::pair<CoreCoord, uint32_t> > mapped_page = std::nullopt;
         if(host_page.has_value()) {
@@ -626,15 +630,10 @@ inline std::tuple< uint32_t, std::unordered_map<CoreCoord, std::vector<PageStrid
             auto input_core = input_buffer_page_mapping.all_cores_[input_buffer_page_mapping.dev_page_to_core_mapping_[input_page]];
             mapped_page = std::make_optional<std::pair<CoreCoord, uint32_t> > ({input_core, local_input_page});
         }
-        if (output_core_to_vector_input_core_page.find(output_core) == output_core_to_vector_input_core_page.end()) {
-            output_core_to_vector_input_core_page[output_core] = {mapped_page};
-        } else {
-            output_core_to_vector_input_core_page[output_core].push_back(mapped_page);
-        }
+        output_core_to_vector_input_core_page[output_core_id].push_back(mapped_page);
     }
 
     // now compress to output_core to vector<pair<input_core, input_page_range> (num_page_ranges_in_output)
-    auto output_cores = corerange_to_cores(output_buffer->shard_spec().grid());
     std::unordered_map<CoreCoord, std::vector<PageStride>> ret_map;
     ret_map.reserve(output_cores.size());
 
@@ -642,12 +641,11 @@ inline std::tuple< uint32_t, std::unordered_map<CoreCoord, std::vector<PageStrid
     auto device = input_buffer->device();
     auto full_grid = device->compute_with_storage_grid_size();
     CoreCoord end_core = (*output_buffer->shard_spec().grid().ranges().rbegin()).end;
-    uint32_t output_core_id;
+    uint32_t output_core_id = 0;
     for (auto output_core : output_cores) {
         ret_map.try_emplace(output_core, std::vector<PageStride>{});
 
-
-        const auto& input_cores_with_pages = output_core_to_vector_input_core_page.at(output_core);
+        const auto& input_cores_with_pages = output_core_to_vector_input_core_page[output_core_id];
         auto it = input_cores_with_pages.begin();
         const auto end = input_cores_with_pages.end();
 
@@ -717,8 +715,8 @@ inline std::tuple< uint32_t, std::unordered_map<CoreCoord, std::vector<PageStrid
                         {
                             auto next_input_page = *(stride_it);
                             auto prev_input_page = *(last_it_stride);
-                            data_stride = next_input_page.value().second - prev_input_page.value().second - 1;
-                            stride = Stride{.core = {next_input_page.value().first.x - prev_input_page.value().first.x, next_input_page.value().first.y - prev_input_page.value().first.y},
+                            data_stride = next_input_page.value().second - prev_input_page.value().second - stride_size;
+                            stride = Stride{.core = {0, 0},
                                             .data = data_stride};
                         }
                         //// strided core but same data
@@ -798,6 +796,7 @@ inline std::tuple< uint32_t, std::unordered_map<CoreCoord, std::vector<PageStrid
                 }
             }
         }
+        output_core_id++;
     }
 
     return std::make_tuple(page_width, ret_map);
@@ -888,7 +887,12 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
         total_size = output_shard_spec.numel() / TILE_HW * unit_size;
     } else {
         unit_size = page_width * output.element_size();
-        total_size = output_shard_shape[0] * unit_size;
+        //if(output.buffer()->buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED and output_shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
+        //    total_size = output_shard_shape[1] * unit_size;
+        //}
+        //else {
+            total_size = output_shard_shape[0] * unit_size;
+        //}
     }
 
     tt_metal::KernelHandle kernel_id_0 = tt_metal::CreateKernel(

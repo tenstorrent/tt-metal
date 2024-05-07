@@ -721,7 +721,7 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     }
 
     auto element_size = tensor_impl::element_size_bytes_wrapper(data_type);
-    auto page_shape = tensor_impl::get_sharded_page_shape(layout, data_type, shard_spec.shape);
+    auto page_shape = tensor_impl::get_sharded_page_shape(layout, memory_config.memory_layout, shard_spec.orientation, data_type, shard_spec.shape);
     std::array<uint32_t,2> tensor2d_size = {other_dims/page_shape[0], width/page_shape[1]};
     ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
     uint32_t packed_size_in_bytes;
