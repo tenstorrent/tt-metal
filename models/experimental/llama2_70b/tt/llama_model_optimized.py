@@ -9,6 +9,9 @@ import torch
 from torch import nn
 import ttnn.experimental as tt_lib
 import ttnn
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+
+
 from models.utility_functions import torch2tt_tensor, nearest_32, profiler
 from models.experimental.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
 from models.experimental.llama2_70b.tt.llama_embedding import TtLlamaEmbedding
@@ -23,10 +26,10 @@ from models.experimental.llama2_70b.tt.llama_common import (
 )
 
 
-class TtLlamaModel_optimized(nn.Module):
+class TtLlamaModel_optimized:
     def __init__(
         self,
-        devices,
+        device_mesh,
         state_dict,
         base_url,
         n_layers,
@@ -36,11 +39,9 @@ class TtLlamaModel_optimized(nn.Module):
         emulated=False,
         cache_path=None,
     ):
-        super().__init__()
-
         self.state_dict = state_dict
-        self.devices = devices
-        self.num_devices = len(devices)
+        self.device_mesh = device_mesh
+        self.num_devices = device_mesh.get_num_devices()
         self.model_config = model_config
         self.emulated = emulated
 
@@ -58,12 +59,19 @@ class TtLlamaModel_optimized(nn.Module):
         self.cache_path = cache_path
         # Transformation matrix for rotary embeddings
         transformation_mat_torch = get_rot_transformation_mat(self.head_dim)
-        transformation_mats = [torch2tt_tensor(transformation_mat_torch.clone(), device) for device in devices]
+        transformation_mats = ttnn.as_tensor(
+            transformation_mat_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            memory_config=model_config["DRAM_MEMCFG"],
+            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+        )
 
         logger.info("Creating Layers")
         self.layers = [
             TtLlamaDecoder_optimized(
-                devices,
+                device_mesh,
                 state_dict,
                 base_url,
                 layer_num,
@@ -83,7 +91,7 @@ class TtLlamaModel_optimized(nn.Module):
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
         # Embedding
         self.tt_embd = TtLlamaEmbedding(
-            devices,
+            device_mesh,
             state_dict,
             cache_path,
         )
@@ -101,55 +109,83 @@ class TtLlamaModel_optimized(nn.Module):
         self.norm_list = []
         self.lm_head_list = []
 
-        test_cache_path = get_weight_cache_path(self.cache_path, lm_head_str, self.num_devices - 1, self.num_devices)
-        if test_cache_path.exists():
-            for i in range(self.num_devices):
-                tensor_cache_path = get_weight_cache_path(self.cache_path, norm_str, i, self.num_devices)
-                self.norm_list.append(
-                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                        self.devices[i], self.model_config["DRAM_MEMCFG"]
-                    )
-                )
+        # test_cache_path = get_weight_cache_path(self.cache_path, lm_head_str, self.num_devices - 1, self.num_devices)
+        # if test_cache_path.exists():
+        #     for i in range(self.num_devices):
+        #         tensor_cache_path = get_weight_cache_path(self.cache_path, norm_str, i, self.num_devices)
+        #         self.norm_list.append(
+        #             tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+        #                 self.devices[i], self.model_config["DRAM_MEMCFG"]
+        #             )
+        #         )
 
-                tensor_cache_path = get_weight_cache_path(self.cache_path, lm_head_str, i, self.num_devices)
-                self.lm_head_list.append(
-                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                        self.devices[i], self.model_config["DRAM_MEMCFG"]
-                    )
-                )
+        #         tensor_cache_path = get_weight_cache_path(self.cache_path, lm_head_str, i, self.num_devices)
+        #         self.lm_head_list.append(
+        #             tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+        #                 self.devices[i], self.model_config["DRAM_MEMCFG"]
+        #             )
+        #         )
+        # else:
+        #     H = 8 * 1024
+        #     if self.llama3:
+        #         PADDED_VOCAB = 128 * 1024
+        #     else:
+        #         PADDED_VOCAB = 32 * 1024
+        #     padded_lm_head = torch.zeros(H, PADDED_VOCAB)
+        #     padded_lm_head[:, : self.vocab_size] = self.state_dict[lm_head_str].transpose(-2, -1)
+        #     padded_lm_head_chunks = torch.chunk(padded_lm_head, self.num_devices, -1)
+
+        #     for i in range(self.num_devices):
+        #         output_norm_host = tt_lib.tensor.Tensor(
+        #             # Expand to size of input since we decomped norm
+        #             self.state_dict[norm_str].reshape([1, 1, -1, 32]),
+        #             self.model_config["LN_F_WEIGHTS_DTYPE"],
+        #         )
+        #         self.norm_list.append(output_norm_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
+        #         tt_lib.tensor.dump_tensor(
+        #             str(get_weight_cache_path(self.cache_path, norm_str, i, self.num_devices)),
+        #             output_norm_host,
+        #         )
+
+        #         lm_head_host = torch2tt_tensor(
+        #             padded_lm_head_chunks[i],
+        #             None,
+        #             tt_memory_config=self.model_config["DRAM_MEMCFG"],
+        #             tt_dtype=self.model_config["BFP8_DTYPE"],
+        #         )
+        #         self.lm_head_list.append(lm_head_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
+        #         tt_lib.tensor.dump_tensor(
+        #             str(get_weight_cache_path(self.cache_path, lm_head_str, i, self.num_devices)),
+        #             lm_head_host,
+        #         )
+
+        H = 8 * 1024
+        if self.llama3:
+            PADDED_VOCAB = 128 * 1024
         else:
-            H = 8 * 1024
-            if self.llama3:
-                PADDED_VOCAB = 128 * 1024
-            else:
-                PADDED_VOCAB = 32 * 1024
-            padded_lm_head = torch.zeros(H, PADDED_VOCAB)
-            padded_lm_head[:, : self.vocab_size] = self.state_dict[lm_head_str].transpose(-2, -1)
-            padded_lm_head_chunks = torch.chunk(padded_lm_head, self.num_devices, -1)
+            PADDED_VOCAB = 32 * 1024
+        padded_lm_head = torch.zeros(1, 1, H, PADDED_VOCAB)
+        padded_lm_head[:, :, :, : self.vocab_size] = self.state_dict[lm_head_str].transpose(-2, -1)
 
-            for i in range(self.num_devices):
-                output_norm_host = tt_lib.tensor.Tensor(
-                    # Expand to size of input since we decomped norm
-                    self.state_dict[norm_str].reshape([1, 1, -1, 32]),
-                    self.model_config["LN_F_WEIGHTS_DTYPE"],
-                )
-                self.norm_list.append(output_norm_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
-                tt_lib.tensor.dump_tensor(
-                    str(get_weight_cache_path(self.cache_path, norm_str, i, self.num_devices)),
-                    output_norm_host,
-                )
+        padded_lm_head_ttnn = ttnn.as_tensor(
+            padded_lm_head,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device_mesh,
+            memory_config=self.model_config["DRAM_MEMCFG"],
+            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+        )
+        self.lm_head = ttnn.to_device(padded_lm_head_ttnn, self.device_mesh)
 
-                lm_head_host = torch2tt_tensor(
-                    padded_lm_head_chunks[i],
-                    None,
-                    tt_memory_config=self.model_config["DRAM_MEMCFG"],
-                    tt_dtype=self.model_config["BFP8_DTYPE"],
-                )
-                self.lm_head_list.append(lm_head_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
-                tt_lib.tensor.dump_tensor(
-                    str(get_weight_cache_path(self.cache_path, lm_head_str, i, self.num_devices)),
-                    lm_head_host,
-                )
+        norm_ttnn = ttnn.as_tensor(
+            self.state_dict[norm_str].reshape([1, 1, -1, 32]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device_mesh,
+            memory_config=self.model_config["DRAM_MEMCFG"],
+            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+        )
+        self.norm = ttnn.to_device(norm_ttnn, self.device_mesh)
 
     def prepare_inputs(self, inp_ids, start_pos, valid_seq_len=None):
         """
@@ -174,11 +210,12 @@ class TtLlamaModel_optimized(nn.Module):
 
         cache_file_name = lambda name, dtype, layout: f"{cache_name(name)}_dtype_{dtype}_layout_{layout}.bin"
 
-        as_tensor = lambda tensor, dtype, layout, name, device_id: ttnn.as_tensor(
+        as_tensor = lambda tensor, dtype, layout, name, mesh_mapper, device_mesh: ttnn.as_tensor(
             tensor,
             dtype=dtype,
             layout=layout,
-            device=self.devices[device_id],
+            device=device_mesh,
+            mesh_mapper=mesh_mapper,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name) if name is not None else None,
         )
@@ -188,16 +225,14 @@ class TtLlamaModel_optimized(nn.Module):
         else:
             inp_ids = inp_ids.reshape(batch, 1, 1, seq_len)
 
-        x = [
-            ttnn.from_torch(
-                inp_ids.clone(),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.devices[device_id],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            for device_id in range(self.num_devices)
-        ]
+        x = ttnn.as_tensor(
+            inp_ids,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device_mesh,
+            memory_config=self.model_config["DRAM_MEMCFG"],
+            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+        )
 
         xs = self.tt_embd(x)
 
@@ -266,65 +301,53 @@ class TtLlamaModel_optimized(nn.Module):
             assert seq_len == 1, "Decode mode only supports seq_len=1"
             assert xs[0].shape == (seq_len, 1, batch, self.hidden_size // self.num_devices)
 
-            for device_id in range(self.num_devices):
-                xs[device_id] = tt_lib.tensor.interleaved_to_sharded(
-                    xs[device_id], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
-                )
+            xs = tt_lib.tensor.interleaved_to_sharded(
+                xs, sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
+            )
 
-            try:
-                rot_mat_tt = ttnn.load_tensor(cache_file_name(f"rot_mat_decode_{start_pos}", "BFLOAT16", "TILE"))
-                rot_mats = [
-                    ttnn.to_device(rot_mat_tt, self.devices[device_id]) for device_id in range(self.num_devices)
-                ]
-            except (FileNotFoundError, RuntimeError):
-                # Use batch=1 because we assume all users use same rot_mat
-                rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch=1)
-                assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
-                rot_mats = []
-                for device_id in range(self.num_devices):
-                    rot_mats.append(
-                        as_tensor(
-                            rot_mat.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, f"rot_mat_decode_{start_pos}", device_id
-                        )
-                    )
+            # Use batch=1 because we assume all users use same rot_mat
+            rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch=1)
+            assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
+
+            rot_mats = ttnn.as_tensor(
+                rot_mat.clone(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device_mesh,
+                memory_config=self.model_config["DRAM_MEMCFG"],
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            )
+            rot_mats = ttnn.to_device(rot_mats, device_mesh)
 
             padded_layer_past_len = nearest_32(start_pos + 1)
-            try:
-                attn_mask_tt = ttnn.load_tensor(cache_file_name(f"attn_mask_decode_{start_pos}", "BFLOAT16", "TILE"))
-                attn_masks = [
-                    ttnn.to_device(attn_mask_tt, self.devices[device_id]) for device_id in range(self.num_devices)
-                ]
-            except (FileNotFoundError, RuntimeError):
-                attn_mask_shape = (1, seq_len, self.padded_local_heads, padded_layer_past_len)
-                attn_mask = torch.zeros(*attn_mask_shape)
-                attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
-                attn_masks = []
-                for device_id in range(self.num_devices):
-                    # BFLOAT16_DTYPE currently pushes faster
-                    attn_masks.append(
-                        as_tensor(
-                            attn_mask.clone(),
-                            ttnn.bfloat16,
-                            ttnn.TILE_LAYOUT,
-                            f"attn_mask_decode_{start_pos}",
-                            device_id,
-                        )
-                    )
+
+            padded_layer_past_len = nearest_32(start_pos + 1)
+            attn_mask_shape = (1, seq_len, self.padded_local_heads, padded_layer_past_len)
+            attn_mask = torch.zeros(*attn_mask_shape)
+            attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
+
+            attn_masks = ttnn.as_tensor(
+                attn_mask,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ReplicateTensorToMesh(device_mesh),
+                device=device_mesh,
+            )
+            attn_masks = ttnn.to_device(attn_masks, device_mesh)
 
             repeat_shape = (batch, 1, 1, 1)
-            for i in range(self.num_devices):
-                attn_masks[i] = tt_lib.tensor.repeat(
-                    attn_masks[i], repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
-                )
+            attn_masks = tt_lib.tensor.repeat(
+                attn_masks, repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
+            )
             # Put attn_mask on the device with the sharded config
             attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
             if attention_mask_memconfig.is_sharded():
                 attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
                 attn_mask_shard_shape[-1] = padded_layer_past_len
                 attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
-            for i in range(self.num_devices):
-                attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
-                    attn_masks[i], sharded_mem_config=attention_mask_memconfig
+
+                attn_masks = tt_lib.tensor.interleaved_to_sharded(
+                    attn_masks, sharded_mem_config=attention_mask_memconfig
                 )
 
         return (
@@ -334,7 +357,7 @@ class TtLlamaModel_optimized(nn.Module):
             attn_masks,
         )
 
-    def forward(
+    def __call__(
         self,
         xs: List[tt_lib.tensor.Tensor],
         rot_mats: List[tt_lib.tensor.Tensor],
@@ -361,56 +384,54 @@ class TtLlamaModel_optimized(nn.Module):
             xs = layer(xs, rot_mats, start_pos, attn_masks)  # xs is sharded
 
         # Convert decoder_output to interleaved
-        for i in range(self.num_devices):
-            xs[i] = tt_lib.tensor.sharded_to_interleaved(xs[i], output_mem_config=self.model_config["L1_MEMCFG"])
+        xs = tt_lib.tensor.sharded_to_interleaved(xs, output_mem_config=self.model_config["L1_MEMCFG"])
 
         ## Gather fractured layers output
-        if self.emulated:
-            xs = tt_all_gather_torch(xs, dim=-1)
-        else:
-            xs = tt_lib.tensor.all_gather(
-                xs,
-                dim=3,
-                num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                output_mem_config=self.model_config["L1_MEMCFG"],
-            )
+        # if self.emulated:
+        #     xs = tt_all_gather_torch(xs, dim=-1)
+        # else:
+        #     xs = tt_lib.tensor.all_gather(
+        #         xs,
+        #         dim=3,
+        #         num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+        #         output_mem_config=self.model_config["L1_MEMCFG"],
+        #     )
+
+        xs = ttnn.all_gather(
+            xs,
+            dim=3,
+            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+            memory_config=self.model_config["L1_MEMCFG"],
+        )
 
         ## Duplicate layernorm
-        norm_out_replicated = []
-        for i in range(self.num_devices):
-            # RMSNorm must execute on sharded input
-            xs[i] = tt_lib.tensor.interleaved_to_sharded(
-                xs[i], sharded_mem_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"]
-            )
-        for i in range(self.num_devices):
-            norm_out_replicated.append(
-                # In-pace RMSNorm
-                tt_lib.operations.primary.rmsnorm(
-                    xs[i],
-                    self.norm_eps,
-                    self.norm_list[i],
-                    program_config=self.model_config["LN_F_PROGCFG"],
-                    output_mem_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
-                    compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
-                )
-            )
+        # RMSNorm must execute on sharded input
+        xs = tt_lib.tensor.interleaved_to_sharded(
+            xs, sharded_mem_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"]
+        )
+
+        # In-place RMSNorm
+        norm_out_replicated = tt_lib.operations.primary.rmsnorm(
+            xs,
+            self.norm_eps,
+            self.norm,
+            program_config=self.model_config["LN_F_PROGCFG"],
+            output_mem_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
+            compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
+        )
 
         ### Each device does an LM head fracture
-        lm_head_out = []
-        for i in range(self.num_devices):
-            lm_head_out.append(
-                tt_lib.operations.primary.matmul_1d(
-                    norm_out_replicated[i],
-                    self.lm_head_list[i],
-                    program_config=self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
-                    if self.llama3
-                    else self.model_config["LM_HEAD_MM_PROGCFG"],
-                    output_mem_config=self.model_config["DRAM_MEMCFG"],
-                    output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-                )
-            )
-            norm_out_replicated[i].deallocate(True)
+        lm_head_out = tt_lib.operations.primary.matmul_1d(
+            norm_out_replicated,
+            self.lm_head,
+            program_config=self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
+            if self.llama3
+            else self.model_config["LM_HEAD_MM_PROGCFG"],
+            output_mem_config=self.model_config["DRAM_MEMCFG"],
+            output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+        )
+        norm_out_replicated.deallocate(True)
 
         return lm_head_out
 

@@ -14,12 +14,13 @@ from models.experimental.llama2_70b.tt.llama_common import (
     get_weight_cache_path,
     get_weight_cache_path_ttnn,
 )
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
 
 
-class TtLlamaMLP_optimized(nn.Module):
+class TtLlamaMLP_optimized:
     def __init__(
         self,
-        devices,
+        device_mesh,
         state_dict,
         base_url,
         layer_num,
@@ -28,11 +29,9 @@ class TtLlamaMLP_optimized(nn.Module):
         emulated=False,
         cache_path=None,
     ):
-        super().__init__()
-
         self.state_dict = state_dict
-        self.devices = devices
-        self.num_devices = len(devices)
+        self.device_mesh = device_mesh
+        self.num_devices = device_mesh.get_num_devices()
         self.model_config = model_config
         self.emulated = emulated
 
@@ -59,121 +58,77 @@ class TtLlamaMLP_optimized(nn.Module):
         w2_dtype = ttnn.bfloat8_b
         w3_dtype = ttnn.bfloat4_b
 
-        # Test if the all weights have been cached
-        try:
-            self.w1_list = []
-            self.w3_list = []
-            self.w2_list = []
-            for i in range(self.num_devices):
-                # tensor_cache_path = get_weight_cache_path(self.cache_path, w1_str, i, self.num_devices)
-                tensor_cache_path = get_weight_cache_path_ttnn(self.cache_path, w1_str, i, self.num_devices, w1_dtype)
-                self.w1_list.append(
-                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                        self.devices[i], self.model_config["DRAM_MEMCFG"]
-                    )
-                )
+        # Do padding
+        H = 8 * 1024
+        PADDED_H4 = 32 * 1024
+        H4 = 28 * 1024
+        padded_w1 = torch.zeros(1, 1, H, PADDED_H4)
+        padded_w2 = torch.zeros(1, 1, PADDED_H4, H)
+        padded_w3 = torch.zeros(1, 1, H, PADDED_H4)
+        padded_w1[:, :, :, :H4] = self.state_dict[w1_str].transpose(-2, -1)
+        padded_w2[:, :, :H4, :] = self.state_dict[w2_str].transpose(-2, -1)
+        padded_w3[:, :, :, :H4] = self.state_dict[w3_str].transpose(-2, -1)
 
-                # tensor_cache_path = get_weight_cache_path(self.cache_path, w2_str, i, self.num_devices)
-                tensor_cache_path = get_weight_cache_path_ttnn(self.cache_path, w2_str, i, self.num_devices, w2_dtype)
-                self.w2_list.append(
-                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                        self.devices[i], self.model_config["DRAM_MEMCFG"]
-                    )
-                )
+        w1_ttnn = ttnn.as_tensor(
+            padded_w1,
+            dtype=w1_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device_mesh,
+            memory_config=self.model_config["DRAM_MEMCFG"],
+            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            # cache_file_name=self.cache_path / w1_str,
+        )
+        self.w1 = ttnn.to_device(w1_ttnn, self.device_mesh)
+        w2_ttnn = ttnn.as_tensor(
+            padded_w2,
+            dtype=w2_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device_mesh,
+            memory_config=self.model_config["DRAM_MEMCFG"],
+            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            # cache_file_name=self.cache_path / w2_str,
+        )
+        self.w2 = ttnn.to_device(w2_ttnn, self.device_mesh)
+        w3_ttnn = ttnn.as_tensor(
+            padded_w3,
+            dtype=w3_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device_mesh,
+            memory_config=self.model_config["DRAM_MEMCFG"],
+            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            # cache_file_name=self.cache_path / w3_str,
+        )
+        self.w3 = ttnn.to_device(w3_ttnn, self.device_mesh)
 
-                # tensor_cache_path = get_weight_cache_path(self.cache_path, w3_str, i, self.num_devices)
-                tensor_cache_path = get_weight_cache_path_ttnn(self.cache_path, w3_str, i, self.num_devices, w3_dtype)
-                self.w3_list.append(
-                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
-                        self.devices[i], self.model_config["DRAM_MEMCFG"]
-                    )
-                )
-        except (FileNotFoundError, RuntimeError):
-            self.w1_list = []
-            self.w3_list = []
-            self.w2_list = []
-            # Do padding
-            H = 8 * 1024
-            PADDED_H4 = 32 * 1024
-            H4 = 28 * 1024
-            padded_w1 = torch.zeros(H, PADDED_H4)
-            padded_w2 = torch.zeros(PADDED_H4, H)
-            padded_w3 = torch.zeros(H, PADDED_H4)
-            padded_w1[:, :H4] = self.state_dict[w1_str].transpose(-2, -1)
-            padded_w2[:H4, :] = self.state_dict[w2_str].transpose(-2, -1)
-            padded_w3[:, :H4] = self.state_dict[w3_str].transpose(-2, -1)
-
-            padded_w1_chunks = torch.chunk(padded_w1, self.num_devices, dim=-1)
-            padded_w2_chunks = torch.chunk(padded_w2, self.num_devices, dim=-1)
-            padded_w3_chunks = torch.chunk(padded_w3, self.num_devices, dim=-1)
-
-            for i in range(self.num_devices):
-                w1_host = torch2tt_tensor(
-                    padded_w1_chunks[i],
-                    None,
-                    tt_memory_config=self.model_config["DRAM_MEMCFG"],
-                    tt_dtype=w1_dtype,
-                )
-                self.w1_list.append(w1_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
-                tt_lib.tensor.dump_tensor(
-                    str(get_weight_cache_path_ttnn(self.cache_path, w1_str, i, self.num_devices, w1_dtype)),
-                    w1_host,
-                )
-
-                w2_host = torch2tt_tensor(
-                    padded_w2_chunks[i],
-                    None,
-                    tt_memory_config=self.model_config["DRAM_MEMCFG"],
-                    tt_dtype=w2_dtype,
-                )
-                self.w2_list.append(w2_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
-                tt_lib.tensor.dump_tensor(
-                    str(get_weight_cache_path_ttnn(self.cache_path, w2_str, i, self.num_devices, w2_dtype)),
-                    w2_host,
-                )
-
-                w3_host = torch2tt_tensor(
-                    padded_w3_chunks[i],
-                    None,
-                    tt_memory_config=self.model_config["DRAM_MEMCFG"],
-                    tt_dtype=w3_dtype,
-                )
-                self.w3_list.append(w3_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
-                tt_lib.tensor.dump_tensor(
-                    str(get_weight_cache_path_ttnn(self.cache_path, w3_str, i, self.num_devices, w3_dtype)),
-                    w3_host,
-                )
-
-    def prepare_inputs(self, x):
+    def prepare_inputs(self, x, device_mesh):
         if self.model_config["LLM_MODE"] == "decode":
-            x_multichip = []
-            for i in range(self.num_devices):
-                x_multichip.append(
-                    torch2tt_tensor(
-                        x.clone(),
-                        self.devices[i],
-                        tt_dtype=self.model_config["LN_MLP_OUTPUT_DTYPE"],
-                        tt_memory_config=self.model_config["L1_MEMCFG"],
-                    )
-                )
-            for i in range(self.num_devices):
-                x_multichip[i] = tt_lib.tensor.interleaved_to_sharded(
-                    x_multichip[i], sharded_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"]
-                )
+            x_multichip = ttnn.from_torch(
+                x, layout=ttnn.TILE_LAYOUT, device=device_mesh, mesh_mapper=ReplicateTensorToMesh(device_mesh)
+            )
+            x_multichip = ttnn.to_memory_config(
+                x_multichip,
+                ttnn.create_sharded_memory_config(
+                    shape=(32, 8192 // 32),
+                    core_grid=ttnn.CoreGrid(y=4, x=8),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                ),
+            )
             return x_multichip
-        elif self.model_config["LLM_MODE"] == "prefill":
-            x_multichip = []
-            for i in range(self.num_devices):
-                x_multichip.append(
-                    torch2tt_tensor(
-                        x.clone(),
-                        self.devices[i],
-                        tt_dtype=self.model_config["LN_MLP_OUTPUT_DTYPE"],
-                    )
-                )
-            return x_multichip
+        # elif self.model_config["LLM_MODE"] == "prefill":
+        #     x_multichip = []
+        #     for i in range(self.num_devices):
+        #         x_multichip.append(
+        #             torch2tt_tensor(
+        #                 x.clone(),
+        #                 self.devices[i],
+        #                 tt_dtype=self.model_config["LN_MLP_OUTPUT_DTYPE"],
+        #             )
+        #         )
+        #     return x_multichip
 
-    def forward(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
+    def __call__(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
         if self.model_config["LLM_MODE"] == "decode":
             return self.decode_forward(x)
@@ -254,72 +209,65 @@ class TtLlamaMLP_optimized(nn.Module):
         hidden_states = []
         w1_outs = []
         w3_outs = []
-        for i in range(len(x)):
-            w1_outs.append(
-                tt_lib.operations.primary.matmul_1d(
-                    x[i],
-                    self.w1_list[i],
-                    program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
-                    output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                    # output_dtype=self.model_config["BFP8_DTYPE"],
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
-                )
-            )
-        for i in range(len(x)):
-            w3_outs.append(
-                tt_lib.operations.primary.matmul_1d(
-                    x[i],
-                    self.w3_list[i],
-                    program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
-                    output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                    # output_dtype=self.model_config["BFP8_DTYPE"],
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
-                )
-            )
-            x[i].deallocate(True)
 
-        for i in range(len(w1_outs)):
-            hidden_states.append(
-                tt_lib.tensor.mul(
-                    w1_outs[i],
-                    w3_outs[i],
-                    output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                    output_dtype=self.model_config["BFP8_DTYPE"],
-                )
-            )
-            w1_outs[i].deallocate(True)
-            w3_outs[i].deallocate(True)
+        # ttnn.matmul , use_1d_systolic =
+        w1_out = tt_lib.operations.primary.matmul_1d(
+            x,
+            self.w1,
+            program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
+            output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
+        )
 
-        for i in range(len(hidden_states)):
-            # Put w2_inputs in DRAM
-            hidden_states[i] = tt_lib.tensor.sharded_to_interleaved(
-                hidden_states[i], output_mem_config=self.model_config["L1_MEMCFG"]
-            )
+        w3_out = tt_lib.operations.primary.matmul_1d(
+            x,
+            self.w3,
+            program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
+            output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
+        )
+        x.deallocate(True)
 
-        if self.emulated:
-            hidden_states = tt_all_gather_torch(hidden_states, dim=-1)
-        else:
-            hidden_states = tt_lib.tensor.all_gather(
-                hidden_states,
-                dim=3,
-                num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                output_mem_config=self.model_config["L1_MEMCFG"],
-            )
+        hidden_states = tt_lib.tensor.mul(
+            w1_out,
+            w3_out,
+            output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+            output_dtype=self.model_config["BFP8_DTYPE"],
+        )
+        w1_out.deallocate(True)
+        w3_out.deallocate(True)
 
-        # Put AllGather results in L1 Sharded
-        for i in range(len(hidden_states)):
-            hidden_states[i] = tt_lib.tensor.interleaved_to_sharded(
-                hidden_states[i], sharded_mem_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"]
-            )
+        hidden_states = tt_lib.tensor.sharded_to_interleaved(
+            hidden_states, output_mem_config=self.model_config["L1_MEMCFG"]
+        )
 
-        for i in range(len(hidden_states)):
-            hidden_states[i] = tt_lib.operations.primary.matmul_1d(
-                hidden_states[i],
-                self.w2_list[i],
-                program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
-                output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                # output_dtype=self.model_config["BFP8_DTYPE"],
-                compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-            )
+        # if self.emulated:
+        #     hidden_states = tt_all_gather_torch(hidden_states, dim=-1)
+        # else:
+        #     hidden_states = tt_lib.tensor.all_gather(
+        #         hidden_states,
+        #         dim=3,
+        #         num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+        #         output_mem_config=self.model_config["L1_MEMCFG"],
+        #     )
 
+        hidden_states = ttnn.all_gather(
+            hidden_states,
+            dim=3,
+            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+            memory_config=self.model_config["L1_MEMCFG"],
+        )
+
+        hidden_states = tt_lib.tensor.interleaved_to_sharded(
+            hidden_states, sharded_mem_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"]
+        )
+
+        hidden_states = tt_lib.operations.primary.matmul_1d(
+            hidden_states,
+            self.w2,
+            program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
+            output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+            # output_dtype=self.model_config["BFP8_DTYPE"],
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+        )
         return hidden_states

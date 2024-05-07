@@ -40,11 +40,12 @@ def get_llama_path(devices, model_config, n_devices, emulated):
     logger.info(f"Tokenizer file: {tokenizer_path}")
     logger.info(f"Cache directory: {cache_path}")
 
-    if emulated:
-        logger.info(f"Running emulated, replicating on {n_devices} devices")
-        devices = [devices[0] for _ in range(n_devices)]  # Emulate fracturing on N chips
-    else:
-        logger.info(f"Running on {n_devices} devices on T3000 chips")
+    if not isinstance(devices, ttnn._ttnn.multi_device.DeviceMesh):
+        if emulated:
+            logger.info(f"Running emulated, replicating on {n_devices} devices")
+            devices = [devices[0] for _ in range(n_devices)]  # Emulate fracturing on N chips
+        else:
+            logger.info(f"Running on {n_devices} devices on T3000 chips")
 
     return devices, ckpt_dir, tokenizer_path, cache_path
 
