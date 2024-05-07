@@ -498,7 +498,7 @@ def shapes_and_datagen(
             assert len(start_shape) == 5
             assert len(end_shape) == 5
 
-            def _gen_ttnn_linear_shapes(shape):
+            def _gen_tt_nn_linear_shapes(shape):
                 b, c, h, w, outer_dim = shape
 
                 b, c, h, w, outer_dim = shape
@@ -513,7 +513,7 @@ def shapes_and_datagen(
                 return shapes
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
-                start_shape, end_shape, interval, _gen_ttnn_linear_shapes
+                start_shape, end_shape, interval, _gen_tt_nn_linear_shapes
             ):
                 yield shapes, datagen_funcs, test_args
 
@@ -522,7 +522,7 @@ def shapes_and_datagen(
             assert len(start_shape) == 4
             assert len(end_shape) == 4
 
-            def _gen_ttnn_embeddings_shapes(shape):
+            def _gen_tt_nn_embeddings_shapes(shape):
                 batch_size = shape[0]
                 num_rows = shape[1]
                 num_embeddings = shape[2]
@@ -534,7 +534,7 @@ def shapes_and_datagen(
                 return [input_rows_shape, weights_shape]
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
-                start_shape, end_shape, interval, _gen_ttnn_embeddings_shapes
+                start_shape, end_shape, interval, _gen_tt_nn_embeddings_shapes
             ):
                 yield shapes, datagen_funcs, test_args
 
@@ -542,7 +542,7 @@ def shapes_and_datagen(
             # start-shape and end-shape are lists of two shapes
             # Only supports dim = 4; for the second shape, only the last dim is used
 
-            def _gen_ttnn_matmul_shapes(shape):
+            def _gen_tt_nn_matmul_shapes(shape):
                 if len(shape) == 5:
                     n, c, h, w, x = shape
                     shape_type = random.randint(0, 3)
@@ -581,12 +581,12 @@ def shapes_and_datagen(
                     shape1 = [1, k]
                     shape2 = [k, n]
                 else:
-                    assert False, f"Bad shape for ttnn matmult sweep {shape}"
+                    assert False, f"Bad shape for tt nn matmult sweep {shape}"
 
                 return [shape1, shape2]
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
-                start_shape, end_shape, interval, _gen_ttnn_matmul_shapes
+                start_shape, end_shape, interval, _gen_tt_nn_matmul_shapes
             ):
                 yield shapes, datagen_funcs, test_args
 
@@ -594,7 +594,7 @@ def shapes_and_datagen(
             assert len(start_shape) == 2
             assert len(end_shape) == 2
 
-            def _gen_ttnn_layernorm_shapes(shape):
+            def _gen_tt_nn_layernorm_shapes(shape):
                 input_shape = [shape[0], shape[1]]
                 weights_shape = [shape[1]]
                 bias_shape = [shape[1]]
@@ -602,7 +602,7 @@ def shapes_and_datagen(
                 return [input_shape, weights_shape, bias_shape]
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
-                start_shape, end_shape, interval, _gen_ttnn_layernorm_shapes
+                start_shape, end_shape, interval, _gen_tt_nn_layernorm_shapes
             ):
                 yield shapes, datagen_funcs, test_args
 
@@ -610,7 +610,7 @@ def shapes_and_datagen(
             assert len(start_shape) == 2
             assert len(end_shape) == 2
 
-            def _gen_ttnn_layernorm_shapes(shape):
+            def _gen_tt_nn_layernorm_res_shapes(shape):
                 input_shape = [shape[0], shape[1]]
                 residual_shape = [shape[0], shape[1]]
                 weights_shape = [shape[1]]
@@ -619,7 +619,7 @@ def shapes_and_datagen(
                 return [input_shape, residual_shape, weights_shape, bias_shape]
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
-                start_shape, end_shape, interval, _gen_ttnn_layernorm_shapes
+                start_shape, end_shape, interval, _gen_tt_nn_layernorm_res_shapes
             ):
                 yield shapes, datagen_funcs, test_args
 
@@ -627,13 +627,13 @@ def shapes_and_datagen(
             assert len(start_shape) == 2
             assert len(end_shape) == 2
 
-            def _gen_ttnn_layernorm_shapes(shape):
+            def _gen_tt_nn_layernorm_nw_shapes(shape):
                 input_shape = [shape[0], shape[1]]
 
                 return [input_shape]
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
-                start_shape, end_shape, interval, _gen_ttnn_layernorm_shapes
+                start_shape, end_shape, interval, _gen_tt_nn_layernorm_nw_shapes
             ):
                 yield shapes, datagen_funcs, test_args
 
@@ -641,13 +641,13 @@ def shapes_and_datagen(
             assert len(start_shape) == 4
             assert len(end_shape) == 4
 
-            def _gen_ttnn_layernorm_shapes(shape):
+            def _gen_tt_nn_softmax_shapes(shape):
                 input_shape = [shape[0], shape[1], shape[2], shape[3]]
                 mask_shape = [shape[0], shape[1], 32, shape[3]]
                 return [input_shape, mask_shape]
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
-                start_shape, end_shape, interval, _gen_ttnn_layernorm_shapes
+                start_shape, end_shape, interval, _gen_tt_nn_softmax_shapes
             ):
                 yield shapes, datagen_funcs, test_args
 
@@ -655,14 +655,14 @@ def shapes_and_datagen(
             assert len(start_shape) == 2
             assert len(end_shape) == 2
 
-            def _gen_ttnn_rmsnorm_shapes(shape):
+            def _gen_tt_nn_rmsnorm_shapes(shape):
                 input_shape = [shape[0], shape[1]]
                 weights_shape = [shape[1]]
 
                 return [input_shape, weights_shape]
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
-                start_shape, end_shape, interval, _gen_ttnn_rmsnorm_shapes
+                start_shape, end_shape, interval, _gen_tt_nn_rmsnorm_shapes
             ):
                 yield shapes, datagen_funcs, test_args
 
@@ -670,7 +670,7 @@ def shapes_and_datagen(
             assert len(start_shape) == 2
             assert len(end_shape) == 2
 
-            def _gen_ttnn_rmsnorm_shapes(shape):
+            def _gen_tt_nn_groupnorm_shapes(shape):
                 input_shape = [shape[0], shape[1]]
                 weights_shape = [shape[1]]
                 bias_shape = [shape[1]]
@@ -678,13 +678,13 @@ def shapes_and_datagen(
                 return [input_shape, weights_shape, bias_shape]
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
-                start_shape, end_shape, interval, _gen_ttnn_rmsnorm_shapes
+                start_shape, end_shape, interval, _gen_tt_nn_groupnorm_shapes
             ):
                 yield shapes, datagen_funcs, test_args
 
-        elif method == "ttnn-bcast":
+        elif method == "tt_nn-bcast":
 
-            def _gen_ttnn_bcast_shapes(shape):
+            def _gen_tt_nn_bcast_shapes(shape):
                 shape_type = random.randint(0, 2)
 
                 if shape_type == 0:
@@ -701,7 +701,7 @@ def shapes_and_datagen(
                 return [shape, second_shape]
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
-                start_shape, end_shape, interval, _gen_ttnn_bcast_shapes
+                start_shape, end_shape, interval, _gen_tt_nn_bcast_shapes
             ):
                 yield shapes, datagen_funcs, test_args
 
