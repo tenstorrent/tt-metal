@@ -157,7 +157,7 @@ OwnedStorage load_owned_storage(ifstream& input_stream, DataType data_type) {
 
 
 MultiDeviceHostStorage load_multi_device_host_storage(ifstream& input_stream, DataType data_type, DeviceMesh *device_mesh) {
-    if (data_type == DataType::UINT32 or data_type == DataType::BFLOAT8_B) {
+    if (data_type == DataType::UINT32 or data_type == DataType::BFLOAT8_B or data_type == DataType::BFLOAT4_B) {
         using T = std::uint32_t;
         return load_multi_device_host_storage<T>(input_stream, device_mesh);
     } else if (data_type == DataType::UINT16) {

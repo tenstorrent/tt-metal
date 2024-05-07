@@ -257,7 +257,7 @@ def test_multi_device_data_parallel_matmul_op(device_mesh):
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
 def test_multi_device_as_tensor_api(device_mesh, layout, memory_config, dtype):
     """Multidevice API: Data Parallel on matmul using cached tensor"""
     torch_input_a_tensor = torch.rand((device_mesh.get_num_devices(), 1, 32, 32), dtype=torch.bfloat16)
@@ -299,7 +299,10 @@ def test_multi_device_as_tensor_api(device_mesh, layout, memory_config, dtype):
         ttnn_torch_output_tensor = ttnn.to_torch(
             ttnn_output_tensor, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0)
         )
-        assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.991)
+        if dtype == ttnn.bfloat4_b:
+            assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.88)
+        else:
+            assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.991)
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
