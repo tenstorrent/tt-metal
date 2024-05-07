@@ -371,6 +371,45 @@ static Tensor index_all(
     return output;
 }
 
+template <typename T>
+static Tensor mask_padded_input(
+    const Shape& padded_shape,
+    const Shape& unpadded_shape,
+    DataType data_type,
+    const Layout layout = Layout::ROW_MAJOR,
+    Device* device = nullptr,
+    const MemoryConfig& output_mem_config = MemoryConfig{
+        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(padded_shape));
+
+    auto index = 0;
+    //auto value = 0;
+    auto rank = padded_shape.rank();
+    auto penultimate = rank - 2;
+    auto ultimate = rank - 1;
+    for (uint32_t b = 0; b < padded_shape[rank - 4]; b++) {
+        for (uint32_t c = 0; c < padded_shape[rank - 3]; c++) {
+            for (uint32_t y = 0; y < padded_shape[penultimate]; y++) {
+                for (uint32_t x = 0; x < padded_shape[ultimate]; x++) {
+                    if (b < unpadded_shape[rank - 4] && c < unpadded_shape[rank - 3] && y < unpadded_shape[penultimate] && x < unpadded_shape[ultimate])
+                    {
+                        owned_buffer[index++] = T(static_cast<float>(1.0));
+                    }
+                    else
+                    {
+                        owned_buffer[index++] = T(static_cast<float>(0.0));
+                    }
+                }  // dim W
+            }      // dim H
+        }          // dim C
+    }              // dim N
+    auto output = Tensor(OwnedStorage{owned_buffer}, padded_shape, data_type, Layout::ROW_MAJOR).to(layout);
+    if (device != nullptr) {
+        output = output.to(device, output_mem_config);
+    }
+    return output;
+}
+
 template<typename T>
 static Tensor fill_first_val_into_tensor(const Tensor& input_tensor, DataType data_type,
 			  const Layout layout , Device * device = nullptr,
