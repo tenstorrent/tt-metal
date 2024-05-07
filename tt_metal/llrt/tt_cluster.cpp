@@ -788,6 +788,7 @@ tt_cxy_pair Cluster::get_eth_core_for_dispatch_core(
 
 // TODO: ALLAN Can change to write one bit
 void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing) const {
+    log_debug(tt::LogDevice, "Set internal routing bit {}", enable_internal_routing);
     const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
     // TODO: initialize devices if user does not
     // Must initialize remote chips first, then mmio chips since once mmio chips are doing fd routing
