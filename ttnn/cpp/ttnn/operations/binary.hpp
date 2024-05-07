@@ -9,29 +9,16 @@
 
 namespace ttnn {
 
-constexpr auto add =
-    ttnn::register_operation<ttnn::operations::binary::Binary, ttnn::operations::binary::BinaryOpType::ADD, false>(
-        "ttnn::add");
-
-constexpr auto add_ =
-    ttnn::register_operation<ttnn::operations::binary::Binary, ttnn::operations::binary::BinaryOpType::ADD, true>(
-        "ttnn::add_");
-
+constexpr auto add = ttnn::register_operation<ttnn::operations::binary::Binary<BinaryOpType::ADD, false>>("ttnn::add");
+constexpr auto add_ = ttnn::register_operation<ttnn::operations::binary::Binary<BinaryOpType::ADD, true>>("ttnn::add_");
 constexpr auto subtract =
-    ttnn::register_operation<ttnn::operations::binary::Binary, ttnn::operations::binary::BinaryOpType::SUB, false>(
-        "ttnn::subtract");
-
+    ttnn::register_operation<ttnn::operations::binary::Binary<BinaryOpType::SUB, false>>("ttnn::subtract");
 constexpr auto subtract_ =
-    ttnn::register_operation<ttnn::operations::binary::Binary, ttnn::operations::binary::BinaryOpType::SUB, true>(
-        "ttnn::subtract_");
-
+    ttnn::register_operation<ttnn::operations::binary::Binary<BinaryOpType::SUB, true>>("ttnn::subtract_");
 constexpr auto multiply =
-    ttnn::register_operation<ttnn::operations::binary::Binary, ttnn::operations::binary::BinaryOpType::MUL, false>(
-        "ttnn::multiply");
-
+    ttnn::register_operation<ttnn::operations::binary::Binary<BinaryOpType::MUL, false>>("ttnn::multiply");
 constexpr auto multiply_ =
-    ttnn::register_operation<ttnn::operations::binary::Binary, ttnn::operations::binary::BinaryOpType::MUL, true>(
-        "ttnn::multiply_");
+    ttnn::register_operation<ttnn::operations::binary::Binary<BinaryOpType::MUL, true>>("ttnn::multiply_");
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor &input_tensor_a, InputBType scalar) {

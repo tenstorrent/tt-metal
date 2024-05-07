@@ -30,23 +30,18 @@ namespace binary {
 using BinaryOpType = tt::tt_metal::BinaryOpType;
 
 struct BinaryProgramConfig {
-    const BinaryOpType op_type;
     const std::optional<std::vector<UnaryWithParam>> fused_activations;
     const MemoryConfig memory_config;
     const DataType dtype;
-    const bool in_place;
 
-    static constexpr auto attribute_names = std::make_tuple("op_type", "fused_activations", "memory_config", "dtype");
+    static constexpr auto attribute_names = std::make_tuple("fused_activations", "memory_config", "dtype");
     const auto attribute_values() const {
         return std::make_tuple(
-            std::cref(this->op_type),
-            std::cref(this->fused_activations),
-            std::cref(this->memory_config),
-            std::cref(this->dtype),
-            std::cref(this->in_place));
+            std::cref(this->fused_activations), std::cref(this->memory_config), std::cref(this->dtype));
     }
 };
 
+template <BinaryOpType binary_op_type, bool in_place>
 struct Binary {
     const BinaryProgramConfig program_config;
     std::optional<DeviceComputeKernelConfig> compute_kernel_config;
@@ -69,7 +64,6 @@ struct Binary {
         return std::make_tuple(std::cref(this->program_config), std::cref(this->compute_kernel_config));
     }
 
-    template <BinaryOpType binary_op_type, bool in_place>
     static inline const std::array<TensorSchema, 2> input_tensor_schemas() {
         return {
             ttnn::TensorSchema{
@@ -92,12 +86,11 @@ struct Binary {
                 false}};
     }
 
-    template <BinaryOpType binary_op_type, bool in_place, typename... Args>
+    template <typename... Args>
     static auto input_tensors_to_validate(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
         return std::make_tuple(input_tensor_a, input_tensor_b);
     };
 
-    template <BinaryOpType binary_op_type, bool in_place>
     static Tensor execute(
         const Tensor &input_tensor_a,
         const Tensor &input_tensor_b,
@@ -135,11 +128,7 @@ struct Binary {
 
                 return operation::run(
                     Binary{BinaryProgramConfig{
-                        binary_op_type,
-                        fused_activations,
-                        output_memory_config,
-                        dtype.value_or(input_tensor_a.get_dtype()),
-                        in_place}},
+                        fused_activations, output_memory_config, dtype.value_or(input_tensor_a.get_dtype())}},
                     {input_tensor_a, input_tensor_b});
             },
             {input_tensor_a, input_tensor_b},
@@ -147,14 +136,13 @@ struct Binary {
         return output_tensors.at(0);
     }
 
-    template <BinaryOpType binary_op_type, bool in_place, typename... Args>
+    template <typename... Args>
     static auto input_tensors_to_validate(const Tensor &input_tensor_a, const float input_tensor_b, Args &&...args) {
         return std::make_tuple(input_tensor_a, input_tensor_b);
     };
 
     // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
     // Currently, this is exactly how tt::tt_metal::add_unary works
-    template <BinaryOpType binary_op_type, bool in_place>
     static Tensor execute(
         const ttnn::Tensor &input_tensor_a,
         const float scalar,
@@ -171,7 +159,7 @@ struct Binary {
             Layout::TILE);
         Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.get_workers());
         // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
-        return Binary::execute<binary_op_type, in_place>(
+        return Binary::execute(
             input_tensor_a, scalar_tensor_device, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, fused_activations);
     }
 };
