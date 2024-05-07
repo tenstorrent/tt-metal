@@ -88,8 +88,10 @@ def test_falcon_attention(
     batch = device_batch_size * device_mesh.get_num_devices()
     if llm_mode == "decode":
         shard_dim = 2
+        concat_dim = 1
     else:
         shard_dim = 0
+        concat_dim = 0
 
     configuration = transformers.FalconConfig.from_pretrained(model_name)
     model_config = get_model_config(model_config_str)
@@ -164,7 +166,7 @@ def test_falcon_attention(
         layer_past_len=kv_cache_len,
         use_cache=True,
     )
-    tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=shard_dim)).squeeze(1)
+    tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=concat_dim)).squeeze(1)
 
     tt_layer_present = (
         ttnn.to_torch(tt_layer_present[0], mesh_composer=ConcatMeshToTensor(device_mesh, dim=0)).squeeze(1),
