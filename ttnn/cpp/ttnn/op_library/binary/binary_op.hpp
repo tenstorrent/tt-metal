@@ -30,14 +30,14 @@ namespace binary {
 using BinaryOpType = tt::tt_metal::BinaryOpType;
 
 struct BinaryProgramConfig {
-    const std::optional<std::vector<UnaryWithParam>> fused_activations;
+    const std::optional<std::vector<std::string>> activations;
     const MemoryConfig memory_config;
     const DataType dtype;
 
-    static constexpr auto attribute_names = std::make_tuple("fused_activations", "memory_config", "dtype");
+    static constexpr auto attribute_names = std::make_tuple("activations", "memory_config", "dtype");
     const auto attribute_values() const {
         return std::make_tuple(
-            std::cref(this->fused_activations), std::cref(this->memory_config), std::cref(this->dtype));
+            std::cref(this->activations), std::cref(this->memory_config), std::cref(this->dtype));
     }
 };
 
@@ -96,11 +96,11 @@ struct Binary {
         const Tensor &input_tensor_b,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::optional<const DataType> &dtype = std::nullopt,
-        std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt) {
+        std::optional<std::vector<std::string>> activations = std::nullopt) {
         std::vector<Tensor> output_tensors = {
             Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
         operation::launch_op(
-            [fused_activations, memory_config, dtype](
+            [activations, memory_config, dtype](
                 const std::vector<Tensor> &input_tensors,
                 const std::vector<std::optional<const Tensor>> &optional_input_tensors) mutable -> std::vector<Tensor> {
                 auto &&[input_tensor_a, input_tensor_b] = [](const auto &input_tensor_a_arg,
@@ -128,7 +128,7 @@ struct Binary {
 
                 return operation::run(
                     Binary{BinaryProgramConfig{
-                        fused_activations, output_memory_config, dtype.value_or(input_tensor_a.get_dtype())}},
+                        activations, output_memory_config, dtype.value_or(input_tensor_a.get_dtype())}},
                     {input_tensor_a, input_tensor_b});
             },
             {input_tensor_a, input_tensor_b},
@@ -148,7 +148,7 @@ struct Binary {
         const float scalar,
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<const DataType> &dtype = std::nullopt,
-        std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt) {
+        std::optional<std::vector<std::string>> activations = std::nullopt) {
         // Cast Float Scalar to a device tensor
         auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(TILE_HEIGHT * TILE_WIDTH));
         host_buffer[0] = scalar;
@@ -160,7 +160,7 @@ struct Binary {
         Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.get_workers());
         // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
         return Binary::execute(
-            input_tensor_a, scalar_tensor_device, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, fused_activations);
+            input_tensor_a, scalar_tensor_device, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, activations);
     }
 };
 

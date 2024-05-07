@@ -109,6 +109,8 @@ inline void validate_shape(const ttnn::Shape& shape) {
 
 template <BinaryOpType binary_op_type, bool in_place>
 void Binary<binary_op_type, in_place>::validate(const std::vector<Tensor>& input_tensors) const {
+    auto program_type = get_program_type(*this, input_tensors);
+
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
@@ -194,6 +196,11 @@ void Binary<binary_op_type, in_place>::validate(const std::vector<Tensor>& input
             TT_FATAL(this->program_config.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
         }
     }
+
+    if (program_type != BinaryProgramType::ElementWiseMultiCore and
+        program_type != BinaryProgramType::ElementWiseSingleCore) {
+        TT_FATAL(not this->program_config.activations.has_value());
+    }
 }
 
 template <BinaryOpType binary_op_type, bool in_place>
@@ -209,55 +216,70 @@ std::vector<Tensor> Binary<binary_op_type, in_place>::create_output_tensors(
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     if constexpr (in_place) {
-        return {};
-    }
-    auto program_type = get_program_type(*this, input_tensors);
-
-    if (program_type == BinaryProgramType::ElementWiseSingleCore or
-        program_type == BinaryProgramType::ElementWiseMultiCore) {
-        if (this->program_config.memory_config.is_sharded()) {
-            ShardSpec shard_spec{CoreRangeSet({}), {0, 0}};
-            if (input_tensor_a.memory_config().is_sharded()) {
-                shard_spec = input_tensor_a.shard_spec().value();
-            } else if (input_tensor_b.memory_config().is_sharded()) {
-                shard_spec = input_tensor_b.shard_spec().value();
-            } else {
-                uint32_t num_blocks = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / TILE_HEIGHT;
-                auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
-                uint32_t num_grid_cores = core_grid.x * core_grid.y;
-                uint32_t target_num_cores = num_blocks < num_grid_cores ? num_blocks : num_grid_cores;
-                shard_spec.grid = num_cores_to_corerange_set(target_num_cores, core_grid, true);
-                shard_spec.shape = {num_blocks / target_num_cores * TILE_HEIGHT, input_tensor_a.get_legacy_shape()[-1]};
-                shard_spec.orientation = ShardOrientation::ROW_MAJOR;
-            }
-            auto memory_config = this->program_config.memory_config;
-            memory_config.shard_spec = shard_spec;
-            return {create_sharded_device_tensor(
-                this->compute_output_shapes(input_tensors).at(0),
-                this->program_config.dtype,
-                Layout::TILE,
-                input_tensor_a.device(),
-                memory_config)};
-        }
+        return {input_tensor_a};
     } else {
-        if (this->program_config.memory_config.is_sharded()) {
-            ShardSpec shard_spec{CoreRangeSet({}), {0, 0}};
-            if (input_tensor_a.memory_config().is_sharded()) {
-                // Derive output shard_spec based on input
-                shard_spec = input_tensor_a.shard_spec().value();
+        auto program_type = get_program_type(*this, input_tensors);
+
+        if (program_type == BinaryProgramType::ElementWiseSingleCore or
+            program_type == BinaryProgramType::ElementWiseMultiCore) {
+            if (this->program_config.memory_config.is_sharded()) {
+                ShardSpec shard_spec{CoreRangeSet({}), {0, 0}};
+                if (input_tensor_a.memory_config().is_sharded()) {
+                    shard_spec = input_tensor_a.shard_spec().value();
+                } else if (input_tensor_b.memory_config().is_sharded()) {
+                    shard_spec = input_tensor_b.shard_spec().value();
+                } else {
+                    uint32_t num_blocks = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / TILE_HEIGHT;
+                    auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+                    uint32_t num_grid_cores = core_grid.x * core_grid.y;
+                    uint32_t target_num_cores = num_blocks < num_grid_cores ? num_blocks : num_grid_cores;
+                    shard_spec.grid = num_cores_to_corerange_set(target_num_cores, core_grid, true);
+                    shard_spec.shape = {
+                        num_blocks / target_num_cores * TILE_HEIGHT, input_tensor_a.get_legacy_shape()[-1]};
+                    shard_spec.orientation = ShardOrientation::ROW_MAJOR;
+                }
+                auto memory_config = this->program_config.memory_config;
+                memory_config.shard_spec = shard_spec;
+                return {create_sharded_device_tensor(
+                    this->compute_output_shapes(input_tensors).at(0),
+                    this->program_config.dtype,
+                    Layout::TILE,
+                    input_tensor_a.device(),
+                    memory_config)};
             }
-            auto memory_config = this->program_config.memory_config;
-            memory_config.shard_spec = shard_spec;
-            return {create_sharded_device_tensor(
-                this->compute_output_shapes(input_tensors).at(0),
-                input_tensor_a.get_dtype(),
-                Layout::TILE,
-                input_tensor_a.device(),
-                memory_config)};
+        } else {
+            if (this->program_config.memory_config.is_sharded()) {
+                ShardSpec shard_spec{CoreRangeSet({}), {0, 0}};
+                if (input_tensor_a.memory_config().is_sharded()) {
+                    // Derive output shard_spec based on input
+                    shard_spec = input_tensor_a.shard_spec().value();
+                }
+                auto memory_config = this->program_config.memory_config;
+                memory_config.shard_spec = shard_spec;
+                return {create_sharded_device_tensor(
+                    this->compute_output_shapes(input_tensors).at(0),
+                    this->program_config.dtype,
+                    Layout::TILE,
+                    input_tensor_a.device(),
+                    memory_config)};
+            }
         }
+        return operation::generic_create_output_tensors(
+            *this, input_tensors, this->program_config.dtype, Layout::TILE, this->program_config.memory_config);
     }
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, this->program_config.dtype, Layout::TILE, this->program_config.memory_config);
+}
+
+template <BinaryOpType binary_op_type>
+constexpr auto binary_op_type_to_bcast_op_math() {
+    if constexpr (binary_op_type == BinaryOpType::ADD) {
+        return tt::tt_metal::BcastOpMath::ADD;
+    } else if constexpr (binary_op_type == BinaryOpType::SUB) {
+        return tt::tt_metal::BcastOpMath::SUB;
+    } else if constexpr (binary_op_type == BinaryOpType::MUL) {
+        return tt::tt_metal::BcastOpMath::MUL;
+    } else {
+        TT_THROW("Invalid binary_op_type");
+    }
 }
 
 template <BinaryOpType binary_op_type, bool in_place>
@@ -265,42 +287,46 @@ operation::ProgramWithCallbacks Binary<binary_op_type, in_place>::create_program
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    const auto& output_tensor = in_place ? input_tensor_a : output_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
 
-    static std::map<BinaryOpType, tt::tt_metal::BcastOpMath> binary_op_type_to_bcast_op_math{
-        {BinaryOpType::ADD, tt::tt_metal::BcastOpMath::ADD},
-        {BinaryOpType::SUB, tt::tt_metal::BcastOpMath::SUB},
-        {BinaryOpType::MUL, tt::tt_metal::BcastOpMath::MUL},
-    };
+    std::vector<UnaryWithParam> activations;
+    if (this->program_config.activations.has_value()) {
+        const auto activations_as_strings = this->program_config.activations.value();
+        std::transform(
+            activations_as_strings.begin(),
+            activations_as_strings.end(),
+            std::back_inserter(activations),
+            [](const std::string& activation) { return string_to_unary_with_param(activation); });
+    }
 
     auto program_type = get_program_type(*this, input_tensors);
     switch (program_type) {
         case BinaryProgramType::ElementWiseMultiCore:
             return eltwise_binary_multi_core(
-                input_tensor_a, input_tensor_b, output_tensor, binary_op_type, this->program_config.fused_activations);
+                input_tensor_a, input_tensor_b, output_tensor, binary_op_type, activations);
         case BinaryProgramType::ElementWiseSingleCore:
             return eltwise_binary_single_core(
-                input_tensor_a, input_tensor_b, output_tensor, binary_op_type, this->program_config.fused_activations);
+                input_tensor_a, input_tensor_b, output_tensor, binary_op_type, activations);
         case BinaryProgramType::BroadcastHeightAndWidthMultiCore:
             return bcast_multi_core_hw(
                 input_tensor_a,
                 input_tensor_b,
                 output_tensor,
-                binary_op_type_to_bcast_op_math.at(binary_op_type),
+                binary_op_type_to_bcast_op_math<binary_op_type>(),
                 tt::tt_metal::BcastOpDim::HW);
         case BinaryProgramType::BroadcastHeightMultiCore:
             return bcast_multi_core_h(
                 input_tensor_a,
                 input_tensor_b,
                 output_tensor,
-                binary_op_type_to_bcast_op_math.at(binary_op_type),
+                binary_op_type_to_bcast_op_math<binary_op_type>(),
                 tt::tt_metal::BcastOpDim::H);
         case BinaryProgramType::BroadcastWidthMultiCore:
             return bcast_multi_core_w(
                 input_tensor_a,
                 input_tensor_b,
                 output_tensor,
-                binary_op_type_to_bcast_op_math.at(binary_op_type),
+                binary_op_type_to_bcast_op_math<binary_op_type>(),
                 tt::tt_metal::BcastOpDim::W);
         default: TT_THROW("Invalid program type");
     }
@@ -313,7 +339,6 @@ const operation::Hash Binary<binary_op_type, in_place>::compute_program_hash(
     const auto& input_tensor_b = input_tensors.at(1);
     auto program_type = get_program_type(*this, input_tensors);
     operation::Hash hash = tt::stl::hash::hash_objects(
-        0,
         typeid(*this).hash_code(),
         this->program_config,
         program_type,
