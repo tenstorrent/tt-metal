@@ -39,6 +39,10 @@ def test_multi_device_subset_mesh(silicon_arch_name, silicon_arch_wormhole_b0):
     assert multi_device.get_num_devices() == 2
     ttnn.close_device_mesh(multi_device)
 
+    multi_device = ttnn.open_device_mesh(device_grid, device_ids)
+    assert multi_device.get_num_devices() == 2
+    ttnn.close_device_mesh(multi_device)
+
 
 def test_multi_device_open_close_full_device_mesh_fixture(device_mesh):
     """Using `device_mesh` pytest fixture defined in conftest.py"""
