@@ -447,3 +447,16 @@ def test_slicing(device_mesh):
     tensor = ttnn.to_device(tensor, device_mesh)
     tensor = tensor[:, :, :, :1]
     assert all([device_tensor.shape == tensor.shape for device_tensor in ttnn.get_device_tensors(tensor)])
+
+
+def test_clone(device_mesh):
+    results_11BH = ttnn.from_torch(
+        torch.randn(1, 1, 32, 128),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+    )
+    results_11BH = ttnn.to_device(results_11BH, device_mesh)
+    results_11BH = ttnn.clone(results_11BH, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+    print(results_11BH)
