@@ -90,19 +90,6 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
 
     uint32_t q_base_addr = input_tensor.buffer()->address();
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t) element_size,
-        (std::uint32_t) sub_tile_line_bytes,
-        q_output_cb_index,
-        k_output_cb_index,
-        v_output_cb_index,
-    };
-    auto reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp",
-        q_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
     // cores to read and write to output
     uint32_t num_cores = q_cores.num_cores(); // number of cores of the output
     auto core_grid = q_cores.bounding_box();
@@ -127,6 +114,33 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
         log_debug("[xuncai] noc_y_coords[{}]: {}", y, noc_y_coords[y]);
     }
 
+    // We parallize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2 of a tile respectively)
+    std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t) element_size,
+        (std::uint32_t) sub_tile_line_bytes,
+        q_output_cb_index,
+        k_output_cb_index,
+        v_output_cb_index,
+        head_size,
+        num_q_heads,
+        num_kv_heads,
+        head_tiles,
+        1, // read the first phase
+        in_num_cores_x,
+        in_num_cores_y
+    };
+    auto reader_kernel_id = tt_metal::CreateKernel(
+        program,
+        "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp",
+        q_cores,
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    reader_compile_time_args[9] = 2;  // read the second phase
+    auto writer_kernel_id = tt_metal::CreateKernel(
+        program,
+        "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp",
+        q_cores,
+        tt_metal::WriterDataMovementConfig(reader_compile_time_args));
+
     uint32_t q_start_addr = q_base_addr;
 
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -134,37 +148,26 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
 
         const auto& core = cores[i];
         std::vector<uint32_t> reader_runtime_args;
-        reader_runtime_args.reserve(9 + in_num_cores_x + in_num_cores_y);
+        reader_runtime_args.reserve(2 + in_num_cores_x + in_num_cores_y);
         reader_runtime_args = {
-            head_size,
-            num_q_heads,
-            num_kv_heads,
-            head_tiles,
             in_tile_offset_by_batch,
-            0, // start_q_x
-            0, // start_q_y
             q_start_addr,
-            in_num_cores_x,
-            in_num_cores_y
         };
         reader_runtime_args.insert(reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
         reader_runtime_args.insert(reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
 
         tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+        tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, reader_runtime_args);
     }
 
     auto override_runtime_arguments_callback = [
             reader_kernel_id,
-            num_q_heads,
-            num_kv_heads,
+            writer_kernel_id,
             num_cores,
             cb_q_output,
             cb_k_output,
             cb_v_output,
             cores,
-            head_size,
-            head_tiles,
-            single_tile_size,
             element_size,
             sub_tile_line_bytes
     ]
@@ -195,8 +198,12 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Ten
             uint32_t in_tile_offset_by_batch = i < 16 ? i * sub_tile_line_bytes : (i - 16) * sub_tile_line_bytes + 512*element_size;
             const auto& core = cores[i];
             auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[4] = in_tile_offset_by_batch;
-            runtime_args[7] = q_start_addr;
+            runtime_args[0] = in_tile_offset_by_batch;
+            runtime_args[1] = q_start_addr;
+
+            auto &runtime_args_writer = GetRuntimeArgs(program, writer_kernel_id, core);
+            runtime_args_writer[0] = in_tile_offset_by_batch;
+            runtime_args_writer[1] = q_start_addr;
         }
     };
 
