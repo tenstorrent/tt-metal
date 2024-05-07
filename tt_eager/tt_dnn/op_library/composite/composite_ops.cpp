@@ -864,6 +864,20 @@ Tensor div(
     return operation::decorate_as_composite(__func__, _div)(input_a, input_b, accurate_mode, output_mem_config);
 }
 
+Tensor _div_no_nan(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config) {
+    Tensor div_result =div(input_a, input_b);
+    return where(eqz(input_b, output_mem_config), 0, div_result);
+}
+Tensor div_no_nan(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _div_no_nan)(input_a, input_b, output_mem_config);
+}
+
 // logit(input, eps)=log(input / 1 - input)
 Tensor _logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_config) {
     Tensor t_eps = full_like(input_a, eps, output_mem_config);

@@ -23,7 +23,6 @@ mem_configs = [
 ]
 
 
-@pytest.mark.parametrize("accurate_mode", [False, True])
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -36,41 +35,22 @@ mem_configs = [
     "dst_mem_config",
     mem_configs,
 )
-class TestDiv:
-    def test_run_div(
+class TestDiv_No_Nan:
+    def test_run_div_no_nan(
         self,
-        accurate_mode,
         input_shapes,
         dst_mem_config,
         device,
     ):
-        if accurate_mode == False:  # If input_b is non-zero tensor
-            datagen_func = [
-                generation_funcs.gen_func_with_cast(
-                    partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
-                )
-            ] + [
-                generation_funcs.gen_func_with_cast(
-                    partial(generation_funcs.gen_rand, low=-100, high=-1), torch.bfloat16
-                )
-            ]
-        else:
-            datagen_func = [
-                generation_funcs.gen_func_with_cast(
-                    partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
-                )
-            ] * 2
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
+        ] + [generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=-1), torch.bfloat16)]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update(
-            {
-                "accurate_mode": accurate_mode,
-            }
-        )
         test_args.update({"output_mem_config": dst_mem_config})
         comparison_func = comparison_funcs.comp_pcc
 
         run_single_pytorch_test(
-            "eltwise-div",
+            "eltwise-div_no_nan",
             input_shapes,
             datagen_func,
             comparison_func,
