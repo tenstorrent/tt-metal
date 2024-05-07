@@ -171,6 +171,11 @@ Tensor div(
     bool accurate_mode = false,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor div_no_nan(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 // xlogy(x,y))=x*log(y)
 Tensor xlogy(
     const Tensor& input_a,
