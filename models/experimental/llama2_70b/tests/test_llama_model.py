@@ -8,6 +8,8 @@ import torch
 from torch import nn
 import tt_lib
 import ttnn
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+
 
 import scipy
 from sklearn.metrics import top_k_accuracy_score
@@ -60,7 +62,7 @@ class PytorchLlamaModel(torch.nn.Module):
 
 
 def run_test_LlamaModel_inference(
-    devices,
+    t3k_device_mesh,
     batch,
     seq_len,
     pcc,
@@ -70,7 +72,10 @@ def run_test_LlamaModel_inference(
     emulated=False,
 ):
     # Prepare paths and devices
-    devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config, n_devices, emulated)
+    t3k_device_mesh, ckpt_dir, tokenizer_path, cache_path = get_llama_path(
+        t3k_device_mesh, model_config, n_devices, emulated
+    )
+
     logger.info(f"Running num_layer: {n_layers}")
     hugging_face_reference_model = Llama.build(
         ckpt_dir,
@@ -91,7 +96,7 @@ def run_test_LlamaModel_inference(
     pytorch_model = PytorchLlamaModel(hugging_face_reference_model)
     # TT model -------------------------------------------------------------------------
     tt_model = TtLlamaModel_optimized(
-        devices,
+        t3k_device_mesh,
         state_dict,
         BASE_URL,
         n_layers,
@@ -102,8 +107,8 @@ def run_test_LlamaModel_inference(
         cache_path=cache_path,
     )
 
-    for device in devices:
-        tt_lib.device.Synchronize(device)
+    # for device in devices:
+    #     tt_lib.device.Synchronize(device)
 
     if model_config["LLM_MODE"] == "prefill":
         generation_start_pos = 0
@@ -126,7 +131,7 @@ def run_test_LlamaModel_inference(
         )
 
         # TT hardware execution -------------------------------------------------------------
-        tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos)
+        tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos, t3k_device_mesh)
 
         tt_out = tt_model(
             tt_inp_emb,
@@ -148,8 +153,8 @@ def run_test_LlamaModel_inference(
         assert isinstance(tt_out, list)  # tt_out should be fractured on N devices
         assert len(tt_out) == len(devices)
 
-        tt_outs = [tt2torch_tensor(o) for o in tt_out]
-        tt_out = torch.cat(tt_outs, dim=-1)
+        tt_out = ttnn.from_device(tt_out)
+        tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=3))
         tt_out = tt_out[..., : configuration.vocab_size]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
         tt_out = tt_out.float()
@@ -198,12 +203,16 @@ def run_test_LlamaModel_inference(
         .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
     ]
     # TT hardware execution -------------------------------------------------------------
-    tt_layer_present = []
-    for layer_past in tt_model.layers[0].attention.layer_past_list:
-        tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
-    # concat the pasts by heads
-    tt_layer_present = [
-        torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
+    # tt_layer_present = []
+    # for layer_past in tt_model.layers[0].attention.layer_past_list:
+    #     tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
+    # # concat the pasts by heads
+    # tt_layer_present = [
+    #     torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
+    # ]
+    tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past_]
+    tt_layer_present_all = [
+        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=1)) for lp in tt_layer_present_all
     ]
 
     for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present):
@@ -270,20 +279,20 @@ def test_LlamaModel_inference(
     pcc,
     n_layers,
     n_devices,
-    all_devices,
+    t3k_device_mesh,
     emulated,
     use_program_cache,
 ):
-    devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
+    # devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
     model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
-    if len(devices) < n_devices and not emulated:
-        pytest.skip(f"Requires at {n_devices} devices to run")
+    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
+    # if len(devices) < n_devices and not emulated:
+    #     pytest.skip(f"Requires at {n_devices} devices to run")
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     run_test_LlamaModel_inference(
-        devices,
+        t3k_device_mesh,
         batch,
         seq_len,
         pcc,
