@@ -2,18 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tensor/tensor.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
+
+#include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/copy/copy_op.hpp"
-#include "tt_dnn/op_library/tilize/tilize_op.hpp"
-#include "tt_dnn/op_library/untilize/untilize_op.hpp"
-#include "tt_dnn/op_library/pad/pad_op.hpp"
-#include "tt_dnn/op_library/unpad/unpad_op.hpp"
-#include "tt_dnn/op_library/layout_conversion/layout_conversion_op.hpp"
 #include "tt_dnn/op_library/data_transfer/data_transfer_op.hpp"
+#include "tt_dnn/op_library/layout_conversion/layout_conversion_op.hpp"
+#include "tt_dnn/op_library/pad/pad_op.hpp"
+#include "tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "tt_dnn/op_library/unpad/unpad_op.hpp"
+#include "tt_dnn/op_library/untilize/untilize_op.hpp"
+#include "tt_metal/common/constants.hpp"
+#include "tt_metal/host_api.hpp"
 
 using namespace tt::constants;
 
@@ -21,7 +22,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor AutoFormat::move_tensor_to_device(const Tensor &input, Device * device, const MemoryConfig& mem_config) {
+Tensor AutoFormat::move_tensor_to_device(const Tensor& input, Device* device, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
         return data_transfer_to_device(input, device, mem_config);
     } else {
@@ -29,7 +30,7 @@ Tensor AutoFormat::move_tensor_to_device(const Tensor &input, Device * device, c
     }
 }
 
-Tensor AutoFormat::move_tensor_to_mem_config(const Tensor &input, const MemoryConfig& mem_config) {
+Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
         return data_transfer_to_device(input, AutoFormat::GetDefaultDevice(), mem_config);
     } else if (input.memory_config() != mem_config) {
@@ -39,7 +40,13 @@ Tensor AutoFormat::move_tensor_to_mem_config(const Tensor &input, const MemoryCo
     }
 }
 
-Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, const Shape& padded_shape, float pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
+Tensor AutoFormat::format_input_tensor(
+    const Tensor& input,
+    Device* device,
+    const Shape& padded_shape,
+    float pad_value,
+    Layout target_layout,
+    std::optional<MemoryConfig> target_mem_config) {
     bool pad_input = input.get_legacy_shape() != padded_shape;
     bool convert_layout = input.get_layout() != target_layout;
 
@@ -72,8 +79,8 @@ Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, con
             }
         } else if (convert_layout && pad_input) {
             if (formatted_input.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE) {
-                return tilize_with_val_padding(formatted_input, padded_shape, {0, 0, 0, 0}, pad_value, mem_config);
-            }  else if (formatted_input.get_layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
+                return tilize_with_val_padding(formatted_input, padded_shape, pad_value, mem_config);
+            } else if (formatted_input.get_layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
                 formatted_input = untilize(formatted_input, mem_config);
                 return pad(formatted_input, padded_shape, {0, 0, 0, 0}, pad_value, mem_config);
             }
@@ -91,15 +98,19 @@ Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, con
         formatted_input = pad_on_host(formatted_input, padded_shape, {0, 0, 0, 0}, pad_value);
     }
 
-    if(convert_layout) {
+    if (convert_layout) {
         formatted_input = layout_conversion_on_host(formatted_input, target_layout);
     }
 
     return AutoFormat::move_tensor_to_device(formatted_input, device, mem_config);
 }
 
-
-Tensor AutoFormat::format_output_tensor(const Tensor &output, const Shape& shape, Device* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
+Tensor AutoFormat::format_output_tensor(
+    const Tensor& output,
+    const Shape& shape,
+    Device* device,
+    Layout target_layout,
+    std::optional<MemoryConfig> target_mem_config) {
     bool unpad_output = output.get_legacy_shape() != shape;
     bool convert_layout = output.get_layout() != target_layout;
 
@@ -132,19 +143,38 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const Shape& shape
             // Output can be unpadded and layout supports the shape
             if ((formatted_output.get_layout() == Layout::TILE && AutoFormat::legal_tile_shape(shape)) ||
                 (formatted_output.get_layout() == Layout::ROW_MAJOR && AutoFormat::legal_rm_shape(shape))) {
-                formatted_output = unpad(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}, mem_config);
+                formatted_output = unpad(
+                    formatted_output,
+                    {0, 0, 0, 0},
+                    {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1},
+                    mem_config);
                 return formatted_output;
-            // Output is tile but shape cannot be tile. We leave in RM
+                // Output is tile but shape cannot be tile. We leave in RM
             } else if (formatted_output.get_layout() == Layout::TILE && AutoFormat::legal_rm_shape(shape)) {
-                formatted_output = untilize_with_unpadding(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}, mem_config);
+                formatted_output = untilize_with_unpadding(
+                    formatted_output,
+                    {0, 0, 0, 0},
+                    {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1},
+                    mem_config);
                 return formatted_output;
             }
         } else if (unpad_output && convert_layout) {
-            if (formatted_output.get_layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR && AutoFormat::legal_rm_shape(shape)) {
-                formatted_output = untilize_with_unpadding(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}, mem_config);
+            if (formatted_output.get_layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR &&
+                AutoFormat::legal_rm_shape(shape)) {
+                formatted_output = untilize_with_unpadding(
+                    formatted_output,
+                    {0, 0, 0, 0},
+                    {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1},
+                    mem_config);
                 return formatted_output;
-            } else if (formatted_output.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE && AutoFormat::legal_tile_shape(shape)) {
-                formatted_output = unpad(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}, mem_config);
+            } else if (
+                formatted_output.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE &&
+                AutoFormat::legal_tile_shape(shape)) {
+                formatted_output = unpad(
+                    formatted_output,
+                    {0, 0, 0, 0},
+                    {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1},
+                    mem_config);
                 formatted_output = tilize(formatted_output, mem_config);
                 return formatted_output;
             }
@@ -160,7 +190,8 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const Shape& shape
             formatted_output = layout_conversion_on_host(formatted_output, Layout::ROW_MAJOR);
             convert_layout = formatted_output.get_layout() != target_layout;
         }
-        formatted_output = unpad_on_host(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
+        formatted_output =
+            unpad_on_host(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
     }
 
     if (convert_layout) {
@@ -185,5 +216,5 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const Shape& shape
     return formatted_output;
 }
 
-}
-}
+}  // namespace tt_metal
+}  // namespace tt

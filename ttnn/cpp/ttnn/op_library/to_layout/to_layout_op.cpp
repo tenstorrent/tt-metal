@@ -129,8 +129,8 @@ Tensor execute(
             padded_4D_output_shape.push_back(tensor.get_shape()[-3]);
             padded_4D_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[-2]));
             padded_4D_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[-1]));
-            tensor = tt::tt_metal::tilize_with_val_padding(
-                tensor, padded_4D_output_shape, {0, 0, 0, 0}, 0, output_memory_config, dtype);
+            tensor =
+                tt::tt_metal::tilize_with_val_padding(tensor, padded_4D_output_shape, 0, output_memory_config, dtype);
             return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape, padded_output_shape}));
 
         } else {

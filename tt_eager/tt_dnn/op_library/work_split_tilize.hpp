@@ -34,19 +34,20 @@ inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks)
     std::optional<CoreCoord> cliff_core;
 
     // Top non-cliff range (full rows)
-    uint32_t top_range_end_y = ncores_y - (ncores_x_cliff > 0 || nblocks_per_core_cliff > 0 ? 1 : 0);
+    const uint32_t top_range_end_y = ncores_y - (ncores_x_cliff < ncores_x || nblocks_per_core_cliff > 0);
+
     if (top_range_end_y > 0) {
         auto range = CoreRange{CoreCoord{0, 0}, CoreCoord{ncores_x - 1, top_range_end_y - 1}};
         core_range.insert(range);
     }
 
-    if (ncores_x_cliff > 0 && nblocks_per_core_cliff == 0) {
+    if (ncores_x_cliff < ncores_x && nblocks_per_core_cliff == 0) {
         // Last partial row (non-cliff)
         auto range = CoreRange{CoreCoord{0, ncores_y - 1}, CoreCoord{ncores_x_cliff - 1, ncores_y - 1}};
         core_range.insert(range);
     } else if (nblocks_per_core_cliff > 0) {
         // Last partial row (excluding last core) and single cliff core
-        if (ncores_x_cliff > 1) {  // Add range only if there are cores before the cliff core
+        if (ncores_x_cliff > 1) { // Add range only if there are cores before the cliff core
             auto range = CoreRange{CoreCoord{0, ncores_y - 1}, CoreCoord{ncores_x_cliff - 2, ncores_y - 1}};
             core_range.insert(range);
         }

@@ -721,7 +721,6 @@ class resnet50:
         x = ttnn.experimental.tensor.tilize_with_val_padding(
             x,
             padded_shape,
-            [0, 0, 0, 0],
             0,
             output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
@@ -754,7 +753,6 @@ class resnet50:
         x = ttnn.experimental.tensor.tilize_with_val_padding(
             x,
             padded_shape,
-            [0, 0, 0, 0],
             0,
             output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
