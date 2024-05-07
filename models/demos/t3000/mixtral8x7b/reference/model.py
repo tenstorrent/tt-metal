@@ -26,6 +26,7 @@ import torch
 from torch import nn
 from typing import Optional, Tuple
 from models.demos.t3000.mixtral8x7b.reference.moe import MoeLayer
+from torch.nn.utils import skip_init
 
 
 def repeat_kv(keys: torch.Tensor, values: torch.Tensor, repeats: int):
@@ -75,10 +76,10 @@ class Attention(nn.Module):
 
         self.scale = self.args.head_dim**-0.5
 
-        self.wq = nn.Linear(args.dim, args.n_heads * args.head_dim, bias=False)
-        self.wk = nn.Linear(args.dim, args.n_kv_heads * args.head_dim, bias=False)
-        self.wv = nn.Linear(args.dim, args.n_kv_heads * args.head_dim, bias=False)
-        self.wo = nn.Linear(args.n_heads * args.head_dim, args.dim, bias=False)
+        self.wq = skip_init(nn.Linear, args.dim, args.n_heads * args.head_dim, bias=False)
+        self.wk = skip_init(nn.Linear, args.dim, args.n_kv_heads * args.head_dim, bias=False)
+        self.wv = skip_init(nn.Linear, args.dim, args.n_kv_heads * args.head_dim, bias=False)
+        self.wo = skip_init(nn.Linear, args.n_heads * args.head_dim, args.dim, bias=False)
         self.cache_k = torch.empty(
             args.max_batch_size,
             args.sliding_window,
@@ -142,9 +143,9 @@ class FeedForward(nn.Module):
     def __init__(self, args):
         super().__init__()
 
-        self.w1 = nn.Linear(args.dim, args.hidden_dim, bias=False)
-        self.w2 = nn.Linear(args.hidden_dim, args.dim, bias=False)
-        self.w3 = nn.Linear(args.dim, args.hidden_dim, bias=False)
+        self.w1 = skip_init(nn.Linear, args.dim, args.hidden_dim, bias=False)
+        self.w2 = skip_init(nn.Linear, args.hidden_dim, args.dim, bias=False)
+        self.w3 = skip_init(nn.Linear, args.dim, args.hidden_dim, bias=False)
 
     def forward(self, x) -> torch.Tensor:
         return self.w2(nn.functional.silu(self.w1(x)) * self.w3(x))
