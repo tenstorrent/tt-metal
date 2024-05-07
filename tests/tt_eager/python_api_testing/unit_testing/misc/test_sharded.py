@@ -33,12 +33,20 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_ze
     ],
 )
 @pytest.mark.parametrize(
-    "shard_orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR]
+    "shard_orientation",
+    [ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR],
 )
 @pytest.mark.parametrize("input_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_tile(
-    device, input_shape, shard_size, shard_scheme, shard_orientation, input_dtype, output_dtype, function_level_defaults
+    device,
+    input_shape,
+    shard_size,
+    shard_scheme,
+    shard_orientation,
+    input_dtype,
+    output_dtype,
+    function_level_defaults,
 ):
     grid_size = device.compute_with_storage_grid_size()
     input_size = torch.Size(input_shape)
@@ -124,7 +132,13 @@ def test_sharded_tile(
     [ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR],
 )
 def test_sharded_rm(
-    device, input_shape, shard_size, shard_scheme, shard_orientation, num_cores, function_level_defaults
+    device,
+    input_shape,
+    shard_size,
+    shard_scheme,
+    shard_orientation,
+    num_cores,
+    function_level_defaults,
 ):
     grid_size = device.compute_with_storage_grid_size()
     input_size = torch.Size(input_shape)
@@ -381,7 +395,16 @@ def test_height_sharded_matmul_1d_padding(device, M, K, N, num_cores):
 @pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_matmul_1d_in1(
-    device, in0_sharded, out_sharded, M, K, N, num_cores, activations_dtype, weights_dtype, function_level_defaults
+    device,
+    in0_sharded,
+    out_sharded,
+    M,
+    K,
+    N,
+    num_cores,
+    activations_dtype,
+    weights_dtype,
+    function_level_defaults,
 ):
     grid_size = device.compute_with_storage_grid_size()
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -459,7 +482,9 @@ def test_sharded_matmul_1d_in1(
     ids=["inputs_BFLOAT16", "inputs_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
-    "output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B], ids=["out_BFLOAT16", "out_BFLOAT8_B"]
+    "output_dtype",
+    [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
+    ids=["out_BFLOAT16", "out_BFLOAT8_B"],
 )
 @pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
 def test_sharded_partial_op(
@@ -534,7 +559,9 @@ def test_sharded_partial_op(
     ids=["inputs_BFLOAT16", "inputs_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
-    "output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B], ids=["out_BFLOAT16", "out_BFLOAT8_B"]
+    "output_dtype",
+    [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
+    ids=["out_BFLOAT16", "out_BFLOAT8_B"],
 )
 @pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
 def test_block_sharded_partial_op(
@@ -621,15 +648,22 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_
     )
 
     height_sharded_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttl.tensor.BufferType.L1
+        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
     )
 
     tt_scalar_dram = torch2tt_tensor(
-        torch_scalar, device, tt_memory_config=dram_interleaved_memory_config, tt_dtype=ttl.tensor.DataType.BFLOAT16
+        torch_scalar,
+        device,
+        tt_memory_config=dram_interleaved_memory_config,
+        tt_dtype=ttl.tensor.DataType.BFLOAT16,
     )
 
     tt_in0_dram = torch2tt_tensor(
-        torch_in0, device, tt_memory_config=dram_interleaved_memory_config, tt_dtype=ttl.tensor.DataType.BFLOAT16
+        torch_in0,
+        device,
+        tt_memory_config=dram_interleaved_memory_config,
+        tt_dtype=ttl.tensor.DataType.BFLOAT16,
     )
 
     if out_height_sharded:
@@ -692,7 +726,9 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_
     ids=["inputs_BFLOAT16", "inputs_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
-    "output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B], ids=["out_BFLOAT16", "out_BFLOAT8_B"]
+    "output_dtype",
+    [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
+    ids=["out_BFLOAT16", "out_BFLOAT8_B"],
 )
 @pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
 def test_width_sharded_partial_op(
@@ -767,7 +803,9 @@ def test_width_sharded_partial_op(
     ids=["inputs_BFLOAT16", "inputs_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
-    "output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B], ids=["out_BFLOAT16", "out_BFLOAT8_B"]
+    "output_dtype",
+    [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
+    ids=["out_BFLOAT16", "out_BFLOAT8_B"],
 )
 @pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
 def test_partial_sharded_op_binary(
@@ -1040,7 +1078,15 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
 @pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_matmul_2d(
-    device, in0_sharded, out_sharded, M, N, K, activations_dtype, weights_dtype, function_level_defaults
+    device,
+    in0_sharded,
+    out_sharded,
+    M,
+    N,
+    K,
+    activations_dtype,
+    weights_dtype,
+    function_level_defaults,
 ):
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
@@ -1215,7 +1261,14 @@ def test_sharded_matmul_2d_in0_height_sharded_in1_width_sharded(
 @pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_matmul_2d_transposed(
-    device, in0_sharded, out_sharded, M, N, activations_dtype, weights_dtype, function_level_defaults
+    device,
+    in0_sharded,
+    out_sharded,
+    M,
+    N,
+    activations_dtype,
+    weights_dtype,
+    function_level_defaults,
 ):
     K = 256
     in0_shape = [1, 1, M, K]
@@ -1715,13 +1768,11 @@ def test_width_sharded_untilize_with_unpadding(
 
 
 @pytest.mark.parametrize("input_shape", [[8, 1, 49, 2048], [1, 1, 8, 2048], [16, 1, 49, 2048], [1, 1, 16, 2048]])
-@pytest.mark.parametrize("in_sharded", [True], ids=["in0_sharded"])
-@pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
+@pytest.mark.parametrize("sharding_config", [(True, True), (False, False)], ids=["both_sharded", "both_interleaved"])
 @pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
-def test_sharded_tilize_with_val_padding(
-    input_shape, in_sharded, out_sharded, output_dtype, device, function_level_defaults
-):
+def test_sharded_tilize_with_val_padding(input_shape, sharding_config, output_dtype, device, function_level_defaults):
     grid_size = (8, 4)
+    in_sharded, out_sharded = sharding_config
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
         pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
@@ -1762,10 +1813,10 @@ def test_sharded_tilize_with_val_padding(
     yt = ttl.tensor.tilize_with_val_padding(
         xt,
         ttl.tensor.Shape([N, C, roundup32(H), W]),
-        ttl.tensor.Shape([0, 0, 0, 0]),
         1.0,
         output_mem_config=out_mem_config,
         output_dtype=output_dtype,
+        use_multicore=True,
     )
 
     if out_sharded:
@@ -1871,7 +1922,15 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
 @pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_matmul_1d_in0(
-    device, in0_sharded, out_sharded, M, K, N, activations_dtype, weights_dtype, function_level_defaults
+    device,
+    in0_sharded,
+    out_sharded,
+    M,
+    K,
+    N,
+    activations_dtype,
+    weights_dtype,
+    function_level_defaults,
 ):
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -2019,7 +2078,8 @@ def test_sharded_matmul_1d_in1_wormhole(device, function_level_defaults):
 @pytest.mark.parametrize("in1_sharded", [True, False], ids=["in1_sharded", "in1_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize(
-    "B, H, M, K, N, out_subblock_h, out_subblock_w", [[12, 16, 384, 64, 384, 1, 6], [12, 16, 384, 384, 64, 4, 2]]
+    "B, H, M, K, N, out_subblock_h, out_subblock_w",
+    [[12, 16, 384, 64, 384, 1, 6], [12, 16, 384, 384, 64, 4, 2]],
 )
 @pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_matmul_no_mcast(
@@ -2232,7 +2292,8 @@ def run_reshard_test(
     ],
 )
 @pytest.mark.parametrize(
-    "shard_orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR]
+    "shard_orientation",
+    [ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR],
 )
 def test_sharded_to_from_l1(device, input_shape, shard_scheme, shard_orientation):
     input_dtype = ttl.tensor.DataType.BFLOAT16

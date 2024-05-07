@@ -2235,7 +2235,6 @@ class ResNet(nn.Module):
             x = tt_lib.tensor.tilize_with_val_padding(
                 x,
                 padded_shape,
-                [0, 0, 0, 0],
                 0,
                 output_mem_config=self.width_sharded_memory_config,
                 output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
@@ -2280,7 +2279,6 @@ class ResNet(nn.Module):
             x = tt_lib.tensor.tilize_with_val_padding(
                 x,
                 padded_shape,
-                [0, 0, 0, 0],
                 0,
                 output_mem_config=self.width_sharded_memory_config,
                 output_dtype=self.model_config["ACTIVATIONS_DTYPE"],

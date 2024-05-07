@@ -60,11 +60,11 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0, num_output_rows_unpadded = 0;
     CoreCoord end_core;
     std::vector<CoreCoord> cores_with_rtargs;
+
     if (src_sharded) {
         auto shard_spec = a.shard_spec().value();
         src_block_sharded = a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
         row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-        ncores_x = device->compute_with_storage_grid_size().x;
         ncores_y = device->compute_with_storage_grid_size().y;
         all_cores = shard_spec.grid;
         uint32_t num_cores = all_cores.num_cores();

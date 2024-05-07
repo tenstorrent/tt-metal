@@ -4,14 +4,12 @@
 
 #include <math.h>
 
-#include "tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "tt_dnn/op_library/math.hpp"
-
-#include "tt_metal/host_api.hpp"
+#include "tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
 #include "tt_metal/common/math.hpp"
-
+#include "tt_metal/detail/util.hpp"
+#include "tt_metal/host_api.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 
 using namespace tt::constants;
@@ -20,8 +18,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& output) {
-
+operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor &output) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
@@ -41,23 +38,23 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
-    int32_t num_tiles = a.volume() / TILE_HW;
+    uint32_t num_tiles = a.volume() / TILE_HW;
 
     auto width = a.get_legacy_shape()[-1];
-    uint32_t stick_s =  width;
+    uint32_t stick_s = width;
     uint32_t num_sticks = a.volume() / width;
-    uint32_t stick_size = stick_s * a.element_size(); // Assuming bfloat16 dataformat
+    uint32_t stick_size = stick_s * a.element_size();  // Assuming bfloat16 dataformat
 
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
     // Ensure we don't intrude into storage space
     uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
-    uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size); // 2 CBs
+    uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
     // Currently need the number of tiles in a row to be divisible by tiles in a block
     uint32_t num_tiles_per_block = 1;
     if (num_tiles_in_row <= max_tiles) {
         num_tiles_per_block = num_tiles_in_row;
     } else {
-        for(uint32_t n_t = max_tiles; n_t > 0; n_t--) {
+        for (uint32_t n_t = max_tiles; n_t > 0; n_t--) {
             if (num_tiles_in_row % n_t == 0) {
                 num_tiles_per_block = n_t;
                 break;
@@ -72,14 +69,18 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
 
-    tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
-		.set_page_size(src0_cb_index, input_single_tile_size);
-	auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, src0_cb_config);
+    tt_metal::CircularBufferConfig src0_cb_config =
+        tt_metal::CircularBufferConfig(
+            num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
+            .set_page_size(src0_cb_index, input_single_tile_size);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, src0_cb_config);
 
-    uint32_t output_cb_index = 16; // output operands start at index 16
+    uint32_t output_cb_index = 16;  // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_block;
-    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
-		.set_page_size(output_cb_index, output_single_tile_size);
+    tt_metal::CircularBufferConfig cb_output_config =
+        tt_metal::CircularBufferConfig(
+            num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
+            .set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     vector<uint32_t> reader_kernel_args = {
@@ -91,24 +92,17 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
         num_full_blocks_in_row,
         num_leftover_tiles,
         leftover_width_in_row,
-        0                       // row_start_id
+        0  // row_start_id
     };
 
     // Reader compile-time args
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)log2(stick_size) : 0;
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t) src0_is_dram,
-        (std::uint32_t) stick_size_is_power_of_two,
-        (std::uint32_t) log2_stick_size,
-    };
+    uint32_t src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
+    uint32_t log2_stick_size = stick_size_is_power_of_two ? (uint32_t)log2(stick_size) : 0;
+    std::vector<uint32_t> reader_compile_time_args = {src0_is_dram, stick_size_is_power_of_two, log2_stick_size};
 
-    bool out_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t) output_cb_index,
-        (std::uint32_t) out_is_dram
-    };
+    uint32_t out_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index, out_is_dram};
 
     // Tilized reader
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
@@ -125,42 +119,25 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     vector<uint32_t> compute_args = {
-        uint32_t(num_tiles / num_tiles_per_block), // per_core_block_cnt
-        uint32_t(num_tiles_per_block) // per_core_block_tile_cnt
+        num_tiles / num_tiles_per_block,  // per_core_block_cnt
+        num_tiles_per_block               // per_core_block_tile_cnt
     };
 
     auto tilize_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/compute/tilize.cpp",
         core,
-        tt_metal::ComputeConfig{.compile_args = compute_args}
-    );
+        tt_metal::ComputeConfig{.compile_args = compute_args});
 
-    tt_metal::SetRuntimeArgs(
-        program,
-        unary_reader_kernel_id,
-        core,
-        reader_kernel_args
-    );
+    tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
 
-    tt_metal::SetRuntimeArgs(
-        program,
-        unary_writer_kernel_id,
-        core,
-        {dst_buffer->address(),
-        (uint32_t) num_tiles,
-        (uint32_t) 0}
-    );
+    tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles, 0});
 
-    auto override_runtime_args_callback = [
-        reader_kernel_id=unary_reader_kernel_id,
-        writer_kernel_id=unary_writer_kernel_id
-    ](
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
-    ) {
-
+    auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
+                                           writer_kernel_id = unary_writer_kernel_id](
+                                              const Program &program,
+                                              const std::vector<Buffer *> &input_buffers,
+                                              const std::vector<Buffer *> &output_buffers) {
         auto src_buffer = input_buffers.at(0);
 
         auto dst_buffer = output_buffers.at(0);
@@ -181,9 +158,8 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value) {
-
-
+operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
+    const Tensor &a, Tensor &output, const float pad_value) {
     auto output_shape = output.get_legacy_shape();
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -216,16 +192,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
     auto output_y = true_output_shape.rank() >= 2 ? true_output_shape[-2] : 1;
     auto output_x = true_output_shape[-1];
 
-    uint32_t unpadded_row_size_datum = input_x;
-    uint32_t padded_row_size_datum = output_x;
-
-    uint32_t num_rows_padded = output_y;
-    uint32_t num_cols_padded = output_x - unpadded_row_size_datum;
-
-    uint32_t num_2d_faces = output_w * output_z;
-
-    uint32_t unpadded_row_size_bytes = unpadded_row_size_datum * a.element_size();  // Assuming bfloat16 dataformat
-    uint32_t padded_row_size_bytes = padded_row_size_datum * a.element_size();      // Assuming bfloat16 dataformat
+    uint32_t unpadded_row_size_bytes = input_x * a.element_size();  // Assuming bfloat16 dataformat
+    uint32_t padded_row_size_bytes = output_x * a.element_size();   // Assuming bfloat16 dataformat
 
     constexpr uint32_t alignment = 32;
 
@@ -248,6 +216,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
             }
         }
     }
+
     uint32_t block_width = num_tiles_per_block * TILE_WIDTH;
     uint32_t block_row_size = block_width * a.element_size();
     uint32_t num_blocks_w_output = padded_row_size_bytes / block_row_size;
@@ -271,16 +240,19 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
     assert(num_input_tiles > 0);
-    tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
-		.set_page_size(src0_cb_index, input_single_tile_size);
-	auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, src0_cb_config);
+    tt_metal::CircularBufferConfig src0_cb_config =
+        tt_metal::CircularBufferConfig(
+            num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
+            .set_page_size(src0_cb_index, input_single_tile_size);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, src0_cb_config);
 
-    uint32_t output_cb_index = 16; // output operands start at index 16
+    uint32_t output_cb_index = 16;  // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_block;
-    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
-		.set_page_size(output_cb_index, output_single_tile_size);
-	auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
-
+    tt_metal::CircularBufferConfig cb_output_config =
+        tt_metal::CircularBufferConfig(
+            num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
+            .set_page_size(output_cb_index, output_single_tile_size);
+    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
@@ -305,21 +277,11 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
         block_row_leftover_size};
 
     // Reader compile-time args
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    uint32_t src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t stick_size = unpadded_row_size_bytes;
-    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)log2(stick_size) : 0;
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t) src0_is_dram,
-        (std::uint32_t) stick_size_is_power_of_two,
-        (std::uint32_t) log2_stick_size,
-    };
-
-    bool out_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t) output_cb_index,
-        (std::uint32_t) out_is_dram
-    };
+    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
+    uint32_t log2_stick_size = stick_size_is_power_of_two ? (uint32_t)log2(stick_size) : 0;
+    std::vector<uint32_t> reader_compile_time_args = {src0_is_dram, stick_size_is_power_of_two, log2_stick_size};
 
     // Tilized reader
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
@@ -329,48 +291,30 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Tilized writer
+    uint32_t out_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig({output_cb_index, out_is_dram}));
 
-    vector<uint32_t> compute_kernel_args = {
-        uint32_t(num_tiles / num_tiles_per_block),
-        uint32_t(num_tiles_per_block)
-    };
+    vector<uint32_t> compute_kernel_args = {uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
 
     auto tilize_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/compute/tilize.cpp",
         core,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
-    );
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 
-    tt_metal::SetRuntimeArgs(
-        program,
-        unary_reader_kernel_id,
-        core,
-        reader_kernel_args
-    );
+    tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
 
-    tt_metal::SetRuntimeArgs(
-        program,
-        unary_writer_kernel_id,
-        core,
-        {dst_buffer->address(),
-        (uint32_t) num_tiles, 0}
-    );
+    tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), (uint32_t)num_tiles, 0});
 
-    auto override_runtime_args_callback = [
-        reader_kernel_id=unary_reader_kernel_id,
-        writer_kernel_id=unary_writer_kernel_id
-    ](
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
-    ) {
-
+    auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
+                                           writer_kernel_id = unary_writer_kernel_id](
+                                              const Program &program,
+                                              const std::vector<Buffer *> &input_buffers,
+                                              const std::vector<Buffer *> &output_buffers) {
         auto src_buffer = input_buffers.at(0);
 
         auto dst_buffer = output_buffers.at(0);

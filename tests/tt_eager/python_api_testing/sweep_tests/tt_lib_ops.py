@@ -2017,7 +2017,6 @@ def tilize_with_val_padding(
     input_mem_config,
     output_mem_config,
     output_tensor_shape,
-    input_tensor_start,
     pad_value,
     **kwargs,
 ):
@@ -2025,7 +2024,6 @@ def tilize_with_val_padding(
     t1 = ttl.tensor.tilize_with_val_padding(
         t0,
         output_tensor_shape,
-        input_tensor_start,
         pad_value,
         output_mem_config=output_mem_config,
     )

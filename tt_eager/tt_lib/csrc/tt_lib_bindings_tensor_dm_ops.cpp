@@ -168,7 +168,8 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("tilize_with_zero_padding", &tilize_with_zero_padding,
-            py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
+            py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
+            py::arg("use_multicore").noconvert() = false, R"doc(
             Tilizes a given tensor across memory on device. Pads zeroes height-wise and width-wise if required.
 
             .. csv-table::
@@ -177,10 +178,12 @@ namespace tt::tt_metal::detail{
                 "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 "output_dtype", "Output tensor data type", "DataType", "Default is None (Use input dtype)", "No"
+                "use_multicore", "Whether to use multi-core parallelization", "bool", "Default is false", "Yes"
         )doc");
 
         m_tensor.def("tilize_with_val_padding", &tilize_with_val_padding,
-            py::arg("input").noconvert(), py::arg("output_tensor_shape"), py::arg("input_tensor_start"), py::arg("pad_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
+            py::arg("input").noconvert(), py::arg("output_tensor_shape"), py::arg("pad_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
+            py::arg("use_multicore").noconvert() = false, R"doc(
             Tilizes a given tensor across memory on device. Pads to specified shape before tilizing.
 
             .. csv-table::
@@ -188,10 +191,10 @@ namespace tt::tt_metal::detail{
 
                 "input", "Input tensor", "Tensor", "", "Yes"
                 "output_tensor_shape", "Shape of output tensor", "List[int[4]]", "Shape [W, Z, Y, X] where Y%32=0 and X%32=0", "Yes"
-                "input_tensor_start", "Start indices to place input tensor in output tensor", "List[int[4]]", "Must be all 0s", "Yes"
                 "pad_value", "Value to pad input tensor", "float", "", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 "output_dtype", "Output tensor data type", "DataType", "Default is None (Use input dtype)", "No"
+                "use_multicore", "Whether to use multi-core parallelization", "bool", "Default is false", "Yes"
         )doc");
 
         m_tensor.def("untilize", &untilize,

@@ -17,9 +17,7 @@ void kernel_main() {
     const uint32_t num_tiles_per_block        = get_arg_val<uint32_t>(3);
     const uint32_t block_width_size           = get_arg_val<uint32_t>(4);
     const uint32_t num_full_blocks_in_row     = get_arg_val<uint32_t>(5);
-    // const uint32_t num_leftover_tiles_in_row  = get_arg_val<uint32_t>(6);
-    // const uint32_t leftover_width_in_row      = get_arg_val<uint32_t>(7);
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(8);
+    const uint32_t start_stick_id             = get_arg_val<uint32_t>(8);
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     #define stick_size_is_power_of_two get_compile_time_arg_val(1) == 1
@@ -63,9 +61,5 @@ void kernel_main() {
         for (uint32_t j = 0; j < num_full_blocks_in_row; j++) {
             read_tiles(num_tiles_per_block, block_width_size);
         }
-
-        // if (num_leftover_tiles_in_row > 0) {
-        //     read_tiles(num_leftover_tiles_in_row, leftover_width_in_row);
-        // }
     }
 }

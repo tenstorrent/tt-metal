@@ -1190,14 +1190,10 @@ def tilize_with_zero_padding(x, *args, **kwargs):
     )
 
 
-def tilize_with_val_padding(x, output_tensor_shape, input_tensor_start, pad_value, *args, **kwargs):
+def tilize_with_val_padding(x, output_tensor_shape, pad_value, *args, **kwargs):
     pad = torch.nn.functional.pad(
         x,
-        tuple(
-            j
-            for i in reversed(range(len(x.shape)))
-            for j in (input_tensor_start[i], output_tensor_shape[i] - x.shape[i])
-        ),
+        tuple(j for i in reversed(range(len(x.shape))) for j in (0, output_tensor_shape[i] - x.shape[i])),
         value=pad_value,
     )
     tilized = tilize_util(pad)
