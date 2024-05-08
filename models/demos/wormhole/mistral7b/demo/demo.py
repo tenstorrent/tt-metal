@@ -127,9 +127,8 @@ def run_mistral_demo(user_input, batch_size, device):
         input_prompts, tokenizer, model_args, dtype, embd, instruct_mode, device
     )
 
-    logger.info("Caching attention ops..")
+    logger.info("Caching attention ops...")
     cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype)
-    logger.info("Cached attention ops.")
 
     if instruct_mode:
         tokenizer._model.pad_id = tokenizer._model.eos_id
