@@ -16,7 +16,4 @@ fi
 cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
 
-# Example test
-pytest tests/ttnn/unit_tests/test_multi_device.py
-
 # Your tests go here!
