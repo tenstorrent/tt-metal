@@ -8,3 +8,4 @@ Programming Examples
    eltwise_binary
    matmul_single_core
    matmul_multi_core
+   matmul_multi_core_optimized
