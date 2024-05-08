@@ -224,3 +224,13 @@ target_include_directories(tt_dnn PUBLIC
     ${CMAKE_SOURCE_DIR}/ttnn/cpp
     ${CMAKE_SOURCE_DIR}/tt_metal/third_party/fmt
 )
+
+target_precompile_headers(tt_dnn PUBLIC
+    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/magic_enum/magic_enum.hpp
+    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/auto_format.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute_kernel_config.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/run_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/work_split.hpp
+)
