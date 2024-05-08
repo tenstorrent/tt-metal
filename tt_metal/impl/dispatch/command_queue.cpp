@@ -645,6 +645,9 @@ void EnqueueProgramCommand::assemble_device_commands() {
                 PCIE_ALIGNMENT);
         }
 
+        // Program Binaries and Go Signals
+        // Get launch msg data while getting size of cmds
+        // TODO: move program binaries to here as well
         for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
             const auto& kg_transfer_info = program.program_transfer_info.kernel_bins[buffer_idx];
             for (int kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
@@ -655,15 +658,67 @@ void EnqueueProgramCommand::assemble_device_commands() {
             }
         }
 
+        // Wait Cmd
         if (program.program_transfer_info.num_active_cores > 0) {
             cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
         }
 
-        for (const auto& transfer_info : program.program_transfer_info.go_signals) {
-            for (const pair<uint32_t, uint32_t>& dst_noc_info : transfer_info.dst_noc_info) {
-                cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-                cmd_sequence_sizeB += align(transfer_info.data.size() * sizeof(uint32_t), PCIE_ALIGNMENT);
+        std::vector<std::pair<const void*, uint32_t>> multicast_go_signal_data;
+        std::vector<std::pair<const void*, uint32_t>> unicast_go_signal_data;
+        std::vector<CQDispatchWritePackedMulticastSubCmd> multicast_go_signal_sub_cmds;
+        std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_go_signal_sub_cmds;
+        const uint32_t go_signal_sizeB = sizeof(launch_msg_t);
+        for (KernelGroup& kernel_group : program.get_kernel_groups(CoreType::WORKER)) {
+            kernel_group.launch_msg.mode = DISPATCH_MODE_DEV;
+            const void* launch_message_data = (const void*)(&kernel_group.launch_msg);
+            for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
+                CoreCoord physical_start =
+                    device->physical_core_from_logical_core(core_range.start, kernel_group.get_core_type());
+                CoreCoord physical_end =
+                    device->physical_core_from_logical_core(core_range.end, kernel_group.get_core_type());
+
+                uint32_t dst_noc_multicast_encoding =
+                    NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
+                multicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
+                    .noc_xy_addr = dst_noc_multicast_encoding, .num_mcast_dests = (uint32_t)core_range.size()});
+                multicast_go_signal_data.emplace_back(launch_message_data, go_signal_sizeB);
             }
+        }
+        if (multicast_go_signal_sub_cmds.size() > 0) {
+            uint32_t num_multicast_sub_cmds = multicast_go_signal_sub_cmds.size();
+            uint32_t aligned_go_signal_data_sizeB = align(sizeof(launch_msg_t), L1_ALIGNMENT) * num_multicast_sub_cmds;
+            uint32_t dispatch_cmd_sizeB = align(
+                sizeof(CQDispatchCmd) + num_multicast_sub_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd),
+                L1_ALIGNMENT);
+            uint32_t mcast_payload_sizeB = dispatch_cmd_sizeB + aligned_go_signal_data_sizeB;
+            cmd_sequence_sizeB += align(sizeof(CQPrefetchCmd) + mcast_payload_sizeB, PCIE_ALIGNMENT);
+        }
+
+        for (KernelGroup& kernel_group : program.get_kernel_groups(CoreType::ETH)) {
+            kernel_group.launch_msg.mode = DISPATCH_MODE_DEV;
+            const void* launch_message_data = (const void*)(&kernel_group.launch_msg);
+            for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
+                for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+                    for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                        CoreCoord physical_coord =
+                            device->physical_core_from_logical_core(CoreCoord({x, y}), kernel_group.get_core_type());
+                        uint32_t dst_noc_unicast_encoding =
+                            NOC_XY_ENCODING(NOC_X(physical_coord.x), NOC_Y(physical_coord.y));
+                        unicast_go_signal_sub_cmds.emplace_back(
+                            CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = dst_noc_unicast_encoding});
+                        unicast_go_signal_data.emplace_back(launch_message_data, go_signal_sizeB);
+                    }
+                }
+            }
+        }
+        if (unicast_go_signal_sub_cmds.size() > 0) {
+            uint32_t num_unicast_sub_cmds = unicast_go_signal_sub_cmds.size();
+            uint32_t aligned_go_signal_data_sizeB = align(sizeof(launch_msg_t), L1_ALIGNMENT) * num_unicast_sub_cmds;
+            uint32_t dispatch_cmd_sizeB = align(
+                sizeof(CQDispatchCmd) + num_unicast_sub_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd),
+                L1_ALIGNMENT);
+            uint32_t ucast_payload_sizeB = dispatch_cmd_sizeB + aligned_go_signal_data_sizeB;
+            cmd_sequence_sizeB += align(sizeof(CQPrefetchCmd) + ucast_payload_sizeB, PCIE_ALIGNMENT);
         }
 
         this->program_command_sequence = HostMemDeviceCommand(cmd_sequence_sizeB);
@@ -808,19 +863,41 @@ void EnqueueProgramCommand::assemble_device_commands() {
         }
 
         // Go Signals
-        for (const auto& transfer_info : program.program_transfer_info.go_signals) {
-            for (const pair<uint32_t, uint32_t>& dst_noc_info : transfer_info.dst_noc_info) {
-                this->program_command_sequence.add_dispatch_write_linear<true>(
-                    true,                 // flush_prefetch
-                    dst_noc_info.second,  // num_mcast_dests
-                    dst_noc_info.first,   // noc_xy_addr
-                    transfer_info.dst_base_addr,
-                    transfer_info.data.size() * sizeof(uint32_t),
-                    transfer_info.data.data());
-            }
+        if (multicast_go_signal_sub_cmds.size() > 0) {
+            uint32_t num_multicast_sub_cmds = multicast_go_signal_sub_cmds.size();
+            uint32_t aligned_go_signal_data_sizeB = align(sizeof(launch_msg_t), L1_ALIGNMENT) * num_multicast_sub_cmds;
+            uint32_t dispatch_cmd_sizeB = align(
+                sizeof(CQDispatchCmd) + num_multicast_sub_cmds * sizeof(CQDispatchWritePackedMulticastSubCmd),
+                L1_ALIGNMENT);
+            uint32_t mcast_payload_sizeB = dispatch_cmd_sizeB + aligned_go_signal_data_sizeB;
+            this->program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
+                num_multicast_sub_cmds,
+                GET_MAILBOX_ADDRESS_HOST(launch),
+                go_signal_sizeB,
+                mcast_payload_sizeB,
+                multicast_go_signal_sub_cmds,
+                multicast_go_signal_data);
         }
+
+        if (unicast_go_signal_sub_cmds.size() > 0) {
+            uint32_t num_unicast_sub_cmds = unicast_go_signal_sub_cmds.size();
+            uint32_t aligned_go_signal_data_sizeB = align(sizeof(launch_msg_t), L1_ALIGNMENT) * num_unicast_sub_cmds;
+            uint32_t dispatch_cmd_sizeB = align(
+                sizeof(CQDispatchCmd) + num_unicast_sub_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd),
+                L1_ALIGNMENT);
+            uint32_t ucast_payload_sizeB = dispatch_cmd_sizeB + aligned_go_signal_data_sizeB;
+            this->program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+                num_unicast_sub_cmds,
+                GET_ETH_MAILBOX_ADDRESS_HOST(launch),
+                go_signal_sizeB,
+                ucast_payload_sizeB,
+                unicast_go_signal_sub_cmds,
+                unicast_go_signal_data);
+        }
+
         // TODO: add GO for FD2.1
         program.cached_device_commands = this->program_command_sequence.cmd_vector();
+
     } else {
         this->program_command_sequence = HostMemDeviceCommand(program.cached_device_commands.size() * sizeof(uint32_t));
         this->program_command_sequence.update_cmd_sequence(
