@@ -8,10 +8,37 @@ import torch.optim as optim
 
 import tt_lib as ttl
 import pytest
-from models.utility_functions import (
-    comp_allclose_and_pcc,
-)
+from models.utility_functions import comp_allclose_and_pcc, is_wormhole_b0
 from loguru import logger
+
+fp32_dest_acc_en = [
+    False,  # for grayskull
+]
+fp32_dest_acc_en_ids = ["fp32_dest_acc_en=False"]
+if is_wormhole_b0:
+    fp32_dest_acc_en.append(True)
+    fp32_dest_acc_en_ids.append("fp32_dest_acc_en=True")
+
+
+def get_compute_kernel_options(fp32_dest_acc_en):
+    if fp32_dest_acc_en is None:
+        return None
+
+    if is_wormhole_b0():
+        packer_l1_acc = False
+        compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=packer_l1_acc,
+        )
+    else:
+        # Grayskull doesn't support fp32 but test passing a GS config is ok
+        compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(
+            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            math_approx_mode=True,
+        )
+    return compute_kernel_config
 
 
 def create_tt_tensor(tensor, device):
@@ -43,11 +70,25 @@ def create_tt_tensor(tensor, device):
     "momentum_initialized", [True, False], ids=["MOMENTUM_INITIALIZED", "MOMENTUM_NOT_INITIALIZED"]
 )
 @pytest.mark.parametrize("has_param_out", [True, False], ids=["HAS_PARAM_OUT_TRUE", "HAS_PARAM_OUT_FALSE"])
-def test_moreh_sgd(shape, lr, momentum, dampening, weight_decay, nesterov, momentum_initialized, has_param_out, device):
+@pytest.mark.parametrize("fp32_dest_acc_en", fp32_dest_acc_en, ids=fp32_dest_acc_en_ids)
+def test_moreh_sgd(
+    shape,
+    lr,
+    momentum,
+    dampening,
+    weight_decay,
+    nesterov,
+    momentum_initialized,
+    has_param_out,
+    fp32_dest_acc_en,
+    device,
+):
     if nesterov and (momentum <= 0 or dampening != 0):
         pytest.skip()
 
     torch.manual_seed(0)
+
+    compute_kernel_config = get_compute_kernel_options(fp32_dest_acc_en)
 
     # make model and compute grad
     x_data = torch.rand(shape).to(torch.bfloat16)
@@ -123,6 +164,7 @@ def test_moreh_sgd(shape, lr, momentum, dampening, weight_decay, nesterov, momen
         weight_decay,
         nesterov,
         momentum_initialized,
+        compute_kernel_config=compute_kernel_config,
     )
 
     assert dev_param_in.get_legacy_shape() == list(model.weight.shape)
