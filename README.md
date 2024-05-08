@@ -43,6 +43,7 @@
 | [Falcon7B-decode](./models/demos/wormhole/falcon7b)         | 129th              | 32                   | 9.9 t/s/u - 317 t/s         | 13.5 t/s/u - 432 t/s        | 21 t/s/u       |∑
 | [Mistral-7B-decode](./models/demos/wormhole/mistral7b)      |  33rd              | 32                   | 7.9 t/s/u - 253 t/s         | 10.9 t/s/u - 349 t/s        | 21 t/s/u       |
 | [Mamba-2.8B-decode](./models/demos/mamba)                   |  any               | 32                   | 1.7 t/s/u -  54 t/s         | 2.0 t/s/u - 64 t/s          | 17 t/s/u       |
+| [BERT-Large](./models/demos/metal_BERT_large_11/) (sen/s)    | any            |  8                  | 270                          | 340                         | 400                                 |
 | Stable Diffusion 1.4 512x512                                | coming soon        | 1                    |                             |                             |                |
 
 [3] - Generating the i'th token in a sequence while the kv_cache is filled with i-1 rows.
