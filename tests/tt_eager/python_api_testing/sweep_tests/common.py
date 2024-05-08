@@ -682,7 +682,7 @@ def shapes_and_datagen(
             ):
                 yield shapes, datagen_funcs, test_args
 
-        elif method == "tt_nn-bcast":
+        elif method == "ttnn-bcast":
 
             def _gen_tt_nn_bcast_shapes(shape):
                 shape_type = random.randint(0, 2)
