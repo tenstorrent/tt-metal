@@ -386,7 +386,10 @@ Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor) 
     // When using async mode, tensors with borrowed storage cannot be passed to workers.
     // They need to be copied to owned storage before being passed to the worker.
     ZoneScopedN("ConvertBorrowedToOwned");
-    if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and tensor.storage_type() == StorageType::BORROWED) {
+    // Tensor has workers (on device) or runtime mode is synchronous. No need to check for borrowed storage
+    if (worker->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS or tensor.get_workers().size()) return tensor;
+
+    if (tensor.storage_type() == StorageType::BORROWED) {
         ZoneScopedN("CopyBorrowedStorage");
         auto borrowed_buffer = std::get<BorrowedStorage>(tensor.get_storage()).buffer;
         Tensor owned_tensor;
