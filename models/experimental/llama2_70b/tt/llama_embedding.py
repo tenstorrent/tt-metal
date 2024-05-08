@@ -46,6 +46,7 @@ class TtLlamaEmbedding:
             device=device_mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ShardTensorToMesh(device_mesh, dim=3),
+            cache_file_name=cache_path / base_name,
         )
         self.emb_weights = ttnn.to_device(embd_weights_ttn, device_mesh)
 

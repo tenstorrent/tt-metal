@@ -34,12 +34,14 @@ class TtLlamaAttention_optimized:
         emulated=False,
         cache_path=None,
         batch_size=None,
+        read_cache=False,
     ):
         self.state_dict = state_dict
         self.device_mesh = device_mesh
         self.num_devices = device_mesh.get_num_devices()
         self.model_config = model_config
         self.emulated = emulated
+        self.read_cache = read_cache
 
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
@@ -135,87 +137,96 @@ class TtLlamaAttention_optimized:
         #             )
         #         )
         # else:
-        wo_ttnn = ttnn.as_tensor(
-            self.state_dict[wo_str].transpose(-1, -2).unsqueeze(0).unsqueeze(0),
+
+        qkv_cat = None
+        pt_wo = None
+
+        if not self.read_cache:
+            qkv_list = []
+            for i in range(self.num_devices):
+                ### Fused QKV Weights
+                # Chunk weights
+                wq_chunks = torch.chunk(self.state_dict[wq_str], self.n_heads, dim=0)
+                wk_chunks = torch.chunk(self.state_dict[wk_str], self.n_kv_heads, dim=0)
+                wv_chunks = torch.chunk(self.state_dict[wv_str], self.n_kv_heads, dim=0)
+
+                # Select chunks for the current device
+                wq_selected = torch.cat(wq_chunks[i * self.n_local_heads : (i + 1) * self.n_local_heads], dim=0)
+                wk_selected = torch.cat(wk_chunks[i * self.n_local_kv_heads : (i + 1) * self.n_local_kv_heads], dim=0)
+                wv_selected = torch.cat(wv_chunks[i * self.n_local_kv_heads : (i + 1) * self.n_local_kv_heads], dim=0)
+
+                # Transpose the selected chunks
+                wq = torch.transpose(wq_selected, -2, -1)
+                wk = torch.transpose(wk_selected, -2, -1)
+                wv = torch.transpose(wv_selected, -2, -1)
+
+                # Create interleaved qkv list
+                n_repeat = self.n_heads // self.n_kv_heads
+                qkv_interleaved = [
+                    [
+                        wq[..., i * n_repeat * self.head_dim : (i + 1) * n_repeat * self.head_dim],
+                        wk[..., i * self.head_dim : (i + 1) * self.head_dim],
+                        wv[..., i * self.head_dim : (i + 1) * self.head_dim],
+                    ]
+                    for i in range(self.n_local_kv_heads)
+                ]
+                qkv_interleaved = [item for sublist in qkv_interleaved for item in sublist]
+
+                # Concatenate Q, K, V for the current device
+                qkv = torch.cat(qkv_interleaved, dim=-1)
+                qkv_list.append(qkv)
+
+                # qkv_host = torch2tt_tensor(
+                #     qkv,
+                #     None,
+                #     tt_memory_config=self.model_config["DRAM_MEMCFG"],
+                #     tt_dtype=self.model_config["BFP8_DTYPE"],
+                # )
+                # self.qkv_list.append(qkv_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
+                # tt_lib.tensor.dump_tensor(
+                #     str(get_weight_cache_path(self.cache_path, wqkv_cache_str, i, self.num_devices)),
+                #     qkv_host,
+                # )
+
+                # ### WO Weights
+                # wo_host = torch2tt_tensor(
+                #     w0_chunks[i],
+                #     None,
+                #     tt_memory_config=self.model_config["DRAM_MEMCFG"],
+                #     tt_dtype=self.model_config["BFP8_DTYPE"],
+                # )
+                # self.wo_list.append(wo_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
+                # tt_lib.tensor.dump_tensor(
+                #     str(get_weight_cache_path(self.cache_path, wo_str, i, self.num_devices)), wo_host
+                # )
+
+            qkv_cat = torch.cat(qkv_list, dim=-1)
+            qkv_cat = (qkv_cat.unsqueeze(0).unsqueeze(0),)
+
+            pt_wo = self.state_dict[wo_str].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+
+        qkv_ttnn = ttnn.as_tensor(
+            qkv_cat,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
             memory_config=self.model_config["DRAM_MEMCFG"],
             mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
-            # cache_file_name=self.cache_path / wo_str
+            cache_file_name=self.cache_path / wqkv_cache_str,
+        )
+        self.qkv = ttnn.to_device(qkv_ttnn, self.device_mesh)
+
+        wo_ttnn = ttnn.as_tensor(
+            pt_wo,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device_mesh,
+            memory_config=self.model_config["DRAM_MEMCFG"],
+            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            cache_file_name=self.cache_path / wo_str,
         )
 
         self.wo = ttnn.to_device(wo_ttnn, self.device_mesh)
-
-        qkv_list = []
-        for i in range(self.num_devices):
-            ### Fused QKV Weights
-            # Chunk weights
-            wq_chunks = torch.chunk(self.state_dict[wq_str], self.n_heads, dim=0)
-            wk_chunks = torch.chunk(self.state_dict[wk_str], self.n_kv_heads, dim=0)
-            wv_chunks = torch.chunk(self.state_dict[wv_str], self.n_kv_heads, dim=0)
-
-            # Select chunks for the current device
-            wq_selected = torch.cat(wq_chunks[i * self.n_local_heads : (i + 1) * self.n_local_heads], dim=0)
-            wk_selected = torch.cat(wk_chunks[i * self.n_local_kv_heads : (i + 1) * self.n_local_kv_heads], dim=0)
-            wv_selected = torch.cat(wv_chunks[i * self.n_local_kv_heads : (i + 1) * self.n_local_kv_heads], dim=0)
-
-            # Transpose the selected chunks
-            wq = torch.transpose(wq_selected, -2, -1)
-            wk = torch.transpose(wk_selected, -2, -1)
-            wv = torch.transpose(wv_selected, -2, -1)
-
-            # Create interleaved qkv list
-            n_repeat = self.n_heads // self.n_kv_heads
-            qkv_interleaved = [
-                [
-                    wq[..., i * n_repeat * self.head_dim : (i + 1) * n_repeat * self.head_dim],
-                    wk[..., i * self.head_dim : (i + 1) * self.head_dim],
-                    wv[..., i * self.head_dim : (i + 1) * self.head_dim],
-                ]
-                for i in range(self.n_local_kv_heads)
-            ]
-            qkv_interleaved = [item for sublist in qkv_interleaved for item in sublist]
-
-            # Concatenate Q, K, V for the current device
-            qkv = torch.cat(qkv_interleaved, dim=-1)
-            qkv_list.append(qkv)
-
-            # qkv_host = torch2tt_tensor(
-            #     qkv,
-            #     None,
-            #     tt_memory_config=self.model_config["DRAM_MEMCFG"],
-            #     tt_dtype=self.model_config["BFP8_DTYPE"],
-            # )
-            # self.qkv_list.append(qkv_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
-            # tt_lib.tensor.dump_tensor(
-            #     str(get_weight_cache_path(self.cache_path, wqkv_cache_str, i, self.num_devices)),
-            #     qkv_host,
-            # )
-
-            # ### WO Weights
-            # wo_host = torch2tt_tensor(
-            #     w0_chunks[i],
-            #     None,
-            #     tt_memory_config=self.model_config["DRAM_MEMCFG"],
-            #     tt_dtype=self.model_config["BFP8_DTYPE"],
-            # )
-            # self.wo_list.append(wo_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
-            # tt_lib.tensor.dump_tensor(
-            #     str(get_weight_cache_path(self.cache_path, wo_str, i, self.num_devices)), wo_host
-            # )
-
-        qkv_cat = torch.cat(qkv_list, dim=-1)
-        qkv_ttnn = ttnn.as_tensor(
-            qkv_cat.unsqueeze(0).unsqueeze(0),
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
-            memory_config=self.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
-            # cache_file_name=self.cache_path / wqkv_cache_str,
-        )
-        self.qkv = ttnn.to_device(qkv_ttnn, self.device_mesh)
 
     def prepare_inputs(self, x, start_pos, device_mesh):
         assert len(x.size()) == 3
