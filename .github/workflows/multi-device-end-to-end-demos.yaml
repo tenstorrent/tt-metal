@@ -1,9 +1,9 @@
-name: "Multi-chip unit tests"
+name: "Multi-chip demo tests"
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */3 * * *" # This cron schedule runs the workflow every 3 hours
+    - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
 
 jobs:
   multi-chip-unit-tests:
@@ -15,17 +15,11 @@ jobs:
         test-group: [
           # N300 2x4
           {
-            name: "T3000 unit tests",
+            name: "T3000 end to end demo tests",
             arch: wormhole_b0,
-            runs-on: ["wormhole_b0", "multi-chip-num-pcie-4", "multi-chip-num-chips-8"],
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type post_commit_multi_device --dispatch-mode ""'
+            {name: "n300-2x4", arch: wormhole_b0, runs-on: ["perf-t3000", "arch-wormhole_b0", "multi-chip-num-pcie-4", "multi-chip-num-chips-8"], machine-type: "bare_metal"},
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type end_to_end_demos_multi_device --dispatch-mode ""'
           },
-          # {
-          #   name: "T3000 unstable tests",
-          #   arch: wormhole_b0,
-          #   runs-on: ["wormhole_b0", "multi-chip-num-pcie-4", "multi-chip-num-chips-8"],
-          #   cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type post_commit_multi_device_unstable --dispatch-mode ""'
-          # },
         ]
     name: ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
     env:
