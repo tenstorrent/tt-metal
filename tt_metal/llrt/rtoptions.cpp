@@ -80,6 +80,9 @@ void RunTimeOptions::ParseWatcherEnv() {
     const char *watcher_append_str = getenv("TT_METAL_WATCHER_APPEND");
     watcher_append = (watcher_append_str != nullptr);
 
+    const char *watcher_noinline_str = getenv("TT_METAL_WATCHER_NOINLINE");
+    watcher_noinline = (watcher_noinline_str != nullptr);
+
     // Auto unpause is for testing only, no env var.
     watcher_auto_unpause = false;
 
