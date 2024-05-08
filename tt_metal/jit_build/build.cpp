@@ -96,6 +96,9 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         this->defines_ += "-DWATCHER_ENABLED ";
     }
+    if (tt::llrt::OptionsG.get_watcher_noinline()) {
+        this->defines_ += "-DWATCHER_NOINLINE ";
+    }
     for (auto &feature : tt::llrt::OptionsG.get_watcher_disabled_features()) {
         this->defines_ += "-DWATCHER_DISABLE_" + feature + " ";
     }
