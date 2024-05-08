@@ -5,6 +5,7 @@
 import tt_lib
 from loguru import logger
 from pathlib import Path
+from models.utility_functions import is_wormhole_b0
 
 
 OP_MEMCFG_KEYS = (
@@ -292,7 +293,11 @@ def get_model_config(batch, device_grid_size, model_config_str):
         activation_grid_dim = 8
         if batch <= device_grid_size.x and activation_grid_dim <= device_grid_size.y:
             grid_size = [batch, activation_grid_dim]
-            shard_orientation = tt_lib.tensor.ShardOrientation.COL_MAJOR
+            shard_orientation = (
+                tt_lib.tensor.ShardOrientation.ROW_MAJOR
+                if is_wormhole_b0()
+                else tt_lib.tensor.ShardOrientation.COL_MAJOR
+            )
         elif activation_grid_dim <= device_grid_size.x and batch <= device_grid_size.y:
             grid_size = [activation_grid_dim, batch]
             shard_orientation = tt_lib.tensor.ShardOrientation.ROW_MAJOR

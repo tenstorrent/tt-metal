@@ -181,6 +181,7 @@ def test_perf_virtual_machine(
     "batch_size, model_config_str, expected_inference_time, expected_compile_time, inference_iterations",
     (
         [7, "BFLOAT8_B-SHARDED", 0.0364, 10, 10],
+        [8, "BFLOAT8_B-SHARDED", 0.0364, 10, 10],
         [12, "BFLOAT8_B-SHARDED", 0.0364, 10, 10],
     ),
 )
@@ -196,6 +197,12 @@ def test_perf_bare_metal(
 ):
     if is_e75(device):
         pytest.skip("Bert large 11 is not supported on E75")
+
+    if device.arch() == tt_lib.device.Arch.WORMHOLE_B0:
+        if (batch_size != 8) or (model_config_str != "BFLOAT8_B-SHARDED"):
+            pytest.skip("batch_8-BFLOAT8_B-SHARDED supported for WH B0")
+        elif batch_size == 8 and device.core_grid.y == 7:
+            pytest.skip("This test is only supported for 8x8 grids")
 
     run_perf_bert11(
         batch_size,

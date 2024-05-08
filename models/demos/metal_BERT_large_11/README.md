@@ -4,7 +4,7 @@
 
 The optimized demos will parallelize batch on one of the device grid dimensions.The grid size used is batch X 8 or 8 X batch depending on your device grid.
 For unharvested Grayskull it supports batch 2 - 12, so you can use `batch_12` for the following commands.
-For Wormhole N300 it supports batch 2 - 7, so you can use `batch_7` for the following commands.
+For Wormhole N300 it supports batch 2 - 7, so you can use `batch_7` for the following commands. N300 can also support batch 8, if `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` is added to the env variables, `batch_8` can be added to the command.
 
 Replace `BATCH_SIZE` with the appropriate size depending on your device
 Use `pytest --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py::test_demo[models/demos/metal_BERT_large_11/demo/input_data.json-1-BATCH_SIZE]` to run the demo for Grayskull.
