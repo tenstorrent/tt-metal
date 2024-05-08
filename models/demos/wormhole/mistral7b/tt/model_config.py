@@ -45,6 +45,8 @@ class TtModelArgs:
         "CONCAT_HEADS_OUTPUT",
         "LM_HEAD_OUTPUT",
         "ATTN_W_LAYOUT",
+        # Decoder
+        "DEC_SKIP_OUTPUT",
     )
 
     def __init__(self, device, model_base_path="/mnt/MLPerf/ttnn/models/demos/mistral7b", instruct=False):
