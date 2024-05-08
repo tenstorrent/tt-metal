@@ -28,12 +28,14 @@ class TtLlamaMLP_optimized:
         model_config,
         emulated=False,
         cache_path=None,
+        read_cache=False,
     ):
         self.state_dict = state_dict
         self.device_mesh = device_mesh
         self.num_devices = device_mesh.get_num_devices()
         self.model_config = model_config
         self.emulated = emulated
+        self.read_cache = read_cache
 
         self.hidden_size = hidden_size
 
@@ -58,16 +60,20 @@ class TtLlamaMLP_optimized:
         w2_dtype = ttnn.bfloat8_b
         w3_dtype = ttnn.bfloat4_b
 
-        # Do padding
-        H = 8 * 1024
-        PADDED_H4 = 32 * 1024
-        H4 = 28 * 1024
-        padded_w1 = torch.zeros(1, 1, H, PADDED_H4)
-        padded_w2 = torch.zeros(1, 1, PADDED_H4, H)
-        padded_w3 = torch.zeros(1, 1, H, PADDED_H4)
-        padded_w1[:, :, :, :H4] = self.state_dict[w1_str].transpose(-2, -1)
-        padded_w2[:, :, :H4, :] = self.state_dict[w2_str].transpose(-2, -1)
-        padded_w3[:, :, :, :H4] = self.state_dict[w3_str].transpose(-2, -1)
+        padded_w1 = None
+        padded_w2 = None
+        padded_w3 = None
+        if not self.read_cache:
+            # Do padding
+            H = 8 * 1024
+            PADDED_H4 = 32 * 1024
+            H4 = 28 * 1024
+            padded_w1 = torch.zeros(1, 1, H, PADDED_H4)
+            padded_w2 = torch.zeros(1, 1, PADDED_H4, H)
+            padded_w3 = torch.zeros(1, 1, H, PADDED_H4)
+            padded_w1[:, :, :, :H4] = self.state_dict[w1_str].transpose(-2, -1)
+            padded_w2[:, :, :H4, :] = self.state_dict[w2_str].transpose(-2, -1)
+            padded_w3[:, :, :, :H4] = self.state_dict[w3_str].transpose(-2, -1)
 
         w1_ttnn = ttnn.as_tensor(
             padded_w1,
@@ -76,7 +82,7 @@ class TtLlamaMLP_optimized:
             device=self.device_mesh,
             memory_config=self.model_config["DRAM_MEMCFG"],
             mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
-            # cache_file_name=self.cache_path / w1_str,
+            cache_file_name=self.cache_path / w1_str,
         )
         self.w1 = ttnn.to_device(w1_ttnn, self.device_mesh)
         w2_ttnn = ttnn.as_tensor(
@@ -86,7 +92,7 @@ class TtLlamaMLP_optimized:
             device=self.device_mesh,
             memory_config=self.model_config["DRAM_MEMCFG"],
             mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
-            # cache_file_name=self.cache_path / w2_str,
+            cache_file_name=self.cache_path / w2_str,
         )
         self.w2 = ttnn.to_device(w2_ttnn, self.device_mesh)
         w3_ttnn = ttnn.as_tensor(
@@ -96,7 +102,7 @@ class TtLlamaMLP_optimized:
             device=self.device_mesh,
             memory_config=self.model_config["DRAM_MEMCFG"],
             mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
-            # cache_file_name=self.cache_path / w3_str,
+            cache_file_name=self.cache_path / w3_str,
         )
         self.w3 = ttnn.to_device(w3_ttnn, self.device_mesh)
 
