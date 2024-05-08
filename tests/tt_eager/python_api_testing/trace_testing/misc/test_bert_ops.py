@@ -268,6 +268,9 @@ def test_bert_linear_batch7(
     activation,
     function_level_defaults,
 ):
+    if K == 1024 and N == 4096 and fp32_acc_mode == True:
+        pytest.skip("Skipping float32 tests as tensor is too large")
+
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
