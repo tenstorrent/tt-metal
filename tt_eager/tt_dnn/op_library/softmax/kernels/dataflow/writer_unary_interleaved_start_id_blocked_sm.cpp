@@ -4,6 +4,47 @@
 
 #include "dataflow_api.h"
 
+// #include "debug/dprint.h"
+
+// H-bcast mask
+FORCE_INLINE void generate_bcast_row_mask(const uint32_t cb_id, const uint32_t num_datum_padded, const uint32_t val) {
+    const uint32_t mask_val = val>>16;
+    cb_reserve_back(cb_id, 1);
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id));
+
+    if (num_datum_padded > 16) {
+        uint32_t num_datum_unpadded_f1 = 32 - num_datum_padded;
+        uint32_t idx = 0;
+        for (uint32_t j = 0; j < num_datum_unpadded_f1; ++j) { // first face
+            ptr[idx + j] = 0;
+        }
+        for (uint32_t j = num_datum_unpadded_f1; j < 16; ++j) { // first face
+            ptr[idx + j] = mask_val;
+        }
+
+        idx = 1 << 8;
+        for (uint32_t j = 0; j < 16; ++j) { // second face
+            ptr[idx + j] = mask_val;
+        }
+    } else {
+        uint32_t num_datum_unpadded_f2 = 16 - num_datum_padded;
+        uint32_t idx = 0;
+        for (uint32_t j = 0; j < 16; ++j) { // first face
+            ptr[idx + j] = 0;
+        }
+
+        idx = 1 << 8;
+        for (uint32_t j = 0; j < num_datum_unpadded_f2; ++j) { // second face
+            ptr[idx + j] = 0;
+        }
+        for (uint32_t j = num_datum_unpadded_f2; j < 16; ++j) { // second face
+            ptr[idx + j] = mask_val;
+        }
+    }
+
+    cb_push_back(cb_id, 1);
+}
+
 void kernel_main() {
     const uint32_t dst_addr  = get_arg_val<uint32_t>(0);
     const uint32_t num_tiles = get_arg_val<uint32_t>(1);
@@ -17,6 +58,13 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out0);
     const DataFormat data_format = get_dataformat(cb_id_out0);
+
+    #ifdef MASK_PADDING
+    constexpr uint32_t cb_id_mask = tt::CB::c_in5;
+    const uint32_t val_to_pad = get_arg_val<uint32_t>(4);
+    constexpr uint32_t num_datum_padded = get_compile_time_arg_val(1);
+    generate_bcast_row_mask(cb_id_mask, num_datum_padded, val_to_pad);
+    #endif
 
     const InterleavedAddrGenFast<dst_is_dram> s = {
         .bank_base_address = dst_addr,

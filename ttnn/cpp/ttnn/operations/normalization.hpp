@@ -38,7 +38,7 @@ struct Softmax {
         auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
         auto is_tile_padded = input_tensor.get_shape()[-2] != input_tensor.get_shape().with_tile_padding()[-2] or
                               input_tensor.get_shape()[-1] != input_tensor.get_shape().with_tile_padding()[-1];
-        if (not is_tile_padded and dim == rank - 1) {
+        if (dim == rank - 1) {
             auto output_tensor =
                 tt::tt_metal::softmax(input_tensor_4D, memory_config.value_or(input_tensor.memory_config()));
             return ttnn::reshape(output_tensor, input_shape);

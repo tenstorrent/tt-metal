@@ -62,6 +62,21 @@ def test_softmax_with_padded_tile_layout(device):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
+def test_softmax_with_padded_tile_layout_large(device):
+    torch.manual_seed(0)
+    torch_input_tensor = torch_random((8, 100, 1200), -10, 10, dtype=torch.bfloat16)
+    torch_output_tensor = F.softmax(torch_input_tensor, dim=-1, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    output_tensor = ttnn.softmax(input_tensor, dim=-1)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+
+
 @pytest.mark.skip(reason="#4629: softmax pcc at 0.948 when comparing to torch")
 def test_specific_tensor_combination(device):
     current_dir = os.path.dirname(os.path.realpath(__file__))
