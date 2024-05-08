@@ -144,6 +144,7 @@ def run_test_LlamaAttention_inference(
         memory_config=model_config["DRAM_MEMCFG"],
         mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
     )
+    transformation_mats = ttnn.to_device(transformation_mats, t3k_device_mesh)
 
     if n_devices == 32:
         tt_LlamaAttention_model = TtLlamaAttention_galaxy(
@@ -267,9 +268,10 @@ def run_test_LlamaAttention_inference(
         # for layer_past in tt_LlamaAttention_model.layer_past_list:
         #     tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
         # concat the pasts by heads
-        tt_layer_presents_all = [ttnn.from_device(lp) for lp in tt_LlamaAttention_model.layer_past]
-        tt_layer_presents_all = [
-            ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=1)) for lp in tt_layer_presents_all
+        tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_LlamaAttention_model.layer_past]
+        tt_layer_present_all = [
+            ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)
+            for lp in tt_layer_present_all
         ]
         # tt_layer_present_all = [
         #     torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
