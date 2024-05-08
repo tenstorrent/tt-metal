@@ -28,6 +28,7 @@ class TtTransformerBlock(torch.nn.Module):
         self.n_kv_heads = args.n_kv_heads
         self.current = 0
         self.sliding_window = args.sliding_window
+        self.model_config = args.get_model_config()
 
         self.layer_num = layer_num
         self.n_local_heads = self.n_heads // self.num_devices
@@ -50,7 +51,7 @@ class TtTransformerBlock(torch.nn.Module):
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
             dtype=dtype,
-            model_config=self.args.get_model_config(),
+            model_config=self.model_config,
         )
         self.attention_norm = TtRMSNorm(
             device=device,
@@ -86,7 +87,7 @@ class TtTransformerBlock(torch.nn.Module):
         assert len(r) == 1, "Multiple devices not yet supported"
         r = r[0]
         r = ttnn.reshape(r, (1, 1, 32, 4096))
-        h = ttnn.experimental.tensor.add(x, r)
+        h = ttnn.add(x, r, memory_config=self.model_config["DEC_SKIP_OUTPUT_MEMCFG"])
         r = self.feed_forward.forward(self.ffn_norm(h))
-        out = ttnn.experimental.tensor.add(h, r)
+        out = ttnn.add(h, r, memory_config=self.model_config["DEC_SKIP_OUTPUT_MEMCFG"])
         return out
