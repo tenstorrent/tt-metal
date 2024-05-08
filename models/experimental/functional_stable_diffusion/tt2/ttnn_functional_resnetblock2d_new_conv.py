@@ -467,6 +467,9 @@ class resnetBlock2D:
                         ),
                     )
                 )
+                print(
+                    f"Shape = {split_hidden_states[i].shape} from {output_tensor_start_width_dim} to {output_tensor_end_width_dim}"
+                )
                 output_tensor_start_width_dim += split_input_channels
                 output_tensor_end_width_dim += split_input_channels
 
@@ -486,11 +489,13 @@ class resnetBlock2D:
                     height_sharding=False,
                     input_channels_alignment=32,
                 )
-
+                if self.conv1_config_override and "act_block_h" in self.conv1_config_override:
+                    print("Setting Act Block H to ", self.conv1_config_override["act_block_h"])
+                    conv_config.act_block_h = self.conv1_config_override["act_block_h"]
                 [split_hidden_states[i], _out_height, _out_width, _dev_weights, _dev_bias] = ttnn.conv2d(
                     input_tensor=split_hidden_states[i],
                     weight_tensor=self.conv1_weights[i],
-                    in_channels=in_channels,
+                    in_channels=split_input_channels,
                     out_channels=out_channels,
                     device=self.device,
                     bias_tensor=self.conv1_biases[i],
@@ -624,16 +629,23 @@ class resnetBlock2D:
                 input_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
                     input_tensor, self.conv_shortcut.conv.input_sharded_memory_config, hidden_states.dtype
                 )
+            print(
+                input_tensor.shape,
+                self.conv_shortcut_weights.get_legacy_shape(),
+                self.conv_shortcut_bias.shape,
+                self.parameters.conv_shortcut.weight.shape[1],
+                self.parameters.conv_shortcut.weight.shape[0],
+            )
             [input_tensor, _out_height, _out_width, _dev_weights, _dev_bias] = ttnn.conv2d(
                 input_tensor=input_tensor,
                 weight_tensor=self.conv_shortcut_weights,
                 in_channels=self.parameters.conv_shortcut.weight.shape[1],
                 out_channels=self.parameters.conv_shortcut.weight.shape[0],
                 device=self.device,
-                bias_tensor=self.conv_shortcut_weights,
-                kernel_size=(3, 3),
+                bias_tensor=self.conv_shortcut_bias,
+                kernel_size=(1, 1),
                 stride=(1, 1),
-                padding=(1, 1),
+                padding=(0, 0),
                 batch_size=self.batch_size,
                 input_height=self.input_height,
                 input_width=self.input_width,
