@@ -8,9 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
-    prepare_inputs_ttnn,
-)
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, prepare_rotation_mat_ttnn
 from models.demos.t3000.mixtral8x7b.reference.model import Attention, precompute_freqs_cis
 from models.utility_functions import (
     comp_pcc,
@@ -48,19 +46,24 @@ def test_mixtral_attention_inference(all_devices, use_program_cache, reset_seeds
     seq_len = 1  # length to generate
 
     tt_model = TtMixtralAttention(devices, state_dict, args=model_args, layer_num=0, dtype=dtype)
+
+    rot_mat = prepare_rotation_mat_ttnn(
+        model_args.head_dim,
+        model_args.max_seq_len,
+        tt_model.devices,
+    )
+
     generation_start_pos = 0
     generation_length = 1
     all_tests_pass = True
 
     for i in range(generation_length):
         pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
-        tt_attention_input = pt_attention_input.clone()
+        tt_attention_input = pt_attention_input
         start_pos = generation_start_pos + i
-        attention_input, rot_mat = prepare_inputs_ttnn(
+        attention_input = prepare_inputs_ttnn(
             tt_attention_input,
             tt_model.hidden_size,
-            tt_model.head_dim,
-            tt_model.max_seq_len,
             tt_model.devices,
         )
         current_pos = start_pos % model_args.sliding_window
@@ -90,8 +93,8 @@ def test_mixtral_attention_inference(all_devices, use_program_cache, reset_seeds
         # Check kv cache
         # PyTorch output --------------------------------------------------------------------
         pytorch_layer_present = [
-            reference_model.cache_k.clone().permute(2, 0, 1, 3),  # [n_kv_heads, batch, seq, head_dim]
-            reference_model.cache_v.clone().permute(2, 0, 1, 3),  # [n_kv_heads, batch, seq, head_dim]
+            reference_model.cache_k.permute(2, 0, 1, 3),  # [n_kv_heads, batch, seq, head_dim]
+            reference_model.cache_v.permute(2, 0, 1, 3),  # [n_kv_heads, batch, seq, head_dim]
         ]
         # TT hardware execution -------------------------------------------------------------
         tt_layer_present = []

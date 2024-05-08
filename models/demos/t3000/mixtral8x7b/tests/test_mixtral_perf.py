@@ -8,6 +8,7 @@ import os
 
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     prepare_inputs_ttnn,
+    prepare_rotation_mat_ttnn,
 )
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
@@ -37,11 +38,16 @@ class Emb(torch.nn.Module):
 
 @pytest.mark.models_performance_bare_metal_multi_device
 @pytest.mark.parametrize(
-    "expected_compile_time, expected_inference_time",
-    ((200, 9.5),),  # Issue 7816 Inference time
+    "generation_start_pos, expected_compile_time, expected_inference_time",
+    (
+        (32, 200, 8.5),
+        (128, 200, 8.5),
+        (1024, 200, 8.5),
+        (2048, 200, 8.5),
+    ),
 )
 def test_mixtral_model_perf(
-    all_devices, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds
+    all_devices, generation_start_pos, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds
 ):
     dtype = ttnn.bfloat8_b
 
@@ -51,7 +57,7 @@ def test_mixtral_model_perf(
     devices = get_devices_for_t3000(devices, num_devices)
 
     model_args = TtModelArgs(devices[0])
-    model_args.n_layers = 32
+    model_args.n_layers = 1
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     # Clear global profiler state before starting measurements
@@ -75,7 +81,6 @@ def test_mixtral_model_perf(
     embd = Emb()
     embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
 
-    generation_start_pos = 0
     generation_length = 1
 
     profiler.start("Mixtral_model_setup")
@@ -88,18 +93,24 @@ def test_mixtral_model_perf(
         layers=list(range(model_args.n_layers)),
         dtype=dtype,
     )
+
+    rot_mat = prepare_rotation_mat_ttnn(
+        tt_model.args.head_dim,
+        tt_model.args.max_seq_len,
+        tt_model.devices,
+    )
     profiler.end("TtMistral_model_setup")
 
     # Call the function
     profiler.start(f"end_to_end_inference_with_compile")
-    run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length)
+    run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length, rot_mat)
     profiler.end(f"end_to_end_inference_with_compile")
     profiler.print()
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
     profiler.clear()
     profiler.start(f"end_to_end_inference")
-    run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length)
+    run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length, rot_mat)
     profiler.end(f"end_to_end_inference")
     profiler.print()
     iter_time = profiler.get("model_run_for_inference_0")
@@ -117,26 +128,28 @@ def test_mixtral_model_perf(
     )
 
 
-def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length):
+def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length, rot_mat):
     seqlen = 1  # Generating one token per user at a time
     batch = tt_model.args.max_batch_size
 
+    profiler.start(f"torch_embed_initial")
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
     pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
     tt_decode_input = pt_decode_input
+    profiler.end(f"torch_embed_initial")
 
     for i in range(generation_length):
         start_pos = generation_start_pos + i
         current_pos = start_pos % tt_model.args.sliding_window
 
-        decode_input, rot_mat = prepare_inputs_ttnn(
+        profiler.start(f"prepare_inputs_for_inference_{i}")
+        decode_input = prepare_inputs_ttnn(
             tt_decode_input,
             tt_model.args.dim,
-            tt_model.args.head_dim,
-            tt_model.args.max_seq_len,
             tt_model.devices,
         )
+        profiler.end(f"prepare_inputs_for_inference_{i}")
 
         # Run TT model
         profiler.start(f"model_run_for_inference_{i}")
@@ -149,6 +162,13 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
         profiler.end(f"model_run_for_inference_{i}")
         profiler.end(f"result_wait_for_inference_{i}")
 
+        profiler.start(f"torch_argmax_and_embed_{i}")
         # Greedy decode the generated token and pass it back in, this is just a perf test
         tt_token_batch = tt_output_torch.squeeze().argmax(axis=-1)
         tt_decode_input = embd(tt_token_batch).view(batch, seqlen, -1)
+        profiler.end(f"torch_argmax_and_embed_{i}")
+
+        profiler.start(f"deallocate_tt_tensors_{i}")
+        for t in decode_input + tt_out:
+            t.deallocate(force=True)
+        profiler.end(f"deallocate_tt_tensors_{i}")
