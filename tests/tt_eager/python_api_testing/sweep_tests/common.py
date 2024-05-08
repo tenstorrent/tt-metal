@@ -493,7 +493,7 @@ def shapes_and_datagen(
             ):
                 yield shapes, datagen_funcs, test_args
 
-        elif method == "tt_nn-linear":
+        elif method == "ttnn-linear":
             # Only supports dim = 5;
             assert len(start_shape) == 5
             assert len(end_shape) == 5
@@ -682,7 +682,7 @@ def shapes_and_datagen(
             ):
                 yield shapes, datagen_funcs, test_args
 
-        elif method == "ttnn-bcast":
+        elif method == "tt_nn-bcast":
 
             def _gen_tt_nn_bcast_shapes(shape):
                 shape_type = random.randint(0, 2)
