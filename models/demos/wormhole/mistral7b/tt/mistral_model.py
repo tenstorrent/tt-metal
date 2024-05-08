@@ -53,6 +53,7 @@ class TtTransformer(nn.Module):
             dtype=dtype,
             layer_num=None,
             weight_key="norm",
+            model_config=self.args.get_model_config(),
         )
         self.state_dict = state_dict
 

@@ -12,6 +12,7 @@ class TtRMSNorm(nn.Module):
         state_dict,
         weight_cache_path,
         dtype,
+        model_config,
         layer_num,
         weight_key,
         eps: float = 1e-05,
@@ -32,12 +33,23 @@ class TtRMSNorm(nn.Module):
         self.weight = ttnn.as_tensor(
             torch_weight,
             device=self.device,
-            dtype=ttnn.bfloat16,  # dtype,
+            dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name,
         )
+        self.model_config = model_config
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps)
-        return x
+        x = ttnn.experimental.tensor.interleaved_to_sharded(
+            x, sharded_mem_config=self.model_config["SHARDED_NORM_INPUT_MEMCFG"]
+        )
+        h = ttnn.experimental.operations.primary.rmsnorm(
+            x,
+            self.eps,
+            self.weight,
+            program_config=self.model_config["SHARDED_NORM_PRGM_CFG"],
+            output_mem_config=self.model_config["SHARDED_NORM_OUTPUT_MEMCFG"],
+        )
+
+        return ttnn.experimental.tensor.sharded_to_interleaved(h)

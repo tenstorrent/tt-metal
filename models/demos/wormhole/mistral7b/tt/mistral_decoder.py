@@ -60,6 +60,7 @@ class TtTransformerBlock(torch.nn.Module):
             dtype=dtype,
             layer_num=layer_num,
             weight_key="attention_norm",
+            model_config=self.args.get_model_config(),
         )
         self.ffn_norm = TtRMSNorm(
             device=device,
@@ -68,6 +69,7 @@ class TtTransformerBlock(torch.nn.Module):
             dtype=dtype,
             layer_num=layer_num,
             weight_key="ffn_norm",
+            model_config=self.args.get_model_config(),
         )
 
     def forward(
