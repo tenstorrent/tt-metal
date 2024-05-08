@@ -32,13 +32,12 @@ class Emb(torch.nn.Module):
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.skip(reason="Issue #7540: Hanging")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "kv_cache_len, expected_compile_time, expected_inference_time",
     (
-        (32, 15, 0.16),
-        (128, 15, 0.40),
+        (32, 15, 0.11),
+        (128, 15, 0.14),
     ),
 )
 def test_mistral_model_perf(

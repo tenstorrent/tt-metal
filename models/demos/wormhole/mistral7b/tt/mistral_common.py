@@ -201,8 +201,6 @@ def cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype):
             [attention_input],
             pos,
         )
-        # ttnn.deallocate(tt_out[0])
-        print("Cached iter", iter)
 
     ttnn.deallocate(tt_model.wqkv_list[0])
     ttnn.deallocate(tt_model.wo_list[0])
