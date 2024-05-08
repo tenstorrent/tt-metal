@@ -276,12 +276,12 @@ class TtLlamaDecoder_optimized:
             rot_mats = ttnn.to_device(rot_mats, device_mesh)
 
             padded_layer_past_len = nearest_32(start_pos + 1)
-            attn_mask_shape = (1, seq_len, self.padded_local_heads, padded_layer_past_len)
+            attn_mask_shape = (seq_len, 1, self.padded_local_heads, padded_layer_past_len)
             attn_mask = torch.zeros(*attn_mask_shape)
             attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
 
             attn_masks = as_tensor(
-                attn_mask.clone(),
+                attn_mask,
                 ttnn.bfloat16,
                 ttnn.TILE_LAYOUT,
                 None,
@@ -290,7 +290,7 @@ class TtLlamaDecoder_optimized:
             )
             attn_masks = ttnn.to_device(attn_masks, device_mesh)
 
-            repeat_shape = (batch, 1, 1, 1)
+            repeat_shape = (1, batch, 1, 1)
             attn_masks = tt_lib.tensor.repeat(
                 attn_masks, repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
             )
@@ -409,7 +409,7 @@ class TtLlamaDecoder_optimized:
             memory_config=self.model_config["L1_MEMCFG"],
         )
 
-        # RMSNorm must execute on sharded input
+        # # RMSNorm must execute on sharded input
         attn_resid_replicated = tt_lib.tensor.interleaved_to_sharded(
             attn_resid_replicated, sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
         )

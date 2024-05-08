@@ -69,6 +69,7 @@ class TtLlamaModel_optimized:
             memory_config=model_config["DRAM_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(device_mesh),
         )
+        transformation_mats = ttnn.to_device(transformation_mats, device_mesh)
 
         logger.info("Creating Layers")
         self.layers = [
@@ -244,6 +245,7 @@ class TtLlamaModel_optimized:
             memory_config=self.model_config["DRAM_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
         )
+        x = ttnn.to_device(x, self.device_mesh)
 
         xs = self.tt_embd(x)
 
@@ -321,7 +323,7 @@ class TtLlamaModel_optimized:
             assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
 
             rot_mats = ttnn.as_tensor(
-                rot_mat.clone(),
+                rot_mat,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device_mesh,
@@ -333,7 +335,7 @@ class TtLlamaModel_optimized:
             padded_layer_past_len = nearest_32(start_pos + 1)
 
             padded_layer_past_len = nearest_32(start_pos + 1)
-            attn_mask_shape = (1, seq_len, self.padded_local_heads, padded_layer_past_len)
+            attn_mask_shape = (seq_len, 1, self.padded_local_heads, padded_layer_past_len)
             attn_mask = torch.zeros(*attn_mask_shape)
             attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
 
@@ -347,7 +349,7 @@ class TtLlamaModel_optimized:
             )
             attn_masks = ttnn.to_device(attn_masks, self.device_mesh)
 
-            repeat_shape = (batch, 1, 1, 1)
+            repeat_shape = (1, batch, 1, 1)
             attn_masks = tt_lib.tensor.repeat(
                 attn_masks, repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
             )
