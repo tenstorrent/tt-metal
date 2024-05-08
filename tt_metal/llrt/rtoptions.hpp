@@ -30,6 +30,7 @@ class RunTimeOptions {
     bool watcher_dump_all = false;
     bool watcher_append = false;
     bool watcher_auto_unpause = false;
+    bool watcher_noinline = false;
 
     std::map<CoreType, std::vector<CoreCoord>> dprint_cores;
     std::map<CoreType, bool> dprint_all_cores;
@@ -67,6 +68,8 @@ class RunTimeOptions {
     inline void set_watcher_append(bool append)       { watcher_append = append; }
     inline int get_watcher_auto_unpause()             { return watcher_auto_unpause; }
     inline void set_watcher_auto_unpause(bool auto_unpause) { watcher_auto_unpause = auto_unpause; }
+    inline int get_watcher_noinline()             { return watcher_noinline; }
+    inline void set_watcher_noinline(bool noinline) { watcher_noinline = noinline; }
     inline std::set<std::string>& get_watcher_disabled_features() { return watcher_disabled_features; }
     inline bool watcher_status_disabled() { return watcher_feature_disabled(watcher_status_str); }
     inline bool watcher_noc_sanitize_disabled() { return watcher_feature_disabled(watcher_noc_sanitize_str); }

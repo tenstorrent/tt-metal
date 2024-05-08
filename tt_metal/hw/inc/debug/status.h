@@ -14,6 +14,7 @@
 #pragma once
 
 #include <utility>
+#include <stddef.h>
 
 #include "dev_msgs.h"
 

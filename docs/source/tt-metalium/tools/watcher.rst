@@ -43,6 +43,9 @@ Watcher features can be disabled individually using the following environment va
    export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
    export TT_METAL_WATCHER_DISABLE_STATUS=1
 
+   # In certain cases enabling watcher can cause the binary to be too large. In this case, disable inlining.
+   export TT_METAL_WATCHER_NOINLINE=1
+
 Details
 -------
 
