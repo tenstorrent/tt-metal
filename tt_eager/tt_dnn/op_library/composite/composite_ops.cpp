@@ -884,6 +884,22 @@ Tensor div_no_nan(
     return operation::decorate_as_composite(__func__, _div_no_nan)(input_a, input_b, output_mem_config);
 }
 
+Tensor _div_no_nan_overload(
+    const Tensor& input_a,
+    float value,
+    const MemoryConfig& output_mem_config) {
+    if(value == 0)
+        return full_like(input_a, 0.0f, output_mem_config);
+    else
+        return div_unary(input_a, value);
+}
+Tensor div_no_nan(
+    const Tensor& input_a,
+    float value,
+    const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _div_no_nan_overload)(input_a, value, output_mem_config);
+}
+
 // logit(input, eps)=log(input / 1 - input)
 Tensor _logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_config) {
     Tensor t_eps = full_like(input_a, eps, output_mem_config);
