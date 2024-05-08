@@ -13,14 +13,14 @@ from models.utility_functions import (
     skip_for_grayskull,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.experimental.functional_stable_diffusion.tt.ttnn_functional_unet_mid_block_2d_cross_attn import (
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_mid_block_2d_cross_attn import (
     unet_mid_block_2d_cross_attn as ttnn_unet_mid_block_2d_cross_attn,
 )
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_mid_block_2d_cross_attn import (
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_unet_mid_block_2d_cross_attn import (
     unet_mid_block_2d_cross_attn as tt2_ttnn_unet_mid_block_2d_cross_attn,
 )
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
     pre_process_input,
     post_process_output,
 )

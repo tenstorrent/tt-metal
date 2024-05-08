@@ -13,8 +13,8 @@ from models.utility_functions import (
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_resnetblock2d import resnetBlock2D
-from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_resnetblock2d import resnetBlock2D
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 
 
 def ttnn_to_torch(input):

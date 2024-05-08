@@ -9,10 +9,10 @@ from diffusers import UNet2DConditionModel
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 
-from models.experimental.functional_stable_diffusion.tt.ttnn_functional_geglu import geglu as ttnn_geglu
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_geglu import geglu as tt2_ttnn_geglu
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_geglu import geglu as ttnn_geglu
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_geglu import geglu as tt2_ttnn_geglu
 from models.utility_functions import torch_random, skip_for_grayskull
 
 from tests.ttnn.utils_for_testing import assert_with_pcc

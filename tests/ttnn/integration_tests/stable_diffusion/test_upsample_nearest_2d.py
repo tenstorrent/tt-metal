@@ -6,10 +6,10 @@ import torch
 import pytest
 import ttnn
 
-from models.experimental.functional_stable_diffusion.tt.ttnn_functional_upsample_nearest_2d import (
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_nearest_2d import (
     upsample_nearest2d as ttnn_upsample_nearest2d,
 )
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upsample_nearest_2d import (
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_upsample_nearest_2d import (
     upsample_nearest2d as tt2_ttnn_upsample_nearest2d,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc

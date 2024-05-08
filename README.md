@@ -44,7 +44,7 @@
 | [Mistral-7B-decode](./models/demos/wormhole/mistral7b)      |  33rd              | 32                   | 10.9 t/s/u - 349 t/s         | 13.3 t/s/u - 426 t/s        | 21 t/s/u       |
 | [Mamba-2.8B-decode](./models/demos/mamba)                   |  any               | 32                   | 9.2 t/s/u -  295 t/s         | 13.1 t/s/u - 419 t/s        | 22 t/s/u       |
 | [BERT-Large](./models/demos/metal_BERT_large_11/) (sen/s)   | any                |  8                   | 270                          | 340                         | 400            |
-| Stable Diffusion 1.4 512x512                                | coming soon        | 1                    |                              |                             |                |
+| Stable Diffusion 1.4 512x512  (seconds for denoise)                              |          | 1                    |      114s                        |    0.2s                         |                |
 
 [3] - Generating the i'th token in a sequence while the kv_cache is filled with i-1 rows.
 
