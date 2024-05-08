@@ -12,6 +12,7 @@ from models.demos.wormhole.mistral7b.tt.mistral_common import (
     sample,
     precompute_freqs,
     freqs_to_rotation_matrix,
+    cache_attention,
 )
 from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
 from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedding
@@ -125,6 +126,10 @@ def run_mistral_demo(user_input, batch_size, device):
     tt_decode_input, pt_encoded_input, input_mask, rot_emb_matrix_list = preprocess_inputs(
         input_prompts, tokenizer, model_args, dtype, embd, instruct_mode, device
     )
+
+    logger.info("Caching attention ops..")
+    cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype)
+    logger.info("Cached attention ops.")
 
     if instruct_mode:
         tokenizer._model.pad_id = tokenizer._model.eos_id
