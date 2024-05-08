@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import torch
 import pytest
-from loguru import logger
-import ttnn
 import time
 import json
 
@@ -12,7 +10,6 @@ from models.demos.mamba.demo.demo import (
     get_tokenizer,
     get_cpu_reference_model,
     get_tt_metal_model,
-    apply_repetition_penalty_,
     display_tokens,
 )
 
@@ -48,7 +45,7 @@ def test_mamba_e2e_perf(
     profiler.end("pytorch_ref_model_setup")
 
     profiler.start("tt_model_setup")
-    tt_model = get_tt_metal_model(model_version, device, cache_dir="/tmp", batch_size=batch)
+    tt_model = get_tt_metal_model(model_version, device, cache_dir=None, batch_size=batch)
     profiler.end("tt_model_setup")
 
     sequences: torch.Tensor = tokenizer(prompts, return_tensors="pt", padding=True).input_ids
