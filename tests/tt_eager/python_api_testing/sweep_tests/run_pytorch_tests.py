@@ -17,9 +17,17 @@ from loguru import logger
 def main(directory, result):
     txt_files = glob(os.path.join(directory, "*.yaml"))
     txt_files.sort()
+    skip = False
 
     for txt_file in txt_files:
         basename = os.path.splitext(os.path.basename(txt_file))[0]
+
+        if basename == "ttnn_eltwise_sub_test":
+            skip = False
+
+        if skip:
+            continue
+
         outFolder = f"{result}/{basename}"
         command = (
             f"python tests/tt_eager/python_api_testing/sweep_tests/run_pytorch_test.py -i {txt_file} -o {outFolder}"
