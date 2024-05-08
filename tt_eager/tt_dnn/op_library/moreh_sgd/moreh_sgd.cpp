@@ -30,7 +30,8 @@ operation::ProgramWithCallbacks moreh_sgd_(
     float weight_decay,
     bool nesterov,
     bool momentum_initialized,
-    const CoreRange core_range) {
+    const CoreRange core_range,
+    const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
     auto shape = param_in.get_legacy_shape();
     auto H = shape[-2];
@@ -48,6 +49,9 @@ operation::ProgramWithCallbacks moreh_sgd_(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(core_range, units_to_divide);
 
+    auto arch = param_in.device()->arch();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(arch, compute_kernel_config);
+
     Program program = Program();
 
     // create circular buffers
@@ -63,11 +67,11 @@ operation::ProgramWithCallbacks moreh_sgd_(
             {CB::c_in2, 2},        // momentum_in
             {CB::c_out0, 2},       // param_out
             {CB::c_out1, 2},       // momentum_out
-            {CB::c_intermed0, 5},  // cb_scalar_args (lr, momentum, dampening, weight_decay, one)
-            {CB::c_intermed1, 1},  //
-            {CB::c_intermed2, 1},  //
-            {CB::c_intermed3, 1},  //
-            {CB::c_intermed4, 1},  //
+            {CB::c_intermed0, 5, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // cb_scalar_args (lr, momentum, dampening, weight_decay, one)
+            {CB::c_intermed1, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  //
+            {CB::c_intermed2, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  //
+            {CB::c_intermed3, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  //
+            {CB::c_intermed4, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  //
         });
 
     std::map<string, string> reader_defines;
@@ -93,6 +97,11 @@ operation::ProgramWithCallbacks moreh_sgd_(
     if (nesterov) {
         reader_defines["NESTEROV"] = 1;
         compute_defines["NESTEROV"] = 1;
+    }
+
+    if (fp32_dest_acc_en) {
+        reader_defines["FP32_DEST_ACC_EN"] = 1;
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
     // create read/wrtie kernel
@@ -121,7 +130,10 @@ operation::ProgramWithCallbacks moreh_sgd_(
             {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1}},
             {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2}},
         },
-        compute_defines);
+        compute_defines,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode);
 
     // Set Runtime Args
     auto core_x_offset = core_range.start.x;
