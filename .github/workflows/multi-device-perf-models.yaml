@@ -3,7 +3,7 @@ name: "Multi-Nebula model perf regressions and output report"
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 2 * * *"
+    - cron: "0 */12 * * *" # This cron schedule runs the workflow every 12 hours
 
 jobs:
   multi-device-models-perf:
