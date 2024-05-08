@@ -8,7 +8,12 @@ import pytest
 from loguru import logger
 from time import time
 import ttnn
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, sample
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
+    prepare_inputs_ttnn,
+    prepare_rotation_mat_ttnn,
+    sample,
+    cache_attention,
+)
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
@@ -167,28 +172,28 @@ def run_mixtral_demo(user_input, batch_size, devices, instruct_mode):
         ]
         decode_input_11BH = [ttnn.to_layout(decode_input_11BH[i], layout=ttnn.TILE_LAYOUT) for i in range(len(devices))]
         # decode_input_11BH = [ttnn.experimental.tensor.tilize(decode_input_11BH[i]) for i in range(len(devices))]
-        # decode_input_11BH = [ttnn.experimental.tensor.tilize_with_val_padding(decode_input_11BH[i], ) for i in range(len(devices))]
-    logger.info("Finished first token embedding. Starting inference...")
+        # decode_input_11BH = [ttnn.experimental.tensor.tilize_with_val_padding(decode_input_11BH[i], ) for i in range(len(devices))]")
+
+    # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
+    rot_mats = prepare_rotation_mat_ttnn(
+        model_args.head_dim,
+        model_args.max_seq_len,
+        tt_model.devices,
+    )
 
     generation_start_pos = 0
-    max_generated_tokens = 10  # TODO Increase to around 100 tokens
+    max_generated_tokens = 200  # TODO Increase to around 100 tokens
+
+    cache_attention(devices, state_dict, model_args, rot_mats, generation_start_pos, max_generated_tokens, dtype)
+
+    logger.info("Starting inference...")
 
     # Keep track of generated outputs to print out every iteration
     all_outputs = [[] for _ in range(batch_size)]
 
-    # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
-
-    if not embed_on_host:  # embed on device
-        rot_mats = prepare_inputs_ttnn(
-            None,
-            model_args.dim,
-            model_args.head_dim,
-            model_args.max_seq_len,
-            tt_model.devices,
-        )
-        # TODO Debug (only device 0 is doing argmax, otherwise it throws an error)
-        # Alternatively, send the output back to device: tt_lib.tensor.Tensor.to()
-        ttl.device.SetDefaultDevice(devices[0])
+    # TODO Debug (only device 0 is doing argmax, otherwise it throws an error)
+    # Alternatively, send the output back to device: tt_lib.tensor.Tensor.to()
+    ttl.device.SetDefaultDevice(devices[0])
 
     # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
     for iteration in range(max_generated_tokens):
@@ -197,13 +202,12 @@ def run_mixtral_demo(user_input, batch_size, devices, instruct_mode):
         current_pos = start_pos % model_args.sliding_window
 
         if embed_on_host:
-            decode_input_11BH, rot_mats = prepare_inputs_ttnn(
+            decode_input_11BH = prepare_inputs_ttnn(
                 pt_decode_input,
                 model_args.dim,
-                model_args.head_dim,
-                model_args.max_seq_len,
                 tt_model.devices,
             )
+
         # Run ttnn mixtral model
         tt_out_11BH = tt_model(decode_input_11BH, start_pos, current_pos, rot_mats)
 

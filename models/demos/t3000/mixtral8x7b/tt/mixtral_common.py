@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
 import torch
 import ttnn
 
@@ -47,53 +48,42 @@ def get_rotation_mat(dhead, end):
     return rot_mat
 
 
-def prepare_inputs_ttnn(x_bsh, hidden_size, head_dim, max_seq_len, devices):
+def prepare_inputs_ttnn(x_bsh, hidden_size, devices):
     """
-    Prepare inputs for decode mode. Assume that current token is at
-    start_pos, and KV cache has valid data up to start_pos.
+    Prepare inputs for decode mode.
     x: (batch, seq, hidden_dim)
-    start_pos: int
-
     B: batch (32)
     S: sequence len (1)
     H: dim (4096)
     """
-    if x_bsh is None:  # First token
-        rot_mat = get_rotation_mat(dhead=head_dim, end=max_seq_len * 2)
-        rot_mats = []
-        for device in devices:
-            rot_mats.append(
-                [
-                    ttnn.from_torch(rot_mat_i, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                    for rot_mat_i in rot_mat
-                ]
-            )
-        return rot_mats
-    else:
-        assert x_bsh.size(2) == hidden_size
-        assert len(x_bsh.size()) == 3
+    assert x_bsh.size(2) == hidden_size
+    assert len(x_bsh.size()) == 3
 
-        batch = x_bsh.size(0)
-        seq_len = x_bsh.size(1)
-        assert seq_len == 1, "Only supporting decode mode"
+    batch = x_bsh.size(0)
+    seq_len = x_bsh.size(1)
+    assert seq_len == 1, "Only supporting decode mode"
 
-        rot_mat = get_rotation_mat(dhead=head_dim, end=max_seq_len * 2)
+    x_1SBH = x_bsh.view(1, seq_len, batch, hidden_size)
+    xs_1SBH = []
+    for device in devices:
+        xs_1SBH.append(ttnn.from_torch(x_1SBH, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
+    return xs_1SBH
 
-        x_1SBH = x_bsh.view(1, seq_len, batch, hidden_size)
 
-        xs_1SBH, rot_mats = [], []
-        for device in devices:
-            xs_1SBH.append(ttnn.from_torch(x_1SBH, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
-            rot_mats.append(
-                [
-                    ttnn.from_torch(rot_mat_i, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                    for rot_mat_i in rot_mat
-                ]
-            )
-        return (
-            xs_1SBH,
-            rot_mats,
+def prepare_rotation_mat_ttnn(head_dim, max_seq_len, devices):
+    """
+    Prepare rotation matricies for decode mode.
+    """
+    rot_mat = get_rotation_mat(dhead=head_dim, end=max_seq_len * 2)
+    rot_mats = []
+    for device in devices:
+        rot_mats.append(
+            [
+                ttnn.from_torch(rot_mat_i, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                for rot_mat_i in rot_mat
+            ]
         )
+    return rot_mats
 
 
 # Sample logits from a distribution
@@ -118,3 +108,38 @@ def sample(logits: torch.Tensor, temperature: float, top_p: float):
         next_token = torch.argmax(logits, dim=-1)
 
     return next_token
+
+
+def cache_attention(devices, state_dict, model_args, rot_emb_matrix_list, seq_start, seq_len, dtype):
+    logger.info(f"Caching attention ops for iterations {seq_start} to {seq_start + seq_len}...")
+    from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
+
+    attention_inputs = [
+        ttnn.from_torch(
+            torch.randn(1, 1, 32, 4096),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        for device in devices
+    ]
+    tt_attn = TtMixtralAttention(
+        devices,
+        state_dict,
+        model_args,
+        layer_num=0,
+        dtype=dtype,
+    )
+    for iter in range(seq_start, seq_start + seq_len):
+        logger.info(f"Caching iteration {iter}...")
+        pos = iter
+        _ = tt_attn(
+            attention_inputs,
+            pos,
+            pos + 1,
+            rot_emb_matrix_list,
+        )
+        # ttnn.deallocate(tt_out[0])
+
+    logger.info("Attention ops cached")
