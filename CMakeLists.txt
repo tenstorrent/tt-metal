@@ -50,6 +50,13 @@ else()
 endif()
 message(STATUS "Build shared libs: ${BUILD_SHARED_LIBS}")
 
+include(GNUInstallDirs)
+set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}")
+set(CMAKE_INSTALL_LIBDIR "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_INSTALL_BINDIR "${CMAKE_BINARY_DIR}/tmp/bin")
+set(CMAKE_INSTALL_INCLUDEDIR "${CMAKE_BINARY_DIR}/tmp/include")
+set(CMAKE_INSTALL_DATAROOTDIR "${CMAKE_BINARY_DIR}/tmp/share")
+
 ############################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
@@ -104,6 +111,14 @@ else()
     )
 endif()
 
+# Can't use the `REUSE_FROM` option bc tt_lib and ttnn have different build flags :(
+add_library(pch_pybinds INTERFACE)
+target_precompile_headers(pch_pybinds INTERFACE
+    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/operators.h
+    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/pybind11.h
+    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/stl.h
+)
+
 ############################################
 # Build subdirectories
 ############################################
@@ -129,26 +144,26 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tests EXCLUDE_FROM_ALL)
 ############################################
 # Install for build artifacts that will upload build/lib
 install(TARGETS tt_metal
-    ARCHIVE DESTINATION ${CMAKE_BINARY_DIR}/lib
-    LIBRARY DESTINATION ${CMAKE_BINARY_DIR}/lib
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT tt_build_artifacts
 )
 install(TARGETS tt_eager
-    ARCHIVE DESTINATION ${CMAKE_BINARY_DIR}/lib
-    LIBRARY DESTINATION ${CMAKE_BINARY_DIR}/lib
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT tt_build_artifacts
 )
 install(TARGETS tt_lib
-    LIBRARY DESTINATION ${CMAKE_BINARY_DIR}/lib
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT tt_build_artifacts
 )
 install(TARGETS ttnn_lib
-    LIBRARY DESTINATION ${CMAKE_BINARY_DIR}/lib
-    ARCHIVE DESTINATION ${CMAKE_BINARY_DIR}/lib
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT tt_build_artifacts
 )
 install(TARGETS ttnn
-    LIBRARY DESTINATION ${CMAKE_BINARY_DIR}/lib
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT tt_build_artifacts
 )
 
@@ -160,11 +175,4 @@ install(FILES ${CMAKE_BINARY_DIR}/lib/_ttnn.so
 install(FILES ${CMAKE_BINARY_DIR}/lib/_C.so
     DESTINATION ${CMAKE_SOURCE_DIR}/tt_eager/tt_lib
     COMPONENT tt_pybinds
-)
-
-# Top level install target, used by pip install
-add_custom_target(metal-install
-    COMMAND ${CMAKE_COMMAND} --install . --component tt_build_artifacts
-    COMMAND ${CMAKE_COMMAND} --install . --component tt_pybinds
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 )

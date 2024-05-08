@@ -26,7 +26,7 @@ jobs:
         run: |
           cmake -B build -G Ninja
           cmake --build build --target tests -- -j`nproc`
-          cmake --build build --target metal-install
+          cmake --build build --target install -- -j`nproc`
       - name: 'Tar files'
         run: tar -cvf ttm_${{ matrix.arch }}.tar build/hw build/lib tt_eager/tt_lib/*.so ttnn/ttnn/*.so build/programming_examples build/test build/tools
       - name: 'Upload Artifact'

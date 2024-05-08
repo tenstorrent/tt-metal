@@ -13,7 +13,7 @@ set(TT_LIB_SRCS
 # TODO: should be using pybind11_add_module, but right now it introduces many build problems
 # pybinds will always be built as a shared library
 add_library(tt_lib SHARED ${TT_LIB_SRCS})
-target_link_libraries(tt_lib PUBLIC compiler_flags linker_flags tt_eager tt_metal)  # linker_flags = -rdynamic if tracy enabled
+target_link_libraries(tt_lib PUBLIC compiler_flags linker_flags tt_eager tt_metal pch_pybinds)  # linker_flags = -rdynamic if tracy enabled
 target_include_directories(tt_lib PUBLIC
     ${UMD_HOME}
     ${CMAKE_SOURCE_DIR}
@@ -29,6 +29,7 @@ target_link_directories(tt_lib PUBLIC
     ${CMAKE_BINARY_DIR}/tt_metal
     ${Python3_LIBRARIES}
 )
+
 # Make sure library built is _C.so and that it can find all it's linked libraries
 # tt_lib breaks if -fvisibility=hidden, so CXX_VISIBILITY_PRESET set to default
 set_target_properties(tt_lib PROPERTIES

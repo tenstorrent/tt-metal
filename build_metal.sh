@@ -19,8 +19,7 @@ fi
 
 echo "Building tt-metal"
 cmake -B build -G Ninja
-cmake --build build
-cmake --build build --target metal-install
+cmake --build build --target install
 
 echo "Creating virtual env in: $PYTHON_ENV_DIR"
 python3 -m venv $PYTHON_ENV_DIR

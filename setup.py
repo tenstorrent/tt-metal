@@ -135,8 +135,9 @@ class CMakeBuild(build_ext):
         build_args = [f"-j{nproc}"]
 
         subprocess.check_call(["cmake", source_dir, *cmake_args], cwd=build_dir, env=build_env)
-        subprocess.check_call(["cmake", "--build", ".", *build_args], cwd=build_dir, env=build_env)
-        subprocess.check_call(["cmake", "--build", ".", "--target", "metal-install"], cwd=build_dir)
+        subprocess.check_call(
+            ["cmake", "--build", ".", "--target", "install", *build_args], cwd=build_dir, env=build_env
+        )
 
         subprocess.check_call(["ls", "-hal"], cwd=source_dir, env=build_env)
         subprocess.check_call(["ls", "-hal", "build/lib"], cwd=source_dir, env=build_env)
