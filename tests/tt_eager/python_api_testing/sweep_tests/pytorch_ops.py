@@ -696,6 +696,15 @@ def div_no_nan(x, y, *args, **kwargs):
     return result
 
 
+def unary_div_no_nan(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    if value == 0:
+        result = torch.zeros_like(x)
+    else:
+        result = x / value
+    return result
+
+
 def div_unary(x, *args, scalar, **kwargs):
     result = torch.div(x, scalar)
     return result

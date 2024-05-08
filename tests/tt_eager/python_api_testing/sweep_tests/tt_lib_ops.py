@@ -1066,6 +1066,24 @@ def eltwise_div_no_nan(
 
 
 @setup_host_and_device
+def eltwise_unary_div_no_nan(
+    x,
+    *args,
+    value,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttl.tensor.div_no_nan(t0, value, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
 def lamb_optimizer(
     x,
     y,
