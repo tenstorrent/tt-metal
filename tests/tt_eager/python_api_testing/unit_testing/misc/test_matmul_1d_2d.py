@@ -35,7 +35,6 @@ def find_max_subblock(out_block_h, out_block_w):
 from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.skipif(is_grayskull(), reason="no llama2 test on GS")
 @pytest.mark.parametrize(
     "packer_l1_acc",
@@ -174,7 +173,6 @@ def test_llama2_matmul(
     assert passing
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
@@ -504,7 +502,6 @@ def test_multi_core_matmul_2d_wh(
     assert passing
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
