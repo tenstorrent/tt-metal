@@ -91,7 +91,7 @@ def import_tracy_op_logs():
             if "TT_DNN" in opDataStr:
                 tmpStrs = opDataStr.split(" ->\n", 1)
                 opData = {}
-                if len(tmpStrs) > 1:
+                if len(tmpStrs) > 1:  # uncached device op, host op, or fallback op
                     jsonStr = tmpStrs[-1]
                     opData = json.loads(jsonStr)
                     if "op_hash" in opData.keys():
@@ -103,7 +103,7 @@ def import_tracy_op_logs():
                         else:
                             cached_ops[deviceID] = {opHash: opData.copy()}
                         del cached_ops[deviceID][opHash]["global_call_count"]
-                else:
+                else:  # cached device op
                     opDataList = opDataStr.split(":", 1)[-1].split(",")
                     assert len(opDataList) > 3, "Wrong cached op info format"
                     opCode = opDataList[0].strip()
