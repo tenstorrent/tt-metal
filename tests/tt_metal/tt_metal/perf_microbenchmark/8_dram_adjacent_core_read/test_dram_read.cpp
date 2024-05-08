@@ -339,6 +339,7 @@ int main(int argc, char **argv) {
 
         uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
         uint32_t num_cores = num_banks; // number of DRAM banks
+        uint32_t num_banks_all = 12;
 
         // get all the logical coord
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -392,7 +393,7 @@ int main(int argc, char **argv) {
         }
 
         std::vector<CoreCoord> adj_core_phy;
-        for (int i=0; i<num_banks; ++i) {
+        for (int i=0; i<num_banks_all; ++i) {
             auto dram_core = dram_coord_phy[i];
             uint32_t adj_core_x = dram_core.x + 1;
             uint32_t adj_core_y = dram_core.y;
