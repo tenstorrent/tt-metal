@@ -846,9 +846,11 @@ bool process_cmd(uint32_t& cmd_ptr,
     case CQ_PREFETCH_CMD_EXEC_BUF:
         DPRINT << "exec buf: " << cmd_ptr << ENDL();
         ASSERT(!exec_buf);
-        ASSERT(stall_state == STALLED); // ExecBuf must be preceded by a stall
+        if (is_h_variant) {
+            ASSERT(stall_state == STALLED); // ExecBuf must be preceded by a prefetcher stall
+        }
         stride = process_exec_buf_cmd(cmd_ptr, downstream_data_ptr);
-        stall_state = NOT_STALLED; // Stall is no longer required after ExecBuf finishd.
+        stall_state = NOT_STALLED; // Stall is no longer required after ExecBuf finished.
         break;
 
     case CQ_PREFETCH_CMD_EXEC_BUF_END:
@@ -1014,6 +1016,7 @@ void kernel_main_h() {
         if (cmd_id == CQ_PREFETCH_CMD_EXEC_BUF) {
             DPRINT << "exec buf\n";
             process_exec_buf_cmd_h();
+            stall_state = NOT_STALLED; // Stall is no longer required after ExecBuf finished
         } else if (cmd_id == CQ_PREFETCH_CMD_TERMINATE) {
             DPRINT << "prefetch terminating_" << is_h_variant << is_d_variant << ENDL();;
             done = true;
