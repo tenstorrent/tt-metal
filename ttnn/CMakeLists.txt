@@ -15,13 +15,16 @@ target_include_directories(ttnn_lib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
     ${CMAKE_SOURCE_DIR}/tt_metal/third_party/fmt
 )
+target_precompile_headers(ttnn_lib PRIVATE
+    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/magic_enum/magic_enum.hpp
+)
 
 
 # TODO: should be using pybind11_add_module, but right now it introduces many build problems
 # pybinds will always be built as a shared library
 add_library(ttnn SHARED ${CMAKE_SOURCE_DIR}/ttnn/cpp/pybind11/__init__.cpp $<TARGET_OBJECTS:ttnn_lib>)
-target_compile_options(ttnn PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
-target_link_libraries(ttnn PUBLIC compiler_flags linker_flags tt_eager)     # linker_flags = -rdynamic if tracy enabled
+target_compile_options(ttnn PUBLIC -Wno-int-to-pointer-cast -fno-var-tracking)
+target_link_libraries(ttnn PUBLIC compiler_flags linker_flags tt_eager pch_pybinds)     # linker_flags = -rdynamic if tracy enabled
 target_include_directories(ttnn PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
     ${CMAKE_SOURCE_DIR}/tt_metal/third_party/pybind11/include
