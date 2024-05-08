@@ -25,12 +25,6 @@ void Sharded::validate(const std::vector<Tensor>& input_tensors) const {
         }
     } else if (this->sharded_op_type == ShardedOpType::ShardedToInterleaved) {
         TT_FATAL(input_tensor.memory_config().is_sharded());
-        if (input_tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-            if (input_tensor.get_legacy_shape()[-1] % this->shard_spec.shape[1] != 0 ||
-                ((input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) % this->shard_spec.shape[0]) != 0) {
-                TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1);
-            }
-        }
         if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
             TT_FATAL(this->shard_spec.shape[1] * input_tensor.element_size() % (this->output_mem_config.buffer_type == BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT) == 0, "Shard page size must be aligned to output buffer type alignment");
         }

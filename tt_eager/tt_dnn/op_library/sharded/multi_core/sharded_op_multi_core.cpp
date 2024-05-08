@@ -37,7 +37,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
 
     uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
         num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_per_shard_height_last,
-        num_units_per_shard_width_last;
+        num_units_per_shard_width_last, padded_offset_bytes;
 
     tt_metal::Device* device = input.device();
 
@@ -64,6 +64,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
             num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
             num_units_per_shard_width - (round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
+        padded_offset_bytes = (num_units_per_shard_width - num_units_per_shard_width_last) * input_unit_size;
     } else {
         num_units = (input.volume() / input.get_legacy_shape()[-1] / shard_spec.shape[0]) *
                     (input.get_legacy_shape()[-1] / shard_spec.shape[1]);
@@ -77,8 +78,10 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
         uint32_t num_units_height = input.volume() / input.get_legacy_shape()[-1];
         num_units_per_shard_height_last =
             num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
+        // TODO: Use a different variable name. Units refers to pages, but this is being used as size
         num_units_per_shard_width_last =
             input_unit_size - (round_up(num_units_per_row, input_unit_size) - num_units_per_row);
+        padded_offset_bytes = align(input_unit_size, ADDRESS_ALIGNMENT);
     }
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
@@ -169,6 +172,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
         if (input.get_layout() == Layout::TILE) {
             uint32_t shard_height = num_units_per_shard_height;
             uint32_t shard_width = num_units_per_shard_width;
+            uint32_t padded_offset = 0;
             if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
                 if (core == end_core) {
                     shard_height = num_units_per_shard_height_last;
@@ -176,11 +180,13 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
             } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
                 if (core == end_core) {
                     shard_width = num_units_per_shard_width_last;
+                    padded_offset = padded_offset_bytes;
                 }
             } else if (shard_strategy == TensorMemoryLayout::BLOCK_SHARDED) {
                 if (rm_orientation) {
                     if (core.x == end_core.x) {
                         shard_width = num_units_per_shard_width_last;
+                        padded_offset = padded_offset_bytes;
                     }
                     if (core.y == end_core.y) {
                         shard_height = num_units_per_shard_height_last;
@@ -188,13 +194,14 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
                 } else {
                     if (core.y == end_core.y) {
                         shard_width = num_units_per_shard_width_last;
+                        padded_offset = padded_offset_bytes;
                     }
                     if (core.x == end_core.x) {
                         shard_height = num_units_per_shard_height_last;
                     }
                 }
             }
-            curr_num_units_per_shard = shard_height * shard_width;
+            curr_num_units_per_shard = shard_height * num_units_per_shard_width;
             tt_metal::SetRuntimeArgs(
                 program,
                 unary_reader_kernel_id,
@@ -202,12 +209,13 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
                 {src_buffer->address(),
                  shard_height,
                  shard_width,
+                 padded_offset,
                  num_units_offset,
                  curr_num_units_per_shard,
                  curr_idx_h + curr_idx_w,
                  starting_idx_h});
             curr_idx_w += num_units_per_shard_width;
-            if (curr_idx_w == num_units_per_row) {
+            if (curr_idx_w >= num_units_per_row) {
                 curr_idx_w = 0;
                 curr_idx_h += num_units_per_row * num_units_per_shard_height;
             }
@@ -242,7 +250,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
                     }
                 }
             }
-            uint32_t padded_shard_width = align(shard_width, ADDRESS_ALIGNMENT);
+
             bool aligned = src_is_dram ? curr_idx_w % DRAM_ALIGNMENT == 0 : true;
             uint32_t aligned_width_offset, aligned_shard_width, aligned_offset;
             if (!aligned) {
@@ -259,9 +267,9 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
                 program,
                 unary_reader_kernel_id,
                 core,
-                {src_buffer->address(), num_units_per_row, shard_height, shard_width, padded_shard_width, static_cast<uint32_t>(aligned), aligned_width_offset, aligned_shard_width, aligned_offset, curr_idx_h});
+                {src_buffer->address(), num_units_per_row, shard_height, shard_width, padded_offset_bytes, static_cast<uint32_t>(aligned), aligned_width_offset, aligned_shard_width, aligned_offset, curr_idx_h});
             curr_idx_w += input_unit_size;
-            if (curr_idx_w == num_units_per_row) {
+            if (curr_idx_w >= num_units_per_row) {
                 curr_idx_w = 0;
                 curr_idx_h += num_units_per_shard_height;
             }
@@ -294,7 +302,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& 
             auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
             if (partial_op) {
-                runtime_args[6] = starting_idx_h;
+                runtime_args[7] = starting_idx_h;
             }
         }
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
