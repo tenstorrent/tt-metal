@@ -43,6 +43,16 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     uint32_t W = shape[-1], H = (input_tensor.volume() / (shape[0] * shape[-1])), NC = shape[0];
     uint32_t HW = H*W;
 
+    bool mask_padded_data = false;
+    uint32_t num_datum_padded = 0;
+    const auto shape_unpadded = input_tensor.get_shape();
+    uint32_t W_unpadded = shape_unpadded[-1];
+    if (W > W_unpadded) {
+        mask_padded_data = true;
+        num_datum_padded = W - W_unpadded;
+
+    }
+
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
 
@@ -116,6 +126,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     uint32_t in2_t  = 1; // scaler for reduce coming from reader
     uint32_t in3_t  = 1; // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
     uint32_t in4_t  = div_up(Wt, block_size)*block_size; // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
+    uint32_t in5_t = 1;
 
     // cb_exps - keeps exps in CB in L1 to avoid recomputing
     uint32_t im0_t  = block_size*div_up(Wt, block_size);
@@ -154,13 +165,16 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     }
 
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      out0_is_dram};
+                                                      out0_is_dram, num_datum_padded};
     std::map<string, string> softmax_defines;
     if (mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
     }
     if (causal_mask) {
         softmax_defines["CAUSAL_MASK"] = "1";
+    }
+    if (mask_padded_data) {
+        softmax_defines["MASK_PADDING"] = "1";
     }
     auto reader_kernels_id = CreateKernel(
         program, "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/reader_unary_interleaved_sm.cpp", all_device_cores,
@@ -172,7 +186,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     auto writer_kernels_id = CreateKernel(
         program, "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/writer_unary_interleaved_start_id_blocked_sm.cpp", all_device_cores,
         tt_metal::WriterDataMovementConfig(
-            writer_compile_time_args
+            writer_compile_time_args,
+            softmax_defines
     ));
 
     // for broadcasting in H direction we need to
@@ -205,6 +220,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     std::optional<CBHandle> cb_intermed3_id;
     std::optional<CBHandle> cb_in3_id;
     std::optional<CBHandle> cb_in4_id;
+    std::optional<CBHandle> cb_in5_id;
     if (mask.has_value()) {
         CircularBufferConfig c_intermed3_config = CircularBufferConfig(im3_t * im_tile_size, {{CB::c_intermed3, im_cb_data_format}}).set_page_size(CB::c_intermed3, im_tile_size);
         cb_intermed3_id = CreateCircularBuffer( program, all_device_cores, c_intermed3_config );
@@ -212,6 +228,10 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         cb_in3_id = CreateCircularBuffer( program, all_device_cores, c_in3_config );
         CircularBufferConfig c_in4_config = CircularBufferConfig(in4_t * mask_tile_size, {{CB::c_in4, mask_cb_data_format}}).set_page_size(CB::c_in4, mask_tile_size);
         cb_in4_id = CreateCircularBuffer( program, all_device_cores, c_in4_config);
+    }
+    if (mask_padded_data) {
+        CircularBufferConfig c_in5_config = CircularBufferConfig(in5_t * mask_tile_size, {{CB::c_in5, mask_cb_data_format}}).set_page_size(CB::c_in5, mask_tile_size);
+        cb_in5_id = CreateCircularBuffer( program, all_device_cores, c_in5_config);
     }
     uint32_t src_addr = src0_buffer->address();
     uint32_t mask_addr = mask.has_value() ? mask.value().buffer()->address() : 0;
@@ -249,7 +269,13 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         }
 
         SetRuntimeArgs(program, softmax_kernels_id, core, { num_tile_rows_per_core, Ht, Wt, block_size, curr_ht });
-        SetRuntimeArgs(program, writer_kernels_id, core, { out_addr, num_tile_rows_per_core * Wt, tile_offset, block_size });
+
+        if (mask_padded_data) {
+            SetRuntimeArgs(program, writer_kernels_id, core, { out_addr, num_tile_rows_per_core * Wt, tile_offset, block_size, 0xFF00FF00});
+        } else {
+            SetRuntimeArgs(program, writer_kernels_id, core, { out_addr, num_tile_rows_per_core * Wt, tile_offset, block_size});
+        }
+
         curr_row += num_tile_rows_per_core;
     }
 

@@ -13,7 +13,7 @@
 #include "compute_kernel_api/softmax.h"
 #include "compute_kernel_api/reduce.h"
 
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
 ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
 ALWI void REL() { release_dst(tt::DstMode::Half); }
@@ -43,6 +43,7 @@ void MAIN {
     constexpr auto cb_bcast_scaler = tt::CB::c_in2;
     constexpr auto cb_fused_scale = tt::CB::c_in3;
     constexpr auto cb_fused_attn = tt::CB::c_in4;
+    constexpr auto cb_mask_padded = tt::CB::c_in5;
     constexpr auto cb_exps = tt::CB::c_intermed0;
     constexpr auto cb_scale_mask = tt::CB::c_intermed3;
     constexpr auto cb_recipsumexps = tt::CB::c_intermed1;
@@ -136,7 +137,18 @@ void MAIN {
                 ACQ();
                 cb_wait_front(cb_in0, ndst);
                 for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
+                    #ifdef MASK_PADDING
+                    if (wt == (Wt - ndst) && (wt8 == ndst - 1)) {
+                        unpack_reconfig_data_format(cb_in0, cb_mask_padded);
+                        add_bcast_rows_init_short();
+                        cb_wait_front(cb_mask_padded, 1);
+                        add_tiles_bcast_rows(cb_in0, cb_mask_padded, wt8, 0, wt8);
+                    } else {
+                        copy_tile(cb_in0, wt8, wt8); // copy from c_in[0] to DST[0]
+                    }
+                    #else
                     copy_tile(cb_in0, wt8, wt8); // copy from c_in[0] to DST[0]
+                    #endif
                 }
                 cb_pop_front(cb_in0, ndst);
 
