@@ -8,9 +8,7 @@ import numpy as np
 from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 import ttnn
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
-    prepare_inputs_ttnn,
-)
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, prepare_rotation_mat_ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.reference.model import Transformer
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
@@ -58,7 +56,6 @@ def test_mixtral_model_inference(all_devices, iterations, n_layers, validation_t
     model_args = TtModelArgs(devices[0])
     model_args.n_layers = n_layers
 
-    print(model_args.state_dict_path)
     state_dict = torch.load(model_args.state_dict_path)
     keys_dict = list(state_dict.keys())[:]
     remv = [f"layers.{i}" for i in range(n_layers, 32)]
@@ -90,6 +87,12 @@ def test_mixtral_model_inference(all_devices, iterations, n_layers, validation_t
         dtype=dtype,
     )
 
+    rot_mat = prepare_rotation_mat_ttnn(
+        model_args.head_dim,
+        model_args.max_seq_len,
+        tt_model.devices,
+    )
+
     generation_start_pos = 0
     generation_length = iterations
     all_tests_pass = True
@@ -104,17 +107,16 @@ def test_mixtral_model_inference(all_devices, iterations, n_layers, validation_t
     tt_decode_input = pt_decode_input
     ref_tokens = []
     tt_tokens = []
+
     for i in range(generation_length):
         logger.info(f"[Decode] Generating token {i}")
 
         start_pos = generation_start_pos + i
         current_pos = start_pos % model_args.sliding_window
 
-        decode_input, rot_mat = prepare_inputs_ttnn(
+        decode_input = prepare_inputs_ttnn(
             tt_decode_input,
             model_args.dim,
-            model_args.head_dim,
-            model_args.max_seq_len,
             tt_model.devices,
         )
 
