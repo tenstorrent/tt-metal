@@ -917,6 +917,99 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<std::size_t> tra
     }
 }
 
+Tensor allocate_tensor_on_device(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
+    // Top level wrapper to asynchronously create a device tensor (single device)
+    Tensor device_tensor = Tensor({device});
+    uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
+    device->push_work(
+        [shape, data_type, layout, device, memory_config, device_tensor] () mutable {
+            if (memory_config.is_sharded()) {
+                auto local_tensor = create_sharded_device_tensor(shape, data_type, layout, device, memory_config);
+                device_tensor.populate_buffers_and_metadata(local_tensor);
+            } else {
+                auto local_tensor = create_device_tensor(shape, data_type, layout, device, memory_config);
+                device_tensor.populate_buffers_and_metadata(local_tensor);
+            }
+        }
+    );
+    device_tensor.tensor_attributes->update_main_thread_ref_count(device, device_tensor_ref_count);
+    return device_tensor;
+}
+
+Tensor allocate_tensor_on_device(const Shape& shape, DataType data_type, Layout layout, DeviceMesh *device_mesh, const MemoryConfig& memory_config) {
+    // Top level wrapper to asynchronously create a device tensor (multi-device)
+    Tensor device_tensor = Tensor(device_mesh->get_devices());
+    uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
+    const auto& workers = device_tensor.get_workers();
+    uint32_t num_workers = workers.size();
+
+    for (int worker_index = 0; worker_index < num_workers; ++worker_index) {
+        auto& worker = workers[worker_index];
+        worker->push_work(
+            [shape, data_type, layout, worker, memory_config, device_tensor, worker_index] () mutable {
+                if (memory_config.is_sharded()) {
+                    auto local_tensor = create_sharded_device_tensor(shape, data_type, layout, worker, memory_config);
+                    insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
+                } else {
+                    auto local_tensor = create_device_tensor(shape, data_type, layout, worker, memory_config);
+                    insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
+                }
+                if (not worker->id()) {
+                    device_tensor.set_shape(ttnn::Shape(shape));
+                    device_tensor.set_dtype(data_type);
+                    device_tensor.set_layout(layout);
+                }
+                device_tensor.set_populated(worker);
+            }
+        );
+    }
+    device_tensor.tensor_attributes->update_main_thread_ref_count(workers.at(0), device_tensor_ref_count);
+    return device_tensor;
+}
+
+void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id) {
+    // Top level wrapper to copy a host tensor to a preallocated device tensor
+    TT_ASSERT(device_tensor.workers.size(), "Workers must be specified for device_tensor in write_tensor");
+    Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(device_tensor.workers.at(0), host_tensor);
+    uint32_t host_tensor_ref_count = async_safe_tensor.tensor_attributes->record_main_thread_ref_count();
+    uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
+
+    for (int worker_index = 0; worker_index < device_tensor.workers.size(); ++worker_index) {
+        auto& worker = device_tensor.workers[worker_index];
+        worker->push_work(
+            [cq_id, worker, worker_index, async_safe_tensor, device_tensor] () mutable {
+                TT_FATAL(async_safe_tensor.storage_type() == StorageType::BORROWED or async_safe_tensor.storage_type() == StorageType::OWNED or async_safe_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST, "write_tensor only supports host_tensor to device_tensor data transfer");
+                TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE or device_tensor.storage_type() == StorageType::MULTI_DEVICE, "write_tensor only supports host_tensor to device_tensor data transfer");
+                TT_FATAL(async_safe_tensor.get_shape() == device_tensor.get_shape());
+                TT_FATAL(async_safe_tensor.get_dtype() == device_tensor.get_dtype());
+                TT_FATAL(async_safe_tensor.get_layout() == device_tensor.get_layout());
+                std::visit(
+                    [worker_index, worker, cq_id, &async_safe_tensor] (auto&& s) {
+                        void* host_data = nullptr;
+                        using StorageType = std::decay_t<decltype(s)>;
+                        if constexpr (std::is_same_v<DeviceStorage, StorageType>) {
+                            if (std::holds_alternative<BorrowedStorage>(async_safe_tensor.get_storage())) {
+                                // Handle case when writing borrowed tensor single device tensor (only allowed for sync mode)
+                                auto host_storage = std::get<BorrowedStorage>(async_safe_tensor.get_storage());
+                                std::visit([&host_data] (auto&& b) { host_data = b.data(); }, host_storage.buffer);
+                            } else {
+                                auto host_storage = std::get<OwnedStorage>(async_safe_tensor.get_storage());
+                                std::visit([&host_data] (auto&& b) { host_data = b.begin(); }, host_storage.get_buffer());
+                            }
+                            EnqueueWriteBuffer(worker->command_queue(cq_id), s.get_buffer(), host_data, false);
+                        } else if constexpr (std::is_same_v<DeviceStorage, StorageType>) {
+                            auto host_storage = std::get<MultiDeviceHostStorage>(async_safe_tensor.get_storage());
+                            std::visit([worker_index, &host_data] (auto&& b) { host_data = b.begin(); }, host_storage.get_buffer(worker_index));
+                            EnqueueWriteBuffer(worker->command_queue(cq_id), s.get_buffer(worker), host_data, false);
+                        }
+                    }, device_tensor.get_storage());
+            }
+        );
+    }
+    async_safe_tensor.tensor_attributes->update_main_thread_ref_count(device_tensor.workers.at(0), host_tensor_ref_count);
+    device_tensor.tensor_attributes->update_main_thread_ref_count(device_tensor.workers.at(0), device_tensor_ref_count);
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt
