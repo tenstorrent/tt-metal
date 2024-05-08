@@ -166,7 +166,7 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
     input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
     input_embeds = ttnn.to_device(input_embeds, device)
 
-    output = ttnn_model.encoder(config, input_embeds, parameters=ttnn_parameters)
+    output = ttnn_model.encoder(config, input_embeds, parameters=ttnn_parameters, device=device)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, 0.968)
@@ -361,6 +361,7 @@ def test_ttnn_whisper(tmp_path, device, ttnn_model):
             decoder_hidden_states,
             decoder_attention_mask=decoder_attention_mask,
             parameters=ttnn_parameters,
+            device=device,
         )
         last_hidden_state = ttnn.to_torch(last_hidden_state)
     ttnn.tracer.visualize(last_hidden_state, file_name=tmp_path / "whisper.svg")
