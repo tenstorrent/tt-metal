@@ -35,11 +35,8 @@ enum class PageTransferType { MULTICAST, UNICAST };
 
 struct ProgramTransferInfo {
     std::uint32_t num_active_cores;
-    std::unordered_map<uint32_t, vector<transfer_info_2>> unicast_runtime_args;    // WritePacked, sorted by dst
-    std::unordered_map<uint32_t, vector<transfer_info_2>> multicast_runtime_args;  // WritePacked, sorted by dst
     std::unordered_map<uint32_t, vector<transfer_info_2>> multicast_semaphores;    // WritePacked, sorted by dst
     std::unordered_map<uint32_t, vector<transfer_info_2>> unicast_semaphores;      // WritePacked, sorted by dst
-    vector<transfer_info_2> go_signals;                                            // WriteLinear
     vector<kernel_bins_transfer_info> kernel_bins;                                 // RelayPaged, WriteLinear
 };
 
