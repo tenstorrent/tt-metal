@@ -19,17 +19,17 @@ from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import is_grayskull
 
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_embeddings import TtTimestepEmbedding
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_mid_block_2d_cross_attn import (
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_mid_block_2d_cross_attn_new_conv import (
     unet_mid_block_2d_cross_attn,
 )
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attention_down_block_2d import (
     cross_attention_down_block_2d,
 )
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attn_upblock import (
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attn_upblock_new_conv import (
     cross_attention_upblock2d,
 )
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downblock_2d import downblock2d
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upblock_2d import upblock_2d
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downblock_2d_new_conv import downblock2d
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upblock_2d_new_conv import upblock_2d
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     pad_group_norm_weight,
     pre_process_input,
@@ -108,8 +108,9 @@ class UNet2DConditionModel:
             parameters.conv_in.weight, parameters.conv_in.bias
         )
         parameters.conv_in.bias = torch.reshape(parameters.conv_in.bias, (1, 1, 1, parameters.conv_in.bias.shape[-1]))
-        tt_weight_tensor = ttnn.from_torch(parameters.conv_in.weight, ttnn.float32)
-        tt_bias_tensor = ttnn.from_torch(parameters.conv_in.bias, ttnn.float32)
+        self.conv_in_weights = ttnn.from_torch(parameters.conv_in.weight, ttnn.float32)
+        self.conv_in_bias = ttnn.from_torch(parameters.conv_in.bias, ttnn.float32)
+
         # breakpoint()
         out_channels = parameters.conv_in.weight.shape[0]
         in_channels = parameters.conv_in.weight.shape[1]
@@ -128,8 +129,8 @@ class UNet2DConditionModel:
             input_height=input_height,
             input_width=input_width,
             reader_patterns_cache=reader_patterns_cache,
-            weight=tt_weight_tensor,
-            bias=tt_bias_tensor,
+            weight=self.conv_in_weights,
+            bias=self.conv_in_bias,
             math_fidelity=ttnn.MathFidelity.LoFi,
             weights_dtype=ttnn.bfloat8_b,
             conv_blocking_and_parallelization_config_override={},
@@ -222,8 +223,9 @@ class UNet2DConditionModel:
         parameters.conv_out.bias = torch.reshape(
             parameters.conv_out.bias, (1, 1, 1, parameters.conv_out.bias.shape[-1])
         )
-        tt_weight_tensor = ttnn.from_torch(parameters.conv_out.weight, ttnn.float32)
-        tt_bias_tensor = ttnn.from_torch(parameters.conv_out.bias, ttnn.float32)
+        self.conv_out_weights = ttnn.from_torch(parameters.conv_out.weight, ttnn.float32)
+        self.conv_out_bias = ttnn.from_torch(parameters.conv_out.bias, ttnn.float32)
+
         out_channels = parameters.conv_out.weight.shape[0]
         in_channels = parameters.conv_out.weight.shape[1]
 
@@ -241,8 +243,8 @@ class UNet2DConditionModel:
             input_height=input_height,
             input_width=input_width,
             reader_patterns_cache=reader_patterns_cache,
-            weight=tt_weight_tensor,
-            bias=tt_bias_tensor,
+            weight=self.conv_out_weights,
+            bias=self.conv_out_bias,
             math_fidelity=ttnn.MathFidelity.LoFi,
             weights_dtype=ttnn.bfloat8_b,
             conv_blocking_and_parallelization_config_override={"act_block_h": 64},
@@ -415,7 +417,34 @@ class UNet2DConditionModel:
         # sample in l1 interelaved and tiled and nhwc
 
         sample = ttnn.to_memory_config(sample, self.conv_in.conv.input_sharded_memory_config)
-        sample = self.conv_in(sample)
+        # sample = self.conv_in(sample)
+        out_channels = self.parameters.conv_in.weight.shape[0]
+        in_channels = self.parameters.conv_in.weight.shape[1]
+
+        conv_config = ttnn.ConvConfig(
+            dtype=ttnn.bfloat8_b,
+            weights_dtype=ttnn.bfloat8_b,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            activation=None,
+            height_sharding=True if in_channels < 320 else False,
+            input_channels_alignment=32,
+        )
+
+        [sample, _out_height, _out_width, _dev_weights, _dev_bias] = ttnn.conv2d(
+            input_tensor=sample,
+            weight_tensor=self.conv_in_weights,
+            bias_tensor=self.conv_in_bias,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=(3, 3),
+            stride=(1, 1),
+            padding=(1, 1),
+            device=self.device,
+            batch_size=self.batch_size,
+            input_height=self.input_height,
+            input_width=self.input_width,
+            conv_config=conv_config,
+        )
         sample = ttnn.reallocate(sample)  # TODO: Test remove
 
         # con_in completes
