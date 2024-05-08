@@ -6,6 +6,7 @@ import os
 import json
 import torch
 import torch.nn.functional as F
+import tt_lib
 
 from time import time
 import pytest
@@ -34,7 +35,9 @@ def main(args):
 
     # Run decode
     with torch.no_grad():
-        all_text = run_decode(args=args, model=model, tokenizer=tokenizer, prompt_tokens=tokenized, prompts=prompts)
+        for i in range(10):
+            input("enter to run again")
+            all_text = run_decode(args=args, model=model, tokenizer=tokenizer, prompt_tokens=tokenized, prompts=prompts)
 
         if args.output_at_end:
             with open(
@@ -328,7 +331,6 @@ def test_LlamaModel_demo(
     n_devices,
     emulated,
     decode_only,
-    use_program_cache,
 ):
     ## Get model config
     # devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
@@ -346,6 +348,10 @@ def test_LlamaModel_demo(
     t3k_device_mesh, ckpt_dir, tokenizer_path, cache_path = get_llama_path(
         t3k_device_mesh, model_config_default, n_devices, emulated
     )
+
+    for i in t3k_device_mesh.get_device_ids():
+        device = t3k_device_mesh.get_device(i)
+        device.enable_program_cache()
 
     args = construct_arg(
         implementation=implementation,

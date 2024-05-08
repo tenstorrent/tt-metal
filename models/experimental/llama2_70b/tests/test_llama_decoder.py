@@ -144,6 +144,8 @@ def run_test_LlamaDecoder_inference(
         memory_config=model_config["DRAM_MEMCFG"],
         mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
     )
+    transformation_mats = ttnn.to_device(transformation_mats, t3k_device_mesh)
+
     if n_devices == 32:
         tt_LlamaDecoder_model = TtLlamaDecoder_galaxy(
             devices,
@@ -275,7 +277,8 @@ def run_test_LlamaDecoder_inference(
         # ]
         tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_LlamaDecoder_model.attention.layer_past]
         tt_layer_present_all = [
-            ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=1)) for lp in tt_layer_present_all
+            ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)
+            for lp in tt_layer_present_all
         ]
 
     for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present_all):

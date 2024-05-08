@@ -554,7 +554,7 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
     # TODO: Remove once confirm we don't need this, using only fallback ops
     if llm_mode == "decode":
         model_config["ROT_MAT_Q_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 1),
+            compute_with_storage_grid_size=(8, 4),
             in0_block_w=4,
             out_subblock_h=1,
             out_subblock_w=4,

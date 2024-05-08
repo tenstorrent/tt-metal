@@ -209,7 +209,8 @@ def run_test_LlamaModel_inference(
     # ]
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past]
     tt_layer_present_all = [
-        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=1)) for lp in tt_layer_present_all
+        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)
+        for lp in tt_layer_present_all
     ]
 
     for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present_all):
