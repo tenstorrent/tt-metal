@@ -190,6 +190,7 @@ from ttnn.types import (
 
 from ttnn.device import (
     Device,
+    Arch,
     open_device,
     close_device,
     enable_program_cache,

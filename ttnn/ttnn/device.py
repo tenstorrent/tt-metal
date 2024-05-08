@@ -16,6 +16,7 @@ def get_device_core_grid(device):
 # TODO: Device = ttnn._ttnn.Device
 Device = ttl.device.Device
 Device.core_grid = property(get_device_core_grid)
+Arch = ttl.device.Arch
 
 
 def open_device(device_id: int, l1_small_size: int = ttl.device.DEFAULT_L1_SMALL_SIZE):

@@ -12,9 +12,8 @@ from models.demos.falcon7b.reference.hf_modeling_falcon import (
 )
 from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 
-from models.demos.falcon7b.tt.model_config import (
-    get_model_config,
-)
+from models.demos.falcon7b.tt.model_config import get_model_config
+from models.demos.falcon7b.tt.model_utils import get_falcon_default_core_grid
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
@@ -205,7 +204,8 @@ def test_FalconCausalLM_inference(
     get_tt_cache_path,
     device,
 ):
-    model_config = get_model_config(model_config_str)
+    default_core_grid = get_falcon_default_core_grid(device)
+    model_config = get_model_config(model_config_str, default_core_grid)
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )

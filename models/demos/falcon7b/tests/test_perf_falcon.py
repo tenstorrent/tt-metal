@@ -19,9 +19,8 @@ from models.demos.falcon7b.tt.falcon_common import (
     PytorchFalconCausalLM,
 )
 
-from models.demos.falcon7b.tt.model_config import (
-    get_model_config,
-)
+from models.demos.falcon7b.tt.model_config import get_model_config
+from models.demos.falcon7b.tt.model_utils import get_falcon_default_core_grid
 from models.demos.falcon7b.tests.test_utils import get_rand_falcon_inputs, concat_device_out_layer_present
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     get_atol_rtol_pcc,
@@ -426,7 +425,8 @@ class TestParametrized:
         if model_config_str == "BFLOAT16-L1_SHARDED":
             pytest.skip("Sharded config is not supported on GS")
 
-        model_config = get_model_config(model_config_str)
+        default_core_grid = get_falcon_default_core_grid(device)
+        model_config = get_model_config(model_config_str, default_core_grid)
         tt_cache_path = get_tt_cache_path(
             model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
         )
@@ -478,7 +478,8 @@ class TestParametrized:
         # Enable Async Mode
         for device in devices:
             device.enable_async(async_mode)
-        model_config = get_model_config(model_config_str)
+        default_core_grid = get_falcon_default_core_grid(device)
+        model_config = get_model_config(model_config_str, default_core_grid)
         tt_cache_path = get_tt_cache_path(
             model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
         )
@@ -511,14 +512,14 @@ class TestParametrized:
             ("prefill", 32, 1, 128, 0, "BFLOAT16-L1", 0.97, 0.99, 0.96, 0.1),
             ("prefill", 32, 1, 256, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96, 0.18),
             ("prefill", 32, 1, 256, 0, "BFLOAT16-L1", 0.98, 0.99, 0.96, 0.18),
-            ("decode", 32, 32, 1, 128, "BFLOAT16-DRAM", 0.91, 0.92, 0.93, 0.15),
-            ("decode", 32, 32, 1, 128, "BFLOAT16-L1", 0.91, 0.92, 0.93, 0.15),
+            ("decode", 32, 32, 1, 128, "BFLOAT16-DRAM", 0.92, 0.94, 0.94, 0.15),
+            ("decode", 32, 32, 1, 128, "BFLOAT16-L1", 0.92, 0.94, 0.94, 0.15),
             ("decode", 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.92, 0.95, 0.95, 0.1),
-            ("decode", 32, 32, 1, 1024, "BFLOAT16-DRAM", 0.86, 0.92, 0.92, 0.4),
-            ("decode", 32, 32, 1, 1024, "BFLOAT16-L1", 0.86, 0.92, 0.92, 0.35),
-            ("decode", 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.85, 0.93, 0.94, 0.1),
-            ("decode", 32, 32, 1, 2047, "BFLOAT16-DRAM", 0.88, 0.93, 0.93, 0.75),
-            ("decode", 32, 32, 1, 2047, "BFLOAT16-L1", 0.88, 0.93, 0.93, 0.6),
+            ("decode", 32, 32, 1, 1024, "BFLOAT16-DRAM", 0.90, 0.94, 0.94, 0.4),
+            ("decode", 32, 32, 1, 1024, "BFLOAT16-L1", 0.90, 0.94, 0.94, 0.35),
+            ("decode", 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.89, 0.95, 0.95, 0.1),
+            ("decode", 32, 32, 1, 2047, "BFLOAT16-DRAM", 0.89, 0.92, 0.93, 0.75),
+            ("decode", 32, 32, 1, 2047, "BFLOAT16-L1", 0.89, 0.92, 0.93, 0.6),
         ),
         ids=[
             "prefill_seq128_bf16_dram",
@@ -589,9 +590,9 @@ class TestParametrized:
         "llm_mode, num_devices, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc, expected_inference_time, async_mode",
         (
             ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96, 0.18, False),  # Issue 7816 Inference time
-            ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.87, 0.91, 0.91, 0.21, False),
+            ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.87, 0.89, 0.90, 0.21, False),
             ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96, 0.18, True),
-            ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.87, 0.91, 0.91, 0.09, True),
+            ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.87, 0.89, 0.90, 0.09, True),
         ),
         ids=[
             "prefill_seq256",

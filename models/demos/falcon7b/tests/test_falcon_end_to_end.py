@@ -14,6 +14,7 @@ from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 # TODO: Remove this?
 from models.demos.falcon7b.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.falcon7b.tt.model_config import get_model_config
+from models.demos.falcon7b.tt.model_utils import get_falcon_default_core_grid
 from models.utility_functions import (
     disable_compilation_reports,
     disable_persistent_kernel_cache,
@@ -369,7 +370,8 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     ):
         pytest.skip("#7933: Out of DRAM space error for tensor")
 
-    model_config = get_model_config(model_config_str, seq_len)
+    default_core_grid = get_falcon_default_core_grid(device)
+    model_config = get_model_config(model_config_str, default_core_grid, seq_len)
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )

@@ -8,6 +8,7 @@ from loguru import logger
 from models.demos.falcon7b.reference.hf_modeling_falcon import FalconForCausalLM
 from models.demos.falcon7b.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
 from models.demos.falcon7b.tt.model_config import get_model_config
+from models.demos.falcon7b.tt.model_utils import get_falcon_default_core_grid
 from models.utility_functions import get_devices_for_t3000, torch2tt_tensor, tt2torch_tensor
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
@@ -147,7 +148,8 @@ def test_FalconMLP_inference(
 ):
     devices = get_devices_for_t3000(all_devices, num_devices)
 
-    model_config = get_model_config(model_config_str, seq_len)
+    default_core_grid = get_falcon_default_core_grid(devices[0])
+    model_config = get_model_config(model_config_str, default_core_grid, seq_len)
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )

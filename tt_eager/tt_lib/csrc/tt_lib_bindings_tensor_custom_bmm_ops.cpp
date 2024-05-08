@@ -94,27 +94,6 @@ namespace tt::tt_metal::detail
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        // Custom Falcon matmuls/bmms
-        m_tensor.def("falcon_fused_qkv_matmul", &falcon_fused_qkv_matmul,
-            py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
-            Perform a falcon_fused_qkv non-batched matmul ``A x B`` with two tensors.
-        )doc");
-        m_tensor.def("falcon_selfout_matmul", &falcon_selfout_matmul,
-            py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
-            Perform a falcon_selfout non-batched matmul ``A x B`` with two tensors.
-        )doc");
-        m_tensor.def("falcon_dense_4h_to_h_matmul", &falcon_dense_4h_to_h_matmul,
-            py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("packer_l1_acc").noconvert() = std::nullopt, R"doc(
-            Perform a falcon_dense_4h_to_h non-batched matmul ``A x B`` with two tensors.
-        )doc");
-        m_tensor.def("falcon_dense_h_to_4h_matmul", &falcon_dense_h_to_4h_matmul,
-            py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("fused_activation") = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
-            Perform a falcon_dense_h_to_4h non-batched matmul ``A x B`` with two tensors. This invokes the MULTI_CORE matmul parallelization. This parallelization does not support bias option yet.
-        )doc");
-        m_tensor.def("falcon_lm_head_matmul", &falcon_lm_head_matmul,
-            py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
-            Perform a falcon_lm_head non-batched matmul ``A x B`` with two tensors. This invokes the MULTI_CORE matmul parallelization. This parallelization does not support bias option yet.
-        )doc");
 
         // Custom Generic NLP TMs
         // This op should support arbitrary B and S divisible by 32 on DRAM; on L1, might error out due to space
