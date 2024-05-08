@@ -493,7 +493,7 @@ def shapes_and_datagen(
             ):
                 yield shapes, datagen_funcs, test_args
 
-        elif method == "ttnn-linear":
+        elif method == "tt_nn-linear":
             # Only supports dim = 5;
             assert len(start_shape) == 5
             assert len(end_shape) == 5
