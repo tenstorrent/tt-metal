@@ -20,8 +20,6 @@ from models.utility_functions import (
     enable_persistent_kernel_cache,
     is_e75,
     profiler,
-    skip_for_wormhole_b0,
-    torch2tt_tensor,
     tt2torch_tensor,
 )
 from sklearn.metrics import top_k_accuracy_score
@@ -316,7 +314,6 @@ def run_test_FalconCausalLM_end_to_end(
     ids=["falcon_7b"],
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
-@skip_for_wormhole_b0(reason_str="Hangs way too often, issue #4425")
 def test_FalconCausalLM_end_to_end_with_program_cache(
     device,
     use_program_cache,

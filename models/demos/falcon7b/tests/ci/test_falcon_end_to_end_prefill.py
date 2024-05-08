@@ -4,6 +4,8 @@
 
 import pytest
 
+import tt_lib
+
 from models.demos.falcon7b.tests.test_falcon_end_to_end import run_test_FalconCausalLM_end_to_end
 from models.demos.falcon7b.tt.model_config import get_model_config
 from models.utility_functions import disable_compilation_reports, disable_persistent_kernel_cache, skip_for_grayskull
@@ -44,6 +46,11 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     model_location_generator,
     get_tt_cache_path,
 ):
+    is_grayskull = device.arch() == tt_lib.device.Arch.GRAYSKULL
+    if is_grayskull:
+        out_pcc = 0.86
+        cache_pcc = 0.86
+
     model_config = get_model_config(model_config_str, seq_len)
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]

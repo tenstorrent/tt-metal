@@ -12,7 +12,6 @@ echo "Running common models for archs"
 env pytest models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py
 env pytest models/demos/metal_BERT_large_11/tests/test_demo.py
 
-env pytest models/demos/falcon7b/tests/test_falcon_end_to_end.py
 env pytest models/demos/falcon7b/tests/ci/test_falcon_end_to_end_prefill.py
 
 env pytest models/demos/ttnn_falcon7b/tests/test_falcon_mlp.py
