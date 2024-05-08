@@ -12,7 +12,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
     skip_for_grayskull,
 )
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
     determine_largest_subblock_size,
     round_up_to_tile_dim,
 )

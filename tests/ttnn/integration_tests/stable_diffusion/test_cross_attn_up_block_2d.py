@@ -11,20 +11,20 @@ from torch import nn
 
 from models.utility_functions import tt_to_torch_tensor, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.functional_stable_diffusion.tt.ttnn_functional_cross_attn_upblock import (
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attn_upblock import (
     cross_attention_upblock2d as ttnn_cross_attention_upblock2d,
 )
 from models.utility_functions import (
     skip_for_grayskull,
 )
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attn_upblock import (
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_cross_attn_upblock import (
     cross_attention_upblock2d as tt2_ttnn_cross_attention_upblock2d,
 )
 
-from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
     pre_process_input,
     weight_to_bfp8,
     post_process_output,
