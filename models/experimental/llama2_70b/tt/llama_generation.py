@@ -99,8 +99,10 @@ class TtLlamaModelForGeneration:
 
         # for device in self.devices:
         #     ttl.device.Synchronize(device)
-        logits = ttnn.from_device(tt_logits)
-        logits = ttnn.to_torch(logits, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=3))
+        # logits = ttnn.from_device(tt_logits)
+        logits = ttnn.to_torch(
+            logits, device=self.device_mesh, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=3)
+        )
 
         # logits = torch.cat([tt2torch_tensor(tt_o) for tt_o in tt_logits], -1)
         logits = logits[..., : self.params.vocab_size].float()

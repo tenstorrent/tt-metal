@@ -35,9 +35,7 @@ def main(args):
 
     # Run decode
     with torch.no_grad():
-        for i in range(10):
-            input("enter to run again")
-            all_text = run_decode(args=args, model=model, tokenizer=tokenizer, prompt_tokens=tokenized, prompts=prompts)
+        all_text = run_decode(args=args, model=model, tokenizer=tokenizer, prompt_tokens=tokenized, prompts=prompts)
 
         if args.output_at_end:
             with open(
