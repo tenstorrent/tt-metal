@@ -6,7 +6,7 @@ if [ -z "$PYTHON_ENV_DIR" ]; then
 fi
 
 if [ -z "$CONFIG" ]; then
-    echo "Build type defaulted to RelWithDebInfo (assert)"
+    echo "Build type defaulted to Release"
 else
     VALID_CONFIGS="RelWithDebInfo Debug Release ci"
     if [[ $VALID_CONFIGS =~ (^|[[:space:]])"$CONFIG"($|[[:space:]]) ]]; then

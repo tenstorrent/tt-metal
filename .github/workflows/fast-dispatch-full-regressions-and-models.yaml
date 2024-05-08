@@ -31,7 +31,6 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}
-      CONFIG: ci
       LOGURU_LEVEL: INFO
     runs-on: model-runner-${{ matrix.test-group.arch }}
     steps:
