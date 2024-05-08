@@ -95,9 +95,7 @@ def _golden_function(
     return torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)
 
 
-layer_norm = ttnn.register_operation(name="ttnn.layer_norm", golden_function=_golden_function)(
-    ttnn._ttnn.operations.normalization.layer_norm
-)
+layer_norm = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.normalization.layer_norm)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, **_):
@@ -112,31 +110,7 @@ def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, *
     return weight * input_tensor
 
 
-def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, **_):
-    import torch
-
-    variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
-    input_tensor = input_tensor * torch.rsqrt(variance + epsilon)
-
-    if weight.dtype in [torch.float16, torch.bfloat16]:
-        input_tensor = input_tensor.to(weight.dtype)
-
-    return weight * input_tensor
-
-
-rms_norm = ttnn.register_operation(name="ttnn.rms_norm", golden_function=_golden_function)(
-    ttnn._ttnn.operations.normalization.rms_norm
-)
-
-
-def _rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float = 1e-6) -> ttnn.Tensor:
-    r"""
-    rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float = 1e-6) -> ttnn.Tensor
-
-    Compute rms_norm over :attr:`input_tensor`.
-
-    """
-    return ttl.tensor.rmsnorm(input_tensor, epsilon, weight)
+rms_norm = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.normalization.rms_norm)
 
 
 # group norm helper function
