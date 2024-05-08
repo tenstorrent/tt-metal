@@ -398,4 +398,72 @@ def sum(
     return output_tensor
 
 
+def _golden_function(input_tensor: ttnn.Tensor, dim: int, keepdim=False, **_):
+    import torch
+
+    return torch.mean(input_tensor, dim=dim, keepdim=keepdim)
+
+
+def _mean_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+@ttnn.register_operation(
+    name="ttnn.mean",
+    validate_input_tensors=_mean_validate_input_tensors,
+    golden_function=_golden_function,
+)
+def mean(input_tensor: ttnn.Tensor, dim: Union[int, Tuple[int]], keepdim: bool = False) -> ttnn.Tensor:
+    """
+    mean(input_tensor: ttnn.Tensor, dim: Union[int, Tuple[int]], keepdim: bool = False) -> ttnn.Tensor
+    """
+
+    input_shape = tuple(input_tensor.shape)
+    rank = len(input_shape)
+
+    if isinstance(dim, int):
+        if dim < 0:
+            dim = rank + dim
+        dim = (dim,)
+
+    if isinstance(dim, tuple):
+        if dim == (rank - 1,):
+            reduce_op_dim = ttl.tensor.ReduceOpDim.W
+        elif dim == (rank - 2,):
+            reduce_op_dim = ttl.tensor.ReduceOpDim.H
+        elif dim == (rank - 1, rank - 2):
+            reduce_op_dim = ttl.tensor.ReduceOpDim.HW
+        else:
+            raise RuntimeError("Unsupported dim")
+    else:
+        raise RuntimeError("Invalid dim")
+
+    output_shape = []
+    padded_output_shape = []
+    for axis, size in enumerate(input_shape):
+        if axis in dim:
+            if keepdim:
+                output_shape.append(1)
+                padded_output_shape.append(ttnn.TILE_SIZE)
+        else:
+            output_shape.append(size)
+            padded_output_shape.append(size)
+    output_shape = tuple(output_shape)
+    padded_output_shape = tuple(padded_output_shape)
+
+    input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
+    output_tensor = ttl.tensor.reduce(input_tensor, ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / input_shape[-1])
+    output_tensor = ttl.tensor.reduce(input_tensor, ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / input_shape[-1])
+    output_tensor = ttnn.reshape(output_tensor, ttnn.Shape(output_shape, padded_output_shape))
+    return output_tensor
+
+
 __all__ = []

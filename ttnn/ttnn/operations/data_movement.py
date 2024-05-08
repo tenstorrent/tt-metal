@@ -520,4 +520,182 @@ def repeat(
         raise NotImplementedError
 
 
+## helper function for upsample. currently only supports HEIGHT sharding
+def _get_upsample_shard_grid_from_num_shards(ncores: int, device):
+    max_grid_size = (8, 8) if device.arch() == ttl.device.Arch.WORMHOLE_B0 else (9, 12)  ## (y, x)
+    if ncores % max_grid_size[1] == 0:
+        core_grid = ttnn.CoreGrid(y=ncores // max_grid_size[1], x=max_grid_size[1])
+        grid_coord = ttnn.experimental.tensor.CoreCoord(core_grid.x - 1, core_grid.y - 1)
+        return ttnn.experimental.tensor.CoreRangeSet(
+            {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord)}
+        )
+    else:
+        if ncores < max_grid_size[1]:
+            core_grid = ttnn.CoreGrid(y=1, x=ncores)
+            grid_coord = ttnn.experimental.tensor.CoreCoord(core_grid.x - 1, 0)
+            return ttnn.experimental.tensor.CoreRangeSet(
+                {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord)}
+            )
+        else:
+            core_grid_1 = ttnn.CoreGrid(y=ncores // max_grid_size[1], x=max_grid_size[1])
+            core_grid_2 = ttnn.CoreGrid(y=ncores // max_grid_size[1] + 1, x=ncores % max_grid_size[1])
+            grid_coord_1 = ttnn.experimental.tensor.CoreCoord(core_grid_1.x - 1, core_grid_1.y - 1)
+            grid_coord_2 = ttnn.experimental.tensor.CoreCoord(core_grid_2.x - 1, core_grid_2.y - 1)
+            return ttnn.experimental.tensor.CoreRangeSet(
+                {
+                    ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord_1),
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, grid_coord_2.y), grid_coord_2
+                    ),
+                }
+            )
+
+
+## helper function for upsample
+def _get_upsample_num_shards(
+    batch_size: int, height: int, num_channels: int, shard_strategy: ttnn.ShardStrategy, device
+):
+    ## calculate ncores, corresponding grid_size and in_shard_shape based on the input_shape
+    max_grid_size = (8, 8) if device.arch() == ttl.device.Arch.WORMHOLE_B0 else (9, 12)  ## (y, x)
+    if shard_strategy == ttnn.ShardStrategy.HEIGHT:
+        ## nsticks per shard should be divisible by in_w
+        max_nshards = min(batch_size * height, max_grid_size[0] * max_grid_size[1])
+        nshards = max_nshards
+        while nshards > 0:
+            if batch_size * height % nshards == 0:
+                break
+            nshards -= 1
+        if nshards == 0:
+            ## should fallback to single core (TODO)
+            raise ValueError("nshards is 0")
+
+    ## TODO: support BLOCK strategy?
+    # elif shard_strategy == ttnn.ShardStrategy.BLOCK:
+    #     max_nshards_h = min(batch_size * height, max_grid_size[0])  ## height along NHW
+    #     max_nshards_w = min(num_channels, max_grid_size[1])  ## width along C
+    #     ## find nshards_h along NHW
+    #     nshards_h = max_nshards_h
+    #     while nshards_h > 0:
+    #         if batch_size * height % nshards_h == 0:
+    #             break
+    #         nshards_h -= 1
+    #     ## find nshards_w along C
+    #     nshards_w = max_nshards_w
+    #     while nshards_w > 0:
+    #         if num_channels % nshards_w == 0:
+    #             break
+    #         nshards_w -= 1
+    #     if nshards_w == 0 or nshards_h == 0:
+    #         ## should fallback to single core (TODO)
+    #         raise ValueError("nshards_h or nshards_w is 0")
+    #     return (nshards_h, nshards_w)
+
+    return nshards
+
+
+def _upsample_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.ROW_MAJOR_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+def _golden_function(input_tensor: ttnn.Tensor, scale_factor: Tuple[float, float], **_):
+    import torch
+
+    input_tensor = input_tensor.permute(0, 3, 1, 2)
+    ret = torch.nn.functional.upsample(input_tensor, scale_factor=scale_factor)
+    ret = ret.permute(0, 2, 3, 1)
+    return ret
+
+
+@ttnn.register_operation(
+    name="ttnn.upsample",
+    validate_input_tensors=_upsample_validate_input_tensors,
+    golden_function=_golden_function,
+)
+def upsample(
+    input_tensor: ttnn.Tensor,
+    scale_factor: Union[float, Tuple[float, float], Tuple[float, float, float], Tuple[float, float, float, float]],
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    r"""
+    Upsamples a given multi-channel 2D (spatial) data.
+    The input data is assumed to be of the form [N, H, W, C].
+
+    The algorithms available for upsampling are 'nearest' for now.
+
+    Args:
+        * :attr:`input_tensor`: the input tensor
+        * :attr:`scale_factor`: multiplier for spatial size. Has to match input size if it is a tuple.
+    """
+
+    scale_h, scale_w = 1, 1
+    if isinstance(scale_factor, float) or isinstance(scale_factor, int):
+        scale_h = scale_factor
+        scale_w = scale_factor
+    elif isinstance(scale_factor, tuple):
+        if len(scale_factor) == 2:
+            scale_w, scale_c = scale_factor
+            assert scale_c == 1, "scale_c should be 1"
+        elif len(scale_factor) == 3:
+            scale_h, scale_w, scale_c = scale_factor
+            assert scale_c == 1, "scale_c should be 1"
+        elif len(scale_factor) == 4:
+            scale_n, scale_h, scale_w, scale_c = scale_factor
+            assert scale_n == 1, "scale_n should be 1"
+            assert scale_c == 1, "scale_c should be 1"
+        else:
+            RuntimeError("Invalid scale factor")
+
+    ## check if the incoming sharding spec is compatible with the upsample operation
+    ## if the sharding spec is not compatible, then the input tensor needs to be resharded
+    if ttnn.is_sharded(input_tensor):
+        if memory_config == ttnn.DRAM_MEMORY_CONFIG:
+            ## input is sharded, make the output config sharded too if not provided
+            memory_config = ttnn.get_memory_config(input_tensor)
+
+        ## check if shard height % input_w == 0
+        input_mem_config = ttnn.get_memory_config(input_tensor)
+        shard_shape = input_mem_config.shard_spec.shape
+        batch_size, input_h, input_w, num_channels = input_tensor.shape
+        if shard_shape[0] % input_w != 0:
+            ## perform a resharding operation:
+            ## calculate ideal shard_grid
+            nshards = _get_upsample_num_shards(
+                batch_size, input_h, num_channels, ttnn.ShardStrategy.HEIGHT, input_tensor.device()
+            )
+            shard_grid = _get_upsample_shard_grid_from_num_shards(nshards, input_tensor.device())
+
+            ## construct new shard_spec
+            shard_width = num_channels
+            shard_height = batch_size * input_h * input_w // nshards
+            shard_spec = ttnn.experimental.tensor.ShardSpec(
+                shard_grid, (shard_height, shard_width), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+            )
+            sharded_mem_config = ttnn.MemoryConfig(
+                ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+            )
+
+            ## interleaved to sharded
+            input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+
+            ## also update the output memory_config
+            shard_height = shard_height * scale_h * scale_w
+            shard_spec = ttnn.experimental.tensor.ShardSpec(
+                shard_grid, (shard_height, shard_width), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+            )
+            memory_config = ttnn.MemoryConfig(
+                ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+            )
+
+    output_tensor = ttl.tensor.upsample(input_tensor, int(scale_h), int(scale_w), output_mem_config=memory_config)
+    return output_tensor
+
+
 __all__ = []

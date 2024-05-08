@@ -268,13 +268,11 @@ from ttnn.operations.matmul import (
     create_matmul_1d_systolic_array_program_config,
 )
 
-from ttnn.operations.others import (
+from ttnn.operations.embedding import (
     embedding,
-    # fused operations
-    softmax,
-    # reduction operations
-    mean,
-    upsample,
+)
+
+from ttnn.operations.comparison import (
     pearson_correlation_coefficient,
 )
 
@@ -295,6 +293,7 @@ from ttnn.operations.reduction import (
     max,
     min,
     sum,
+    mean,
 )
 
 from ttnn.operations.losses import (
@@ -309,6 +308,7 @@ from ttnn.operations.data_movement import (
     split,
     repeat_interleave,
     repeat,
+    upsample,
 )
 
 from ttnn.operations.unary import (
@@ -448,6 +448,7 @@ from ttnn.operations.math import (
 )
 
 from ttnn.operations.normalization import (
+    softmax,
     layer_norm,
     rms_norm,
     group_norm,
