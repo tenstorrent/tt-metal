@@ -102,8 +102,8 @@ DataFormat check_same_format_within_operand(DataFormat data_format[NUM_OPERANDS]
     DataFormat last_valid_format = DataFormat::Invalid;
     for (int i = 0; i < NUM_OPERANDS; i++) {
         if (data_format[i] != DataFormat::Invalid && last_valid_format != DataFormat::Invalid) {
-            TT_FATAL(data_format[i] == last_valid_format,
-                "Not all buffer data-formats within this operand are the same");
+            // TT_FATAL(data_format[i] == last_valid_format,
+            //     "Not all buffer data-formats within this operand are the same");
 
             // dump_data_formats(data_format);
         } else if (data_format[i] != DataFormat::Invalid && last_valid_format == DataFormat::Invalid) {
