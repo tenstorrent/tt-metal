@@ -131,7 +131,7 @@ def run_test_LlamaModel_inference(
         )
 
         # TT hardware execution -------------------------------------------------------------
-        tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos, t3k_device_mesh)
+        tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos)
 
         tt_out = tt_model(
             tt_inp_emb,
@@ -143,15 +143,12 @@ def run_test_LlamaModel_inference(
 
         logger.info(f"Syncronizing devices for token idx {start_pos}")
 
-        for device in devices:
-            tt_lib.device.Synchronize(device)
-            if i % 8 == 0:
-                tt_lib.device.DumpDeviceProfiler(device)
+        # for device in devices:
+        #     tt_lib.device.Synchronize(device)
+        #     if i % 8 == 0:
+        #         tt_lib.device.DumpDeviceProfiler(device)
 
         logger.info(f"Done synchronizing devices")
-
-        assert isinstance(tt_out, list)  # tt_out should be fractured on N devices
-        assert len(tt_out) == len(devices)
 
         tt_out = ttnn.from_device(tt_out)
         tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=3))
@@ -210,12 +207,12 @@ def run_test_LlamaModel_inference(
     # tt_layer_present = [
     #     torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
     # ]
-    tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past_]
+    tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past]
     tt_layer_present_all = [
         ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=1)) for lp in tt_layer_present_all
     ]
 
-    for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present):
+    for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present_all):
         cache_length_to_check = generation_start_pos + generation_length + 1
         if model_config["LLM_MODE"] == "prefill":
             cache_pt = cache_pt[:, :, :seq_len, :]

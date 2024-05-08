@@ -37,6 +37,7 @@ class TtLlamaDecoder_optimized:
         transformation_mats,
         emulated=False,
         cache_path=None,
+        read_cache=False,
     ):
         super().__init__()
 
@@ -45,6 +46,7 @@ class TtLlamaDecoder_optimized:
         self.num_devices = device_mesh.get_num_devices()
         self.model_config = model_config
         self.emulated = emulated
+        self.read_cache = read_cache
 
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
@@ -67,6 +69,7 @@ class TtLlamaDecoder_optimized:
             transformation_mats,
             emulated=emulated,
             cache_path=cache_path,
+            read_cache=read_cache,
         )
 
         self.mlp = TtLlamaMLP_optimized(
@@ -78,6 +81,7 @@ class TtLlamaDecoder_optimized:
             model_config,
             emulated=emulated,
             cache_path=cache_path,
+            read_cache=read_cache,
         )
 
         self.load_weights()
@@ -138,25 +142,31 @@ class TtLlamaDecoder_optimized:
         #         )
         #         self.ffn_norm_list.append(ffn_norm_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
 
+        pt_attn_norm = None
+        pt_ffn_norm = None
+        if not self.read_cache:
+            pt_attn_norm = self.state_dict[attn_norm_str].reshape([1, 1, -1, 32])
+            pt_ffn_norm = self.state_dict[ffn_norm_str].reshape([1, 1, -1, 32])
+
         attn_norm_ttnn = ttnn.as_tensor(
-            self.state_dict[attn_norm_str].reshape([1, 1, -1, 32]),
+            pt_attn_norm,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device_mesh,
             memory_config=self.model_config["DRAM_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
-            # cache_file_name=self.cache_path / attn_norm_str,
+            cache_file_name=self.cache_path / attn_norm_str,
         )
         self.attn_norm = ttnn.to_device(attn_norm_ttnn, self.device_mesh)
 
         ffn_norm_ttnn = ttnn.as_tensor(
-            self.state_dict[ffn_norm_str].reshape([1, 1, -1, 32]),
+            pt_ffn_norm,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device_mesh,
             memory_config=self.model_config["DRAM_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
-            # cache_file_name=self.cache_path / ffn_norm_str,
+            cache_file_name=self.cache_path / ffn_norm_str,
         )
         self.ffn_norm = ttnn.to_device(ffn_norm_ttnn, self.device_mesh)
 
