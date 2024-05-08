@@ -12,7 +12,6 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
-      CONFIG: ci
       SILENT: 0
       VERBOSE: 1
     environment: dev
