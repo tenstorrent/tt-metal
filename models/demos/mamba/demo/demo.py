@@ -82,7 +82,7 @@ def run_mamba_demo(
     model_version: MambaPretrainedModelName = "state-spaces/mamba-2.8b-slimpj",
     batch_size: int = 32,
     generated_sequence_length: int = 50,
-    cache_dir: Optional[str] = "/tmp",
+    cache_dir: Optional[str] = None,
     display: bool = True,
 ):
     if len(prompts) == 1:
