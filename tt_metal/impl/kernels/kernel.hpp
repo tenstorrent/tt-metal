@@ -50,6 +50,7 @@ class Kernel : public JitBuildSettings {
     void update_runtime_arg( const CoreCoord &logical_core, size_t idx, uint32_t value);
 
     std::vector<uint32_t> & runtime_args(const CoreCoord &logical_core);
+    std::vector< std::vector< std::vector<uint32_t>> > & runtime_args();
     std::vector<uint32_t> & common_runtime_args();
 
     std::map<std::string, std::string> defines() const { return defines_; }

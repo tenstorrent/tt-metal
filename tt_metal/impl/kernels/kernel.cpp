@@ -157,6 +157,10 @@ std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord &logical_core) {
     return this->core_to_runtime_args_[logical_core.x][logical_core.y];
 }
 
+std::vector< std::vector< std::vector<uint32_t>> > & Kernel::runtime_args() {
+    return this->core_to_runtime_args_;
+}
+
 std::vector<uint32_t>& Kernel::common_runtime_args() {
     return this->common_runtime_args_;
 }

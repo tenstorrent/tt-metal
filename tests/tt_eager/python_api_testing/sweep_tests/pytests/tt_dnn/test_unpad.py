@@ -45,9 +45,6 @@ params += [
 
 @pytest.mark.parametrize("input_shapes, unpad_args", params)
 def test_run_unpad_test(input_shapes, unpad_args, device):
-    if is_wormhole_b0():
-        if input_shapes == [[5, 5, 64, 96]]:
-            pytest.skip("skip this shape for Wormhole B0")
     datagen_func = [
         generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
     ]
