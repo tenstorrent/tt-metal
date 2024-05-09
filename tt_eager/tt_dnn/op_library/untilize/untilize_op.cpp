@@ -63,7 +63,7 @@ std::vector<Tensor> Untilize::create_output_tensors(const std::vector<Tensor> &i
         if (input_tensor.memory_config().is_sharded()) {
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = input_tensor.memory_config().shard_spec;
-            return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), output_dtype, Layout::ROW_MAJOR, input_tensor.device(), mem_config)};
+            return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0), output_dtype, Layout::ROW_MAJOR, input_tensor.device(), mem_config)};
         } else {
             uint32_t ntiles = input_tensor.volume() / TILE_HW;
             uint32_t ntiles_per_block = input_tensor.get_legacy_shape()[-1] / TILE_WIDTH;
@@ -75,7 +75,7 @@ std::vector<Tensor> Untilize::create_output_tensors(const std::vector<Tensor> &i
             ShardSpec shard_spec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;
-            return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), output_dtype, Layout::ROW_MAJOR, input_tensor.device(), mem_config)};
+            return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0), output_dtype, Layout::ROW_MAJOR, input_tensor.device(), mem_config)};
         }
     } else {
         return operation::generic_create_output_tensors(*this, input_tensors, output_dtype, Layout::ROW_MAJOR, this->output_mem_config);
@@ -201,7 +201,7 @@ std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(const std::vect
         shard_spec.shape = shard_shape;
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;
-        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), output_dtype, Layout::ROW_MAJOR, input_tensor_a.device(), mem_config)};
+        return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0), output_dtype, Layout::ROW_MAJOR, input_tensor_a.device(), mem_config)};
     } else {
         return operation::generic_create_output_tensors(*this, input_tensors, output_dtype, Layout::ROW_MAJOR, this->output_mem_config);
     }

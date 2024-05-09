@@ -100,7 +100,7 @@ std::vector<Tensor> Transpose::create_output_tensors(const std::vector<Tensor> &
             const auto output_shape = this->compute_output_shapes(input_tensors)[0];
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;
-            return {create_sharded_device_tensor(
+            return {create_device_tensor(
                 output_shape,
                 input_tensor.get_dtype(),
                 input_tensor.get_layout(),

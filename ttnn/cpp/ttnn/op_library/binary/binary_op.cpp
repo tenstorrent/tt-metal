@@ -226,7 +226,7 @@ std::vector<Tensor> Binary<binary_op_type, in_place>::create_output_tensors(
                 }
                 auto memory_config = this->program_config.memory_config;
                 memory_config.shard_spec = shard_spec;
-                return {create_sharded_device_tensor(
+                return {create_device_tensor(
                     this->compute_output_shapes(input_tensors).at(0),
                     this->program_config.dtype,
                     Layout::TILE,
@@ -242,7 +242,7 @@ std::vector<Tensor> Binary<binary_op_type, in_place>::create_output_tensors(
                 }
                 auto memory_config = this->program_config.memory_config;
                 memory_config.shard_spec = shard_spec;
-                return {create_sharded_device_tensor(
+                return {create_device_tensor(
                     this->compute_output_shapes(input_tensors).at(0),
                     this->program_config.dtype,
                     Layout::TILE,

@@ -152,7 +152,7 @@ std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(const std::vec
         }
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;
-        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
+        return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
     } else {
         return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
     }

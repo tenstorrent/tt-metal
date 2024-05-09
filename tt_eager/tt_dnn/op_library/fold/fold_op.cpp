@@ -60,7 +60,7 @@ std::vector<Tensor> Fold::create_output_tensors(const std::vector<Tensor> &input
         mem_config.shard_spec->shape[0] /= stride_h * stride_w;
         mem_config.shard_spec->shape[1] *= stride_h * stride_w;
 
-        return {create_sharded_device_tensor(
+        return {create_device_tensor(
             compute_output_shapes(input_tensors).at(0),
             output_dtype,
             input_tensor.get_layout(),

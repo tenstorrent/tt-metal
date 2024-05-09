@@ -206,7 +206,7 @@ struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
             shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;
-            return {create_sharded_device_tensor(
+            return {create_device_tensor(
                 this->compute_output_shapes(input_tensors).at(0),
                 input_tensor.get_dtype(),
                 Layout::TILE,

@@ -932,7 +932,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     ShardSpec shard_spec = ShardSpec{all_cores, {per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, ShardOrientation::ROW_MAJOR};
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
-                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, output_layout, input_tensor_a.device(), mem_config)};
+                    return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, output_layout, input_tensor_a.device(), mem_config)};
                 } else if constexpr (
                     std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>
                 ) {
@@ -957,7 +957,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     ShardSpec shard_spec = ShardSpec{all_cores, {per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, shard_orientation};
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
-                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, output_layout, input_tensor_a.device(), mem_config)};
+                    return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, output_layout, input_tensor_a.device(), mem_config)};
                 } else if constexpr (
                     std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>
                 ) {
@@ -981,7 +981,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     ShardSpec shard_spec = ShardSpec{all_cores, {per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, shard_orientation};
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
-                    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, output_layout, input_tensor_a.device(), mem_config)};
+                    return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, output_layout, input_tensor_a.device(), mem_config)};
                 } else {
                     TT_FATAL(false, "Unsupported op for output sharding");
                     return {};
