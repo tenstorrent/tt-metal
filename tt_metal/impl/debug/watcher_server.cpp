@@ -17,8 +17,6 @@
 #include "dev_mem_map.h"
 #include "dev_msgs.h"
 
-#include "debug/sanitize_noc.h"
-
 #include "noc/noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
 
