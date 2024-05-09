@@ -1810,7 +1810,7 @@ def clamp_bw(x, y, scalar, *args, **kwargs):
 
 
 def attention_softmax_nomask(x, *args, **kwargs):
-    torch_output_tensor = ttnn.transformer._torch_attention_softmax(
+    torch_output_tensor = ttnn.transformer.attention_softmax.golden_function(
         x,
         head_size=None,
         attention_mask=None,
@@ -1825,7 +1825,7 @@ def attention_softmax(x, y, *args, scalar, **kwargs):
     if scalar < 0:
         scalar = -scalar
 
-    torch_output_tensor = ttnn.transformer._torch_attention_softmax(
+    torch_output_tensor = ttnn.transformer.attention_softmax.golden_function(
         x,
         head_size=None,
         attention_mask=y,
@@ -1850,7 +1850,7 @@ def ttnn_rmsnorm(x, y, *args, **kwargs):
 
 
 def transformer_concatenate_heads(x, *args, **kwargs):
-    torch_output_tensor = ttnn.transformer._torch_concatenate_heads(x)
+    torch_output_tensor = ttnn.transformer.concatenate_heads.golden_function(x)
 
     return torch_output_tensor
 
