@@ -85,12 +85,16 @@ class upsample2d:
         )
         self.output_height = self.conv.output_height
         self.output_width = self.conv.output_width
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        print(f"Upsample Input = {input_height}x{input_width} Output = {self.output_height}x{self.output_width}")
 
     def __call__(self, input, in_channels, out_channels):
         if input.layout == ttnn.TILE_LAYOUT:
             input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
         # # slice out batch
         input = ttnn.reshape(input, (2, self.input_height, self.input_width, input.shape[3]))
+        print(f"Upsample Input = {input.shape}")
         tt_out = upsample_nearest2d(input, self.scale_factor)
         del input
         tt_out = ttnn.reshape(tt_out, (1, 1, tt_out.shape[0] * tt_out.shape[1] * tt_out.shape[2], tt_out.shape[3]))
@@ -111,8 +115,8 @@ class upsample2d:
 
         [tt_out, _out_height, _out_width, _dev_weights, _dev_bias] = ttnn.conv2d(
             input_tensor=tt_out,
-            in_channels=in_channels,
-            out_channels=out_channels,
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
             weight_tensor=self.conv_weights,
             bias_tensor=self.conv_bias,
             device=self.device,
@@ -120,8 +124,8 @@ class upsample2d:
             stride=(1, 1),
             padding=(1, 1),
             batch_size=self.batch_size,
-            input_height=self.input_height,
-            input_width=self.input_width,
+            input_height=self.input_height * self.scale_factor,
+            input_width=self.input_width * self.scale_factor,
             conv_config=conv_config,
             reshard_if_not_optimal=True,
         )
@@ -134,5 +138,5 @@ class upsample2d:
         #     self.conv.input_width,
         #     self.conv.out_channels,
         # )
-
+        print(f"Upsample Output = {tt_out.shape}")
         return tt_out

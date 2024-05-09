@@ -40,6 +40,9 @@ class cross_attention_down_block_2d:
 
         self.output_height = self.downsample_2d.output_height
         self.output_width = self.downsample_2d.output_width
+        print(
+            f"Cross Attention Down Block Input = {input_height}x{input_width} Output = {self.output_height}x{self.output_width}"
+        )
 
     def __call__(
         self,

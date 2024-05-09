@@ -31,7 +31,11 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
     post_process_output,
 )
 from ttnn.operations.core import unsqueeze_to_4D
+import sys
+from loguru import logger
 
+logger.remove()
+logger.add(sys.stderr, level="INFO")
 scheduler = LMSDiscreteScheduler(
     beta_start=0.00085,
     beta_end=0.012,

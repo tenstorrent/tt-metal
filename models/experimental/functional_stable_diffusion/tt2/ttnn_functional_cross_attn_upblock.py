@@ -53,6 +53,9 @@ class cross_attention_upblock2d:
 
             self.output_height = self.upsample_2d.output_height
             self.output_width = self.upsample_2d.output_width
+        print(
+            f"Cross Attention UpBlock Input = {input_height}x{input_width} Output = {self.output_height}x{self.output_width}"
+        )
 
     def __call__(
         self,

@@ -19,17 +19,35 @@ from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import is_grayskull
 
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_embeddings import TtTimestepEmbedding
+
+# Working Config
+# from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_mid_block_2d_cross_attn_new_conv import (
+#     unet_mid_block_2d_cross_attn,
+# )
+# from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attention_down_block_2d_new_conv import (
+#     cross_attention_down_block_2d,
+# )
+# from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attn_upblock import (
+#     cross_attention_upblock2d,
+# )
+# from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downblock_2d import downblock2d
+# from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upblock_2d import upblock_2d
+
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_mid_block_2d_cross_attn_new_conv import (
     unet_mid_block_2d_cross_attn,
 )
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attention_down_block_2d import (
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attention_down_block_2d_new_conv import (
     cross_attention_down_block_2d,
 )
+
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attn_upblock_new_conv import (
     cross_attention_upblock2d,
 )
+
+# Change Downblock
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downblock_2d_new_conv import downblock2d
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upblock_2d_new_conv import upblock_2d
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upblock_2d import upblock_2d
+
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     pad_group_norm_weight,
     pre_process_input,
@@ -567,6 +585,10 @@ class UNet2DConditionModel:
 
             if not is_final_block and forward_upsample_size:
                 upsample_size = down_block_res_samples[-1].shape[2:]
+
+            print(f"Sample Shape = {sample.shape}")
+            for _this in res_samples:
+                print(f"Res Sample Shape = {_this.shape}")
 
             if up_block_type == "CrossAttnUpBlock2D":
                 # sample = ttnn.reallocate(sample)

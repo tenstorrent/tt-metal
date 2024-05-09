@@ -89,6 +89,7 @@ class downsample_2d:
 
         self.output_height = self.conv.output_height
         self.output_width = self.conv.output_width
+        print(f"Downsample Input = {input_height}x{input_width} Output = {self.output_height}x{self.output_width}")
 
     def __call__(
         self,

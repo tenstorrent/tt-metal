@@ -539,6 +539,10 @@ class UNet2DConditionModel:
             if not is_final_block and forward_upsample_size:
                 upsample_size = down_block_res_samples[-1].shape[2:]
 
+            print(f"Sample Shape = {sample.shape}")
+            for _this in res_samples:
+                print(f"Res Sample Shape = {_this.shape}")
+
             if up_block_type == "CrossAttnUpBlock2D":
                 # sample = ttnn.reallocate(sample)
                 sample = up_block(

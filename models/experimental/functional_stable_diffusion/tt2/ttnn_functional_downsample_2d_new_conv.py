@@ -59,23 +59,25 @@ class downsample_2d:
         self.conv_bias = ttnn.from_torch(parameters.conv.bias, ttnn.float32)
         self.input_height = input_height
         self.input_width = input_width
-
+        self.batch_size = batch_size
         self.out_channels = parameters.conv.weight.shape[0]
         self.in_channels = parameters.conv.weight.shape[1]
-        conv_config_override = {}
-        if (out_channels, in_channels, input_height, input_width) in config_override:
-            conv_config_override = config_override[(out_channels, in_channels, input_height, input_width)]
+        self.conv_config_override = {}
+        if (self.out_channels, self.in_channels, input_height, input_width) in config_override:
+            self.conv_config_override = config_override[
+                (self.out_channels, self.in_channels, input_height, input_width)
+            ]
 
         self.stride = 2
         self.conv = ttnn.Conv2d(
-            in_channels=in_channels,
-            out_channels=out_channels,
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
             kernel_size=(3, 3),
             stride=(self.stride, self.stride),
             padding=(1, 1),
             dtype=ttnn.bfloat8_b,
             device=device,
-            use_1d_systolic_array=True if in_channels < 320 else False,
+            use_1d_systolic_array=True if self.in_channels < 320 else False,
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
@@ -84,7 +86,7 @@ class downsample_2d:
             bias=self.conv_bias,
             math_fidelity=ttnn.MathFidelity.LoFi,
             weights_dtype=ttnn.bfloat8_b,
-            conv_blocking_and_parallelization_config_override=conv_config_override,
+            conv_blocking_and_parallelization_config_override=self.conv_config_override,
             use_shallow_conv_variant=False,
             # enable_auto_formatting=True,
             compute_kernel_config=compute_kernel_config,
@@ -92,6 +94,7 @@ class downsample_2d:
 
         self.output_height = self.conv.output_height
         self.output_width = self.conv.output_width
+        print(f"Downsample Input = {input_height}x{input_width} Output = {self.output_height}x{self.output_width}")
 
     def __call__(
         self,
@@ -122,9 +125,9 @@ class downsample_2d:
             height_sharding=True if self.in_channels < 320 else False,
             input_channels_alignment=32,
         )
-        if self.conv1_config_override and "act_block_h" in self.conv1_config_override:
-            print("Setting Act Block H to ", self.conv1_config_override["act_block_h"])
-            conv_config.act_block_h = self.conv1_config_override["act_block_h"]
+        if self.conv_config_override and "act_block_h" in self.conv_config_override:
+            print("Setting Act Block H to ", self.conv_config_override["act_block_h"])
+            conv_config.act_block_h = self.conv_config_override["act_block_h"]
 
         [hidden_states, _out_height, _out_width, _dev_weights, _dev_bias] = ttnn.conv2d(
             input_tensor=hidden_states,
