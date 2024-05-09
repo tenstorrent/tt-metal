@@ -22,7 +22,7 @@ union Converter {
     float f;
     uint32_t u;
 
-    Converter(float f_) : f(f_) {};
+    Converter(float f_) : f(f_){};
 
     static std::string to_hex(float f_) {
         Converter obj(f_);
@@ -67,6 +67,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::SIN:
         case UnaryOpType::TAN: defines["SFPU_OP_TRIG_FAMILY_INCLUDE"] = "1"; break;
         case UnaryOpType::NEG: defines["SFPU_OP_NEG_INCLUDE"] = "1"; break;
+        case UnaryOpType::SOFTPLUS: defines["SFPU_OP_SOFTPLUS_INCLUDE"] = "1"; break;
         default: defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1"; break;
     };
 }
@@ -74,7 +75,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 std::pair<string, string> get_op_init_and_func_parameterized(
     UnaryOpType op_type, std::vector<float> params, string idst) {
     std::pair<string, string> op_init_and_name;
-    TT_FATAL(is_parametrized_type(op_type) && "operator should support one parameter");
+    TT_FATAL(is_parametrized_type(op_type) && "operator should support at least one parameter");
     float param0 = params[0];
     switch (op_type) {
         case UnaryOpType::RELU_MAX:
@@ -162,6 +163,19 @@ std::pair<string, string> get_op_init_and_func_parameterized(
             op_init_and_name = {
                 "unary_lt_tile_init();", fmt::format("unary_lt_tile({}, {}u);", idst, Converter::to_hex(param0))};
             break;
+        case UnaryOpType::SOFTPLUS: {
+            TT_ASSERT(params.size() == 2, "Expected softplus to take 2 parameters");
+            float param1 = params[1];
+            op_init_and_name = {
+                "softplus_tile_init();",
+                fmt::format(
+                    "softplus_tile({}, {}u, {}u, {}u);",
+                    idst,
+                    Converter::to_hex(param0),
+                    Converter::to_hex(1.0f / param0),  // Pass reciprocal to avoid doing it on device
+                    Converter::to_hex(param1))};
+            break;
+        }
         default: TT_ASSERT(false && "unexpected parameterized type");
     };
     return op_init_and_name;

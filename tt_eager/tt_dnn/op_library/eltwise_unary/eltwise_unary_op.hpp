@@ -66,6 +66,7 @@ enum class UnaryOpType {
     RSUB,
     RDIV,
     SILU,
+    SOFTPLUS,
     IDENTITY,
     NEG,
     ADD_UNARY_SFPU,
@@ -95,6 +96,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::RSUB:
         case UnaryOpType::RDIV:
         case UnaryOpType::EXP:
+        case UnaryOpType::SOFTPLUS:
         case UnaryOpType::ADD_UNARY_SFPU:
         case UnaryOpType::SUB_UNARY_SFPU:
         case UnaryOpType::MUL_UNARY_SFPU:
@@ -154,6 +156,8 @@ inline UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::SIGN);
     else if (name == "square")
         return UnaryWithParam(UnaryOpType::SQUARE);
+    else if (name == "softplus")
+        return UnaryWithParam(UnaryOpType::SOFTPLUS);
     TT_THROW("Unknown unary op: " + name);
 }
 
@@ -421,6 +425,16 @@ inline Tensor sigmoid_accurate(
          UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
          UnaryWithParam(UnaryOpType::RECIP)},
         output_mem_config);
+}
+
+inline Tensor softplus(
+    const Tensor& input_tensor,
+    float beta,
+    float threshold,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    TT_ASSERT(input_tensor.device()->arch() != tt::ARCH::GRAYSKULL, "Softplus is not currently supported on Grayskull");
+    return run_eltwise_unary(
+        input_tensor, {UnaryWithParam(UnaryOpType::SOFTPLUS, {beta, threshold})}, output_mem_config);
 }
 
 inline Tensor unary_chain(

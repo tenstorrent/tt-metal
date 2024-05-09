@@ -110,25 +110,6 @@ Tensor log1p(const Tensor& x, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _log1p)(x, output_mem_config);
 }
 
-// softplus[x] =(1/beta) * log[1 + exp[x * beta]]
-// (x*beta) > threshold ==> x
-// use transformation y = log[1+exp[x]] by broadcast
-Tensor _softplus(const Tensor& x, float beta, float threshold, const MemoryConfig& output_mem_config) {
-    float oned_beta = (1 / beta);
-    Tensor x_beta = mul_unary(x, beta, output_mem_config);
-    Tensor exp_x = exp(x_beta, output_mem_config);
-    Tensor result_log1p = log1p(exp_x, output_mem_config);
-    exp_x.deallocate();
-    Tensor sp_result = mul_unary(result_log1p,  oned_beta, output_mem_config);
-    result_log1p.deallocate();
-    sp_result = where(gt(x_beta, full_like(x, threshold, output_mem_config), std::nullopt, output_mem_config), x,
-                where(eqz(full_like(x, beta, output_mem_config), output_mem_config), std::numeric_limits<float>::infinity(), sp_result), output_mem_config);
-    return sp_result;
-}
-Tensor softplus(const Tensor& a, float beta, float threshold, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _softplus)(a, beta, threshold, output_mem_config);
-}
-
 // tanhshrink(x) = x - tanh(x)
 Tensor _tanhshrink(const Tensor& x, const MemoryConfig& output_mem_config) {
     Tensor tan_x = tanh(x, output_mem_config);
