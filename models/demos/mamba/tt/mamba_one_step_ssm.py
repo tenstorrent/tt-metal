@@ -179,15 +179,17 @@ class TtMambaSSM(torch.nn.Module):
         ttnn.deallocate(delta_t2)
         ttnn.deallocate(B0)
 
-        x0 = self.transformer.repeat_interleave(
+        # bbar * x
+        bmulx0 = ttnn.experimental.operations.primary.transformers.ssm_eltwise_mul(
+            bbar0,
             x,
-            memory_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            output_mem_config=ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+            ),
         )
-        bmulx0 = ttnn.mul(bbar0, x0, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # deallocate bbar
         ttnn.deallocate(bbar0)
-        ttnn.deallocate(x0)
 
         # add amulh and bmulx
         hidden_state1 = ttnn.add(amulh0, bmulx0, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -206,25 +208,25 @@ class TtMambaSSM(torch.nn.Module):
             core_grid=ttnn.CoreGrid(y=self.core_grid_row, x=self.core_grid_col),
         )  # b,n
 
-        # repeat using mask+matmul instead of ttnn.repeat to avoid fallback
-        C1 = self.transformer.repeat(
+        # c * hidden_state
+        C1 = ttnn.experimental.operations.primary.transformers.ssm_eltwise_mul(
             C0,
-            memory_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-        )
-        ttnn.deallocate(C0)
-
-        C2 = ttnn.mul(hidden_state1, C1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(hidden_state1)
-        ttnn.deallocate(C1)
-
-        # Reduction matmul
-        C3 = ttnn.experimental.operations.primary.transformers.ssm_1d_sum_reduce(
-            C2,
+            hidden_state1,
             output_mem_config=ttl.tensor.MemoryConfig(
                 ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
             ),
         )
-        ttnn.deallocate(C2)
+        ttnn.deallocate(hidden_state1)
+        ttnn.deallocate(C0)
+
+        # Reduction matmul
+        C2 = ttnn.experimental.operations.primary.transformers.ssm_1d_sum_reduce(
+            C1,
+            output_mem_config=ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+            ),
+        )
+        ttnn.deallocate(C1)
 
         # x * D
         D = ttnn.to_memory_config(self.D, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -232,8 +234,8 @@ class TtMambaSSM(torch.nn.Module):
         ttnn.deallocate(x)
 
         # add xD and x
-        output = ttnn.add(xD, C3, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(C3)
+        output = ttnn.add(xD, C2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(C2)
         ttnn.deallocate(xD)
 
         return output
