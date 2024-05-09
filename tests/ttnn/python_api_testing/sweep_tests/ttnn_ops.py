@@ -2572,7 +2572,7 @@ def pow(
     x,
     y,
     *args,
-    exponent,
+    exponent=None,
     device,
     dtype,
     layout,
@@ -2581,8 +2581,14 @@ def pow(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.pow(t0, exponent, memory_config=memory_config_to_ttnn(output_mem_config))
-    return ttnn_tensor_to_torch(t1)
+
+    if exponent is not None:
+        t1 = ttnn.pow(t0, exponent, memory_config=memory_config_to_ttnn(output_mem_config))
+        return ttnn_tensor_to_torch(t1)
+    else:
+        t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+        t2 = ttnn.pow(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+        return ttnn_tensor_to_torch(t2)
 
 
 def logaddexp(
