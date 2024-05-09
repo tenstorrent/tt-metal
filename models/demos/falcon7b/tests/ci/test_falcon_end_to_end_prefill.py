@@ -4,32 +4,31 @@
 
 import pytest
 
-import tt_lib
-
 from models.demos.falcon7b.tests.test_falcon_end_to_end import run_test_FalconCausalLM_end_to_end
 from models.demos.falcon7b.tt.model_config import get_model_config
 from models.utility_functions import disable_compilation_reports, disable_persistent_kernel_cache, skip_for_grayskull
 
 
 @pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len",
+    "llm_mode, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc",
     (
-        ("prefill", 1, 32, 0),
-        ("prefill", 1, 128, 0),
+        ("prefill", 32, 1, 32, 0, "BFLOAT16-DRAM", 0.97, 0.95, 0.95),
+        ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.97, 0.99, 0.96),
+        ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96),
+        # ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96), # CI machines don't have enough RAM memory to run this test atm; to reduce memory usage (#8349)
     ),
-    ids=["prefill_seq32", "prefill_seq128"],
-)
-@pytest.mark.parametrize(
-    "num_layers, out_pcc, cache_pcc",
-    ((32, 0.97, 0.95),),
-    ids=["layers_32"],
+    ids=[
+        "prefill_seq32",
+        "prefill_seq128",
+        "prefill_seq1024",
+        # "prefill_seq2048",
+    ],
 )
 @pytest.mark.parametrize(
     "model_version",
     ("tiiuae/falcon-7b-instruct",),
     ids=["falcon_7b"],
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
 @skip_for_grayskull()
 def test_FalconCausalLM_end_to_end_with_program_cache(
     device,
@@ -40,17 +39,13 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     seq_len,
     kv_cache_len,
     num_layers,
-    out_pcc,
-    cache_pcc,
+    expected_output_pcc,
+    expected_k_cache_pcc,
+    expected_v_cache_pcc,
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
 ):
-    is_grayskull = device.arch() == tt_lib.device.Arch.GRAYSKULL
-    if is_grayskull:
-        out_pcc = 0.86
-        cache_pcc = 0.86
-
     model_config = get_model_config(model_config_str, seq_len)
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
@@ -67,8 +62,9 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
         seq_len,
         kv_cache_len,
         num_layers,
-        out_pcc,
-        cache_pcc,
+        expected_output_pcc,
+        expected_k_cache_pcc,
+        expected_v_cache_pcc,
         model_config,
         tt_cache_path,
         model_location_generator,

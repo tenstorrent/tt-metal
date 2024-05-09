@@ -10,7 +10,6 @@ from typing import List, Optional, Tuple
 import tt_lib
 
 from models.utility_functions import (
-    torch2tt_tensor,
     tt2torch_tensor,
     pad_by_zero,
     nearest_32,
@@ -172,17 +171,19 @@ class TtFalconAttentionPrefill(nn.Module):
             model_config=model_config,
             tt_cache_path=tt_cache_path,
         )
-        if not model_config["OPTIMIZED_MODE"]:
-            scale = 1 / math.sqrt(self.head_dim)
-            self.scalar = []
-            for device in self.devices:
-                self.scalar.append(pad_by_zero(torch.Tensor([scale]), device)[0])
-        else:
-            # optimized version can utilize single float value for softmax
-            self.scalar = 1 / math.sqrt(self.head_dim)
+
+        scale = 1 / math.sqrt(self.head_dim)
+        self.scalar = []
+        for device in self.devices:
+            self.scalar.append(pad_by_zero(torch.Tensor([scale]), device)[0])
+
+        # optimized version can utilize single float value for softmax
+        if self.model_config["PREFILL_OPTIMIZED_MODE"]:
+            self.scalar_for_optimized_prefill = 1 / math.sqrt(self.head_dim)
 
         # generate output buffer on device
-        if "ATTN_OUTPUT_TENSORS" not in self.model_config and self.model_config["OPTIMIZED_MODE"]:
+        if self.model_config["PREFILL_OPTIMIZED_MODE"] and "ATTN_OUTPUT_TENSORS" not in self.model_config:
+            self.model_config["ATTN_OUTPUT_TENSORS"] = {}
             # create output tensors
             for seq_len in [128, 1024, 2048]:
                 tensor = torch.zeros((1, self.num_heads, seq_len, self.head_dim)).bfloat16().float()
@@ -215,7 +216,11 @@ class TtFalconAttentionPrefill(nn.Module):
 
         seq_len = hidden_states[0].get_legacy_shape()[2]
 
-        if seq_len in [128, 1024, 2048] and self.model_config["OPTIMIZED_MODE"]:
+        if (
+            self.model_config["PREFILL_OPTIMIZED_MODE"]
+            and self.model_config["PREFILL_ATTENTION_OPTIMIZED_MODE"]
+            and seq_len in [128, 1024, 2048]
+        ):
             attn_output, layer_present = self._optimized_forward(
                 hidden_states,
                 attention_mask,
@@ -443,9 +448,6 @@ class TtFalconAttentionPrefill(nn.Module):
         num_cores = grid_size[0] * grid_size[1]
         num_slices = {128: 1, 1024: 4, 2048: 16}[seq_len]
 
-        attention_output_shape = [1, self.num_heads, seq_len, self.head_dim]
-        torch_attention_output = torch.randn(attention_output_shape).bfloat16().float()
-
         tiles_per_shard = math.ceil((((self.num_heads * seq_len) / num_cores) / num_slices) / 32)
         mm_activations_height_shard_spec = [tiles_per_shard * 32, 2 * 32]
         mm_output_height_shard_spec = [tiles_per_shard * 32, seq_len]
@@ -495,7 +497,7 @@ class TtFalconAttentionPrefill(nn.Module):
             mm_slices = [
                 tt_lib.operations.primary.transformers.scale_causal_mask_hw_dims_softmax_in_place(
                     mm_slices[device_id],
-                    self.scalar,
+                    self.scalar_for_optimized_prefill,
                     attention_mask[device_id][i],
                     program_config=softmax_program_config,
                     compute_kernel_config=self.model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"],

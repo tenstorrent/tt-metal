@@ -94,6 +94,7 @@ def run_test_FalconCausalLM_inference(
         head_dim,
         max_position_embeddings,
         configuration,
+        model_config,
         num_layers=num_layers,
         generate_attention_inputs=False,
     )
