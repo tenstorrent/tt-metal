@@ -117,7 +117,7 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     TT_FATAL(
-        (input_tensor_a.get_legacy_shape() == input_tensor_b.get_legacy_shape()) and
+        (input_tensor_a.get_legacy_shape() == input_tensor_b.get_legacy_shape()) or
             (input_tensor_a.get_legacy_shape().without_padding() ==
              input_tensor_b.get_legacy_shape().without_padding()),
         "Input shapes must be the same!");
