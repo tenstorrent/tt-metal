@@ -15,6 +15,8 @@
 #include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_eager/tt_dnn/op_library/conv/optimized_conv_op.hpp"
 #include "tt_eager/tensor/tensor.hpp"
+#include "tt_eager/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
+
 using namespace tt;
 namespace ttnn {
 
@@ -80,19 +82,6 @@ static inline const std::array<ttnn::TensorSchema, 3> input_schemas{
         4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT}, true, true, false},
    ttnn::TensorSchema{
         4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT}, true, true, false}};
-
-
-struct ParallelConfig {
-    CoreRangeSet grid = {{}};
-    TensorMemoryLayout shard_scheme;
-    ShardOrientation shard_orientation;
-    bool operator==(const ParallelConfig &other) {
-        return (grid == other.grid && shard_scheme == other.shard_scheme && shard_orientation == other.shard_orientation);
-    }
-    bool operator!=(const ParallelConfig &other) {
-        return !(*this == other);
-    }
-};
 
 uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor) {
     uint32_t divisor = start_divisor;
