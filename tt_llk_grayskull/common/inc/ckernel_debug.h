@@ -211,6 +211,7 @@ inline void dbg_get_array_row(const uint32_t array_id, const uint32_t row_addr, 
     dbg_bus_cntl.f.en = 1;
 
     for (uint32_t i=0; i<8; i++) {
+       dbg_bus_cntl.f.sig_sel = i>>2;
        dbg_bus_cntl.f.rd_sel = i<<1; // Sel 16-bit
        reg_write(RISCV_DEBUG_REG_DBG_BUS_CNTL_REG, dbg_bus_cntl.val);
        wait (5); // Wait for value to get stable
