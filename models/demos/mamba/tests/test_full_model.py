@@ -39,6 +39,7 @@ class MambaPytorch(torch.nn.Module):
         x = self.lm_head(x)
         return x
 
+
 def run_inference(
     device: ttnn.Device,
     use_program_cache,
@@ -109,7 +110,7 @@ def test_inference(
     iterations: int,
 ):
     run_inference(device, use_program_cache, model_version, batch, pcc, cache_dir, num_layers, iterations)
-    
+
 
 @skip_for_grayskull("Not supported on Grayskull")
 @pytest.mark.parametrize(
@@ -123,7 +124,7 @@ def test_device_perf(
     model_version="state-spaces/mamba-2.8b",
     batch=32,
     pcc=0.97,
-    cache_dir="/tmp",
+    cache_dir=None,
     num_layers=1,
 ):
     run_inference(device, use_program_cache, model_version, batch, pcc, cache_dir, num_layers, iterations)
