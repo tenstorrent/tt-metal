@@ -572,6 +572,10 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_signbit,
         "pytorch_op": pytorch_ops.signbit,
     },
+    "eltwise-floor": {
+        "tt_op": tt_lib_ops.eltwise_floor,
+        "pytorch_op": pytorch_ops.unary_floor,
+    },
     "eltwise-rpow": {
         "tt_op": tt_lib_ops.eltwise_rpow,
         "pytorch_op": pytorch_ops.eltwise_rpow,
