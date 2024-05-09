@@ -39,6 +39,7 @@ class upsample2d:
     ):
         self.input_height = input_height
         self.input_width = input_width
+        self.batch_size = batch_size
         self.device = device
         self.parameters = parameters
         parameters.conv.weight, parameters.conv.bias = permute_conv_parameters(
@@ -53,11 +54,12 @@ class upsample2d:
         in_channels = parameters.conv.weight.shape[1]
         # breakpoint()
         parameters.conv.bias = torch.reshape(parameters.conv.bias, (1, 1, 1, out_channels))
-        tt_weight_tensor = ttnn.from_torch(parameters.conv.weight, ttnn.float32)
-        tt_bias_tensor = ttnn.from_torch(parameters.conv.bias, ttnn.float32)
-        conv_config_override = {}
+        self.conv_weights = ttnn.from_torch(parameters.conv.weight, ttnn.float32)
+        self.conv_bias = ttnn.from_torch(parameters.conv.bias, ttnn.float32)
+        self.conv_config_override = {}
         if (out_channels, in_channels, input_height, input_width) in config_override:
-            conv_config_override = config_override[(out_channels, in_channels, input_height, input_width)]
+            self.conv_config_override = config_override[(out_channels, in_channels, input_height, input_width)]
+
         self.conv = ttnn.Conv2d(
             in_channels,
             out_channels,
@@ -71,11 +73,11 @@ class upsample2d:
             input_height=input_height,
             input_width=input_width,
             reader_patterns_cache=reader_patterns_cache,
-            weight=tt_weight_tensor,
-            bias=tt_bias_tensor,
+            weight=self.conv_weights,
+            bias=self.conv_bias,
             math_fidelity=ttnn.MathFidelity.LoFi,
             weights_dtype=ttnn.bfloat8_b,
-            conv_blocking_and_parallelization_config_override=conv_config_override,
+            conv_blocking_and_parallelization_config_override=self.conv_config_override,
             use_shallow_conv_variant=False,
             # enable_auto_formatting=True,
             deallocate_activation=True,
@@ -95,6 +97,34 @@ class upsample2d:
         if ttnn.get_memory_config(tt_out) != self.conv.conv.input_sharded_memory_config:
             tt_out = ttnn.to_memory_config(tt_out, self.conv.conv.input_sharded_memory_config)
         tt_out = self.conv(tt_out)
+        conv_config = ttnn.ConvConfig(
+            dtype=ttnn.bfloat8_b,
+            weights_dtype=ttnn.bfloat8_b,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            activation=None,
+            height_sharding=False,
+            input_channels_alignment=32,
+        )
+        if self.conv_config_override and "act_block_h" in self.conv_config_override:
+            print("Setting Act Block H to ", self.conv_config_override["act_block_h"])
+            conv_config.act_block_h = self.conv_config_override["act_block_h"]
+
+        [tt_out, _out_height, _out_width, _dev_weights, _dev_bias] = ttnn.conv2d(
+            input_tensor=tt_out,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            weight_tensor=self.conv_weights,
+            bias_tensor=self.conv_bias,
+            device=self.device,
+            kernel_size=(3, 3),
+            stride=(1, 1),
+            padding=(1, 1),
+            batch_size=self.batch_size,
+            input_height=self.input_height,
+            input_width=self.input_width,
+            conv_config=conv_config,
+            reshard_if_not_optimal=True,
+        )
         # tt_out = run_ttnn_conv_with_pre_and_post_tensor_formatting(
         #     self.device,
         #     self.conv,

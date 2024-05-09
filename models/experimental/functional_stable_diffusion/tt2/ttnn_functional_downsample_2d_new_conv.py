@@ -54,21 +54,24 @@ class downsample_2d:
             parameters.conv.weight, parameters.conv.bias
         )
         parameters.conv.bias = torch.reshape(parameters.conv.bias, (1, 1, 1, parameters.conv.bias.shape[-1]))
-        tt_weight_tensor = ttnn.from_torch(parameters.conv.weight, ttnn.float32)
-        tt_bias_tensor = ttnn.from_torch(parameters.conv.bias, ttnn.float32)
 
-        out_channels = parameters.conv.weight.shape[0]
-        in_channels = parameters.conv.weight.shape[1]
+        self.conv_weights = ttnn.from_torch(parameters.conv.weight, ttnn.float32)
+        self.conv_bias = ttnn.from_torch(parameters.conv.bias, ttnn.float32)
+        self.input_height = input_height
+        self.input_width = input_width
+
+        self.out_channels = parameters.conv.weight.shape[0]
+        self.in_channels = parameters.conv.weight.shape[1]
         conv_config_override = {}
         if (out_channels, in_channels, input_height, input_width) in config_override:
             conv_config_override = config_override[(out_channels, in_channels, input_height, input_width)]
 
-        stride = 2
+        self.stride = 2
         self.conv = ttnn.Conv2d(
             in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=(3, 3),
-            stride=(stride, stride),
+            stride=(self.stride, self.stride),
             padding=(1, 1),
             dtype=ttnn.bfloat8_b,
             device=device,
@@ -77,8 +80,8 @@ class downsample_2d:
             input_height=input_height,
             input_width=input_width,
             reader_patterns_cache=reader_patterns_cache,
-            weight=tt_weight_tensor,
-            bias=tt_bias_tensor,
+            weight=self.conv_weights,
+            bias=self.conv_bias,
             math_fidelity=ttnn.MathFidelity.LoFi,
             weights_dtype=ttnn.bfloat8_b,
             conv_blocking_and_parallelization_config_override=conv_config_override,
@@ -110,7 +113,34 @@ class downsample_2d:
 
         if ttnn.get_memory_config(hidden_states) != self.conv.conv.input_sharded_memory_config:
             hidden_states = ttnn.to_memory_config(hidden_states, self.conv.conv.input_sharded_memory_config)
-        hidden_states = self.conv(hidden_states)
+        # hidden_states = self.conv(hidden_states)
+        conv_config = ttnn.ConvConfig(
+            dtype=ttnn.bfloat8_b,
+            weights_dtype=ttnn.bfloat8_b,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            activation=None,
+            height_sharding=True if self.in_channels < 320 else False,
+            input_channels_alignment=32,
+        )
+        if self.conv1_config_override and "act_block_h" in self.conv1_config_override:
+            print("Setting Act Block H to ", self.conv1_config_override["act_block_h"])
+            conv_config.act_block_h = self.conv1_config_override["act_block_h"]
+
+        [hidden_states, _out_height, _out_width, _dev_weights, _dev_bias] = ttnn.conv2d(
+            input_tensor=hidden_states,
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            kernel_size=(3, 3),
+            stride=(self.stride, self.stride),
+            padding=(1, 1),
+            device=self.device,
+            batch_size=self.batch_size,
+            input_height=self.input_height,
+            input_width=self.input_width,
+            weight_tensor=self.conv_weights,
+            bias_tensor=self.conv_bias,
+            conv_config=conv_config,
+        )
         # hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
         #     self.device,
         #     self.conv,

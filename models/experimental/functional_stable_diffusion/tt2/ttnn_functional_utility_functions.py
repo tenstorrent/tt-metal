@@ -24,6 +24,7 @@ def pre_process_input(device, tensor):
     input_height = tensor.shape[2]
     input_width = tensor.shape[3]
     tensor = fallback_ops.permute(tensor, (0, 2, 3, 1), output_layout=ttnn.ROW_MAJOR_LAYOUT, output_on_device=False)
+    print(f"Tensor shape = {batch_size}x{input_height}x{input_channels}x{input_width}")
     import math
 
     assert input_channels == tensor.get_legacy_shape()[3]
@@ -36,6 +37,7 @@ def pre_process_input(device, tensor):
             output_on_device=False,
         )
     # Reshape 4d to 2d
+    print(f"Padded IC = {padded_input_channels}. Original = {input_channels}, Shape = {tensor.shape}")
     tensor = fallback_ops.reshape(
         tensor,
         1,
