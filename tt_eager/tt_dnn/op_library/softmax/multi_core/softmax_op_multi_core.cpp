@@ -238,8 +238,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         if (i >= num_cores) {
             SetRuntimeArgs(program, reader_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }); // [8]=1.0f is scaler
-            SetRuntimeArgs(program, softmax_kernels_id, core, { 0, 0, 0, 0, 0 });
-            SetRuntimeArgs(program, writer_kernels_id, core, { 0, 0, 0, 0 });
+            SetRuntimeArgs(program, softmax_kernels_id, core, { 0, 0, 0, 0, 0, 0 });
+            SetRuntimeArgs(program, writer_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0 });
             continue;
         }
         uint32_t num_tile_rows_per_core = 0;
@@ -370,8 +370,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             CoreCoord core = {i % grid_size.x, i / grid_size.x};
             if (i >= num_cores) {
                 SetRuntimeArgs(program, reader_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }); // [8]=1.0f is scaler
-                SetRuntimeArgs(program, softmax_kernels_id, core, { 0, 0, 0, 0, 0 });
-                SetRuntimeArgs(program, writer_kernels_id, core, { 0, 0, 0, 0 });
+                SetRuntimeArgs(program, softmax_kernels_id, core, { 0, 0, 0, 0, 0, 0 });
+                SetRuntimeArgs(program, writer_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0});
                 continue;
             }
 
