@@ -7,6 +7,7 @@
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_dnn/op_library/compute_kernel_config.hpp"
+#include "tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 
 namespace tt {
 
@@ -152,6 +153,21 @@ Tensor optimized_conv(const Tensor& a, const Tensor &b, std::optional<const Tens
     std::optional<std::array<std::uint32_t, 4>> input_tensor_shape = std::nullopt,
     bool use_shallow_conv_variant = false,
     bool tranpose_mcast = true,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
+);
+
+// new micro op
+Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias,
+    const SlidingWindowConfig& sliding_window_config,
+    const ParallelConfig& parallel_config,
+    uint32_t output_channels,
+    bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
+    const OptimizedConvParallelizationConfig& parallelization_config,
+    const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment=0,
+    std::optional<MemoryConfig> output_mem_config = std::nullopt,
+    std::optional<DataType> output_dtype=std::nullopt,
+    std::optional<std::array<std::uint32_t, 4>> input_tensor_shape = std::nullopt,
+    bool use_shallow_conv_variant = false,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
 );
 
