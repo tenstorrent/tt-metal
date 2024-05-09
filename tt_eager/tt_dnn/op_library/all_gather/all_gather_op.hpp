@@ -217,7 +217,6 @@ std::vector<Tensor> line_all_gather(
     const uint32_t num_links = 1,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-
 struct ShardedAllGatherConfig {
     ShardedAllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim)
         {
@@ -745,5 +744,17 @@ class EriscDatamoverBuilder {
 };
 
 }  // namespace tt_metal
+
+namespace operations {
+namespace ccl {
+
+Tensor all_gather(
+    const Tensor& input_tensor,
+    const uint32_t dim,
+    const uint32_t num_links = 1,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
+} // namespace ccl
+} // namespace operations
 
 }  // namespace tt

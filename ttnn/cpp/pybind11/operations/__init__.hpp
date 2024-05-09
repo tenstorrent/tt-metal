@@ -9,6 +9,7 @@
 
 #include "unary.hpp"
 #include "binary.hpp"
+#include "ccl.hpp"
 #include "core.hpp"
 #include "matmul.hpp"
 #include "transformer.hpp"
@@ -38,6 +39,9 @@ void py_module(py::module& module) {
 
     auto m_normalization = module.def_submodule("normalization", "normalization operations");
     normalization::py_module(m_normalization);
+
+    auto m_ccl = module.def_submodule("ccl", "collective communication operations");
+    ccl::py_module(m_ccl);
 }
 
 }  // namespace operations
