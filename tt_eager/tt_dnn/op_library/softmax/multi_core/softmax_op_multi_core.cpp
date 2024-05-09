@@ -50,7 +50,6 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     if (W > W_unpadded) {
         mask_padded_data = true;
         num_datum_padded = W - W_unpadded;
-
     }
 
     uint32_t Wt = W/TILE_WIDTH;
@@ -165,16 +164,13 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     }
 
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      out0_is_dram, num_datum_padded};
+                                                      out0_is_dram};
     std::map<string, string> softmax_defines;
     if (mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
     }
     if (causal_mask) {
         softmax_defines["CAUSAL_MASK"] = "1";
-    }
-    if (mask_padded_data) {
-        softmax_defines["MASK_PADDING"] = "1";
     }
     auto reader_kernels_id = CreateKernel(
         program, "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/reader_unary_interleaved_sm.cpp", all_device_cores,
@@ -229,10 +225,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         CircularBufferConfig c_in4_config = CircularBufferConfig(in4_t * mask_tile_size, {{CB::c_in4, mask_cb_data_format}}).set_page_size(CB::c_in4, mask_tile_size);
         cb_in4_id = CreateCircularBuffer( program, all_device_cores, c_in4_config);
     }
-    if (mask_padded_data) {
-        CircularBufferConfig c_in5_config = CircularBufferConfig(in5_t * mask_tile_size, {{CB::c_in5, mask_cb_data_format}}).set_page_size(CB::c_in5, mask_tile_size);
-        cb_in5_id = CreateCircularBuffer( program, all_device_cores, c_in5_config);
-    }
+    CircularBufferConfig c_in5_config = CircularBufferConfig(in5_t * mask_tile_size, {{CB::c_in5, mask_cb_data_format}}).set_page_size(CB::c_in5, mask_tile_size);
+    cb_in5_id = CreateCircularBuffer( program, all_device_cores, c_in5_config);
+
     uint32_t src_addr = src0_buffer->address();
     uint32_t mask_addr = mask.has_value() ? mask.value().buffer()->address() : 0;
     uint32_t out_addr = out0_buffer->address();
@@ -268,13 +263,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             SetRuntimeArgs(program, reader_kernels_id, core, { src_addr, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_addr, curr_ht, mask_id, 0x3f803f80 }); // [10]=1.0f is scaler
         }
 
-        SetRuntimeArgs(program, softmax_kernels_id, core, { num_tile_rows_per_core, Ht, Wt, block_size, curr_ht });
+        SetRuntimeArgs(program, softmax_kernels_id, core, { num_tile_rows_per_core, Ht, Wt, block_size, curr_ht, mask_padded_data });
 
-        if (mask_padded_data) {
-            SetRuntimeArgs(program, writer_kernels_id, core, { out_addr, num_tile_rows_per_core * Wt, tile_offset, block_size, 0xFF00FF00});
-        } else {
-            SetRuntimeArgs(program, writer_kernels_id, core, { out_addr, num_tile_rows_per_core * Wt, tile_offset, block_size});
-        }
+        SetRuntimeArgs(program, writer_kernels_id, core, { out_addr, num_tile_rows_per_core * Wt, tile_offset, block_size, mask_padded_data, num_datum_padded, 0xFF00FF00});
 
         curr_row += num_tile_rows_per_core;
     }
@@ -319,6 +310,15 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
         uint32_t Wt = W/TILE_WIDTH;
         uint32_t Ht = H/TILE_HEIGHT;
+
+        bool mask_padded_data = false;
+        uint32_t num_datum_padded = 0;
+        const auto shape_unpadded = input_tensors.at(0).get_shape();
+        uint32_t W_unpadded = shape_unpadded[-1];
+        if (W > W_unpadded) {
+            mask_padded_data = true;
+            num_datum_padded = W - W_unpadded;
+        }
 
         int32_t num_tiles = input_tensors.at(0).volume()/TILE_HW;
         uint32_t block_size = find_max_divisor(Wt, 8);
@@ -396,8 +396,10 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                 SetRuntimeArgs(program, reader_kernels_id, core, { src_buffer_address, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_buffer_address, curr_ht, mask_id, 0x3f803f80 }); // [10]=1.0f is scaler
             }
 
-            SetRuntimeArgs(program, softmax_kernels_id, core, { num_tile_rows_per_core, Ht, Wt, block_size, curr_ht });
-            SetRuntimeArgs(program, writer_kernels_id, core, { dst_buffer_address, num_tile_rows_per_core * Wt, tile_offset, block_size });
+            SetRuntimeArgs(program, softmax_kernels_id, core, { num_tile_rows_per_core, Ht, Wt, block_size, curr_ht, mask_padded_data });
+
+            SetRuntimeArgs(program, writer_kernels_id, core, { dst_buffer_address, num_tile_rows_per_core * Wt, tile_offset, block_size, mask_padded_data, num_datum_padded, 0xFF00FF00});
+
             curr_row += num_tile_rows_per_core;
         }
     };
