@@ -768,6 +768,30 @@ struct TensorSchema {
     const bool can_be_on_cpu;
     const bool can_be_scalar;
     const bool is_optional;
+
+    static constexpr auto attribute_names() {
+        return std::make_tuple(
+            "min_rank",
+            "max_rank",
+            "dtypes",
+            "layouts",
+            "can_be_on_device",
+            "can_be_on_cpu",
+            "can_be_scalar",
+            "is_optional");
+    }
+
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->min_rank),
+            std::cref(this->max_rank),
+            std::cref(this->dtypes),
+            std::cref(this->layouts),
+            std::cref(this->can_be_on_device),
+            std::cref(this->can_be_on_cpu),
+            std::cref(this->can_be_scalar),
+            std::cref(this->is_optional));
+    }
 };
 
 }  // namespace types

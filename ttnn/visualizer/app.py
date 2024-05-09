@@ -130,7 +130,7 @@ def root():
 def apis():
     @dataclasses.dataclass
     class Api:
-        fully_qualified_name: str
+        python_fully_qualified_name: str
         is_experimental: bool
         is_cpp_function: bool
         golden_function: callable
@@ -139,7 +139,7 @@ def apis():
         @classmethod
         def from_registered_operation(cls, operation):
             return cls(
-                fully_qualified_name=operation.fully_qualified_name,
+                python_fully_qualified_name=operation.python_fully_qualified_name,
                 is_experimental=operation.is_experimental,
                 is_cpp_function=operation.is_cpp_function,
                 golden_function=operation.golden_function,
@@ -149,7 +149,7 @@ def apis():
     apis = [Api.from_registered_operation(api) for api in ttnn.query_registered_operations(include_experimental=True)]
 
     df = pd.DataFrame(apis)
-    df.sort_values(by=["is_experimental", "is_cpp_function", "fully_qualified_name"], inplace=True)
+    df.sort_values(by=["is_experimental", "is_cpp_function", "python_fully_qualified_name"], inplace=True)
     df["has_fallback"] = df["golden_function"].apply(lambda golden_function: golden_function is not None)
     df["will_fallback"] = df[["has_fallback", "allow_to_fallback_to_golden_function_on_failure"]].apply(
         lambda row: row.has_fallback and row.allow_to_fallback_to_golden_function_on_failure, axis=1
@@ -159,7 +159,13 @@ def apis():
         apis=df.to_html(
             index=False,
             justify="center",
-            columns=["fully_qualified_name", "is_cpp_function", "is_experimental", "has_fallback", "will_fallback"],
+            columns=[
+                "python_fully_qualified_name",
+                "is_cpp_function",
+                "is_experimental",
+                "has_fallback",
+                "will_fallback",
+            ],
         ),
     )
 

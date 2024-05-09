@@ -360,7 +360,10 @@ def to_torch(
             if tensor.shape[0] != 1:
                 raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
             tensor = tensor.squeeze()
-    return TorchTensor(tensor)
+
+    if not ttnn.CONFIG.enable_fast_runtime_mode:
+        tensor = TorchTensor(tensor)
+    return tensor
 
 
 def _to_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):

@@ -43,19 +43,59 @@ struct pybind_overload_t {
     pybind_overload_t(function_t function, py_args_t... args) : function{function}, args{args...} {}
 };
 
+template <auto id, typename concrete_operation_t>
+std::string append_input_tensor_schemas_to_doc(
+    const operation_t<id, concrete_operation_t>& operation, const std::string& doc) {
+    std::stringstream updated_doc;
+
+    auto write_row = [&updated_doc]<typename Tuple>(const Tuple& tuple) {
+        auto index = 0;
+
+        std::apply(
+            [&index, &updated_doc](const auto&... args) {
+                (
+                    [&index, &updated_doc](const auto& item) {
+                        updated_doc << "        ";
+                        if (index == 0) {
+                            updated_doc << " * - ";
+                        } else {
+                            updated_doc << "   - ";
+                        }
+                        updated_doc << fmt::format("{}", item);
+                        updated_doc << "\n";
+                        index++;
+                    }(args),
+                    ...);
+            },
+            tuple);
+    };
+
+    updated_doc << doc << "\n\n";
+    auto tensor_index = 0;
+    for (const auto& schema : concrete_operation_t::input_tensor_schemas()) {
+        updated_doc << "    .. list-table:: Input Tensor " << tensor_index << "\n\n";
+        write_row(ttnn::TensorSchema::attribute_names());
+        write_row(schema.attribute_values());
+        tensor_index++;
+        updated_doc << "\n";
+    }
+    updated_doc << "\n";
+    return updated_doc.str();
+}
+
 template <auto id, typename concrete_operation_t, typename... overload_t>
 auto bind_registered_operation(
     py::module& module,
     const operation_t<id, concrete_operation_t>& operation,
-    const std::string doc,
+    const std::string& doc,
     overload_t&&... overloads) {
     using registered_operation_t = operation_t<id, concrete_operation_t>;
 
-    const auto fully_qualified_name = std::string{operation.fully_qualified_name};
+    const auto cpp_fully_qualified_name = std::string{operation.cpp_fully_qualified_name};
 
     py::class_<registered_operation_t> py_operation(module, operation.class_name().c_str());
 
-    py_operation.doc() = doc.c_str();
+    py_operation.doc() = append_input_tensor_schemas_to_doc(operation, doc).c_str();
 
     py_operation.def_property_readonly(
         "name",
@@ -63,8 +103,8 @@ auto bind_registered_operation(
         "Shortened name of the api");
 
     py_operation.def_property_readonly(
-        "fully_qualified_name",
-        [](const registered_operation_t& self) -> const std::string { return self.python_name(); },
+        "python_fully_qualified_name",
+        [](const registered_operation_t& self) -> const std::string { return self.python_fully_qualified_name(); },
         "Fully qualified name of the api");
 
     py_operation.def_property_readonly(
