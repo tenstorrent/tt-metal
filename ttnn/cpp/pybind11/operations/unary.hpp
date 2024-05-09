@@ -52,8 +52,15 @@ void bind_unary(py::module& module, const unary_operation_t& operation) {
 
 template <typename unary_operation_t>
 void bind_unary_with_bool_parameter_set_to_false_by_default(py::module& module, const unary_operation_t& operation) {
+    std::string parameter_description;
+    if (operation.name() == "exp") {
+        parameter_description = "Use fast and approximate mode";
+    } else {
+        TT_THROW("Unknown name!");
+    }
+
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, *, parameter: float, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc({0}(input_tensor: ttnn.Tensor, *, parameter: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
         Applies {0} to :attr:`input_tensor` element-wise.
 
@@ -64,7 +71,7 @@ void bind_unary_with_bool_parameter_set_to_false_by_default(py::module& module, 
             * :attr:`input_tensor`
 
         Keyword Args:
-            * :attr:`parameter` (float): Parameter for the operation.
+            * :attr:`parameter` (bool): {2}.
             * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
 
         Example::
@@ -73,6 +80,7 @@ void bind_unary_with_bool_parameter_set_to_false_by_default(py::module& module, 
             >>> output = {1}(tensor, parameter=true)
     )doc",
         operation.name(),
+        parameter_description,
         operation.python_fully_qualified_name());
 
     bind_registered_operation(

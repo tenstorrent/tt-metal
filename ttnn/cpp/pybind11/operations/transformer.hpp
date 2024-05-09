@@ -26,9 +26,38 @@ void py_module(py::module& module) {
 
             Args:
                 * :attr:`input_tensor`: Input Tensor
+
+            Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor, if None then it gets set to input_tensor.memory_config()
         )doc",
         ttnn::pybind_arguments_t{py::arg("input_tensor"), py::kw_only(), py::arg("memory_config") = std::nullopt});
+
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::transformer::attention_softmax,
+        R"doc(attention_softmax(tensor: ttnn.Tensor, *, head_size: Optional[int] = None, attention_mask: Optional[ttnn.Tensor] = None, program_config: Optional[SoftmaxProgramConfig] = SoftmaxDefaultProgramConfig(), causal_mask: bool = False,  memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+            Divides :attr:`tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
+
+            Args:
+                * :attr:`tensor`: Input Tensor
+
+            Keyword Args:
+                * :attr:`head_size`: Number of heads
+                * :attr:`attention_mask`: Attention Mask
+                * :attr:`program_config`: Program Config of the output tensor
+                * :attr:`causal_mask`: the attention mask is causal
+                * :attr:`memory_config`: Memory Config of the output tensor, defaults to input_tensor.memory_config()
+        )doc",
+        ttnn::pybind_arguments_t{
+            py::arg("tensor"),
+            py::kw_only(),
+            py::arg("head_size") = std::nullopt,
+            py::arg("attention_mask") = std::nullopt,
+            py::arg("program_config").noconvert() =
+                tt::operations::primary::transformers::SoftmaxDefaultProgramConfig{},
+            py::arg("causal_mask") = false,
+            py::arg("memory_config") = std::nullopt});
 
     ttnn::bind_registered_operation(
         module,
@@ -39,9 +68,12 @@ void py_module(py::module& module) {
 
             Args:
                 * :attr:`tensor`: Input Tensor
+
+            Keyword Args:
                 * :attr:`head_size`: Number of heads
                 * :attr:`attention_mask`: Attention Mask
                 * :attr:`program_config`: Program Config of the output tensor
+                * :attr:`causal_mask`: the attention mask is causal
                 * :attr:`memory_config`: Memory Config of the output tensor, defaults to input_tensor.memory_config()
         )doc",
         ttnn::pybind_arguments_t{
