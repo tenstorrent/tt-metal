@@ -47,7 +47,7 @@ std::vector<Tensor> Sharded::create_output_tensors(const std::vector<Tensor>& in
     if (this->sharded_op_type == ShardedOpType::InterleavedToSharded) {
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = this->shard_spec;
-        return {create_sharded_device_tensor(
+        return {create_device_tensor(
             this->compute_output_shapes(input_tensors).at(0),
             this->output_dtype,
             input_tensor.get_layout(),
@@ -109,7 +109,7 @@ std::vector<Tensor> Reshard::create_output_tensors(const std::vector<Tensor>& in
     const auto& input_tensor = input_tensors.at(0);
     auto mem_config = this->output_mem_config;
 
-    return {create_sharded_device_tensor(
+    return {create_device_tensor(
         this->compute_output_shapes(input_tensors).at(0),
         input_tensor.get_dtype(),
         input_tensor.get_layout(),

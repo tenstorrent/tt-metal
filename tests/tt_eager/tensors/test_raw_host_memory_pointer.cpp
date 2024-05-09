@@ -175,7 +175,6 @@ void test_raw_host_memory_pointer() {
     Tensor e_dev = tt::tt_metal::add(c_dev, d_dev);
 
     tt::tt_metal::memcpy(tensor_for_printing, e_dev);
-    tensor_for_printing.print();
 
     for (auto& element : owned_buffer::get_as<bfloat16>(tensor_for_printing)) {
         TT_ASSERT(element == bfloat16(10.0f));

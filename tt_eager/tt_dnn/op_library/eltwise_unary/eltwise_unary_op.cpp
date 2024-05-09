@@ -299,7 +299,7 @@ std::vector<Tensor> EltwiseUnary::create_output_tensors(const std::vector<Tensor
     const auto& input_tensor = input_tensors.at(0);
     if (this->output_mem_config.is_sharded()) {
         Shape output_shape = compute_output_shapes(input_tensors).at(0);
-        return {create_sharded_device_tensor(
+        return {create_device_tensor(
             output_shape,
             input_tensor.get_dtype(),
             input_tensor.get_layout(),

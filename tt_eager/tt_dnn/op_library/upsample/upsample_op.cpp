@@ -63,7 +63,7 @@ std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor> &i
                 mem_config.shard_spec = output_shard_spec;
                 log_debug(LogOp, "output_shard_shape: {}", output_shard_shape);
                 log_debug(LogOp, "output_shard_spec: {}", output_shard_spec);
-                return {create_sharded_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
+                return {create_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
             } else if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
                 auto shard_grid = input_shard_spec.grid.ranges();
                 TT_FATAL(shard_grid.size() == 1, "Block sharded input should have only one CoreRange");
@@ -78,7 +78,7 @@ std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor> &i
                 auto output_shard_shape = output_shard_spec.shape;
                 log_debug(LogOp, "ncores_w, ncores_h: {} {}", ncores_w, ncores_h);
                 log_debug(LogOp, "output_shard_shape: {}", output_shard_shape);
-                return {create_sharded_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
+                return {create_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
             } else {
                 TT_FATAL(false, "input memory config is not HEIGHT or BLOCK sharded");
             }

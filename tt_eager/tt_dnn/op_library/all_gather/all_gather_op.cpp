@@ -73,7 +73,7 @@ std::vector<Shape> AllGather::compute_output_shapes(const std::vector<Tensor> &i
 std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors[0];
     if(this->output_mem_config.is_sharded()) {
-        return {create_sharded_device_tensor(
+        return {create_device_tensor(
             this->compute_output_shapes(input_tensors).at(0),
             input_tensor.get_dtype(),
             input_tensor.get_layout(),

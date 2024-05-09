@@ -795,38 +795,36 @@ uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->get_
 
 Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
     ZoneScoped;
-    uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
-    auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
-    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
-}
+    if (memory_config.is_sharded()) {
+        TT_ASSERT(memory_config.shard_spec.has_value());
+        TT_ASSERT(memory_config.is_l1());
 
-Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
-    ZoneScoped;
-    TT_ASSERT(memory_config.is_sharded());
-    TT_ASSERT(memory_config.shard_spec.has_value());
-    TT_ASSERT(memory_config.is_l1());
+        auto shard_spec = memory_config.shard_spec.value();
+        auto& shard_shape = shard_spec.shape;
 
-    auto shard_spec = memory_config.shard_spec.value();
-    auto& shard_shape = shard_spec.shape;
+        auto width = shape[-1];
+        auto other_dims = 1;
+        for (int i = 0; i < shape.rank() - 1; i++) {
+            other_dims *= shape[i];
+        }
 
-    auto width = shape[-1];
-    auto other_dims = 1;
-    for (int i = 0; i < shape.rank() - 1; i++) {
-        other_dims *= shape[i];
+        auto element_size = tensor_impl::element_size_bytes_wrapper(data_type);
+        auto page_shape = tensor_impl::get_sharded_page_shape(layout, data_type, shard_spec.shape);
+        std::array<uint32_t,2> tensor2d_size = {other_dims/page_shape[0], width/page_shape[1]};
+        ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
+        uint32_t packed_size_in_bytes;
+
+        packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
+        auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape,
+                                                                data_type, layout, memory_config,
+                                                                std::make_optional<ShardSpecBuffer>(shard_spec_buffer)
+                                                                );
+        return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
+    } else {
+        uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
+        auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
+        return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
     }
-
-    auto element_size = tensor_impl::element_size_bytes_wrapper(data_type);
-    auto page_shape = tensor_impl::get_sharded_page_shape(layout, data_type, shard_spec.shape);
-    std::array<uint32_t,2> tensor2d_size = {other_dims/page_shape[0], width/page_shape[1]};
-    ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
-    uint32_t packed_size_in_bytes;
-
-    packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
-    auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape,
-                                                            data_type, layout, memory_config,
-                                                            std::make_optional<ShardSpecBuffer>(shard_spec_buffer)
-                                                            );
-    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
 }
 
 void* get_raw_host_data_ptr(const Tensor& tensor) {
@@ -909,13 +907,8 @@ Tensor allocate_tensor_on_device(const Shape& shape, DataType data_type, Layout 
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
     device->push_work(
         [shape, data_type, layout, device, memory_config, device_tensor] () mutable {
-            if (memory_config.is_sharded()) {
-                auto local_tensor = create_sharded_device_tensor(shape, data_type, layout, device, memory_config);
-                device_tensor.populate_buffers_and_metadata(local_tensor);
-            } else {
-                auto local_tensor = create_device_tensor(shape, data_type, layout, device, memory_config);
-                device_tensor.populate_buffers_and_metadata(local_tensor);
-            }
+            auto local_tensor = create_device_tensor(shape, data_type, layout, device, memory_config);
+            device_tensor.populate_buffers_and_metadata(local_tensor);
         }
     );
     device_tensor.tensor_attributes->update_main_thread_ref_count(device, device_tensor_ref_count);
@@ -933,13 +926,8 @@ Tensor allocate_tensor_on_device(const Shape& shape, DataType data_type, Layout 
         auto& worker = workers[worker_index];
         worker->push_work(
             [shape, data_type, layout, worker, memory_config, device_tensor, worker_index] () mutable {
-                if (memory_config.is_sharded()) {
-                    auto local_tensor = create_sharded_device_tensor(shape, data_type, layout, worker, memory_config);
-                    insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
-                } else {
-                    auto local_tensor = create_device_tensor(shape, data_type, layout, worker, memory_config);
-                    insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
-                }
+                auto local_tensor = create_device_tensor(shape, data_type, layout, worker, memory_config);
+                insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
                 if (not worker->id()) {
                     device_tensor.set_shape(ttnn::Shape(shape));
                     device_tensor.set_dtype(data_type);

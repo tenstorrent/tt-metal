@@ -339,8 +339,6 @@ struct Tensor {
 
 Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig& memory_config = {.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
 
-Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config);
-
 // template<typename Buffer>
 // void *get_host_buffer(const Tensor &tensor);
 void *get_raw_host_data_ptr(const Tensor &tensor);

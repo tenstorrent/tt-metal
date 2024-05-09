@@ -70,7 +70,7 @@ std::vector<Tensor> Downsample::create_output_tensors(const std::vector<Tensor> 
     uint32_t output_shard_width = round_up(output_shape[3], num_cores_width_sliced * TILE_WIDTH) / num_cores_width_sliced;
     auto mem_config = input_tensor.memory_config();
     mem_config.shard_spec =  ShardSpec {input_tensor.shard_spec().value().grid, std::array<uint32_t, 2>{{output_shard_height, output_shard_width}}, input_tensor.shard_spec().value().orientation};
-    return {create_sharded_device_tensor(output_shape, this->output_dtype, Layout::TILE, input_tensor.device(), mem_config)};
+    return {create_device_tensor(output_shape, this->output_dtype, Layout::TILE, input_tensor.device(), mem_config)};
 }
 
 operation::ProgramWithCallbacks Downsample::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {

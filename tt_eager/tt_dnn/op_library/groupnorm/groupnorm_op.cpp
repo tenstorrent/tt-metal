@@ -1841,7 +1841,7 @@ std::vector<Tensor> GroupNorm::create_output_tensors(const std::vector<Tensor> &
     } else {
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = input_tensor.shard_spec();
-        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), program_config.out_data_format, Layout::ROW_MAJOR, input_tensor.device(), mem_config)};
+        return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0), program_config.out_data_format, Layout::ROW_MAJOR, input_tensor.device(), mem_config)};
     }
 }
 operation::ProgramWithCallbacks GroupNorm::create_program(
