@@ -33,6 +33,7 @@ void MAIN {
     const uint32_t Wt = get_arg_val<uint32_t>(2);
     const uint32_t ndst = get_arg_val<uint32_t>(3);
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
+    const uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
     binary_op_init_common(tt::CB::c_in0, tt::CB::c_in2, tt::CB::c_intermed0);
 
     constexpr uint32_t onetile = 1;
@@ -132,34 +133,50 @@ void MAIN {
             pack_reconfig_data_format(cb_exps);
             copy_tile_to_dst_init_short(); // need to copy from CB to DST to be able to run sfpu math
             exp_tile_init<EXP_APPROX>();
-            for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
+            if (mask_padded_data) {
+                for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
+                    ACQ();
+                    cb_wait_front(cb_in0, ndst);
+                    for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
+                        if (wt == (Wt - ndst) && (wt8 == ndst - 1)) {
+                            unpack_reconfig_data_format(cb_in0, cb_mask_padded);
+                            add_bcast_rows_init_short();
+                            cb_wait_front(cb_mask_padded, 1);
+                            add_tiles_bcast_rows(cb_in0, cb_mask_padded, wt8, 0, wt8);
+                        } else {
+                            copy_tile(cb_in0, wt8, wt8); // copy from c_in[0] to DST[0]
+                        }
+                    }
+                    cb_pop_front(cb_in0, ndst);
 
-                ACQ();
-                cb_wait_front(cb_in0, ndst);
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    #ifdef MASK_PADDING
-                    if (wt == (Wt - ndst) && (wt8 == ndst - 1)) {
-                        unpack_reconfig_data_format(cb_in0, cb_mask_padded);
-                        add_bcast_rows_init_short();
-                        cb_wait_front(cb_mask_padded, 1);
-                        add_tiles_bcast_rows(cb_in0, cb_mask_padded, wt8, 0, wt8);
-                    } else {
+                    cb_reserve_back(cb_exps, ndst);
+                    for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
+                        exp_tile<EXP_APPROX>(wt8); // exp on DST[0]
+                        pack_tile(wt8, cb_exps); // DST[0]->cb_id[wt]
+                    }
+                    cb_push_back(cb_exps, ndst);
+                    REL();
+                }
+
+            } else {
+                for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
+                    ACQ();
+                    cb_wait_front(cb_in0, ndst);
+                    for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
                         copy_tile(cb_in0, wt8, wt8); // copy from c_in[0] to DST[0]
                     }
-                    #else
-                    copy_tile(cb_in0, wt8, wt8); // copy from c_in[0] to DST[0]
-                    #endif
-                }
-                cb_pop_front(cb_in0, ndst);
+                    cb_pop_front(cb_in0, ndst);
 
-                cb_reserve_back(cb_exps, ndst);
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    exp_tile<EXP_APPROX>(wt8); // exp on DST[0]
-                    pack_tile(wt8, cb_exps); // DST[0]->cb_id[wt]
+                    cb_reserve_back(cb_exps, ndst);
+                    for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
+                        exp_tile<EXP_APPROX>(wt8); // exp on DST[0]
+                        pack_tile(wt8, cb_exps); // DST[0]->cb_id[wt]
+                    }
+                    cb_push_back(cb_exps, ndst);
+                    REL();
                 }
-                cb_push_back(cb_exps, ndst);
-                REL();
             }
+
             unpack_reconfig_data_format(cb_exps, cb_bcast_scaler);
         #endif
 
