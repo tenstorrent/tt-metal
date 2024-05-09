@@ -204,16 +204,16 @@ void DeviceModule(py::module &m_device) {
     m_device.def("DeallocateBuffers", &detail::DeallocateBuffers, R"doc(
         Deallocate all buffers associated with Device handle
     )doc");
-    m_device.def("BeginTraceCapture", &detail::BeginTraceCapture, R"doc(
+    m_device.def("BeginTraceCapture", &BeginTraceCapture, R"doc(
         Begin trace capture on Device handle
     )doc");
-    m_device.def("EndTraceCapture", &detail::EndTraceCapture, R"doc(
+    m_device.def("EndTraceCapture", &EndTraceCapture, R"doc(
         End trace capture on Device handle
     )doc");
-    m_device.def("ExecuteLastTrace", &detail::ExecuteLastTrace, R"doc(
-        Execute last captured trace on Device handle
+    m_device.def("ReplayTrace", &ReplayTrace, R"doc(
+        Replay last captured trace on Device handle
     )doc");
-    m_device.def("ReleaseLastTrace", &detail::ReleaseLastTrace, R"doc(
+    m_device.def("ReleaseTrace", &ReleaseTrace, R"doc(
         Release last captured Trace on Device handle
     )doc");
 

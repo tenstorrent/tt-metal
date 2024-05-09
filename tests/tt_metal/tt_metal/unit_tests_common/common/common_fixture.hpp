@@ -14,20 +14,21 @@ class CommonFixture: public ::testing::Test {
 public:
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(tt::tt_metal::Device* device, Program& program) {
-        static std::unordered_set<uint64_t> trace_caputured;
+        static std::unordered_map<uint64_t, uint32_t> trace_captured;
         uint64_t program_id = program.get_id();
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program);
         } else if (this->metal_trace_) {
-            if (trace_caputured.find(program_id) == trace_caputured.end()) {
-                tt::tt_metal::detail::BeginTraceCapture(device);
-                EnqueueProgram(device->command_queue(), program, false);
-                tt::tt_metal::detail::EndTraceCapture(device);
-                trace_caputured.insert(program_id);
+            CommandQueue& cq = device->command_queue();
+            if (trace_captured.find(program_id) == trace_captured.end()) {
+                uint32_t tid = tt::tt_metal::BeginTraceCapture(device, cq.id(), 2048);
+                EnqueueProgram(cq, program, false);
+                tt::tt_metal::EndTraceCapture(device, cq.id(), tid);
+                trace_captured[program_id] = tid;
             }
             log_debug(tt::LogTest, "Executing trace for program {}", program_id);
-            tt::tt_metal::detail::ExecuteLastTrace(device, false);
-            Finish(device->command_queue());
+            tt::tt_metal::ReplayTrace(device, cq.id(), trace_captured[program_id], false);
+            Finish(cq);
         } else {
             CommandQueue& cq = device->command_queue();
             EnqueueProgram(cq, program, false);

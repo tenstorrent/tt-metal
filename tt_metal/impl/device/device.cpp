@@ -1293,8 +1293,13 @@ bool Device::close() {
     watcher_detach(this);
 
     for (const std::unique_ptr<HWCommandQueue> &hw_command_queue : hw_command_queues_) {
+        if (hw_command_queue->manager.get_bypass_mode()) {
+            hw_command_queue->record_end();
+        }
         hw_command_queue->terminate();
     }
+    this->trace_buffer_pool_.clear();
+    detail::EnableAllocs(this);
 
     std::unordered_set<CoreCoord> not_done_dispatch_cores;
     std::unordered_set<CoreCoord> cores_to_skip;
@@ -1674,58 +1679,58 @@ bool Device::using_slow_dispatch() const {
     return not (this->using_fast_dispatch);
 }
 
-void Device::begin_trace() {
-    this->trace_contexts_.clear();
-    for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        trace_contexts_.push_back(std::make_shared<detail::TraceDescriptor>());
-        hw_command_queues_[cq_id]->record_begin(trace_contexts_.at(cq_id));
-    }
+void Device::begin_trace(const uint8_t cq_id, const uint32_t tid, const uint32_t trace_buff_size) {
+    TT_FATAL(this->trace_buffer_pool_.count(tid) == 0, "Trace already exists for tid {} on device", tid);
+    TT_FATAL(!this->hw_command_queues_[cq_id]->tid.has_value(), "CQ {} is already being used for tracing tid {}", (uint32_t)cq_id, tid);
+    auto desc = std::make_shared<detail::TraceDescriptor>();
+    detail::EnableAllocs(this);
+    this->trace_buffer_pool_.insert({tid, Trace::create_trace_buffer(this->command_queue(cq_id), desc, trace_buff_size)});
+    this->hw_command_queues_[cq_id]->record_begin(tid, desc);
 }
 
-void Device::end_trace() {
-
-    // Currently only supports one trace at a time per CQ, so release last trace
-    // before instantiating new ones.
-    this->release_last_trace();
-
-    for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        hw_command_queues_[cq_id]->record_end();
-        trace_contexts_.at(cq_id)->data = std::move(this->sysmem_manager().get_bypass_data());
-        uint32_t tid = Trace::instantiate(this->command_queue(cq_id), trace_contexts_.at(cq_id));
-        trace_insts_.push_back(tid);
+void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
+    TT_FATAL(this->hw_command_queues_[cq_id]->tid == tid, "CQ {} is not being used for tracing tid {}", (uint32_t)cq_id, tid);
+    TT_FATAL(this->trace_buffer_pool_.count(tid) > 0, "Trace instance " + std::to_string(tid) + " must exist on device");
+    this->hw_command_queues_[cq_id]->record_end();
+    auto &data = this->trace_buffer_pool_[tid]->desc->data;
+    data = std::move(this->sysmem_manager().get_bypass_data());
+    // Add command to terminate the trace buffer
+    DeviceCommand command_sequence(CQ_PREFETCH_CMD_BARE_MIN_SIZE);
+    command_sequence.add_prefetch_exec_buf_end();
+    for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
+        data.push_back(((uint32_t*)command_sequence.data())[i]);
     }
+    Trace::initialize_buffer(this->command_queue(cq_id), this->trace_buffer_pool_[tid]);
+    detail::DisableAllocs(this);
 }
 
-void Device::execute_last_trace(bool blocking) {
+void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) {
     constexpr bool check = false;
-    for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        if (this->trace_insts_.at(cq_id).has_value()) {
-            uint32_t tid = this->trace_insts_.at(cq_id).value();
-            TT_FATAL(Trace::has_instance(tid), "Trace instance " + std::to_string(tid) + " must exist on device");
-            if constexpr (check) {
-                Trace::validate_instance(tid);
-            }
-            this->command_queue(cq_id).run_command(CommandInterface{
-                .type = EnqueueCommandType::ENQUEUE_TRACE,
-                .blocking = blocking,
-                .trace_id = tid
-            });
-        }
+    TT_FATAL(this->trace_buffer_pool_.count(tid) > 0, "Trace instance " + std::to_string(tid) + " must exist on device");
+    if constexpr (check) {
+        Trace::validate_instance(*this->trace_buffer_pool_[tid]);
+    }
+    this->command_queue(cq_id).run_command(CommandInterface{
+        .type = EnqueueCommandType::ENQUEUE_TRACE,
+        .blocking = blocking,
+        .trace_id = tid
+    });
+}
+
+void Device::release_trace(const uint32_t tid) {
+    uint32_t erased = this->trace_buffer_pool_.erase(tid);
+    // Only enable allocations once all captured traces are released
+    if (this->trace_buffer_pool_.empty()) {
+        detail::EnableAllocs(this);
     }
 }
 
-void Device::release_last_trace() {
-    for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        if (this->trace_insts_.size() > cq_id) {
-            if (this->trace_insts_.at(cq_id).has_value()) {
-                uint32_t tid = this->trace_insts_.at(cq_id).value();
-                if (Trace::has_instance(tid)) {
-                    Trace::remove_instance(tid);
-                }
-            }
-        }
+std::shared_ptr<TraceBuffer> Device::get_trace(const uint32_t tid) {
+    if (auto trace = this->trace_buffer_pool_.find(tid); trace != this->trace_buffer_pool_.end()) {
+        return trace->second;
+    } else {
+        return nullptr;
     }
-    this->trace_insts_.clear();
 }
 
 }  // namespace tt_metal
