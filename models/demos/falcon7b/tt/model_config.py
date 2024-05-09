@@ -5,7 +5,7 @@
 import tt_lib as ttl
 from loguru import logger
 from pathlib import Path
-from models.utility_functions import is_wormhole_b0
+from models.utility_functions import is_grayskull, is_wormhole_b0
 
 OP_KEYS = (
     # Inputs
@@ -92,7 +92,7 @@ def pretty_print_model_config(model_config):
     return "\n".join(print_str)
 
 
-def get_model_config(model_config_str, prefill_seq_len=0, optimized=False):
+def get_model_config(model_config_str, prefill_seq_len=0):
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
     DRAM_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
@@ -193,8 +193,9 @@ def get_model_config(model_config_str, prefill_seq_len=0, optimized=False):
     return model_config
 
 
-def set_prefill_config(model_config, seq_len, dram_memcfg, optimized=False):
-    model_config["OPTIMIZED_MODE"] = optimized
+def set_prefill_config(model_config, seq_len, dram_memcfg):
+    model_config["PREFILL_OPTIMIZED_MODE"] = not is_grayskull()
+    model_config["PREFILL_ATTENTION_OPTIMIZED_MODE"] = False  # enable when #8349 is fixed
     model_config["MLP_SEQ_LEN"] = seq_len
     model_config["MLP_PADDING_VALUE"] = 4608
     model_config["MLP_GRID_SIZE"] = (8, 8)

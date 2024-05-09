@@ -53,7 +53,8 @@ def run_test_FalconCausalLM_end_to_end(
     kv_cache_len,
     num_layers,
     out_pcc,
-    cache_pcc,
+    k_cache_pcc,
+    v_cache_pcc,
     model_config,
     tt_cache_path,
     model_location_generator,
@@ -98,6 +99,7 @@ def run_test_FalconCausalLM_end_to_end(
         head_dim,
         max_position_embeddings,
         configuration,
+        model_config,
         num_layers=num_layers,
         generate_attention_inputs=False,
     )
@@ -181,6 +183,7 @@ def run_test_FalconCausalLM_end_to_end(
         head_dim,
         max_position_embeddings,
         configuration,
+        model_config,
         num_layers=num_layers,
         generate_attention_inputs=False,
     )
@@ -274,12 +277,12 @@ def run_test_FalconCausalLM_end_to_end(
                 num_devices, tt_layer_present[i], kv_cache_len, end_idx_only=True
             )
 
-        does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[0], tt_layer_pres[0], cache_pcc)
+        does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[0], tt_layer_pres[0], k_cache_pcc)
         logger.info(f"K Cache Layer {i}: {output_pcc}")
 
         does_pass = does_pass and does_pass2
 
-        does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[1], tt_layer_pres[1], cache_pcc)
+        does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[1], tt_layer_pres[1], v_cache_pcc)
         logger.info(f"V Cache Layer {i}: {output_pcc}")
 
         does_pass = does_pass and does_pass2
@@ -294,80 +297,53 @@ def run_test_FalconCausalLM_end_to_end(
 
 
 @pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len",
+    "llm_mode, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc",
     (
-        ("prefill", 2, 128, 0),
-        ("prefill", 2, 1024, 0),
-        ("decode", 32, 1, 128),
-        ("decode", 32, 1, 1024),
+        ("prefill", 32, 1, 32, 0, "BFLOAT16-L1", 0.97, 0.98, 0.95),
+        ("prefill", 32, 1, 32, 0, "BFLOAT16-DRAM", 0.97, 0.98, 0.95),
+        ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.97, 0.99, 0.96),
+        ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96),
+        ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.97),
+        ("decode", 32, 32, 1, 128, "BFLOAT16-DRAM", 0.86, 0.86, 0.86),
+        ("decode", 32, 32, 1, 128, "BFLOAT16-L1", 0.86, 0.86, 0.86),
+        ("decode", 32, 32, 1, 1024, "BFLOAT16-DRAM", 0.86, 0.86, 0.86),
+        ("decode", 32, 32, 1, 1024, "BFLOAT16-L1", 0.86, 0.86, 0.86),
     ),
-    ids=["prefill_seq128", "prefill_seq1024", "decode_batch32", "decode_batch32_1024"],
-)
-@pytest.mark.parametrize(
-    "num_layers, out_pcc, cache_pcc",
-    ((2, 0.98, 0.98), (32, 0.86, 0.86)),
-    ids=["layers_2", "layers_32"],
+    ids=[
+        "prefill_seq32_bf16_l1",
+        "prefill_seq32_bf16_dram",
+        "prefill_seq128_bf16_dram",
+        "prefill_seq1024_bf16_dram",
+        "prefill_seq2048_bf16_dram",
+        "decode_batch32_128_bf16_dram",
+        "decode_batch32_128_bf16_l1",
+        "decode_batch32_1024_bf16_dram",
+        "decode_batch32_1024_bf16_l1",
+    ],
 )
 @pytest.mark.parametrize(
     "model_version",
     ("tiiuae/falcon-7b-instruct",),
     ids=["falcon_7b"],
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
 def test_FalconCausalLM_end_to_end_with_program_cache(
     device,
-    use_program_cache,
-    model_version,
     llm_mode,
+    num_layers,
     batch,
     seq_len,
     kv_cache_len,
-    num_layers,
-    out_pcc,
-    cache_pcc,
-    request,
     model_config_str,
+    expected_output_pcc,
+    expected_k_cache_pcc,
+    expected_v_cache_pcc,
+    model_version,
     model_location_generator,
     get_tt_cache_path,
+    use_program_cache,
 ):
     if is_e75(device) and batch == 32:
         pytest.skip("Falcon batch 32 is unsupported on E75")
-
-    is_grayskull = device.arch() == tt_lib.device.Arch.GRAYSKULL
-
-    is_low_card_setup = tt_lib.device.GetNumPCIeDevices() <= 1 or is_grayskull
-
-    current_low_card_gs_only_working_config = not (
-        model_config_str != "BFLOAT16-L1"
-        or llm_mode != "decode"
-        or batch != 32
-        or kv_cache_len != 128
-        or num_layers != 32
-    )
-
-    if (
-        is_low_card_setup
-        and (model_config_str != "BFLOAT16-L1" or llm_mode != "prefill" or num_layers != 32)
-        and not current_low_card_gs_only_working_config
-    ):
-        pytest.skip(
-            "Single-card falcon for both archs must run with config: BFLOAT16-L1-falcon_7b-layers_32-prefill_seq128"
-        )
-
-    # gs only
-    if is_low_card_setup and not is_grayskull and current_low_card_gs_only_working_config:
-        pytest.skip(
-            "Single-card falcon cannot run this config on non-Grayskull: BFLOAT16-L1-falcon_7b-layers_32-decode_batch32"
-        )
-
-    if (
-        is_grayskull
-        and model_config_str == "BFLOAT16-L1"
-        and num_layers == 32
-        and llm_mode == "prefill"
-        and seq_len == 1024
-    ):
-        pytest.skip("#7933: Out of DRAM space error for tensor")
 
     model_config = get_model_config(model_config_str, seq_len)
     tt_cache_path = get_tt_cache_path(
@@ -385,8 +361,9 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
         seq_len,
         kv_cache_len,
         num_layers,
-        out_pcc,
-        cache_pcc,
+        expected_output_pcc,
+        expected_k_cache_pcc,
+        expected_v_cache_pcc,
         model_config,
         tt_cache_path,
         model_location_generator,

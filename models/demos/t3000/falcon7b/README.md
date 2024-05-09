@@ -1,5 +1,9 @@
 # Falcon7B Demo (T3000)
 
+Falcon7b prefill uses 8x8 core grid size, so the following environment variable needs to be set on N300 setup:
+
+`export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml`
+
 ## How to Run
 
 To run the demo using prewritten prompts for a batch of 256 users split evenly on 8 devices run (currently only supports same token-length inputs):

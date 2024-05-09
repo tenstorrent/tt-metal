@@ -78,7 +78,16 @@ def run_test_FalconDecoder_inference(
         tt_layer_past,
         kv_len,
     ) = get_rand_falcon_inputs(
-        llm_mode, seq_len, batch, kv_cache_len, devices, global_batch, head_dim, max_position_embeddings, configuration
+        llm_mode,
+        seq_len,
+        batch,
+        kv_cache_len,
+        devices,
+        global_batch,
+        head_dim,
+        max_position_embeddings,
+        configuration,
+        model_config,
     )
     if layer_past is not None:
         layer_past = layer_past[0]

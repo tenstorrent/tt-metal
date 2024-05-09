@@ -119,6 +119,7 @@ def run_test_FalconCausalLM_end_to_end(
         head_dim,
         max_position_embeddings,
         configuration,
+        model_config,
         num_layers=num_layers,
         generate_attention_inputs=False,
     )
@@ -207,6 +208,7 @@ def run_test_FalconCausalLM_end_to_end(
         head_dim,
         max_position_embeddings,
         configuration,
+        model_config,
         num_layers=num_layers,
         generate_attention_inputs=False,
     )
@@ -426,7 +428,7 @@ class TestParametrized:
         if model_config_str == "BFLOAT16-L1_SHARDED":
             pytest.skip("Sharded config is not supported on GS")
 
-        model_config = get_model_config(model_config_str)
+        model_config = get_model_config(model_config_str, seq_len)
         tt_cache_path = get_tt_cache_path(
             model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
         )
@@ -478,7 +480,7 @@ class TestParametrized:
         # Enable Async Mode
         for device in devices:
             device.enable_async(async_mode)
-        model_config = get_model_config(model_config_str)
+        model_config = get_model_config(model_config_str, seq_len)
         tt_cache_path = get_tt_cache_path(
             model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
         )
@@ -508,9 +510,8 @@ class TestParametrized:
         "llm_mode, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc, expected_inference_time",
         (
             ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.97, 0.99, 0.96, 0.1),
-            ("prefill", 32, 1, 128, 0, "BFLOAT16-L1", 0.97, 0.99, 0.96, 0.1),
-            ("prefill", 32, 1, 256, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96, 0.18),
-            ("prefill", 32, 1, 256, 0, "BFLOAT16-L1", 0.98, 0.99, 0.96, 0.18),
+            ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96, 1),
+            ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96, 2),
             ("decode", 32, 32, 1, 128, "BFLOAT16-DRAM", 0.91, 0.92, 0.93, 0.15),
             ("decode", 32, 32, 1, 128, "BFLOAT16-L1", 0.91, 0.92, 0.93, 0.15),
             ("decode", 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.92, 0.95, 0.95, 0.1),
@@ -522,9 +523,8 @@ class TestParametrized:
         ),
         ids=[
             "prefill_seq128_bf16_dram",
-            "prefill_seq128_bf16_l1",
-            "prefill_seq256_bf16_dram",
-            "prefill_seq256_bf16_l1",
+            "prefill_seq1024_bf16_dram",
+            "prefill_seq2048_bf16_dram",
             "decode_batch32_128_bf16_dram",
             "decode_batch32_128_bf16_l1",
             "decode_batch32_128_bf16_l1_sharded",
@@ -558,7 +558,7 @@ class TestParametrized:
         async_mode,
     ):
         if async_mode:
-            if llm_mode == "prefill" and seq_len == 128:
+            if llm_mode == "prefill" and seq_len != 1024:
                 pytest.skip(
                     f"Skipping {llm_mode} with {seq_len} in async mode. Config is supported but provides redundant testing."
                 )
