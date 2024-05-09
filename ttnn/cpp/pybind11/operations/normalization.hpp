@@ -22,8 +22,32 @@ namespace normalization {
 void py_module(py::module& module) {
     ttnn::bind_registered_operation(
         module,
+        ttnn::softmax,
+        R"doc(softmax(input_tensor: ttnn.Tensor, dim: int, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+            Compute softmax over :attr:`input_tensor` along :attr:`dim`.
+
+            Args:
+                * :attr:`input_tensor`: the input tensor
+                * :attr:`dim`: the dimension along which to compute softmax.
+
+            Keyword Args:
+                * :attr:`memory_config`: the memory configuration for the output tensor. If not provided, the memory configuration of the input tensor is used.
+
+            Example::
+
+                >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
+                >>> output = ttnn.softmax(tensor, -1)
+                >>> print(output[0, 0, 0, :3])
+                ttnn.Tensor([ 0.0310059, 0.0310059, 0.0310059], dtype=bfloat16 )
+        )doc",
+        ttnn::pybind_arguments_t{
+            py::arg("input_tensor"), py::arg("dim"), py::kw_only(), py::arg("memory_config") = std::nullopt});
+
+    ttnn::bind_registered_operation(
+        module,
         ttnn::layer_norm,
-        R"doc(rms_norm(input_tensor: ttnn.Tensor, epsilon: float = 1e-12, weight: ttnn.Tensor, bias: ttnn.Tensor, residual_input_tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig, program_config: ttnn.LayerNormProgramConfig) -> ttnn.Tensor
+        R"doc(rms_norm(input_tensor: ttnn.Tensor, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, residual_input_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, program_config: Optional[ttnn.ProgramConfig] = None) -> ttnn.Tensor
             Compute layer_norm over :attr:`input_tensor`.
         )doc",
         ttnn::pybind_arguments_t{
@@ -39,7 +63,7 @@ void py_module(py::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::rms_norm,
-        R"doc(rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float = 1e-12, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor
+        R"doc(rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float = 1e-12, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
             Compute rms_norm over :attr:`input_tensor`.
         )doc",
         ttnn::pybind_arguments_t{

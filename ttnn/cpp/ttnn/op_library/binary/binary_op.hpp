@@ -89,7 +89,7 @@ struct Binary {
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
         return std::make_tuple(input_tensor_a, input_tensor_b);
-    };
+    }
 
     static Tensor execute(
         const Tensor &input_tensor_a,
@@ -139,7 +139,7 @@ struct Binary {
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor &input_tensor_a, const float input_tensor_b, Args &&...args) {
         return std::make_tuple(input_tensor_a, input_tensor_b);
-    };
+    }
 
     // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
     // Currently, this is exactly how tt::tt_metal::add_unary works

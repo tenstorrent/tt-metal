@@ -5,11 +5,10 @@
 #pragma once
 
 // This is a place holder for when the cpp/ttnn folder structure and ttnn namespace is moved over to tt_eager.
-#include "tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
-#include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "tensor/tensor.hpp"
-
+#include "tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
+#include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "ttnn/operations/core.hpp"
 
 namespace ttnn {
@@ -155,6 +154,144 @@ inline std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
             {outputs.at(0), outputs.at(1), outputs.at(2)}, sequence_size, sequence_size_padded, transpose_key);
     }
 }
+
+struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
+    void validate(const std::vector<Tensor>& input_tensors) const {
+        const auto& input_tensor = input_tensors.at(0);
+        const auto head_size = input_tensor.get_shape()[-1];
+        const auto padded_head_size = input_tensor.get_legacy_shape()[-1];
+        TT_FATAL(
+            head_size % ttnn::types::TILE_SIZE == 0,
+            fmt::format(
+                "Head size must be a multiple of {} but was found to be {}! Update matmul that uses the output of this "
+                "operation to have the "
+                "padding in the weights!",
+                ttnn::types::TILE_SIZE,
+                head_size));
+        TT_FATAL(padded_head_size - head_size == 0, "Head size cannot have tile padding!");
+
+        NlpConcatHeads::validate(input_tensors);
+    }
+
+    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+        std::vector<tt::tt_metal::Shape> output_shape_vec;
+        const auto& input_tensor = input_tensors.at(0);
+        const ttnn::types::Shape input_shape = input_tensor.get_shape();
+        const ttnn::types::Shape padded_input_shape = input_shape.with_tile_padding();
+
+        auto batch_size = input_shape[0];
+        auto num_heads = input_shape[1];
+        auto sequence_size = input_shape[2];
+        auto padded_sequence_size = padded_input_shape[2];
+        auto head_size = input_shape[3];
+        auto padded_head_size = padded_input_shape[3];
+
+        std::array<uint32_t, 3> intended_output_shape = {batch_size, sequence_size, num_heads * head_size};
+        std::array<uint32_t, 3> padded_output_shape = {batch_size, padded_sequence_size, num_heads * padded_head_size};
+        return {ttnn::types::Shape(intended_output_shape, padded_output_shape).value()};
+    }
+
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+        const auto& input_tensor = input_tensors.at(0);
+        if (this->output_mem_config.is_sharded()) {
+            ShardSpec shard_spec = input_tensor.shard_spec().value();
+            uint32_t num_cores = shard_spec.num_cores();
+            uint32_t heads_per_shard = shard_spec.shape[0] / input_tensor.get_legacy_shape()[-2];
+            shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
+            auto mem_config = this->output_mem_config;
+            mem_config.shard_spec = shard_spec;
+            return {create_sharded_device_tensor(
+                this->compute_output_shapes(input_tensors).at(0),
+                input_tensor.get_dtype(),
+                Layout::TILE,
+                input_tensor.device(),
+                mem_config)};
+        } else {
+            return operation::generic_create_output_tensors(
+                *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
+        }
+    }
+
+    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
+        return {ttnn::TensorSchema{
+            4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false}};
+    }
+
+    template <typename... Args>
+    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
+        return std::make_tuple(input_tensor);
+    }
+
+    static inline ttnn::Tensor execute(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+        std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+        operation::launch_op(
+            [memory_config](
+                std::vector<Tensor> input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+                auto& input_tensor = input_tensors.at(0);
+                return operation::run(
+                    ConcatenateHeads{memory_config.value_or(input_tensor.memory_config())}, {input_tensor});
+            },
+            {input_tensor},
+            output_tensors);
+        return output_tensors.at(0);
+    }
+};
+
+template <bool in_place>
+struct AttentionSoftmax : public tt::operations::primary::Softmax {
+    static inline const std::array<TensorSchema, 2> input_tensor_schemas() {
+        return {
+            ttnn::TensorSchema{4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false},
+            ttnn::TensorSchema{4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, true}};
+    }
+
+    template <typename... Args>
+    static auto input_tensors_to_validate(
+        const ttnn::Tensor& input_tensor,
+        const std::optional<int>& head_size = std::nullopt,
+        const std::optional<const ttnn::Tensor>& attention_mask = std::nullopt,
+        Args&&... args) {
+        return std::make_tuple(input_tensor, attention_mask);
+    }
+
+    static ttnn::Tensor execute(
+        const ttnn::Tensor& input_tensor,
+        const std::optional<int>& head_size = std::nullopt,
+        const std::optional<const ttnn::Tensor>& attention_mask = std::nullopt,
+        const tt::operations::primary::transformers::SoftmaxProgramConfig& program_config =
+            tt::operations::primary::transformers::SoftmaxDefaultProgramConfig{},
+        const std::optional<bool> causal_mask = false,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
+        TT_FATAL(attention_mask.has_value(), "Cannot apply divide by sqrt(head_size) using in-place version!");
+
+        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
+        auto kernel_config_val = init_device_compute_kernel_config(
+            input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        operation::run(
+            AttentionSoftmax{
+                head_size.has_value() ? 1.0 / sqrt(head_size.value()) : 1.0,
+                true,
+                memory_config.value_or(input_tensor.memory_config()),
+                program_config,
+                causal_mask.value(),
+                kernel_config_val,
+                false},
+            {input_tensor},
+            {attention_mask});
+        return input_tensor;
+    }
+};
+
 }  // namespace transformer
 }  // namespace operations
+
+namespace transformer {
+constexpr auto concatenate_heads =
+    ttnn::register_operation<ttnn::operations::transformer::ConcatenateHeads>("ttnn::transfomer::concatenate_heads");
+
+constexpr auto attention_softmax_ = ttnn::register_operation<ttnn::operations::transformer::AttentionSoftmax<true>>(
+    "ttnn::transfomer::attention_softmax_");
+}  // namespace transformer
+
 }  // namespace ttnn

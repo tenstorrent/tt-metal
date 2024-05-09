@@ -12,7 +12,6 @@
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_dnn/op_library/compute_kernel_config.hpp"
-#include "ttnn/types.hpp"
 
 namespace tt {
 namespace operations {
@@ -127,88 +126,3 @@ Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale
 }  // namespace tt_metal
 
 }  // namespace tt
-
-namespace ttnn {
-
-namespace operations {
-
-namespace transformer {
-
-struct Softmax : public tt::operations::primary::Softmax {
-    static inline const std::vector<TensorSchema> input_tensor_schemas() {
-        return {
-            ttnn::TensorSchema{4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false},
-            ttnn::TensorSchema{4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, true}};
-    }
-
-    void validate(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-        const auto& input_tensor = input_tensors.at(0);
-        const auto& shape = input_tensor.get_shape();
-
-        TT_FATAL(
-            shape.rank() == 4,
-            fmt::format("Input Tensor must have strictly 4 dimensions however it currently has {}!", shape.rank()));
-
-        TT_FATAL(input_tensor.get_layout() == ttnn::TILE_LAYOUT, "Input Tensor must be in a TILE_LAYOUT!");
-        tt::operations::primary::Softmax::validate(input_tensors, optional_input_tensors);
-    }
-};
-
-inline ttnn::Tensor attention_softmax_(
-    const ttnn::Tensor& input_tensor,
-    const std::optional<int> head_size = std::nullopt,
-    const std::optional<const ttnn::Tensor>& attention_mask = std::nullopt,
-    const tt::operations::primary::transformers::SoftmaxProgramConfig& program_config =
-        tt::operations::primary::transformers::SoftmaxDefaultProgramConfig{},
-    const std::optional<bool> causal_mask = false,
-    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
-    TT_FATAL(attention_mask.has_value(), "Cannot apply divide by sqrt(head_size) using in-place version!");
-
-    // std::vector<Tensor> output_tensors = {
-    //     Tensor(operation::get_workers_for_op_output({input_tensor}, {attention_mask}))};
-    // std::cout << "Launching attention_softmax_ seems to hang unfortunately." << std::endl;
-    // operation::launch_op(
-    //     [&input_tensor, &head_size, &attention_mask, &program_config, &causal_mask, &memory_config](
-    //         std::vector<Tensor> input_tensors,
-    //         const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
-    //         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
-    //         auto kernel_config_val = init_device_compute_kernel_config(
-    //             input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-    //         return operation::run(
-    //             Softmax{
-    //                 head_size.has_value() ? 1.0 / sqrt(head_size.value()) : 1.0,
-    //                 true,
-    //                 memory_config.value_or(input_tensor.memory_config()),
-    //                 program_config,
-    //                 causal_mask.value(),
-    //                 kernel_config_val,
-    //                 false},
-    //             {input_tensor},
-    //             {attention_mask});
-    //     },
-    //     {input_tensor},
-    //     output_tensors,
-    //     {attention_mask});
-    // return output_tensors.at(0);
-
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
-    auto kernel_config_val = init_device_compute_kernel_config(
-                 input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-    operation::run(
-                Softmax{
-                    head_size.has_value() ? 1.0 / sqrt(head_size.value()) : 1.0,
-                    true,
-                    memory_config.value_or(input_tensor.memory_config()),
-                    program_config,
-                    causal_mask.value(),
-                    kernel_config_val,
-                    false},
-                {input_tensor},
-                {attention_mask});
-    return input_tensor;
-}
-}  // namespace transformer
-}  // namespace operations
-}  // namespace ttnn
