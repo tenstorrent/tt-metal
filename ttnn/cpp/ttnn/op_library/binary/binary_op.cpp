@@ -91,22 +91,6 @@ inline BinaryProgramType get_program_type(
     TT_THROW("ttnn::operations::binary::Binary: unsupported broadcast");
 }
 
-inline void validate_shape(const ttnn::Shape& shape) {
-    // Validate that intended and tile-padded shapes are either the same
-    // or tile-padded dim is the indended dim padded to the next multiple of ttnn::TILE_SIZE
-
-    for (int i = 0; i < shape.rank(); i++) {
-        TT_ASSERT(
-            shape[i] == shape.with_tile_padding()[i] or
-                pad_to_multiple_of_tile_size(shape[i]) == shape.with_tile_padding()[i],
-            "{}: pad_to_multiple_of_tile_size({}) -> {} != {}",
-            i,
-            shape[i],
-            pad_to_multiple_of_tile_size(shape[i]),
-            shape.with_tile_padding()[i]);
-    }
-}
-
 template <BinaryOpType binary_op_type, bool in_place>
 void Binary<binary_op_type, in_place>::validate(const std::vector<Tensor>& input_tensors) const {
     auto program_type = get_program_type(*this, input_tensors);
@@ -144,8 +128,6 @@ void Binary<binary_op_type, in_place>::validate(const std::vector<Tensor>& input
     if (width_a != width_b) {
         TT_ASSERT(width_a > width_b and width_b == 1, "ttnn::operations::binary::Binary: width mismatch");
     }
-    validate_shape(input_shape_a);
-    validate_shape(input_shape_b);
 
     TT_FATAL(
         input_tensor_a.device() == input_tensor_b.device(),
