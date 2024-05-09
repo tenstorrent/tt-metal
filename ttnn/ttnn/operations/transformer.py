@@ -125,71 +125,9 @@ def _golden_function(input_tensor: ttnn.Tensor, *, head_size: int, attention_mas
     return torch.softmax(input_tensor, -1)
 
 
-def _attention_softmax_validate_input_tensors(operation_name, input_tensor, *args, attention_mask, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(4,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        attention_mask,
-        ranks=(4,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-        is_optional=True,
-    )
-
-
-@ttnn.register_operation(
-    name="ttnn.transformer.attention_softmax",
-    validate_input_tensors=_attention_softmax_validate_input_tensors,
+attention_softmax = ttnn.register_operation(
     golden_function=_golden_function,
-)
-def attention_softmax(
-    input_tensor: ttnn.Tensor,
-    *,
-    head_size: Optional[int],
-    attention_mask: Optional[ttnn.Tensor],
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-    program_config: Optional[
-        ttl.operations.primary.transformers.SoftmaxProgramConfig
-    ] = ttl.operations.primary.transformers.SoftmaxDefaultProgramConfig(),
-) -> ttnn.Tensor:
-    """
-    attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor], memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-    Divides :attr:`input_tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax
-
-    Args:
-        * :attr:`input_tensor`: Input Tensor
-        * :attr:`head_size`: Number of heads
-        * :attr:`attention_mask`: Attention Mask
-        * :attr:`memory_config`: Memory Config of the output tensor
-
-    """
-    if head_size is not None:
-        scaler = 1 / (head_size**0.5)
-    else:
-        scaler = 1.0
-
-    if attention_mask is not None:
-        output_tensor = ttl.tensor.scale_mask_softmax(
-            input_tensor,
-            scaler,
-            attention_mask,
-            output_mem_config=memory_config,
-        )
-    else:
-        scaled_input_tensor = input_tensor * scaler
-        output_tensor = ttl.tensor.softmax(scaled_input_tensor, output_mem_config=memory_config)
-    return output_tensor
+)(ttnn._ttnn.operations.transformer.attention_softmax)
 
 
 attention_softmax_ = ttnn.register_operation(

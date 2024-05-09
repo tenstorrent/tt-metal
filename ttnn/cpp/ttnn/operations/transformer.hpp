@@ -60,12 +60,12 @@ inline std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_val
 }  // namespace detail
 
 inline std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
-    const Tensor &input_tensor,
-    const std::optional<Tensor> &input_tensor_kv,
+    const Tensor& input_tensor,
+    const std::optional<Tensor>& input_tensor_kv,
     const uint32_t num_heads,
     const std::optional<uint32_t> num_kv_heads,
     const bool transpose_key,
-    const std::optional<MemoryConfig> &memory_config) {
+    const std::optional<MemoryConfig>& memory_config) {
     const auto input_shape = input_tensor.get_shape();
     TT_FATAL(input_shape.rank() == 3, "Input Tensor must have strictly 3 dimensions!");
     TT_FATAL(input_tensor.get_layout() == tt::tt_metal::Layout::TILE,"Input Tensor must be in a TILE_LAYOUT!");
@@ -81,7 +81,13 @@ inline std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
         auto head_size = qkv_heads_times_head_dim / (num_heads + (num_kv_heads.value() * 2));
         auto padded_head_size = qkv_heads_times_head_dim_padded / (num_heads + (num_kv_heads.value() * 2));
 
-        TT_FATAL(head_size % TILE_SIZE == 0, fmt::format("Head size {} must be a multiple of tile size {}! Update the preceding matmul to have the padding in the weights!", head_size, TILE_WIDTH));
+        TT_FATAL(
+            head_size % TILE_SIZE == 0,
+            fmt::format(
+                "Head size {} must be a multiple of tile size {}! Update the preceding matmul to have the padding in "
+                "the weights!",
+                head_size,
+                TILE_WIDTH));
         TT_FATAL(padded_head_size == head_size, fmt::format("Head size {} cannot have tile padding", head_size));
 
         const auto input_4d = input_tensor.reshape(
@@ -257,20 +263,28 @@ struct AttentionSoftmax : public tt::operations::primary::Softmax {
 
     static ttnn::Tensor execute(
         const ttnn::Tensor& input_tensor,
-        const std::optional<int>& head_size = std::nullopt,
+        const std::optional<int>& head_size_arg = std::nullopt,
         const std::optional<const ttnn::Tensor>& attention_mask = std::nullopt,
         const tt::operations::primary::transformers::SoftmaxProgramConfig& program_config =
             tt::operations::primary::transformers::SoftmaxDefaultProgramConfig{},
         const std::optional<bool> causal_mask = false,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
-        TT_FATAL(attention_mask.has_value(), "Cannot apply divide by sqrt(head_size) using in-place version!");
+        auto head_size = head_size_arg.has_value() ? 1.0 / sqrt(head_size_arg.value()) : 1.0;
+        if constexpr (in_place) {
+            TT_FATAL(attention_mask.has_value(), "Cannot apply divide by sqrt(head_size) using in-place version!");
+        } else {
+            if (not attention_mask.has_value()) {
+                auto output_tensor = ttnn::multiply(input_tensor, head_size);
+                return tt::tt_metal::softmax(output_tensor, memory_config.value_or(input_tensor.memory_config()));
+            }
+        }
 
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
         auto kernel_config_val = init_device_compute_kernel_config(
             input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
         auto output_tensor = operation::run(
                                  AttentionSoftmax{
-                                     head_size.has_value() ? 1.0 / sqrt(head_size.value()) : 1.0,
+                                     head_size,
                                      in_place,
                                      memory_config.value_or(input_tensor.memory_config()),
                                      program_config,
@@ -291,6 +305,8 @@ namespace transformer {
 constexpr auto concatenate_heads =
     ttnn::register_operation<ttnn::operations::transformer::ConcatenateHeads>("ttnn::transfomer::concatenate_heads");
 
+constexpr auto attention_softmax = ttnn::register_operation<ttnn::operations::transformer::AttentionSoftmax<false>>(
+    "ttnn::transfomer::attention_softmax");
 constexpr auto attention_softmax_ = ttnn::register_operation<ttnn::operations::transformer::AttentionSoftmax<true>>(
     "ttnn::transfomer::attention_softmax_");
 }  // namespace transformer
