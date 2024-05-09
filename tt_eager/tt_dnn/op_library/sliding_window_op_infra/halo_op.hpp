@@ -14,8 +14,38 @@
 
 
 namespace ttnn::operations {
-
 namespace halo {
+
+struct Halo {
+    SlidingWindowConfig config_;
+    uint32_t pad_val_;
+    bool remote_read_;
+    bool transpose_mcast_;
+    uint32_t reshard_num_cores_nhw_;
+    uint32_t max_out_nsticks_per_core_;
+    MemoryConfig output_memory_config_;
+
+    void validate(const std::vector<Tensor> &input_tensors) const;
+    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
+
+    static constexpr auto attribute_names =
+        std::make_tuple("config_", "pad_val_", "remote_read_", "transpose_mcast_", "reshard_num_cores_nhw_", "max_out_nsticks_per_core_", "output_memory_config_");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(config_),
+            std::cref(pad_val_),
+            std::cref(remote_read_),
+            std::cref(transpose_mcast_),
+            std::cref(reshard_num_cores_nhw_),
+            std::cref(max_out_nsticks_per_core_),
+            std::cref(output_memory_config_)
+        );
+    }
+};
+
 
 Tensor halo_op(const Tensor& a,
                 const SlidingWindowConfig& config,
@@ -47,13 +77,15 @@ Tensor halo_op(const Tensor& a,
         uint32_t max_out_nsticks_per_core = std::get<3>(kernel_config_tensors);
 
         return operation::run(
-            UntilizeWithHaloV2{
+            Halo{
+                .config_ = config,
                 .pad_val_ = pad_val,
-                .ncores_nhw_ = config.num_cores_nhw_,
-                .max_out_nsticks_per_core_ = max_out_nsticks_per_core,
-                .out_mem_config_ = output_memory_config,
                 .remote_read_ = remote_read,
-                .transpose_mcast_ = transpose_mcast},
+                .transpose_mcast_ = transpose_mcast,
+                .reshard_num_cores_nhw_ = reshard_num_cores_nhw,
+                .max_out_nsticks_per_core_ = max_out_nsticks_per_core,
+                .output_memory_config_ = output_memory_config
+            },
             {
                 a,
                 padding_config,
