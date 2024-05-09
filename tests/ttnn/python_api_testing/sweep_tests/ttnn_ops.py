@@ -927,7 +927,6 @@ def eltwise_sub(
     x,
     y,
     *args,
-    scalar,
     device,
     dtype,
     layout,
@@ -938,7 +937,7 @@ def eltwise_sub(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttnn.sub(t0, t1, alpha=scalar, memory_config=memory_config_to_ttnn(output_mem_config))
+    t2 = ttnn.subtract(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
     return ttnn_tensor_to_torch(t2)
 
 
@@ -996,7 +995,6 @@ def mul(
     x,
     y,
     *args,
-    scalar=0,
     device,
     dtype,
     layout,
@@ -1007,7 +1005,7 @@ def mul(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttnn.mul(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+    t2 = ttnn.multiply(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
     return ttnn_tensor_to_torch(t2)
 
 

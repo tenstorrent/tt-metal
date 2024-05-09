@@ -624,6 +624,14 @@ def gen_permute_args(
             mem_configs,
             do_sanitize_args=do_sanitize_args,
         ):
+            if input_info["layout"][0] == ttl.tensor.Layout.ROW_MAJOR:
+                # Last dim of output must be divisible by 2 for row_major
+                last_dim = permute_dims[-1]
+                last_dim_shape = input_shapes[0][last_dim]
+
+                if last_dim_shape % 2 == 1:
+                    continue
+
             if input_info is not None:
                 input_info.update({"permute_dims": permute_dims})
                 yield input_info
