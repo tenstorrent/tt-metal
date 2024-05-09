@@ -23,7 +23,10 @@ jobs:
     runs-on: ${{ matrix.config.runs-on }}
     name: cmake build ${{ matrix.config.type }} ${{ matrix.arch }}
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: false
       - uses: ./.github/actions/install-metal-deps
         with:
           os: ubuntu-20.04
@@ -62,7 +65,10 @@ jobs:
       VERBOSE: 1
     runs-on: build
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: false
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -92,7 +98,10 @@ jobs:
     runs-on: ${{ matrix.config.runs-on }}
     name: build ${{ matrix.config.type }} ${{ matrix.arch }}
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: false
       - uses: ./.github/actions/install-metal-deps
         with:
           os: ubuntu-20.04
@@ -130,7 +139,10 @@ jobs:
       SILENT: 0
     runs-on: build
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: false
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV

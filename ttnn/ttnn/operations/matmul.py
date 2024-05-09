@@ -56,27 +56,10 @@ def _get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, fp32_dst):
     )
 
 
-_ACTIVATION_TO_FUSED_ACTIVATION = {
-    "gelu": (ttnn.experimental.tensor.FusibleActivation.GELU, True),
-    "relu": ttnn.experimental.tensor.FusibleActivation.RELU,
-    "silu": ttnn.experimental.tensor.FusibleActivation.SILU,
-}
-
-
 def get_fused_activation(activation):
     if activation is None:
         return None
-    return _ACTIVATION_TO_FUSED_ACTIVATION[activation]
-
-
-def _validate_activation(activation):
-    if activation is None:
-        return
-    is_supported = activation in _ACTIVATION_TO_FUSED_ACTIVATION
-    if not is_supported:
-        raise RuntimeError(
-            f"{activation} is not supported as activation function. Use one of these instead: {_ACTIVATION_TO_FUSED_ACTIVATION.keys()}"
-        )
+    return ttnn._tt_lib.tensor.string_to_unary_with_param(activation)
 
 
 def create_matmul_1d_systolic_array_program_config(
@@ -99,8 +82,6 @@ def create_matmul_1d_systolic_array_program_config(
         * :attr:`activation` (Optional[str]): the activation function to use. Defaults to None
 
     """
-
-    _validate_activation(activation)
 
     if core_grid is None:
         raise RuntimeError(f"core_grid must be a valid CoreGrid object")

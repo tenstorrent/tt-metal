@@ -79,10 +79,17 @@ FORCE_INLINE void generate_bcast_scaler(
 
 FORCE_INLINE void fill_cb_with_value(uint32_t cb_id, uint32_t value, int32_t num_of_elems = 1024) {
     cb_reserve_back(cb_id, 1);
-    auto ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_id));
-    for (int j = 0; j < 1024; j++) {
-        ptr[j] = uint16_t(value >> 16);
-    }
+    #if defined FP32_DEST_ACC_EN
+        auto ptr = reinterpret_cast<uint32_t *>(get_write_ptr(cb_id));
+        for (int j = 0; j < 1024; j++) {
+            ptr[j] = value;
+        }
+    #else
+        auto ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_id));
+        for (int j = 0; j < 1024; j++) {
+            ptr[j] = uint16_t(value >> 16);
+        }
+    #endif
     cb_push_back(cb_id, 1);
 }
 

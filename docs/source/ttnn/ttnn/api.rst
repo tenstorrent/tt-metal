@@ -172,8 +172,6 @@ Pointwise Binary
    ttnn/logaddexp2
    ttnn/xlogy
    ttnn/squared_difference
-   ttnn/add_and_apply_activation
-   ttnn/add_and_apply_activation_
    ttnn/gtz
    ttnn/ltz
    ttnn/gez

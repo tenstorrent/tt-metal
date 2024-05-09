@@ -22,20 +22,20 @@ void kernel_main() {
     #if (dst_stick_size_is_pow2)
     constexpr uint32_t dst_log_base_2_of_page_size = get_compile_time_arg_val(3);
     const InterleavedPow2AddrGen<dst0_is_dram> s0 = {
-        .bank_base_address = dst_addr,
+        .bank_base_address = dst_addr + input_width_offset_bytes,
         .log_base_2_of_page_size = dst_log_base_2_of_page_size // TODO(AP): refactor
     };
     #else
     const InterleavedAddrGen<dst0_is_dram> s0 = {
-        .bank_base_address = dst_addr,
+        .bank_base_address = dst_addr + input_width_offset_bytes,
         .page_size = stick_size
     };
     #endif
     uint32_t stick_id = start_id;
     cb_wait_front(cb_id_out0, block_height);
     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-    for (uint32_t h = 0; h < block_height; h++) {
-        uint64_t dst_noc_addr = get_noc_addr(stick_id, s0, input_width_offset_bytes);
+    for (uint32_t h = 0; h < block_height; ++h) {
+        uint64_t dst_noc_addr = get_noc_addr(stick_id, s0);
         noc_async_write(l1_read_addr, dst_noc_addr, block_width_bytes);
         stick_id++;
         l1_read_addr += padded_block_width_bytes;

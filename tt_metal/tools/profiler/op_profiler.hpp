@@ -208,6 +208,7 @@ namespace op_profiler {
             }
         }
 
+        std::replace( opName.begin(), opName.end(), ',', ';');
         j["op_code"] = opName;
 
         json attributesObj;

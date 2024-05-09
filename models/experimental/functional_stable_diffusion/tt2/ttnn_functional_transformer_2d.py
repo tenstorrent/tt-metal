@@ -67,6 +67,7 @@ class transformer_2d_model:
             use_shallow_conv_variant=False,
             deallocate_activation=True,
             compute_kernel_config=compute_kernel_config,
+            transpose_mcast=False,
         )
 
         norm_num_groups = 32
@@ -79,6 +80,7 @@ class transformer_2d_model:
             num_groups=norm_num_groups,
             input_nhw=batch_size * input_height * input_width,
             is_height_sharded=False,
+            is_row_major=True,
         )
 
         if not self.fallback_on_groupnorm:
@@ -158,6 +160,7 @@ class transformer_2d_model:
             use_shallow_conv_variant=False,
             deallocate_activation=True,
             compute_kernel_config=compute_kernel_config,
+            transpose_mcast=False,
         )
 
         self.output_height = self.proj_out.output_height
@@ -230,8 +233,6 @@ class transformer_2d_model:
         if spilled_residual:
             residual = ttnn.to_memory_config(residual, ttnn.DRAM_MEMORY_CONFIG)
 
-        # print(hidden_states.shape)
-        # print(hidden_states.memory_config())
         hidden_states = ttnn.to_layout(
             hidden_states,
             ttnn.ROW_MAJOR_LAYOUT,
@@ -263,6 +264,7 @@ class transformer_2d_model:
                 # hidden_states = ttnn.experimental.tensor.reshard(hidden_states, self.gn_expected_input_sharded_memory_config)
                 hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
                 hidden_states = ttnn.to_memory_config(hidden_states, self.gn_expected_input_sharded_memory_config)
+
             hidden_states = ttnn.group_norm(
                 input_tensor=hidden_states,
                 num_groups=norm_num_groups,
@@ -318,6 +320,7 @@ class transformer_2d_model:
                 hidden_states = self.proj_out(hidden_states)
                 if ttnn.get_memory_config(residual) != self.proj_out.conv.input_sharded_memory_config:
                     residual = ttnn.to_memory_config(residual, self.proj_out.conv.input_sharded_memory_config)
+
                 if output_bfloat16:
                     hidden_states = dealloc_input(
                         ttnn.add,

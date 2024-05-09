@@ -31,9 +31,6 @@ jobs:
       ARCH_NAME: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          lfs: false
       - uses: ./.github/actions/install-metal-deps
         with:
           os: ${{ matrix.os }}
@@ -70,9 +67,6 @@ jobs:
       ARCH_NAME: ${{ matrix.runner-hw-info.arch }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          lfs: false
       - uses: actions/download-artifact@v4
         with:
           name: eager-dist-${{ matrix.os }}-${{ matrix.runner-hw-info.arch }}

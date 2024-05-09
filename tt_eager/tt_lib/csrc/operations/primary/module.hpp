@@ -930,6 +930,7 @@ void py_module(py::module& m_primary) {
         py::arg("momentum_initialized").noconvert(),
         py::arg("param_out_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("momentum_buffer_out_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a SGD operation.");
 
     py::class_<GroupNormShardedMultiCoreProgramConfig>(m_primary, "GroupNormShardedMultiCoreProgramConfig")

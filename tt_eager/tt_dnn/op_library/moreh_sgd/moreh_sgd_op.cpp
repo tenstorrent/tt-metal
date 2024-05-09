@@ -103,7 +103,8 @@ operation::ProgramWithCallbacks MorehSGD::create_program(
         this->weight_decay,
         this->nesterov,
         this->momentum_initialized,
-        this->core_range)};
+        this->core_range,
+        this->compute_kernel_config)};
 }
 
 std::vector<std::optional<Tensor>> moreh_sgd(
@@ -119,11 +120,13 @@ std::vector<std::optional<Tensor>> moreh_sgd(
     bool nesterov,
     bool momentum_initialized,
     const MemoryConfig &param_out_mem_config,
-    const MemoryConfig &momentum_buffer_out_mem_config) {
+    const MemoryConfig &momentum_buffer_out_mem_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = param_in.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
+    auto kernel_config_val = init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
     auto output_tensors = operation::run(
         MorehSGD{
             .lr = lr,
@@ -134,7 +137,8 @@ std::vector<std::optional<Tensor>> moreh_sgd(
             .momentum_initialized = momentum_initialized,
             .core_range = all_cores,
             .param_out_mem_config = param_out_mem_config,
-            .momentum_buffer_out_mem_config = momentum_buffer_out_mem_config},
+            .momentum_buffer_out_mem_config = momentum_buffer_out_mem_config,
+            .compute_kernel_config = kernel_config_val},
         {param_in, grad},
         {momentum_buffer_in},
         {param_out, momentum_buffer_out});

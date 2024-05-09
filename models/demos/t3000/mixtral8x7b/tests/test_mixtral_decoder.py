@@ -6,9 +6,7 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
-    prepare_inputs_ttnn,
-)
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, prepare_rotation_mat_ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
 from models.demos.t3000.mixtral8x7b.reference.model import TransformerBlock, precompute_freqs_cis
 from models.utility_functions import comp_pcc, comp_allclose, get_devices_for_t3000
@@ -51,6 +49,12 @@ def test_mixtral_decoder_inference(all_devices, use_program_cache, reset_seeds):
         dtype=dtype,
     )
 
+    rot_mat = prepare_rotation_mat_ttnn(
+        model_args.head_dim,
+        model_args.max_seq_len,
+        tt_model.devices,
+    )
+
     generation_start_pos = 0
     generation_length = 1
     all_tests_pass = True
@@ -66,11 +70,9 @@ def test_mixtral_decoder_inference(all_devices, use_program_cache, reset_seeds):
         start_pos = generation_start_pos + i
         current_pos = start_pos % model_args.sliding_window
 
-        decode_input_b1sh, rot_mat = prepare_inputs_ttnn(
-            pt_decode_input_bsh.clone(),
+        decode_input_b1sh = prepare_inputs_ttnn(
+            pt_decode_input_bsh,
             tt_model.hidden_size,
-            tt_model.head_dim,
-            tt_model.max_seq_len,
             tt_model.devices,
         )
         # Run TT model

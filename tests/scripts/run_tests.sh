@@ -111,6 +111,15 @@ run_frequent_multi_device_pipeline_tests() {
     ./tests/scripts/multi_chip/run_frequent_regressions_multi_device.sh
 }
 
+# Run end to end demos - these are the t3000 + 4xn300 tests
+run_end_to_end_demos_multi_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/multi_chip/run_end_to_end_demos.sh
+}
+
 run_models_performance() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -242,6 +251,8 @@ run_pipeline_tests() {
         run_post_commit_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "frequent_multi_device" ]]; then
         run_frequent_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "end_to_end_demos_multi_device" ]]; then
+        run_end_to_end_demos_multi_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "microbenchmarks" ]]; then
         run_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "ttnn_sweeps" ]]; then

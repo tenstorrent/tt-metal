@@ -122,6 +122,42 @@ struct UnaryWithParam {
     const auto attribute_values() const { return std::make_tuple(std::cref(this->op_type), std::cref(this->param)); }
 };
 
+inline UnaryWithParam string_to_unary_with_param(const std::string& name) {
+    if (name == "relu")
+        return UnaryWithParam{.op_type = UnaryOpType::RELU};
+    else if (name == "gelu")
+        return UnaryWithParam{.op_type = UnaryOpType::GELU, .param = static_cast<float>(true)};
+    else if (name == "silu")
+        return UnaryWithParam{.op_type = UnaryOpType::SILU};
+    else if (name == "sigmoid")
+        return UnaryWithParam{.op_type = UnaryOpType::SIGMOID};
+    else if (name == "sqrt")
+        return UnaryWithParam{.op_type = UnaryOpType::SQRT};
+    else if (name == "exp")
+        return UnaryWithParam{.op_type = UnaryOpType::EXP, .param = static_cast<float>(true)};
+    else if (name == "recip")
+        return UnaryWithParam{.op_type = UnaryOpType::RECIP};
+    else if (name == "log")
+        return UnaryWithParam{.op_type = UnaryOpType::LOG};
+    else if (name == "tanh")
+        return UnaryWithParam{.op_type = UnaryOpType::TANH};
+    else if (name == "log2")
+        return UnaryWithParam{.op_type = UnaryOpType::LOG2};
+    else if (name == "log10")
+        return UnaryWithParam{.op_type = UnaryOpType::LOG10};
+    else if (name == "sin")
+        return UnaryWithParam{.op_type = UnaryOpType::SIN};
+    else if (name == "cos")
+        return UnaryWithParam{.op_type = UnaryOpType::COS};
+    else if (name == "abs")
+        return UnaryWithParam{.op_type = UnaryOpType::ABS};
+    else if (name == "sign")
+        return UnaryWithParam{.op_type = UnaryOpType::SIGN};
+    else if (name == "square")
+        return UnaryWithParam{.op_type = UnaryOpType::SQUARE};
+    TT_THROW("Unknown unary op: " + name);
+}
+
 enum class UnaryOpParallelizationStrategy { SINGLE_CORE = 0, MULTI_CORE = 1, SHARDED_MULTI_CORE=2 };
 
 struct EltwiseUnary {

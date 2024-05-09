@@ -44,7 +44,7 @@ def resnet_basic_block(x, *, parameters):
         ttnn.deallocate(x)
 
     identity = ttnn.reshape(identity, conv2.shape)
-    out = ttnn.add_and_apply_activation(conv2, identity, activation="relu", memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.add(conv2, identity, activations=["relu"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(conv2)
     if x is not identity:
         ttnn.deallocate(identity)
@@ -141,7 +141,7 @@ def resnet_bottleneck_block(x, parameters, layer=None, module=None, device=None)
         conv3 = ttnn.to_memory_config(conv3, conv3_mem_config)
     conv3 = ttnn.reshape(conv3, identity.shape)
     mem_config = ttnn.get_memory_config(conv3)
-    out = ttnn.add_and_apply_activation(conv3, identity, activation="relu", memory_config=mem_config)
+    out = ttnn.add(conv3, identity, activations=["relu"], memory_config=mem_config)
     ttnn.deallocate(conv3)
 
     if x is not identity:

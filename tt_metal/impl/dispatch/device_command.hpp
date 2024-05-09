@@ -343,7 +343,8 @@ class DeviceCommand {
         uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(PackedSubCmd);
         this->memcpy((char*)this->cmd_region + this->cmd_write_offsetB, &sub_cmds[offset_idx], sub_cmds_sizeB);
 
-        uint32_t increment_sizeB = align(sub_cmds_sizeB, L1_ALIGNMENT);
+        uint32_t increment_sizeB =
+            align(sub_cmds_sizeB, L1_ALIGNMENT);  // this assumes CQDispatchCmd is L1_ALIGNEMENT aligned
         this->cmd_write_offsetB += increment_sizeB;
 
         // copy the actual data
