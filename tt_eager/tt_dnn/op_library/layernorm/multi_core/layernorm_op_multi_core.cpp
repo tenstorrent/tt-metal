@@ -1168,6 +1168,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     auto override_runtime_args_callback = [
             writer_kernel_ids,
+            writer_mcast_sender_kernels_id,
+            writer_mcast_receiver_kernels_id,
             cb_in0,
             cb_in1,
             cb_output,
@@ -1180,11 +1182,11 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
     ) {
-        auto src_buffer_a = input_tensors.at(0).buffer();
-        auto b_tensor = optional_input_tensors.at(0);
-        auto gamma_tensor = optional_input_tensors.at(1);
-        auto beta_tensor = optional_input_tensors.at(2);
-        auto dst_buffer = output_tensors.at(0).buffer();
+        const auto src_buffer_a = input_tensors.at(0).buffer();
+        const auto b_tensor = optional_input_tensors.at(0);
+        const auto gamma_tensor = optional_input_tensors.at(1);
+        const auto beta_tensor = optional_input_tensors.at(2);
+        const auto dst_buffer = output_tensors.at(0).buffer();
 
         UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
 
@@ -1194,18 +1196,27 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
 
+        auto& writer_sender_args_by_core = GetRuntimeArgs(program, writer_mcast_sender_kernels_id);
+        auto& writer_receiver_args_by_core = GetRuntimeArgs(program, writer_mcast_receiver_kernels_id);
+
+        const auto gamma_address = gamma_tensor.has_value() ? gamma_tensor.value().buffer()->address() : 0;
+        const auto beta_address = beta_tensor.has_value() ? beta_tensor.value().buffer()->address() : 0;
+
+
         for (uint32_t i = 0; i < cores.size(); ++i) {
             const CoreCoord& core = cores[i];
 
-            auto writer_kernel_id = writer_kernel_ids.at(i);
+            const auto writer_kernel_id = writer_kernel_ids.at(i);
 
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            if (writer_kernel_id == writer_mcast_sender_kernels_id) {
+                auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
+                runtime_args[3] = gamma_address;
+                runtime_args[4] = beta_address;
 
-            if (gamma_tensor.has_value()) {
-                runtime_args[3] = gamma_tensor.value().buffer()->address();
-            }
-            if (beta_tensor.has_value()) {
-                runtime_args[4] = beta_tensor.value().buffer()->address();
+            } else if (writer_kernel_id == writer_mcast_receiver_kernels_id) {
+                auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
+                runtime_args[3] = gamma_address;
+                runtime_args[4] = beta_address;
             }
         }
     };
