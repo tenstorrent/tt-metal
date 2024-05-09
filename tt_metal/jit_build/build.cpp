@@ -86,7 +86,12 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch) {
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
 
     if (tt::tt_metal::getDeviceProfilerState()) {
-        this->defines_ += "-DPROFILE_KERNEL=1 ";
+        if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores()) {
+            //TODO(MO): Standard bit mask for device side profiler options
+            this->defines_ += "-DPROFILE_KERNEL=2 ";
+        } else {
+            this->defines_ += "-DPROFILE_KERNEL=1 ";
+        }
     }
 
     if (tt::llrt::OptionsG.get_watcher_enabled()) {

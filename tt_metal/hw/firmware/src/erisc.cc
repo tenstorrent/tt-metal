@@ -24,12 +24,15 @@ void ApplicationHandler(void) __attribute__((__section__(".init")));
 }
 #endif
 
+#if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
     uint32_t wIndex __attribute__((used));
     uint32_t stackSize __attribute__((used));
     uint32_t sums[SUM_COUNT] __attribute__((used));
     uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+    uint16_t core_flat_id __attribute__((used));
 }
+#endif
 
 uint8_t noc_index = 0;  // TODO: remove hardcoding
 uint8_t my_x[NUM_NOCS] __attribute__((used));

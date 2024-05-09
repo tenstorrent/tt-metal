@@ -161,6 +161,36 @@ class test_full_buffer(default_setup):
     detectOps = False
 
 
+class test_dispatch_cores(default_setup):
+    timerAnalysis = {
+        "Tensix CQ Dispatch": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "NCRISC", "zone_name": "CQ-DISPATCH"},
+            "end": {"risc": "NCRISC", "zone_name": "CQ-DISPATCH"},
+        },
+        "Tensix CQ Prefetch": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "NCRISC", "zone_name": "KERNEL-MAIN-HD"},
+            "end": {"risc": "NCRISC", "zone_name": "KERNEL-MAIN-HD"},
+        },
+        "Ethernet CQ Dispatch": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "ERISC", "zone_name": "CQ-DISPATCH"},
+            "end": {"risc": "ERISC", "zone_name": "CQ-DISPATCH"},
+        },
+        "Ethernet CQ Prefetch": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "ERISC", "zone_name": "KERNEL-MAIN-HD"},
+            "end": {"risc": "ERISC", "zone_name": "KERNEL-MAIN-HD"},
+        },
+    }
+    detectOps = False
+
+
 class test_noc(default_setup):
     timerAnalysis = {
         "NoC For Loop": {

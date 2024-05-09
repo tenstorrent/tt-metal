@@ -7,10 +7,8 @@
 
 using namespace tt;
 
-bool RunCustomCycle(tt_metal::Device *device, int loop_count)
+void RunCustomCycle(tt_metal::Device *device, int loop_count)
 {
-    bool pass = true;
-
     CoreCoord compute_with_storage_size = device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
@@ -44,8 +42,6 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count)
 
     EnqueueProgram(device->command_queue(), program, false);
     tt_metal::DumpDeviceProfileResults(device, program);
-
-    return pass;
 }
 
 int main(int argc, char **argv) {
@@ -60,7 +56,7 @@ int main(int argc, char **argv) {
             tt_metal::CreateDevice(device_id);
 
         int loop_count = 2000;
-        pass &= RunCustomCycle(device, loop_count);
+        RunCustomCycle(device, loop_count);
 
         pass &= tt_metal::CloseDevice(device);
 

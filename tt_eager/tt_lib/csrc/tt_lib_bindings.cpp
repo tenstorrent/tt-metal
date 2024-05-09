@@ -198,14 +198,14 @@ void DeviceModule(py::module &m_device) {
         the FinishCommand. Once set to false, all subsequent commands will immediately notify the device
         that the write pointer has been updated.
     )doc");
-    m_device.def("DumpDeviceProfiler", &detail::DumpDeviceProfiler, py::arg("device"), py::arg("free_buffers") = false, R"doc(
+    m_device.def("DumpDeviceProfiler", &detail::DumpDeviceProfiler, py::arg("device"), py::arg("last_dump") = false, R"doc(
         Dump device side profiling data.
 
         +------------------+----------------------------------+-----------------------+-------------+----------+
         | Argument         | Description                      | Data type             | Valid range | Required |
         +==================+==================================+=======================+=============+==========+
         | device           | Device to dump profiling data of | tt_lib.device.Device  |             | Yes      |
-        | free_buffers     | Option to free buffer            | bool                  |             | No       |
+        | last_dump        | Last dump before process dies    | bool                  |             | No       |
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
     m_device.def("DeallocateBuffers", &detail::DeallocateBuffers, R"doc(

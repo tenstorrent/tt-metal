@@ -812,6 +812,7 @@ bool process_cmd(uint32_t& cmd_ptr,
                  uint32_t& downstream_data_ptr,
                  uint32_t& stride) {
 
+    DeviceZoneScopedND("PROCESS-CMD", block_noc_writes_to_clear, rd_block_idx );
     volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
     bool done = false;
 
@@ -1101,9 +1102,9 @@ void kernel_main_hd() {
 
     uint32_t cmd_ptr = cmddat_q_base;
     uint32_t fence = cmddat_q_base;
-
     bool done = false;
     while (!done) {
+        DeviceZoneScopedND("KERNEL-MAIN-HD", block_noc_writes_to_clear, rd_block_idx );
         constexpr uint32_t preamble_size = 0;
         fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
 

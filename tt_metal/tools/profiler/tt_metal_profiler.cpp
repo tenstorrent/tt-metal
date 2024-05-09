@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <thread>
+#include <chrono>
+
 #include "tt_metal/host_api.hpp"
 #include "impl/debug/dprint_server.hpp"
 
@@ -106,7 +109,7 @@ void InitDeviceProfiler(Device *device){
 #endif
 }
 
-void DumpDeviceProfileResults(Device *device, bool free_buffers) {
+void DumpDeviceProfileResults(Device *device, bool lastDump) {
 #if defined(PROFILER)
     std::vector<CoreCoord> workerCores;
     auto device_id = device->id();
@@ -115,36 +118,111 @@ void DumpDeviceProfileResults(Device *device, bool free_buffers) {
         const CoreCoord curr_core = device->worker_core_from_logical_core(core);
         workerCores.push_back(curr_core);
     }
-    for (const CoreCoord& core : tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs)) {
-        CoreType dispatch_core_type = tt::get_dispatch_core_type(device_id, device_num_hw_cqs);
-        const auto curr_core = device->physical_core_from_logical_core(core, dispatch_core_type);
-        workerCores.push_back(curr_core);
+    for (const CoreCoord& core : device->get_active_ethernet_cores(true)){
+        auto physicalCore = device->physical_core_from_logical_core(core, CoreType::ETH);
+        workerCores.push_back(physicalCore);
     }
-    for (const CoreCoord& core : tt::Cluster::instance().get_soc_desc(device_id).physical_ethernet_cores)
-    {
-        workerCores.push_back(core);
-    }
-    DumpDeviceProfileResults(device, workerCores, free_buffers);
+    DumpDeviceProfileResults(device, workerCores, lastDump);
 #endif
 }
 
-void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cores, bool free_buffers){
+
+void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cores, bool lastDump){
 #if defined(PROFILER)
     ZoneScoped;
+
+    if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores()) {
+        auto device_id = device->id();
+        auto device_num_hw_cqs = device->num_hw_cqs();
+        for (const CoreCoord& core : tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs)) {
+            CoreType dispatch_core_type = tt::get_dispatch_core_type(device_id, device_num_hw_cqs);
+            const auto curr_core = device->physical_core_from_logical_core(core, dispatch_core_type);
+            worker_cores.push_back(curr_core);
+        }
+        for (const CoreCoord& core : tt::Cluster::instance().get_soc_desc(device_id).physical_ethernet_cores){
+            worker_cores.push_back(core);
+        }
+    }
     if (getDeviceProfilerState())
     {
-        const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
-        if (USE_FAST_DISPATCH)
+	if (!lastDump)
+	{
+	    const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
+	    if (USE_FAST_DISPATCH)
+	    {
+		Finish(device->command_queue());
+	    }
+	}
+        else
         {
-            Finish(device->command_queue());
+            if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores())
+            {
+                bool waitForDispatch = true;
+                uint8_t loopCount = 0;
+                CoreCoord unfinishedCore = {0,0};
+                constexpr uint8_t maxLoopCount = 10;
+                constexpr uint32_t loopDuration_us = 10000;
+                while (waitForDispatch)
+                {
+                    waitForDispatch = false;
+                    std::this_thread::sleep_for(std::chrono::microseconds(loopDuration_us));
+                    auto device_id = device->id();
+                    auto device_num_hw_cqs = device->num_hw_cqs();
+                    loopCount++;
+                    if (loopCount > maxLoopCount)
+                    {
+                        std::string msg = fmt::format(
+                                "Device profiling never finished on device {}, worker core {}, {}",
+                                device_id, unfinishedCore.x, unfinishedCore.y);
+                        TracyMessageC(msg.c_str(), msg.size(), tracy::Color::Tomato3);
+                        log_warning(msg.c_str());
+                        break;
+                    }
+                    for (const CoreCoord& core : tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs))
+                    {
+                        CoreType dispatch_core_type = tt::get_dispatch_core_type(device_id, device_num_hw_cqs);
+                        const auto curr_core = device->physical_core_from_logical_core(core, dispatch_core_type);
+                        vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
+                                device_id,
+                                curr_core,
+                                PROFILER_L1_BUFFER_CONTROL,
+                                PROFILER_L1_CONTROL_BUFFER_SIZE);
+                        if (control_buffer[kernel_profiler::PROFILER_DONE] == 0)
+                        {
+                            unfinishedCore = curr_core;
+                            waitForDispatch = true;
+                            continue;
+                        }
+                    }
+                    if (waitForDispatch)
+                    {
+                        continue;
+                    }
+                    for (const CoreCoord& core : tt::Cluster::instance().get_soc_desc(device_id).physical_ethernet_cores)
+                    {
+                        vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
+                                device_id,
+                                core,
+                                eth_l1_mem::address_map::PROFILER_L1_BUFFER_CONTROL,
+                                PROFILER_L1_CONTROL_BUFFER_SIZE);
+                        if (control_buffer[kernel_profiler::PROFILER_DONE] == 0)
+                        {
+                            unfinishedCore = core;
+                            waitForDispatch = true;
+                            continue;
+                        }
+                    }
+
+                }
+            }
         }
-        TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");
+	TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");
         auto device_id = device->id();
         if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end())
         {
             tt_metal_device_profiler_map.at(device_id).setDeviceArchitecture(device->arch());
             tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores);
-            if (free_buffers)
+            if (lastDump)
             {
                 // Process is ending, no more device dumps are coming, reset your ref on the buffer so deallocate is the last
                 // owner.

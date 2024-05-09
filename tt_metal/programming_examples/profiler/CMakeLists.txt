@@ -3,6 +3,7 @@ set(PROFILER_EXAMPLES_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/test_custom_cycle_count/test_custom_cycle_count
     ${CMAKE_CURRENT_SOURCE_DIR}/test_full_buffer/test_full_buffer
     ${CMAKE_CURRENT_SOURCE_DIR}/test_multi_op/test_multi_op
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_dispatch_cores/test_dispatch_cores
 )
 
 CREATE_PGM_EXAMPLES_EXE("${PROFILER_EXAMPLES_SRCS}" "profiler")

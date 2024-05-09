@@ -273,7 +273,7 @@ def device(request, device_params):
 
     yield device
 
-    ttl.device.DumpDeviceProfiler(device, True)
+    ttl.device.DumpDeviceProfiler(device)
     ttl.device.DeallocateBuffers(device)
 
     ttl.device.Synchronize(device)
@@ -292,7 +292,7 @@ def pcie_devices(request, device_params):
     yield [devices[i] for i in range(num_devices)]
 
     for device in devices.values():
-        ttl.device.DumpDeviceProfiler(device, True)
+        ttl.device.DumpDeviceProfiler(device)
         ttl.device.DeallocateBuffers(device)
 
     ttl.device.CloseDevices(devices)
@@ -310,7 +310,7 @@ def all_devices(request, device_params):
     yield [devices[i] for i in range(num_devices)]
 
     for device in devices.values():
-        ttl.device.DumpDeviceProfiler(device, True)
+        ttl.device.DumpDeviceProfiler(device)
         ttl.device.DeallocateBuffers(device)
 
     ttl.device.CloseDevices(devices)
@@ -334,7 +334,7 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
     import tt_lib as ttl
 
     for device in device_mesh.get_devices():
-        ttl.device.DumpDeviceProfiler(device, True)
+        ttl.device.DumpDeviceProfiler(device)
         ttl.device.DeallocateBuffers(device)
 
     ttnn.close_device_mesh(device_mesh)
@@ -361,7 +361,7 @@ def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
     import tt_lib as ttl
 
     for device in device_mesh.get_devices():
-        ttl.device.DumpDeviceProfiler(device, True)
+        ttl.device.DumpDeviceProfiler(device)
         ttl.device.DeallocateBuffers(device)
 
     ttnn.close_device_mesh(device_mesh)
@@ -388,7 +388,7 @@ def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
     import tt_lib as ttl
 
     for device in device_mesh.get_devices():
-        ttl.device.DumpDeviceProfiler(device, True)
+        ttl.device.DumpDeviceProfiler(device)
         ttl.device.DeallocateBuffers(device)
 
     ttnn.close_device_mesh(device_mesh)

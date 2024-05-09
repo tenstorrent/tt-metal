@@ -1307,8 +1307,6 @@ bool Device::close() {
     if (not this->initialized_) {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
-    this->deallocate_buffers();
-    watcher_detach(this);
 
     for (const std::unique_ptr<HWCommandQueue> &hw_command_queue : hw_command_queues_) {
         if (hw_command_queue->manager.get_bypass_mode()) {
@@ -1316,8 +1314,15 @@ bool Device::close() {
         }
         hw_command_queue->terminate();
     }
+
+    tt_metal::detail::DumpDeviceProfileResults(this, true);
+
     this->trace_buffer_pool_.clear();
     detail::EnableAllocs(this);
+
+    this->deallocate_buffers();
+    watcher_detach(this);
+
 
     std::unordered_set<CoreCoord> not_done_dispatch_cores;
     std::unordered_set<CoreCoord> cores_to_skip;

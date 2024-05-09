@@ -48,12 +48,15 @@ constexpr uint32_t num_cbs_to_early_init = 4;  // safe small number to overlap w
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
+#if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
     uint32_t wIndex __attribute__((used));
     uint32_t stackSize __attribute__((used));
     uint32_t sums[SUM_COUNT] __attribute__((used));
     uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+    uint16_t core_flat_id __attribute__((used));
 }
+#endif
 
 //inline void RISC_POST_STATUS(uint32_t status) {
 //  volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
@@ -101,7 +104,7 @@ int main() {
         DEBUG_STATUS("GD");
 
         {
-            DeviceZoneScopedMainN("ERISC-FW");
+            DeviceZoneScopedMainN("ERISC-IDLE-FW");
 
             noc_index = mailboxes->launch.brisc_noc_id;
 
