@@ -219,6 +219,8 @@ class Device {
     void initialize_and_launch_firmware();
     void initialize_command_queue();
     void initialize_synchronous_sw_cmd_queue();
+    void configure_kernel_variant(Program& program, string path, std::vector<uint32_t> compile_args, CoreCoord kernel_core, CoreCoord Kernel_physical_core,
+                                  CoreType dispatch_core_type, CoreCoord upstream_physical_core, CoreCoord downstream_physical_core, std::map<string, string> defines_in , bool is_active_eth_core = false);
     void compile_command_queue_programs();
     void configure_command_queue_programs();
     void clear_l1_state();
