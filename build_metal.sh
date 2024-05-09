@@ -18,8 +18,8 @@ else
 fi
 
 echo "Building tt-metal"
-cmake -B build
-cmake --build build -- -j`nproc`
+cmake -B build -G Ninja
+cmake --build build
 cmake --build build --target metal-install
 
 echo "Creating virtual env in: $PYTHON_ENV_DIR"
