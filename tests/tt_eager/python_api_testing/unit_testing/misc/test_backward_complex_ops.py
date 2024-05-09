@@ -127,14 +127,14 @@ def test_level2_conj_bw(bs, hw, memcfg, dtype, device, function_level_defaults):
     in_data.requires_grad = True
 
     input_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data = random_complex_tensor(input_shape, (-50, 50), (-60, 60))
     grad_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
     tt_dev = ttl.tensor.conj_bw(grad_tensor, input_tensor, memcfg)
     in_data.retain_grad()
@@ -177,14 +177,14 @@ def test_level2_imag_bw(bs, hw, memcfg, dtype, device, function_level_defaults):
     in_data.requires_grad = True
 
     input_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data = random_complex_tensor(input_shape, (-50, 50), (-60, 60))
     grad_data = grad_data.imag
     grad_tensor = ttl.tensor.Tensor(
-        ttl.tensor.Tensor(grad_data, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
     tt_dev = ttl.tensor.imag_bw(grad_tensor, input_tensor, memcfg)
     in_data.retain_grad()
@@ -227,14 +227,14 @@ def test_level2_real_bw(bs, hw, memcfg, dtype, device, function_level_defaults):
     in_data.requires_grad = True
 
     input_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data = random_complex_tensor(input_shape, (-50, 50), (-60, 60))
     grad_data = grad_data.real
     grad_tensor = ttl.tensor.Tensor(
-        ttl.tensor.Tensor(grad_data, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
     tt_dev = ttl.tensor.real_bw(grad_tensor, input_tensor, memcfg)
     in_data.retain_grad()
@@ -281,18 +281,18 @@ def test_level2_complex_add_bw(bs, hw, alpha, memcfg, dtype, device, function_le
     other_data.requires_grad = True
 
     input_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
     other_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(other_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(other_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(other_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(other_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data = random_complex_tensor(input_shape, (-50, 50), (-60, 60))
     grad_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
     tt_dev = ttl.tensor.complex_add_bw(grad_tensor, input_tensor, other_tensor, alpha, memcfg)
     in_data.retain_grad()
@@ -341,18 +341,18 @@ def test_level2_complex_sub_bw(bs, hw, alpha, memcfg, dtype, device, function_le
     other_data.requires_grad = True
 
     input_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
     other_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(other_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(other_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(other_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(other_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data = random_complex_tensor(input_shape, (-50, 50), (-60, 60))
     grad_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
     tt_dev = ttl.tensor.complex_sub_bw(grad_tensor, input_tensor, other_tensor, alpha, memcfg)
     in_data.retain_grad()
@@ -400,18 +400,18 @@ def test_level2_complex_mul_bw(bs, hw, memcfg, dtype, device, function_level_def
     other_data.requires_grad = True
 
     input_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
     other_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(other_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(other_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(other_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(other_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data = random_complex_tensor(input_shape, (-50, 50), (-60, 60))
     grad_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
     tt_dev = ttl.tensor.complex_mul_bw(grad_tensor, input_tensor, other_tensor, memcfg)
     in_data.retain_grad()
@@ -459,18 +459,18 @@ def test_level2_complex_div_bw(bs, hw, memcfg, dtype, device, function_level_def
     other_data.requires_grad = True
 
     input_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
     other_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(other_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(other_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(other_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(other_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data = random_complex_tensor(input_shape, (-50, 50), (-60, 60))
     grad_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
     tt_dev = ttl.tensor.complex_div_bw(grad_tensor, input_tensor, other_tensor, memcfg)
     in_data.retain_grad()
@@ -519,18 +519,18 @@ def test_level2_complex_div_bw_other_zero(bs, hw, memcfg, dtype, device, functio
     other_data.requires_grad = True
 
     input_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
     other_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(other_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(other_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(other_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(other_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data = random_complex_tensor(input_shape, (-50, 50), (-60, 60))
     grad_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
     tt_dev = ttl.tensor.complex_div_bw(grad_tensor, input_tensor, other_tensor, memcfg)
     in_data.retain_grad()
@@ -575,8 +575,8 @@ def test_level2_abs_bw(bs, hw, memcfg, dtype, device, function_level_defaults):
     in_data.requires_grad = True
 
     input_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data, grad_tensor = data_gen_with_range(input_shape, -50, 40, device)
@@ -622,8 +622,8 @@ def test_level2_abs_bw_inp_zero(bs, hw, memcfg, dtype, device, function_level_de
     in_data.requires_grad = True
 
     input_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data, grad_tensor = data_gen_with_range(input_shape, -50, 80, device)
@@ -669,14 +669,14 @@ def test_level2_recip_bw(bs, hw, memcfg, dtype, device, function_level_defaults)
     in_data.requires_grad = True
 
     input_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data = random_complex_tensor(input_shape, (-50, 50), (-60, 60))
     grad_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
     tt_dev = ttl.tensor.complex_recip_bw(grad_tensor, input_tensor, memcfg)
     in_data.retain_grad()
@@ -720,14 +720,14 @@ def test_level2_recip_bw_inp_zero(bs, hw, memcfg, dtype, device, function_level_
     in_data.requires_grad = True
 
     input_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data = random_complex_tensor(input_shape, (-50, 50), (-60, 60))
     grad_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
     tt_dev = ttl.tensor.complex_recip_bw(grad_tensor, input_tensor, memcfg)
     in_data.retain_grad()
@@ -770,8 +770,8 @@ def test_level2_angle_bw(bs, hw, memcfg, dtype, device, function_level_defaults)
     in_data.requires_grad = True
 
     input_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data, grad_tensor = data_gen_with_range(input_shape, -50, 40, device)
@@ -818,14 +818,14 @@ def test_level2_polar_bw(bs, hw, memcfg, dtype, device, function_level_defaults)
     in_data.requires_grad = True
 
     input_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data = random_complex_tensor(input_shape, (-50, 50), (-60, 60))
     grad_tensor = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
-        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
     tt_dev = ttl.tensor.polar_bw(grad_tensor, input_tensor, memcfg)
     in_data.retain_grad()

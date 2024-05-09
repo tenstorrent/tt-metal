@@ -1495,7 +1495,7 @@ Tensor sfpu_eps(const Shape shape, Layout layout, Device* device, const MemoryCo
 
 // tril : select lower triangular region of input matrix
 Tensor _tril(const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_config) {
-    Tensor index_l = tt::numpy::index_tril<bfloat16>(input_a.get_legacy_shape(), diag, DataType::BFLOAT16);
+    Tensor index_l = tt::numpy::index_tril<bfloat16>(input_a.get_legacy_shape(), diag, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config);
     return mul(input_a, index_l, std::nullopt, output_mem_config);
 }
 Tensor tril(
@@ -1507,7 +1507,7 @@ Tensor tril(
 
 // triu : select upper triangular region of input matrix
 Tensor _triu(const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_config) {
-    Tensor index_u = tt::numpy::index_triu<bfloat16>(input_a.get_legacy_shape(), diag, DataType::BFLOAT16);
+    Tensor index_u = tt::numpy::index_triu<bfloat16>(input_a.get_legacy_shape(), diag, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config);
     return mul(input_a, index_u, std::nullopt, output_mem_config);
 }
 Tensor triu(
@@ -1581,14 +1581,14 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig
                     bool is_width = (dim == (input_shape.rank() - 1));
                     Tensor max_val = max(input_a, dim, output_mem_config);
                     Tensor max_tensor = zeros_like(input_a, output_mem_config);
-                    Tensor tindex = tt::numpy::index_width<bfloat16>(input_shape, DataType::BFLOAT16);
+                    Tensor tindex = tt::numpy::index_width<bfloat16>(input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config);
                     if (is_width)
                     {
                         max_tensor = bcast(max_tensor, max_val, BcastOpMath::ADD, BcastOpDim::W, output_mem_config);
                     }
                     else
                     {
-                        tindex = tt::numpy::index_height<bfloat16>(input_shape, DataType::BFLOAT16);
+                        tindex = tt::numpy::index_height<bfloat16>(input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config);
                         max_tensor = bcast(max_tensor, max_val, BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
                     }
                     tindex = tindex.to(input_a.device());
@@ -1629,10 +1629,10 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig
                     Tensor concat_out = concat(combined_tensors, dim, output_mem_config);
                     Tensor cmp_results = eq(input_a, concat_out, std::nullopt, output_mem_config);
                     concat_out.deallocate();
-                    Tensor tindex = tt::numpy::index_channel<bfloat16>(input_shape, DataType::BFLOAT16);
+                    Tensor tindex = tt::numpy::index_channel<bfloat16>(input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config);
                     if (!is_channel)
                     {
-                        tindex = tt::numpy::index_batch<bfloat16>(input_shape, DataType::BFLOAT16);
+                        tindex = tt::numpy::index_batch<bfloat16>(input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config);
                     }
                     tindex = tindex.to(input_a.device());
                     Tensor max_indices =  mul(cmp_results, tindex, std::nullopt, output_mem_config);
@@ -1657,8 +1657,7 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig
                 }
             }
             //TODO: Fix the index generation code. With the fix the code will work for argmax that return entire maximum value index
-            Tensor tindex = tt::numpy::index_all<bfloat16>(input_shape, DataType::BFLOAT16);
-            tindex = tindex.to(input_a.device());
+            Tensor tindex = tt::numpy::index_all<bfloat16>(input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config);
             Tensor max_val = global_max(input_a, output_mem_config);
             Tensor max_tensor = zeros_like(input_a, output_mem_config);
             max_tensor = bcast(max_tensor, max_val, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
