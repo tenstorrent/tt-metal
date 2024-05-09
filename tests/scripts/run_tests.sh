@@ -129,6 +129,15 @@ run_post_commit_tg_pipeline_tests() {
     ./tests/scripts/tg/run_pre_post_commit_regressions_tg.sh
 }
 
+# Run post commit TGG tests - these are 8xn150 + 2xgalaxy tests
+run_post_commit_tgg_pipeline_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/tgg/run_pre_post_commit_regressions_tgg.sh
+}
+
 run_models_performance() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -264,6 +273,8 @@ run_pipeline_tests() {
         run_end_to_end_demos_multi_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "post_commit_tg" ]]; then
         run_post_commit_tg_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "post_commit_tgg" ]]; then
+        run_post_commit_tgg_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "microbenchmarks" ]]; then
         run_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "ttnn_sweeps" ]]; then
