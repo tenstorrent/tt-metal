@@ -59,12 +59,13 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_out0);
     const DataFormat data_format = get_dataformat(cb_id_out0);
 
-    #ifdef MASK_PADDING
     constexpr uint32_t cb_id_mask = tt::CB::c_in5;
-    const uint32_t val_to_pad = get_arg_val<uint32_t>(4);
-    constexpr uint32_t num_datum_padded = get_compile_time_arg_val(1);
-    generate_bcast_row_mask(cb_id_mask, num_datum_padded, val_to_pad);
-    #endif
+    const uint32_t mask_padded_data = get_arg_val<uint32_t>(4);
+    const uint32_t num_datum_padded = get_arg_val<uint32_t>(5);
+    const uint32_t val_to_pad = get_arg_val<uint32_t>(6);
+    if (mask_padded_data) {
+        generate_bcast_row_mask(cb_id_mask, num_datum_padded, val_to_pad);
+    }
 
     const InterleavedAddrGenFast<dst_is_dram> s = {
         .bank_base_address = dst_addr,
