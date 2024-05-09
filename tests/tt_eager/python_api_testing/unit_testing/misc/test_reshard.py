@@ -14,7 +14,25 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 
 from enum import Enum
 
-from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, get_debug_tensor
+
+
+tt_dtype_to_torch_dtype = {
+    ttl.tensor.DataType.UINT32: torch.int32,
+    ttl.tensor.DataType.UINT16: torch.int16,
+    ttl.tensor.DataType.BFLOAT16: torch.bfloat16,
+    ttl.tensor.DataType.BFLOAT8_B: torch.float,
+}
+TILE_WIDTH = 32
+TILE_HEIGHT = 32
+
+
+def get_tensor(shape, dtype):
+    if dtype in {torch.int16, torch.int32}:
+        torch_tensor = torch.randint(0, 1024, shape, dtype=dtype)
+    else:
+        torch_tensor = torch.rand(shape, dtype=dtype)
+    return torch_tensor
 
 
 def run_reshard_test(
@@ -31,10 +49,16 @@ def run_reshard_test(
     output_sharding_scheme,
     tt_dtype,
 ):
+    full_grid = device.compute_with_storage_grid_size()
+
     input_shard_grid_set = set()
     for _input_shard_grid in input_shard_grid:
         compute_grid_start = ttl.tensor.CoreCoord(_input_shard_grid[0][0], _input_shard_grid[0][1])
         compute_grid_end = ttl.tensor.CoreCoord(_input_shard_grid[1][0], _input_shard_grid[1][1])
+        if compute_grid_start.x >= full_grid.x or compute_grid_start.y >= full_grid.y:
+            pytest.skip("Illegal input core_grid")
+        if compute_grid_end.x >= full_grid.x or compute_grid_end.y >= full_grid.y:
+            pytest.skip("Illegal input core_grid")
         input_shard_grid_set.add(ttl.tensor.CoreRange(compute_grid_start, compute_grid_end))
 
     input_shard_grid = ttl.tensor.CoreRangeSet(input_shard_grid_set)
@@ -43,6 +67,10 @@ def run_reshard_test(
     for _output_shard_grid in output_shard_grid:
         compute_grid_start = ttl.tensor.CoreCoord(_output_shard_grid[0][0], _output_shard_grid[0][1])
         compute_grid_end = ttl.tensor.CoreCoord(_output_shard_grid[1][0], _output_shard_grid[1][1])
+        if compute_grid_start.x >= full_grid.x or compute_grid_start.y >= full_grid.y:
+            pytest.skip("Illegal output core_grid")
+        if compute_grid_end.x >= full_grid.x or compute_grid_end.y >= full_grid.y:
+            pytest.skip("Illegal output core_grid")
         output_shard_grid_set.add(ttl.tensor.CoreRange(compute_grid_start, compute_grid_end))
 
     output_shard_grid = ttl.tensor.CoreRangeSet(output_shard_grid_set)
@@ -56,7 +84,27 @@ def run_reshard_test(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
         buffer_type=ttl.tensor.BufferType.DRAM,
     )
-    torch_tensor = torch.randn(input_shape).bfloat16()
+    debug = True
+    dtype = tt_dtype_to_torch_dtype[tt_dtype]
+    if debug:
+        if input_layout == ttl.tensor.Layout.TILE:
+            num_pages_height = (input_shape[0] * input_shape[1] * input_shape[2]) / 32
+            num_pages_width = input_shape[3] / 32
+            page_height = 32
+            page_width = 32
+        else:
+            page_width_input = input_shard_shape[1]
+            page_width_output = output_shard_shape[1]
+            page_height = 1
+            page_width = int(math.gcd(page_width_input, page_width_output))
+            num_pages_height = int(input_shape[0] * input_shape[1] * input_shape[2])
+            num_pages_width = int(input_shape[3] / page_width)
+        torch_tensor = get_debug_tensor(
+            num_pages_width, num_pages_height, dtype, page_width=page_width, page_height=page_height
+        )
+    else:
+        torch_tensor = get_tensor(input_shape, dtype)
+
     tt_tensor_sharded = ttl.tensor.Tensor(torch_tensor, tt_dtype).to(input_layout)
     tt_tensor_sharded = tt_tensor_sharded.to(device, dram_memory_config)
     tt_tensor_sharded = ttl.tensor.interleaved_to_sharded(
@@ -81,7 +129,6 @@ def run_reshard_test(
     return torch_tensor, torch_tensor_after_round_trip
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
     [
@@ -154,6 +201,18 @@ def run_reshard_test(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             [[(0, 0), (0, 7)]],
             (32, 1024),
+            ttl.tensor.ShardOrientation.COL_MAJOR,
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        (
+            [1, 1, 160, 64],
+            ttl.tensor.Layout.TILE,
+            [[(0, 0), (0, 4)]],
+            (32, 64),
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            [[(0, 0), (1, 1)]],
+            (96, 32),
             ttl.tensor.ShardOrientation.COL_MAJOR,
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ),
@@ -257,14 +316,14 @@ def test_reshard_rn50(
     "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
     [
         (
-            [1, 1, 32, 6272],
+            [1, 1, 160, 64],
             ttl.tensor.Layout.TILE,
-            [[(0, 0), (6, 6)]],
-            (32, 128),
+            [[(0, 0), (0, 4)]],
+            (32, 64),
             ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            [[(0, 0), (0, 6)]],
-            (32, 1024),
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            [[(0, 0), (1, 1)]],
+            (96, 32),
             ttl.tensor.ShardOrientation.COL_MAJOR,
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ),

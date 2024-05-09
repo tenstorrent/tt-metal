@@ -35,25 +35,28 @@ void kernel_main() {
 		const uint32_t start_y = get_arg_val<uint32_t>(y_offset + start_y_index);
 
 		const uint32_t stride_data_offset = get_arg_val<uint32_t>(arg_index++);
-		const uint32_t stride_size_num_strides = get_arg_val<uint32_t>(arg_index++);
-		const uint32_t num_strides = ((stride_size_num_strides) & mask_short);
+		const uint32_t stride_size_num_strides_skip = get_arg_val<uint32_t>(arg_index++);
+		const uint32_t num_strides = ((stride_size_num_strides_skip) & mask_short) >> 8;
+		const bool skip = (((stride_size_num_strides_skip) & mask_byte)  == 1);
 
 
 		const uint32_t stride_data = ((stride_data_offset >> 16)) * page_size;
 		const uint32_t offset = ((stride_data_offset) & mask_short) * page_size;
-		const uint32_t stride_size = ((stride_size_num_strides >> 16)) * page_size;
+		const uint32_t num_pages_per_stride = (stride_size_num_strides_skip >> 16);
+		const uint32_t stride_size = num_pages_per_stride * page_size;
 
 		uint32_t addr_offset = offset;
 		uint32_t core_id_x_index = start_x_index;
 		uint32_t core_id_y_index = start_y_index;
 
 		for(uint32_t stride_idx = 0; stride_idx < num_strides; stride_idx++) {
-
-			uint32_t core_id_x = get_arg_val<uint32_t>(core_id_x_index);
-			uint32_t core_id_y = get_arg_val<uint32_t>(y_offset + core_id_y_index);
-			uint64_t noc_address = get_noc_addr(core_id_x, core_id_y,
-					input_shard_addr + addr_offset);
-			noc_async_read(noc_address, l1_write_addr, stride_size);
+			if(!skip) {
+				uint32_t core_id_x = get_arg_val<uint32_t>(core_id_x_index);
+				uint32_t core_id_y = get_arg_val<uint32_t>(y_offset + core_id_y_index);
+				uint64_t noc_address = get_noc_addr(core_id_x, core_id_y,
+						input_shard_addr + addr_offset);
+				noc_async_read(noc_address, l1_write_addr, stride_size);
+			}
 			l1_write_addr+=stride_size;
 			if(stride_x == 0 and stride_y == 0) {
 				addr_offset += (stride_data + stride_size);
