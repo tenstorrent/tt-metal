@@ -372,7 +372,7 @@ TEST_F(CommandQueueFixture, TestAsyncCBAllocation) {
     CircularBufferConfig config1 = CircularBufferConfig(page_size, {{buffer_indices[0], data_format}, {buffer_indices[1], data_format}}, *l1_buffer)
         .set_page_size(buffer_indices[0], page_size)
         .set_page_size(buffer_indices[1], page_size);
-    // Asyncrhonously assign the L1 Buffer to the CB
+    // Asynchronously assign the L1 Buffer to the CB
     auto multi_core_cb = CreateCircularBuffer(program, cr_set, config1);
     auto cb_ptr = detail::GetCircularBuffer(program, multi_core_cb);
     Finish(this->device_->command_queue());
@@ -407,7 +407,7 @@ TEST_F(CommandQueueFixture, TestAsyncAssertForDeprecatedAPI) {
         SetRuntimeArgs(program, dummy_kernel, core, runtime_args);
     }
     catch (std::runtime_error &e) {
-        std::string expected = "This variant of SetRuntimeArgs can only be called when Asyncrhonous SW Command Queues are disabled for Fast Dispatch.";
+        std::string expected = "This variant of SetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.";
         const string error = string(e.what());
         EXPECT_TRUE(error.find(expected) != std::string::npos);
     }

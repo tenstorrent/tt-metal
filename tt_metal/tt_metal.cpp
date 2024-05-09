@@ -840,8 +840,9 @@ void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, co
     if (not buffer.is_l1()) {
         TT_FATAL("Only L1 buffers can have an associated circular buffer!");
     }
-    detail::GetCircularBuffer(program, cb_handle)->config().set_globally_allocated_address(buffer);
-    detail::GetCircularBuffer(program, cb_handle)->assign_global_address();
+    auto circular_buffer = detail::GetCircularBuffer(program, cb_handle);
+    circular_buffer->config().set_globally_allocated_address(buffer);
+    circular_buffer->assign_global_address();
 }
 
 uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type) {
@@ -901,7 +902,7 @@ void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, std::variant<st
 
 void SetRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::variant<CoreCoord,CoreRange,CoreRangeSet> &core_spec, const std::vector<uint32_t> &runtime_args) {
     ZoneScoped;
-    TT_FATAL( not CommandQueue::async_mode_set(), "This variant of SetRuntimeArgs can only be called when Asyncrhonous SW Command Queues are disabled for Fast Dispatch.");
+    TT_FATAL( not CommandQueue::async_mode_set(), "This variant of SetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
     std::visit(
         [&](auto&& core_spec)
         {
@@ -922,7 +923,7 @@ void SetRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::v
 void SetRuntimeArgs(const Program &program, KernelHandle kernel, const std::vector< CoreCoord > & core_spec, const std::vector< std::vector<uint32_t> > &runtime_args)
 {
     ZoneScoped;
-    TT_FATAL( not CommandQueue::async_mode_set(), "This variant of SetRuntimeArgs can only be called when Asyncrhonous SW Command Queues are disabled for Fast Dispatch.");
+    TT_FATAL( not CommandQueue::async_mode_set(), "This variant of SetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
     TT_FATAL( core_spec.size() == runtime_args.size(), "Mistmatch between number of cores {} and number of runtime args {} getting updated", core_spec.size(), runtime_args.size());
     auto k = detail::GetKernel(program, kernel);
     for (size_t i = 0; i < core_spec.size(); i++)
@@ -935,7 +936,7 @@ void SetRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const 
 }
 
 void SetRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const std::vector< CoreCoord > & core_spec, const std::vector<std::shared_ptr<RuntimeArgs>> runtime_args) {
-    TT_FATAL( core_spec.size() == runtime_args.size(), "Mistmatch between number of cores {} and number of runtime args {} getting updated", core_spec.size(), runtime_args.size());
+    TT_FATAL( core_spec.size() == runtime_args.size(), "Mismatch between number of cores {} and number of runtime args {} getting updated", core_spec.size(), runtime_args.size());
     detail::DispatchStateCheck(not device->using_slow_dispatch());
     SetRuntimeArgs(device->command_queue(), kernel, core_spec, runtime_args, false);
 }
@@ -943,7 +944,7 @@ void SetRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const 
 
 void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args) {
     ZoneScoped;
-    TT_FATAL( not CommandQueue::async_mode_set(), "This variant of SetCommonRuntimeArgs can only be called when Asyncrhonous SW Command Queues are disabled for Fast Dispatch.");
+    TT_FATAL( not CommandQueue::async_mode_set(), "This variant of SetCommonRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
     if (runtime_args.size() != 0) {
         detail::GetKernel(program, kernel_id)->set_common_runtime_args(runtime_args);
     }
@@ -951,8 +952,18 @@ void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const 
 
 
 std::vector<uint32_t> & GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core) {
-    TT_FATAL( not CommandQueue::async_mode_set(), "GetRuntimeArgs can only be called when Asyncrhonous SW Command Queues are disabled for Fast Dispatch.");
+    TT_FATAL( not CommandQueue::async_mode_set(), "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
     return detail::GetKernel(program, kernel_id)->runtime_args(logical_core);
+}
+
+std::vector< std::vector< std::vector<uint32_t>> > & GetRuntimeArgs(const Program &program, KernelHandle kernel_id) {
+    TT_FATAL( not CommandQueue::async_mode_set(), "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
+    return detail::GetKernel(program, kernel_id)->runtime_args();
+}
+
+std::vector<uint32_t> & GetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id) {
+    TT_FATAL( not CommandQueue::async_mode_set(), "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
+    return detail::GetKernel(program, kernel_id)->common_runtime_args();
 }
 
 void UpdateRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const CoreCoord &core_coord, std::vector<uint32_t> &update_idx, std::shared_ptr<RuntimeArgs> runtime_args) {
