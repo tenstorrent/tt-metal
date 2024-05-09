@@ -779,6 +779,7 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("in_place") = false,
+        py::arg("output_tensor").noconvert() = std::nullopt,
         R"doc(Perform an eltwise-binary add (``{0} + {1}``) on two tensors.
 
         Both input tensors must have TILE layout. Output tensor will have TILE layout.
