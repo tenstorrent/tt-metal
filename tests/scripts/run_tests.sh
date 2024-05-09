@@ -120,6 +120,15 @@ run_end_to_end_demos_multi_device() {
     ./tests/scripts/multi_chip/run_end_to_end_demos.sh
 }
 
+# Run post commit TG tests - these are 4xn150 + galaxy tests
+run_post_commit_tg_pipeline_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/tg/run_pre_post_commit_regressions_tg.sh
+}
+
 run_models_performance() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -253,6 +262,8 @@ run_pipeline_tests() {
         run_frequent_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "end_to_end_demos_multi_device" ]]; then
         run_end_to_end_demos_multi_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "post_commit_tg" ]]; then
+        run_post_commit_tg_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "microbenchmarks" ]]; then
         run_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "ttnn_sweeps" ]]; then
