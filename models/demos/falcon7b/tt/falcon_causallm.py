@@ -24,13 +24,8 @@ class TtFalconCausalLM(TtFalconModelShared):
         model_config,
         tt_cache_path,
         seq_len,
-        optimized=False,
     ):
         assert base_url == "", "base_url should be empty at the root of the model!"
-        assert (
-            not optimized
-        ), "CausalLM does not support optimized mode at the moment"  # TODO: remove assert when prog_cache is supported for i2s_partial
-        model_config["OPTIMIZED_MODE"] = optimized
         super().__init__(
             devices=devices,
             state_dict=state_dict,
@@ -50,7 +45,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             lm_head_weight = self.state_dict["lm_head.weight"]
             lm_head_weight = torch.transpose(lm_head_weight, -2, -1)
 
-        if self.seq_len > 512:
+        if self.model_config["PREFILL_OPTIMIZED_MODE"] and self.seq_len > 512:
             # Optimization for lm_head matmul
             self.num_slices = 4 if self.seq_len <= 1024 else 8
             if lm_head_weight is not None:
@@ -110,7 +105,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             use_cache=use_cache,
         )
 
-        if hidden_states[0].get_legacy_shape()[-2] > 512 and self.model_config["OPTIMIZED_MODE"]:
+        if self.model_config["PREFILL_OPTIMIZED_MODE"] and hidden_states[0].get_legacy_shape()[-2] > 512:
             lm_logits = [
                 falcon_lm_head_matmul_2d(
                     hidden_states[device_id],

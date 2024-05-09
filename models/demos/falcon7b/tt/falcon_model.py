@@ -94,7 +94,7 @@ class TtFalconModelShared(torch.nn.Module):
 
         self.layernorm_eps = config.layer_norm_epsilon
 
-    def model_preprocessing(self, llm_mode, input_ids, kv_cache_len, num_input_tokens, optimized_mode=False):
+    def model_preprocessing(self, llm_mode, input_ids, kv_cache_len, num_input_tokens):
         assert input_ids.dim() == 2
         global_batch_size, sequence_size = input_ids.shape
         batch_size = global_batch_size // self.num_devices
@@ -117,7 +117,11 @@ class TtFalconModelShared(torch.nn.Module):
                 dim=-1,
             )
 
-            if num_input_tokens in [128, 1024, 2048] and optimized_mode:
+            if (
+                self.model_config["PREFILL_OPTIMIZED_MODE"]
+                and self.model_config["PREFILL_ATTENTION_OPTIMIZED_MODE"]
+                and num_input_tokens in [128, 1024, 2048]
+            ):
                 attention_mask_ = create_prefill_attn_mask_for_sharded_softmax(
                     attention_mask_bool_padded * -1e5,
                     self.config.num_attention_heads,
