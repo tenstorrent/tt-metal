@@ -23,8 +23,8 @@ import tt_lib.profiler as profiler
 import ttnn
 
 
-def update_ttnn_module_args(ttnn_module_args):
-    ttnn_module_args["use_1d_systolic_array"] = ttnn_module_args.in_channels < 256
+def update_ttnn_module_args(ttnn_module_args, groups):
+    ttnn_module_args["use_1d_systolic_array"] = ttnn_module_args.in_channels < 256 or groups > 1
 
 
 def create_custom_preprocessor(device, groups=1):
@@ -108,8 +108,12 @@ def create_custom_preprocessor(device, groups=1):
             ttnn_module_args.c4_2["activation"] = "relu"  # Fuse relu with conv4
             ttnn_module_args.c4["deallocate_activation"] = True
             ttnn_module_args.c4_2["deallocate_activation"] = True
-            ttnn_module_args.c4["conv_blocking_and_parallelization_config_override"] = None
-            ttnn_module_args.c4_2["conv_blocking_and_parallelization_config_override"] = None
+            ttnn_module_args.c4["conv_blocking_and_parallelization_config_override"] = (
+                {"num_cores_nhw": 42} if groups > 1 else None
+            )
+            ttnn_module_args.c4_2["conv_blocking_and_parallelization_config_override"] = (
+                {"num_cores_nhw": 42} if groups > 1 else None
+            )
 
             ttnn_module_args.bnc["math_fidelity"] = ttnn.MathFidelity.LoFi
             ttnn_module_args.bnc_2["math_fidelity"] = ttnn.MathFidelity.LoFi
@@ -139,9 +143,15 @@ def create_custom_preprocessor(device, groups=1):
             ttnn_module_args.c5["deallocate_activation"] = True
             ttnn_module_args.c5_2["deallocate_activation"] = True
             ttnn_module_args.c5_3["deallocate_activation"] = True
-            ttnn_module_args.c5["conv_blocking_and_parallelization_config_override"] = None
-            ttnn_module_args.c5_2["conv_blocking_and_parallelization_config_override"] = None
-            ttnn_module_args.c5_3["conv_blocking_and_parallelization_config_override"] = None
+            ttnn_module_args.c5["conv_blocking_and_parallelization_config_override"] = (
+                {"num_cores_nhw": 42} if groups > 1 else None
+            )
+            ttnn_module_args.c5_2["conv_blocking_and_parallelization_config_override"] = (
+                {"num_cores_nhw": 42} if groups > 1 else None
+            )
+            ttnn_module_args.c5_3["conv_blocking_and_parallelization_config_override"] = (
+                {"num_cores_nhw": 42} if groups > 1 else None
+            )
 
             ttnn_module_args.c6["math_fidelity"] = ttnn.MathFidelity.LoFi
             ttnn_module_args.c6["use_shallow_conv_variant"] = (
@@ -238,29 +248,29 @@ def create_custom_preprocessor(device, groups=1):
             conv8_2_weight, conv8_2_bias = fold_batch_norm2d_into_conv2d(model.c8_2, model.b8_2)
             conv8_3_weight, conv8_3_bias = fold_batch_norm2d_into_conv2d(model.c8_3, model.b8_3)
 
-            update_ttnn_module_args(ttnn_module_args.c1)
-            update_ttnn_module_args(ttnn_module_args.c1_2)
-            update_ttnn_module_args(ttnn_module_args.c2)
-            update_ttnn_module_args(ttnn_module_args.c2_2)
-            update_ttnn_module_args(ttnn_module_args.c3)
-            update_ttnn_module_args(ttnn_module_args.c3_2)
-            update_ttnn_module_args(ttnn_module_args.c4)
-            update_ttnn_module_args(ttnn_module_args.c4_2)
-            update_ttnn_module_args(ttnn_module_args.bnc)
-            update_ttnn_module_args(ttnn_module_args.bnc_2)
-            update_ttnn_module_args(ttnn_module_args.c5)
-            update_ttnn_module_args(ttnn_module_args.c5_2)
-            update_ttnn_module_args(ttnn_module_args.c5_3)
-            update_ttnn_module_args(ttnn_module_args.c6)
-            update_ttnn_module_args(ttnn_module_args.c6_2)
-            update_ttnn_module_args(ttnn_module_args.c6_3)
-            update_ttnn_module_args(ttnn_module_args.c7)
-            update_ttnn_module_args(ttnn_module_args.c7_2)
-            update_ttnn_module_args(ttnn_module_args.c7_3)
-            update_ttnn_module_args(ttnn_module_args.c8)
-            update_ttnn_module_args(ttnn_module_args.c8_2)
-            update_ttnn_module_args(ttnn_module_args.c8_3)
-            update_ttnn_module_args(ttnn_module_args.output_layer)
+            update_ttnn_module_args(ttnn_module_args.c1, groups)
+            update_ttnn_module_args(ttnn_module_args.c1_2, groups)
+            update_ttnn_module_args(ttnn_module_args.c2, groups)
+            update_ttnn_module_args(ttnn_module_args.c2_2, groups)
+            update_ttnn_module_args(ttnn_module_args.c3, groups)
+            update_ttnn_module_args(ttnn_module_args.c3_2, groups)
+            update_ttnn_module_args(ttnn_module_args.c4, groups)
+            update_ttnn_module_args(ttnn_module_args.c4_2, groups)
+            update_ttnn_module_args(ttnn_module_args.bnc, groups)
+            update_ttnn_module_args(ttnn_module_args.bnc_2, groups)
+            update_ttnn_module_args(ttnn_module_args.c5, groups)
+            update_ttnn_module_args(ttnn_module_args.c5_2, groups)
+            update_ttnn_module_args(ttnn_module_args.c5_3, groups)
+            update_ttnn_module_args(ttnn_module_args.c6, groups)
+            update_ttnn_module_args(ttnn_module_args.c6_2, groups)
+            update_ttnn_module_args(ttnn_module_args.c6_3, groups)
+            update_ttnn_module_args(ttnn_module_args.c7, groups)
+            update_ttnn_module_args(ttnn_module_args.c7_2, groups)
+            update_ttnn_module_args(ttnn_module_args.c7_3, groups)
+            update_ttnn_module_args(ttnn_module_args.c8, groups)
+            update_ttnn_module_args(ttnn_module_args.c8_2, groups)
+            update_ttnn_module_args(ttnn_module_args.c8_3, groups)
+            update_ttnn_module_args(ttnn_module_args.output_layer, groups)
 
             parameters["c1"], c1_parallel_config = preprocess_conv2d(
                 conv1_weight, conv1_bias, ttnn_module_args.c1, return_parallel_config=True
@@ -513,7 +523,7 @@ class UNet(nn.Module):
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 @pytest.mark.parametrize("loop", [0])
-@pytest.mark.parametrize("perf_mode, groups", [(False, 1), (True, 1)])  # , (True, 2)])
+@pytest.mark.parametrize("perf_mode, groups", [(False, 1), (True, 1), (True, 2)])  # , (True, 4)])
 def test_unet(device, loop, perf_mode, groups):
     if perf_mode and device.arch() == ttl.device.Arch.GRAYSKULL:
         pytest.skip("Perf mode is not supported on Grayskull")
