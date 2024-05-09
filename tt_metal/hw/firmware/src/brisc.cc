@@ -65,12 +65,15 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 #define MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
 
+#if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
-uint32_t wIndex __attribute__((used));
-uint32_t stackSize __attribute__((used));
-uint32_t sums[SUM_COUNT] __attribute__((used));
-uint32_t sumIDs[SUM_COUNT] __attribute__((used));
-}  // namespace kernel_profiler
+    uint32_t wIndex __attribute__((used));
+    uint32_t stackSize __attribute__((used));
+    uint32_t sums[SUM_COUNT] __attribute__((used));
+    uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+    uint16_t core_flat_id __attribute__((used));
+}
+#endif
 
 void enable_power_management() {
     // Mask and Hyst taken from tb_tensix math_tests
