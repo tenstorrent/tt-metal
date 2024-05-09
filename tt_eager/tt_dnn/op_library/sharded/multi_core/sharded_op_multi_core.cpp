@@ -532,11 +532,11 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
+        auto src_buffer = input_tensors[0].buffer();
 
         Buffer* dst_buffer = nullptr;
         uint32_t starting_idx_h = 0;
-        bool partial_op = num_slices > 1 || (num_slices == 1 && output_tensors.size() == 0);
+        const bool partial_op = num_slices > 1 || (num_slices == 1 && output_tensors.size() == 0);
         if (partial_op) {
             // If we have num_slices > 1, it means that our op is S->I partial.
             // And currently we store output tensors there as input[1]
@@ -550,14 +550,13 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& 
         } else {
             dst_buffer = output_tensors.at(0).buffer();
         }
-
+        // TODO: Make these common args instead
+        auto& runtime_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
         for (const auto& core : cores) {
-            {
-                auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
-                if (partial_op) {
-                    runtime_args[8] = starting_idx_h;
-                }
+            auto& runtime_args = runtime_args_by_core[core.x][core.y];
+            runtime_args[0] = dst_buffer->address();
+            if (partial_op) {
+                runtime_args[8] = starting_idx_h;
             }
         }
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
