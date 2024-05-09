@@ -18,60 +18,9 @@ def _golden_function(input_tensor: ttnn.Tensor, dim: int, **_):
     return torch.softmax(input_tensor, dim)
 
 
-def _softmax_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-
-
-@ttnn.register_operation(
-    name="ttnn.softmax",
-    validate_input_tensors=_softmax_validate_input_tensors,
+softmax = ttnn.register_operation(
     golden_function=_golden_function,
-)
-def softmax(
-    input_tensor: ttnn.Tensor, dim: int, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
-) -> ttnn.Tensor:
-    r"""
-    softmax(input_tensor: ttnn.Tensor, dim: int, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-    Compute softmax over :attr:`input_tensor` along :attr:`dim`.
-
-    Args:
-        * :attr:`input_tensor`: the input tensor
-        * :attr:`dim`: the dimension along which to compute softmax.
-
-    Example::
-
-        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
-        >>> output = ttnn.softmax(tensor, -1)
-        >>> print(output[0, 0, 0, :3])
-        ttnn.Tensor([ 0.0310059, 0.0310059, 0.0310059], dtype=bfloat16 )
-
-    """
-
-    input_shape = input_tensor.shape
-    rank = len(input_shape)
-    if dim < 0:
-        dim = rank + dim
-
-    input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-
-    is_tile_padded = list(input_tensor.shape)[-2:] != list(input_tensor.shape.with_tile_padding())[-2:]
-    if not is_tile_padded and dim == rank - 1:
-        # TODO: #4599 Research why softmax appears to not be stable when using a padded ttnn.TILE_LAYOUT
-        output_tensor = ttl.tensor.softmax(input_tensor, output_mem_config=memory_config)
-    else:
-        dim_4D = dim + 4 - rank
-        output_tensor = ttl.operations.primary.moreh_softmax(input_tensor, dim=dim_4D)
-    output_tensor = ttnn.reshape(output_tensor, input_shape)
-    return output_tensor
+)(ttnn._ttnn.operations.normalization.softmax)
 
 
 def _golden_function(

@@ -25,7 +25,7 @@ namespace operations {
 namespace core {
 
 struct ToLayout {
-    static inline const std::vector<TensorSchema> input_tensor_schemas() {
+    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
         return {ttnn::TensorSchema{
             1,
             4,
@@ -40,7 +40,7 @@ struct ToLayout {
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor& tensor_arg, Args&&... args) {
         return std::make_tuple(tensor_arg);
-    };
+    }
 
     static Tensor execute(
         const ttnn::Tensor& tensor_arg,

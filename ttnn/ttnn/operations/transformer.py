@@ -192,23 +192,8 @@ def attention_softmax(
     return output_tensor
 
 
-doc = r"""
-attention_softmax_(tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[ttnn.Tensor], program_config: Optional[SoftmaxProgramConfig] = SoftmaxDefaultProgramConfig(),  memory_config: Optional[ttnn.MemoryConfig] = input_tensor.memory_config()) -> ttnn.Tensor
-
-In-Place divides :attr:`tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
-
-Args:
-    * :attr:`tensor`: Input Tensor
-    * :attr:`head_size`: Number of heads
-    * :attr:`attention_mask`: Attention Mask
-    * :attr:`program_config`: Program Config of the output tensor
-    * :attr:`memory_config`: Memory Config of the output tensor, defaults to input_tensor.memory_config()
-
-"""
 attention_softmax_ = ttnn.register_operation(
-    name="ttnn.transformer.attention_softmax_",
     golden_function=_golden_function,
-    doc=doc,
 )(ttnn._ttnn.operations.transformer.attention_softmax_)
 
 
@@ -224,19 +209,9 @@ def _golden_function(input_tensor: ttnn.Tensor, **_):
     return output_tensor
 
 
-doc = r"""
-concatenate_heads(input_tensor: ttnn.Tensor, *, memory_config: MemoryConfig = input_tensor.memory_config()) -> ttnn.Tensor
-
-Takes in a tensor of shape ``[batch_size, num_heads, sequence_size, head_size]``, concatenates heads back along the width dimension and returns the tensor of shape ``[batch_size, sequence_size, num_heads * head_size]``
-
-Args:
-    * :attr:`input_tensor`: Input Tensor
-    * :attr:`memory_config`: Memory Config of the output tensor, defaults to input_tensor.memory_config()
-"""
-
-concatenate_heads = ttnn.register_operation(
-    name="ttnn.transformer.concatenate_heads", golden_function=_golden_function, doc=doc
-)(ttnn._ttnn.operations.transformer.concatenate_heads)
+concatenate_heads = ttnn.register_operation(golden_function=_golden_function)(
+    ttnn._ttnn.operations.transformer.concatenate_heads
+)
 
 
 def _rotary_embedding_validate_input_tensors(operation_name, input_tensor, cos_cache, sin_cache, *args, **kwargs):
