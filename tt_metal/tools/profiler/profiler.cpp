@@ -7,7 +7,6 @@
 #include <iomanip>
 #include <filesystem>
 
-
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tools/profiler/profiler.hpp"
@@ -66,8 +65,8 @@ void DeviceProfiler::readRiscProfilerResults(
         riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_ER);
     }
 
-
     if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR] == 0) &&
+        (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0) &&
         (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_ER] == 0))
     {
         return;
@@ -79,10 +78,11 @@ void DeviceProfiler::readRiscProfilerResults(
         if (bufferEndIndex > 0)
         {
             uint32_t bufferRiscShift = riscNum * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
-            if (bufferEndIndex > PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
+            if ((control_buffer[kernel_profiler::DROPPED_ZONES] >> riscEndIndex) & 1)
             {
-                log_warning("Profiler DRAM buffers were full, markers were dropped! device {}, worker core {}, {}, Risc {},  bufferEndIndex = {}, host_size = {}", device_id, worker_core.x, worker_core.y, tracy::riscName[riscEndIndex], bufferEndIndex , PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC );
-                bufferEndIndex = PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
+                std::string warningMsg = fmt::format("Profiler DRAM buffers were full, markers were dropped! device {}, worker core {}, {}, Risc {},  bufferEndIndex = {}", device_id, worker_core.x, worker_core.y, tracy::riscName[riscEndIndex], bufferEndIndex);
+                TracyMessageC(warningMsg.c_str(), warningMsg.size(), tracy::Color::Tomato3);
+                log_warning(warningMsg.c_str());
             }
 
             uint32_t riscNumRead = 0;
@@ -180,11 +180,13 @@ void DeviceProfiler::readRiscProfilerResults(
         riscNum ++;
     }
 
-    std::vector<uint32_t> zero_buffer(PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
+    std::vector<uint32_t> control_buffer_reset(PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
+    control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer->address();
+
     tt::llrt::write_hex_vec_to_core(
             device_id,
             worker_core,
-            zero_buffer,
+            control_buffer_reset,
             PROFILER_L1_BUFFER_CONTROL);
 }
 
@@ -236,7 +238,9 @@ void DeviceProfiler::dumpResultToFile(
 
     tracy::TTDeviceEvent event = tracy::TTDeviceEvent(run_id, device_id, core.x, core.y, risc_num, timer_id, timestamp, source_line, source_file, zone_name, zone_phase);
 
-    device_events.push_back(event);
+    auto ret = device_events.insert(event);
+
+    if (!ret.second) return;
 
     firstTimestamp(timestamp);
 
@@ -286,6 +290,7 @@ DeviceProfiler::~DeviceProfiler()
 {
 #if defined(PROFILER)
     ZoneScoped;
+    pushTracyDeviceResults();
     for (auto tracyCtx : device_tracy_contexts)
     {
         TracyTTDestroy(tracyCtx.second);
@@ -375,25 +380,6 @@ void DeviceProfiler::dumpResults (
 
         }
 
-        for (const auto &worker_core : worker_cores) {
-            std::pair<uint32_t, CoreCoord> device_core = {device_id, worker_core};
-            if (device_tracy_contexts.find(device_core) == device_tracy_contexts.end())
-            {
-                auto tracyCtx = TracyTTContext();
-                std::string tracyTTCtxName = fmt::format("Device: {}, Core ({},{})", device_id, worker_core.x, worker_core.y);
-                TracyTTContextPopulate(tracyCtx, smallest_timestamp, 1000.f / (float)device_core_frequency);
-                TracyTTContextName(tracyCtx, tracyTTCtxName.c_str(), tracyTTCtxName.size());
-
-                device_tracy_contexts.emplace(
-                        device_core,
-                        tracyCtx
-                    );
-            }
-        }
-
-        std::sort (device_events.begin(), device_events.end());
-
-        pushTracyDeviceResults();
     }
     else
     {
@@ -405,6 +391,41 @@ void DeviceProfiler::dumpResults (
 void DeviceProfiler::pushTracyDeviceResults()
 {
 #if defined(PROFILER) && defined(TRACY_ENABLE)
+    ZoneScoped;
+    std::set<std::pair<uint32_t, CoreCoord>> device_cores_set;
+    std::vector<std::pair<uint32_t, CoreCoord>> device_cores;
+    for (auto& event: device_events)
+    {
+        std::pair<uint32_t, CoreCoord> device_core = {event.chip_id, (CoreCoord){event.core_x,event.core_y}};
+        auto ret = device_cores_set.insert(device_core);
+        if (ret.second )
+        {
+            device_cores.push_back(device_core);
+        }
+    }
+
+    for (auto& device_core: device_cores)
+    {
+        int device_id = device_core.first;
+        CoreCoord worker_core = device_core.second;
+
+
+        if (device_tracy_contexts.find(device_core) == device_tracy_contexts.end())
+        {
+            auto tracyCtx = TracyTTContext();
+            std::string tracyTTCtxName = fmt::format("Device: {}, Core ({},{})", device_id, worker_core.x, worker_core.y);
+
+	    TracyTTContextPopulate(tracyCtx, smallest_timestamp, 1000.f / (float)device_core_frequency);
+
+            TracyTTContextName(tracyCtx, tracyTTCtxName.c_str(), tracyTTCtxName.size());
+
+            device_tracy_contexts.emplace(
+                    device_core,
+                    tracyCtx
+                );
+        }
+    }
+
     for (auto& event: device_events)
     {
         std::pair<uint32_t, CoreCoord> device_core = {event.chip_id, (CoreCoord){event.core_x,event.core_y}};

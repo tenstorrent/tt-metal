@@ -16,6 +16,8 @@ from tt_metal.tools.profiler.common import (
     clear_profiler_runtime_artifacts,
 )
 
+from models.utility_functions import skip_for_grayskull
+
 PROG_EXMP_DIR = "programming_examples/profiler"
 
 
@@ -53,6 +55,7 @@ def get_function_name():
     return frame.f_code.co_name
 
 
+@skip_for_grayskull()
 def test_multi_op():
     OP_COUNT = 1000
     RUN_COUNT = 2
@@ -129,3 +132,42 @@ def test_full_buffer():
         assert stats[statNameEth]["stats"]["Count"] % (OP_COUNT * ZONE_COUNT) == 0, "Wrong Eth Marker Repeat count"
     else:
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
+
+
+def test_dispatch_cores():
+    OP_COUNT = 1
+    RISC_COUNT = 1
+    ZONE_COUNT = 37
+    REF_COUNT_DICT = {
+        "grayskull": {
+            "Tensix CQ Dispatch": 37,
+            "Tensix CQ Prefetch": 44,
+        },
+        "wormhole_b0": {
+            "Tensix CQ Dispatch": 37,
+            "Tensix CQ Prefetch": 44,
+        },
+    }
+
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
+
+    os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
+
+    devicesData = run_device_profiler_test(setup=True)
+
+    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
+
+    verifiedStat = []
+    for stat in REF_COUNT_DICT[ENV_VAR_ARCH_NAME].keys():
+        if stat in stats.keys():
+            verifiedStat.append(stat)
+            assert stats[stat]["stats"]["Count"] == REF_COUNT_DICT[ENV_VAR_ARCH_NAME][stat], "Wrong Dispatch zone count"
+
+    statTypes = ["Dispatch", "Prefetch"]
+    statTypesSet = set(statTypes)
+    for statType in statTypes:
+        for stat in verifiedStat:
+            if statType in stat:
+                statTypesSet.remove(statType)
+    assert len(statTypesSet) == 0

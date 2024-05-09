@@ -863,6 +863,7 @@ void kernel_main() {
     }
     bool done = false;
     while (!done) {
+        DeviceZoneScopedND("CQ-DISPATCH", block_noc_writes_to_clear, rd_block_idx );
         if (cmd_ptr == cb_fence) {
             get_cb_page<
                 dispatch_cb_base,

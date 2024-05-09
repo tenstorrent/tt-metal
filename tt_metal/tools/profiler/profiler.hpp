@@ -51,7 +51,7 @@ class DeviceProfiler {
         std::map<std::pair<uint16_t,CoreCoord>, TracyTTCtx> device_tracy_contexts;
 
         // Device-Core tracy context
-        std::vector<tracy::TTDeviceEvent> device_events;
+        std::set<tracy::TTDeviceEvent> device_events;
 
         // Hash to zone source locations
         std::unordered_map<uint16_t, std::string> hash_to_zone_src_locations;
