@@ -20,7 +20,7 @@ for attribute_name in dir(ttl.operations.primary.transformers):
         "tt_lib.tensor.Tensor" in attribute.__doc__ or "tt::tt_metal::Tensor" in attribute.__doc__
     ):
         attribute = ttnn.decorators.register_ttl_operation_as_ttnn_operation(
-            fully_qualified_name=f"ttnn.experimental.operations.primary.transformers.{attribute_name}",
+            python_fully_qualified_name=f"ttnn.experimental.operations.primary.transformers.{attribute_name}",
             function=attribute,
         )
     setattr(THIS_MODULE, attribute_name, attribute)

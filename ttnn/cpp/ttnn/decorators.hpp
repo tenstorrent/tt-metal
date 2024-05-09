@@ -5,6 +5,7 @@
 #pragma once
 
 #include "tt_eager/tensor/tensor.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "ttnn/validation.hpp"
 
 namespace ttnn {
@@ -12,35 +13,38 @@ namespace decorators {
 
 template <auto id, typename concrete_operation_t>
 struct operation_t {
-    const char* fully_qualified_name;  // TODO: move this to template args when C++20 is available
+    const char* cpp_fully_qualified_name;  // TODO: move this to template args when C++20 is available
 
     template <typename... Args>
-    constexpr auto operator()(Args&&... args) const {
-        tt::log_debug(tt::LogOp, "Started  C++ ttnn operation: {}", this->fully_qualified_name);
+    auto operator()(Args&&... args) const {
+        ZoneScopedN("ttnn::decorators::operation_t::operator()");
+        tt::log_debug(tt::LogOp, "Started  C++ ttnn operation: {}", this->cpp_fully_qualified_name);
 
         if (not ttnn::CONFIG.enable_fast_runtime_mode) {
             auto tensors_to_validate = concrete_operation_t::input_tensors_to_validate(std::forward<Args>(args)...);
-            TT_ASSERT(
+            static_assert(
                 std::tuple_size_v<decltype(tensors_to_validate)> ==
-                concrete_operation_t::input_tensor_schemas().size());
+                    std::tuple_size_v<decltype(concrete_operation_t::input_tensor_schemas())>,
+                "Number of tensors to validate must match the number of input tensors schemas");
             [this, &tensors_to_validate]<auto... Ns>(std::index_sequence<Ns...>) {
                 (ttnn::validate_input_tensor(
-                     this->fully_qualified_name,
+                     this->cpp_fully_qualified_name,
                      std::get<Ns>(tensors_to_validate),
                      concrete_operation_t::input_tensor_schemas().at(Ns)),
                  ...);
             }(std::make_index_sequence<std::tuple_size_v<decltype(tensors_to_validate)>>{});
         }
+
         auto output = concrete_operation_t::execute(std::forward<Args>(args)...);
 
-        tt::log_debug(tt::LogOp, "Finished C++ ttnn operation: {}", this->fully_qualified_name);
+        tt::log_debug(tt::LogOp, "Finished C++ ttnn operation: {}", this->cpp_fully_qualified_name);
         return output;
     }
 
     // Get "add" from "ttnn::add"
     const std::string name() const {
-        auto fully_qualified_name = std::string(this->fully_qualified_name);
-        auto last_token = fully_qualified_name.substr(fully_qualified_name.rfind("::") + 2);
+        auto cpp_fully_qualified_name = std::string(this->cpp_fully_qualified_name);
+        auto last_token = cpp_fully_qualified_name.substr(cpp_fully_qualified_name.rfind("::") + 2);
         return last_token;
     }
 
@@ -50,7 +54,7 @@ struct operation_t {
     }
 
     // Convert "ttnn::add" to "ttnn.add"
-    const std::string python_name() const {
+    const std::string python_fully_qualified_name() const {
         auto replace = [](const std::string& input, const std::string& from, const std::string& to) {
             if(from.empty()) { return input; }
             auto output = input;
@@ -61,7 +65,7 @@ struct operation_t {
             };
             return output;
         };
-        return replace(std::string{this->fully_qualified_name}, "::", ".");
+        return replace(std::string{this->cpp_fully_qualified_name}, "::", ".");
     }
 };
 
