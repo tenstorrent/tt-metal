@@ -201,6 +201,10 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 remote_read=remote_read,
             )
 
+            # print ("padding_config", padding_config)
+            # print ("local_config", local_config)
+            # print ("remote_config", remote_config)
+
             padding_config_tensor = gen_per_core_gather_data_uint16_tensor(padding_config)
             local_config_tensor = gen_per_core_gather_data_uint16_tensor(local_config)
             remote_config_tensor = gen_per_core_gather_data_uint16_tensor(remote_config)
