@@ -172,3 +172,42 @@ def sample(logits: torch.Tensor, temperature: float, top_p: float):
         next_token = torch.argmax(logits, dim=-1)
 
     return next_token
+
+
+from models.demos.wormhole.mistral7b.tt.mistral_attention import TtMistralAttention
+
+
+def cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype):
+    attention_input = ttnn.from_torch(
+        torch.randn(1, 1, 32, 4096),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    tt_model = TtMistralAttention(
+        [device],
+        state_dict,
+        weight_cache_path=model_args.weight_cache_path(dtype),
+        layer_num=0,
+        dtype=dtype,
+        configuration=model_args,
+        rot_mat=rot_emb_matrix_list,
+        start_pos=0,
+    )
+    for iter in range(1024):
+        pos = iter
+        tt_out = tt_model(
+            [attention_input],
+            pos,
+        )
+
+    ttnn.deallocate(tt_model.wqkv_list[0])
+    ttnn.deallocate(tt_model.wo_list[0])
+    ttnn.deallocate(tt_model.layer_past_list[0][0])
+    ttnn.deallocate(tt_model.layer_past_list[0][1])
+    ttnn.deallocate(tt_model.head_dims[0])
+    ttnn.deallocate(tt_model.expand_D_8D[0])
+    ttnn.deallocate(tt_model.reduce_8D_D[0])
+    ttnn.deallocate(tt_model.mask_Q_8D[0])
+    ttnn.deallocate(attention_input)
