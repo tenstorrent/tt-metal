@@ -60,6 +60,7 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse_padding/bmm_op_multi_core_reuse_padding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse_mcast_1d_optimized/bmm_op_multi_core_reuse_mcast_1d_optimized.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse_mcast_2d_optimized/bmm_op_multi_core_reuse_mcast_2d_optimized.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse_mcast_dram_sharded_optimized/bmm_op_multi_core_reuse_dram_sharded_optimized.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse_optimized/bmm_op_multi_core_reuse_optimized.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/downsample/downsample_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/conv/conv_op.cpp
