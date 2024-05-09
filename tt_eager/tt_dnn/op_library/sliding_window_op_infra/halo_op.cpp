@@ -1,0 +1,97 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "sliding_window_op_infra/halo_op.hpp"
+
+namespace ttnn::operations::halo {
+
+using namespace tt::tt_metal;
+
+void Halo::validate(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+
+    // validate input data tensor
+    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+        // skip the untilize, only do halo
+        log_debug(tt::LogOp, "Input is ROW_MAJOR, no need to untilize.");
+    } else {
+        TT_FATAL(input_tensor.volume() % TILE_HW == 0);
+    }
+    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Only height or block sharded tensors are supported.");
+    TT_FATAL(input_tensor.shard_spec().has_value(), "Shard spec should not be empty");
+}
+
+const operation::Hash Halo::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+    return operation::hash_operation<Halo>(this->attribute_values());
+}
+
+std::vector<tt::tt_metal::Shape> Halo::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    const auto& input = input_tensors.at(0);
+    const auto& input_shape = input.get_legacy_shape();
+    tt::tt_metal::Shape output_shape = input_shape;
+
+    uint32_t nbatch = input_shape[0];
+    uint32_t total_nsticks = config_.num_cores_nhw_ * max_out_nsticks_per_core_;
+
+    // output_shape[0] remains same
+    // output_shape[1] remains same
+    // output_shape[2] changes
+    // output_shape[3] remains same
+    output_shape[2] = (uint32_t) ceil((float) total_nsticks / nbatch);
+
+    log_debug(tt::LogOp, "output_shape: [{} {} {} {}]", output_shape[0], output_shape[1], output_shape[2], output_shape[3]);
+    log_debug(tt::LogOp, "max_out_nsticks_per_core: {}", max_out_nsticks_per_core_);
+    log_debug(tt::LogOp, "num_cores_nhw: {}", config_.num_cores_nhw_);
+
+    return {output_shape};
+}
+
+std::vector<Tensor> Halo::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    DataType output_dtype = input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
+    auto output_shape = this->compute_output_shapes(input_tensors).at(0);
+
+    TT_FATAL(input_tensor.memory_config().memory_layout == output_memory_config_.memory_layout, input_tensor.memory_config(), output_memory_config_);
+
+    if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        auto input_core_range = *(input_tensor.memory_config().shard_spec->grid.ranges().begin());
+        auto output_core_range = *(output_memory_config_.shard_spec->grid.ranges().begin());
+        auto input_core_w = input_core_range.end.y - input_core_range.start.y + 1;
+        auto output_core_w = output_core_range.end.y - output_core_range.start.y + 1;
+        TT_FATAL(input_core_w == output_core_w);
+    }
+
+    auto out_mem_config = output_memory_config_;
+    out_mem_config.shard_spec->shape[0] = div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw_);
+    out_mem_config.shard_spec->shape[1] = input_tensor.memory_config().shard_spec->shape[1];
+    out_mem_config.shard_spec->halo = true;
+    return {create_sharded_device_tensor(
+        output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), out_mem_config)};
+}
+
+operation::ProgramWithCallbacks Halo::create_program(const std::vector<Tensor>& inputs, std::vector<Tensor> &outputs) const {
+    const auto& input_tensor = inputs.at(0);
+    const auto& padding_config = inputs.at(1);
+    const auto& local_config = inputs.at(2);
+    const auto& remote_config = inputs.at(3);
+    auto& output_tensor = outputs.at(0);
+
+    Program program = CreateProgram();
+
+    return {untilize_with_halo_multi_core_v2(
+        program,
+        input_tensor,
+        pad_val_,
+        config_.num_cores_nhw_,
+        max_out_nsticks_per_core_,
+        padding_config,
+        local_config,
+        remote_config,
+        remote_read_,
+        transpose_mcast_,
+        output_tensor)};
+}
+
+
+} // namespace ttnn::operations::halo
