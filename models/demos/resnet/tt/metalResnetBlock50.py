@@ -2127,6 +2127,20 @@ class ResNet(nn.Module):
                 tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, shard_spec
             )
             x = x.to(self.device, mem_config)
+        else:
+            shard_spec = tt_lib.tensor.ShardSpec(
+                self.shard_grid,
+                [
+                    x.get_legacy_shape()[2] // self.first_conv_num_cores_nhw,
+                    x.get_legacy_shape()[3],
+                ],
+                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            )
+            mem_config = tt_lib.tensor.MemoryConfig(
+                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, shard_spec
+            )
+            x = tt_lib.tensor.interleaved_to_sharded(x, mem_config)
 
         x = self.conv1(x)
         # Relu is fused with conv1
