@@ -171,7 +171,9 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(const Tensor &a, cons
             g1_numcores,
             g2_numcores,
             num_blocks_per_core_group_1,
-            num_blocks_per_core_group_2
+            num_blocks_per_core_group_2,
+            bshape,
+            hidden_size
         ]
     (
         Program& program,
@@ -225,8 +227,16 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(const Tensor &a, cons
             all_reader_runtime_args[i][3] = num_blocks_written;
 
             all_writer_runtime_args[i][0] = dst_buffer->address();
-            all_writer_runtime_args[i][1] = num_blocks_per_core * TILE_WIDTH;
-            all_writer_runtime_args[i][2] = num_blocks_written * TILE_WIDTH;
+
+            // update writer's num_tiles based on input_b already repeat_interleaved or not
+            if (bshape[-1] == hidden_size) {
+                all_writer_runtime_args[i][1] = num_blocks_per_core * TILE_WIDTH;
+                all_writer_runtime_args[i][2] = num_blocks_written * TILE_WIDTH;
+            }
+            else {
+                all_writer_runtime_args[i][1] = num_blocks_per_core;
+                all_writer_runtime_args[i][2] = num_blocks_written;
+            }
 
             all_compute_runtime_args[i][0] = num_blocks_per_core;
 

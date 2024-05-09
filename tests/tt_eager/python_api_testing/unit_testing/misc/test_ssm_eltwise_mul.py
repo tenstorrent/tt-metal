@@ -36,10 +36,14 @@ def run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, in0_mem_config, in1_mem_config
     out = tt2torch_tensor(tt_out)
 
     # Compute reference on pytorch
-    if in0_W == latent_size:
+    if in0_W == latent_size and in1_W == hidden_size:
         ref_out = B.repeat(1, 1, 1, hidden_size) * X.repeat_interleave(latent_size, dim=-1)
-    elif in0_W == latent_size * hidden_size:
+    elif in0_W == latent_size * hidden_size and in1_W == hidden_size:
         ref_out = B * X.repeat_interleave(latent_size, dim=-1)
+    elif in0_W == latent_size and in1_W == latent_size * hidden_size:
+        ref_out = B.repeat(1, 1, 1, hidden_size) * X
+    else:
+        raise Exception("Input shapes invalid, use eltwise_mul for same input shapes,", in0_W, in1_W)
 
     passing_pcc, output_pcc = comp_pcc(out, ref_out, 0.9999)
     logger.debug(f"Out passing={passing_pcc}")
@@ -78,7 +82,7 @@ def run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, in0_mem_config, in1_mem_config
     (
         (32, 5120),
         (32 * 5120, 5120),
-        # (32, 32*5120), # TODO: Enable this test case where in1 is already expanded
+        (32, 32 * 5120),
     ),
 )
 def test_ssm_eltwise_mul(in0_W, in1_W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device):
@@ -94,8 +98,10 @@ def test_ssm_eltwise_mul_with_program_cache(device, use_program_cache):
         run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, mem_config, mem_config, mem_config, device)
         in0_W, in1_W = 32 * 5120, 5120
         run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, mem_config, mem_config, mem_config, device)
+        in0_W, in1_W = 32, 32 * 5120
+        run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, mem_config, mem_config, mem_config, device)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.num_program_cache_entries() == 3
