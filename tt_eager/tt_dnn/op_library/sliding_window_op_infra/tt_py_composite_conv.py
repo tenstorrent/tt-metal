@@ -1075,7 +1075,10 @@ class TTPyCompositeConv(TTPyOp):
         )
 
         # Copy to host
-        return conv_output_on_device.cpu()
+        cpu_tensor = conv_output_on_device.cpu()
+        if cpu_tensor.shape_without_padding()[3] != self.conv_output_shape[3]:
+            cpu_tensor = cpu_tensor[:, :, :, : self.conv_output_shape[3]]
+        return cpu_tensor
 
     # TODO: with this api, we get TT_ASSERT @ tt_metal/impl/dispatch/command_queue.cpp:790: dev_page_id < num_pages and dev_page_id >= 0
     def copy_output_from_device_with_sharded_api(self, conv_output_on_device):
