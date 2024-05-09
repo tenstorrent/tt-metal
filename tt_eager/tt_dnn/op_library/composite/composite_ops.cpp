@@ -1575,7 +1575,7 @@ Tensor create_mask(const Tensor& input_a, const MemoryConfig& output_mem_config)
         return input_a;
     float t_inf = -std::numeric_limits<float>::infinity();
     Tensor masked_input = tt::numpy::mask_padded_input<bfloat16>(padded_shape, unpadded_shape, DataType::BFLOAT16);
-    masked_input = where(eqz(masked_input, output_mem_config), t_inf, input_a, output_mem_config);
+    masked_input = where(masked_input, input_a, t_inf, output_mem_config);
     return masked_input;
 }
 // Argmax returns the index of maximum element in the tensor

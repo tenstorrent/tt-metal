@@ -28,7 +28,6 @@ class TestArgmax:
 
         # input_data = torch.tensor([5,3,2,1,10,9,6,7,4,8]).reshape(input_shapes).bfloat16()
         input_data = torch.randn(input_shapes).bfloat16()
-        print("input_data", input_data)
         input_tensor = (
             tt_lib.tensor.Tensor(input_data, tt_lib.tensor.DataType.BFLOAT16)
             .pad_to_tile(100)
@@ -59,7 +58,4 @@ class TestArgmax:
         logger.info(comp_all)
         logger.info(comp_out)
         status = comp_pass | comp_all
-
-        print("pt_out_tensor", pt_out_tensor)
-        print("tt_out_tensor", tt_out_tensor)
         assert status
