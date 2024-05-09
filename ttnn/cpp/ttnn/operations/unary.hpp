@@ -60,7 +60,6 @@ struct ExecuteUnary {
     static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
     }
-
     static Tensor execute_on_worker_thread(
         const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         return detail::execute_on_worker_thread(input_tensor, {UnaryWithParam{unary_op_types}...}, memory_config);
@@ -115,16 +114,10 @@ struct Softplus {
         const Tensor& input,
         const float beta,
         const float threshold,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
-        auto original_input_shape = input.get_shape();
-        auto input_4D = ttnn::unsqueeze_to_4D(input);
-
-        auto memory_config = memory_config_arg.value_or(input_4D.memory_config());
-        auto result = tt::tt_metal::softplus(input_4D, beta, threshold, memory_config);
-
-        result = ttnn::reshape(result, original_input_shape);
-
-        return result;
+        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+        TT_ASSERT(input.device()->arch() != tt::ARCH::GRAYSKULL, "Softplus is not currently supported on Grayskull");
+        return detail::execute_on_worker_thread(
+            input, {UnaryWithParam{ttnn::operations::unary::UnaryOpType::SOFTPLUS, {beta, threshold}}}, memory_config);
     }
 };
 }  // namespace unary
@@ -199,7 +192,7 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(heaviside, HEAVISIDE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(leaky_relu, LEAKY_RELU);
 auto prelu = leaky_relu;  // Alias for leaky_relu. TODO(#8544): implement PReLU properly
 
-// Other unaries (composite operations)
+// Other unaries
 constexpr auto softplus = ttnn::register_operation<ttnn::operations::unary::Softplus>("ttnn::softplus");
 
 }  // namespace ttnn
