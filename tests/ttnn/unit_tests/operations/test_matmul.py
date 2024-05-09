@@ -482,16 +482,10 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    program_config = ttnn.create_matmul_1d_systolic_array_program_config(
-        input_shape_a=input_tensor_a.shape.with_tile_padding(),
-        input_shape_b=input_tensor_b.shape.with_tile_padding(),
-        core_grid=input_tensor_a.device().core_grid,
-    )
-
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
-        program_config=program_config,
+        core_grid=input_tensor_a.device().core_grid,
     )
 
     output_tensor = ttnn.to_torch(output_tensor)

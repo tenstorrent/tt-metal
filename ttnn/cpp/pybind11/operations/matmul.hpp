@@ -23,16 +23,18 @@ void py_module(py::module& module) {
            const ttnn::Tensor& input_tensor_b,
            const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
            const std::optional<const DataType> dtype = std::nullopt,
-           const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) -> ttnn::Tensor {
+           const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+	   const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> ttnn::Tensor {
             return ttnn::operations::matmul::matmul(
-                input_tensor_a, input_tensor_b, MatmulDefaultProgramConfig{}, memory_config, dtype, compute_kernel_config);
+                input_tensor_a, input_tensor_b, MatmulDefaultProgramConfig{}, memory_config, dtype, compute_kernel_config, core_grid);
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),
         py::kw_only(),
         py::arg("memory_config") = DRAM_MEMORY_CONFIG,
         py::arg("dtype") = std::nullopt,
-        py::arg("compute_kernel_config") = std::nullopt);
+        py::arg("compute_kernel_config") = std::nullopt,
+	py::arg("core_grid") = std::nullopt);
 
     module.def(
         "matmul",
@@ -66,7 +68,8 @@ void py_module(py::module& module) {
            const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
            const std::optional<const DataType> dtype = std::nullopt,
            const std::optional<const std::string>& activation = std::nullopt,
-           const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) -> ttnn::Tensor {
+           const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+	   const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> ttnn::Tensor {
             return ttnn::operations::matmul::linear(
                 input_tensor_a,
                 input_tensor_b,
@@ -75,7 +78,8 @@ void py_module(py::module& module) {
                 memory_config,
                 dtype,
                 activation,
-                compute_kernel_config);
+                compute_kernel_config,
+		core_grid);
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),
@@ -84,7 +88,8 @@ void py_module(py::module& module) {
         py::arg("memory_config") = DRAM_MEMORY_CONFIG,
         py::arg("dtype") = std::nullopt,
         py::arg("activation") = std::nullopt,
-        py::arg("compute_kernel_config") = std::nullopt);
+        py::arg("compute_kernel_config") = std::nullopt,
+	py::arg("core_grid") = std::nullopt);
 
     module.def(
         "linear",
@@ -114,6 +119,7 @@ void py_module(py::module& module) {
         py::arg("memory_config") = DRAM_MEMORY_CONFIG,
         py::arg("dtype") = std::nullopt,
         py::arg("compute_kernel_config") = std::nullopt);
+
 }
 
 }  // namespace matmul

@@ -265,8 +265,6 @@ from ttnn.operations.core import (
 from ttnn.operations.matmul import (
     matmul,
     linear,
-    create_matmul_program_config,
-    create_matmul_1d_systolic_array_program_config,
 )
 
 from ttnn.operations.embedding import (

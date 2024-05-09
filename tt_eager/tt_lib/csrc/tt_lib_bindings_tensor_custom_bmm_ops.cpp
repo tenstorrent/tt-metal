@@ -77,7 +77,7 @@ namespace tt::tt_metal::detail
            const MemoryConfig& output_mem_config,
            std::optional<const DeviceComputeKernelConfig> kernel_config,
            const bool untilize_out) {
-		return tt::operations::primary::matmul(input_a, input_b, std::nullopt /*bias*/, tt::operations::primary::MatmulDefaultProgramConfig{}, output_mem_config, std::nullopt /*output_dtype*/, kernel_config, untilize_out, std::nullopt /*user_core_coord*/, true /*input_b_is_batched*/);
+		return tt::operations::primary::matmul(input_a, input_b, std::nullopt /*bias*/, tt::operations::primary::MatmulDefaultProgramConfig{}, output_mem_config, std::nullopt /*output_dtype*/, kernel_config, untilize_out, std::nullopt /*user_core_coord*/, std::nullopt /*user_fused_activation*/, true /*input_b_is_batched*/);
 		},
             py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("kernel_config").noconvert() = std::nullopt, py::arg("untilize_out").noconvert() = false,  R"doc(
             Perform a batched matmul ``arg0 x arg1`` with two tensors, where batch dims match.

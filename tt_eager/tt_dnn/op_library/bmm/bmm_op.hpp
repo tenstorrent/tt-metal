@@ -312,6 +312,11 @@ inline bool is_program_config_default(const MatmulProgramConfig& matmul_program_
     return result;
 }
 
+
+MatmulProgramConfig create_matmul_1d_systolic_array_program_config(const ttnn::types::Shape& input_shape_a, const ttnn::types::Shape& input_shape_b, const CoreCoord& core_coord, const std::optional<const UnaryWithParam> fused_activation, const bool fp32_dest_acc_en);
+
+MatmulProgramConfig create_matmul_program_config(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<const CoreCoord> user_core_coord, std::optional<UnaryWithParam> fused_activation, std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
+
 }  // namespace primary
 
 }  // namespace operations
@@ -322,6 +327,8 @@ inline bool is_program_config_default(const MatmulProgramConfig& matmul_program_
 namespace bmm_op_utils {
 using namespace tt::tt_metal;
 
+// Ensure there are always symmetrical values. Different paths use different
+// index ordering (0,1 vs 1,0) to meet test PCC requirements.
 constexpr std::array<tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
     {4, 2}, {2, 4}, {8, 1}, {1, 8},
     {7, 1}, {1, 7},
@@ -378,6 +385,7 @@ inline Tensor matmul(
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool untilize_out = false,
     std::optional<const CoreCoord> user_core_coord = std::nullopt,
+    std::optional<UnaryWithParam> user_fused_activation = std::nullopt,
     std::optional<const bool> input_b_is_batched = std::nullopt,
     const bool needs_autoformat = false) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
@@ -392,16 +400,20 @@ inline Tensor matmul(
 
     if (!needs_autoformat) {
 	operation::launch_op(
-		[program_config, mem_config, output_dtype, compute_kernel_config, untilize_out, user_core_coord, input_b_is_batched] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+		[program_config, mem_config, output_dtype, compute_kernel_config, untilize_out, user_core_coord, user_fused_activation, input_b_is_batched] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor_a = input_tensors.at(0);
             const auto& input_tensor_b = input_tensors.at(1);
             auto arch = input_tensor_a.device()->arch();
-            const auto program_config_default = is_program_config_default(program_config);
-            auto math_fidelity = program_config_default ? MathFidelity::HiFi2 : MathFidelity::LoFi;
+            const auto increase_fidelity = is_program_config_default(program_config) && !user_core_coord.has_value();
+            auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
             auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity);
             bool broadcast_batch = get_broadcast_batch(input_tensor_a, input_tensor_b, program_config);
             auto matmul_program_config = program_config;
-	    if (program_config_default && input_tensor_a.is_sharded()) {
+            if (user_core_coord.has_value()) {
+		TT_FATAL(is_program_config_default(program_config), "Cannot use both user core grid/coordinates and a program config");
+		matmul_program_config = create_matmul_program_config(input_tensor_a, input_tensor_b, user_core_coord, user_fused_activation, compute_kernel_config);
+            }
+	    if (is_program_config_default(matmul_program_config) && input_tensor_a.is_sharded()) {
 	        bool bmm = input_b_is_batched.value_or(false);
 	        matmul_program_config = bmm_op_utils::get_matmul_program_config(input_tensor_a, input_tensor_b, mem_config, std::nullopt, !bmm, user_core_coord, compute_kernel_config);
 	    }

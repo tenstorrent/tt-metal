@@ -7,6 +7,7 @@
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_eager/tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_metal/common/core_coord.h"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 
@@ -78,11 +79,18 @@ inline ttnn::Tensor matmul(
 	user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
     auto output_tensor = tt::operations::primary::matmul(
-        input_tensor_a_4d, input_tensor_b_4d, std::nullopt /*bias*/, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/,  user_core_coord, input_b_is_batched);
+        input_tensor_a_4d, input_tensor_b_4d, /*bias=*/std::nullopt, program_config, memory_config, dtype, compute_kernel_config, /*untilize_out=*/false,  user_core_coord, /*user_fused_activation=*/std::nullopt, input_b_is_batched);
     while (output_tensor.get_shape().rank() != input_tensor_a_shape.rank()) {
         output_tensor = ttnn::squeeze_from_4D(output_tensor, input_tensor_a_shape.rank());
     }
     return output_tensor;
+}
+
+std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std::string>& activation) {
+    if (!activation.has_value()) {
+	return std::nullopt;
+    }
+    return string_to_unary_with_param(activation.value());
 }
 
 inline ttnn::Tensor linear(
@@ -112,10 +120,11 @@ inline ttnn::Tensor linear(
     const auto input_tensor_b_4d = ttnn::unsqueeze_to_4D(input_tensor_b);
 
     std::optional<Tensor> bias_4d = std::nullopt;
+    const bool has_user_grid = core_grid.has_value();
     bool post_process_bias = false;
     if (bias.has_value()) {
         bias_4d = ttnn::unsqueeze_to_4D(bias.value());
-	if (tt::operations::primary::is_program_config_default(program_config)) {
+	if (tt::operations::primary::is_program_config_default(program_config) && !has_user_grid) {
 	    post_process_bias = true;
 	}
     }
@@ -124,19 +133,19 @@ inline ttnn::Tensor linear(
         TT_THROW("ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor");
     }
     std::optional<CoreCoord> user_core_coord;
-    if (core_grid) {
+    if (has_user_grid) {
 	user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
 
     auto output_tensor = tt::operations::primary::matmul(
-        input_tensor_a_4d, input_tensor_b_4d, post_process_bias ? std::nullopt : bias_4d, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/, user_core_coord);
+        input_tensor_a_4d, input_tensor_b_4d, post_process_bias ? std::nullopt : bias_4d, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/, user_core_coord, get_fused_activation(activation));
 
     if (post_process_bias) {
         output_tensor = tt::tt_metal::bcast(
             output_tensor, bias_4d.value(), tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, memory_config);
     }
 
-    if (activation.has_value()) {
+    if (activation.has_value() && !has_user_grid) {
         if (activation.value() == "relu") {
             output_tensor = tt::tt_metal::relu(output_tensor, memory_config);
         } else if (activation.value() == "gelu") {

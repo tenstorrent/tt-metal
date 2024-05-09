@@ -151,18 +151,6 @@ class TtMistralAttention(nn.Module):
             for i in range(self.num_devices)
         ]
 
-        self.wqkv_program_config = ttnn.operations.matmul.create_matmul_1d_systolic_array_program_config(
-            input_shape_a=ttnn.Shape([1, 1, self.max_batch_size, self.hidden_size]),
-            input_shape_b=self.wqkv_list[0].shape,
-            core_grid=self.grid_size,
-            fp32_dst=self.compute_kernel_config.fp32_dest_acc_en,
-        )
-        self.dense_program_config = ttnn.operations.matmul.create_matmul_1d_systolic_array_program_config(
-            input_shape_a=ttnn.Shape([1, 1, self.max_batch_size, self.hidden_size]),
-            input_shape_b=self.wo_list[0].shape,
-            core_grid=self.grid_size,
-            fp32_dst=self.compute_kernel_config.fp32_dest_acc_en,
-        )
         self.q_heads_program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
@@ -291,10 +279,10 @@ class TtMistralAttention(nn.Module):
             xqkv_fused = ttnn.linear(
                 x,
                 wqkv,
-                program_config=self.wqkv_program_config,
                 memory_config=self.model_config["XQKV_MM_OUTPUT_MEMCFG"],
                 compute_kernel_config=self.compute_kernel_config,
                 dtype=self.dtype,
+                core_grid=self.grid_size,
             )
 
             # ttnn.deallocate(x)
@@ -492,9 +480,9 @@ class TtMistralAttention(nn.Module):
             dense_out = ttnn.linear(
                 attn_output_cat,
                 wo,
-                program_config=self.dense_program_config,
                 memory_config=self.model_config["LM_HEAD_OUTPUT_MEMCFG"],
                 compute_kernel_config=self.compute_kernel_config,
+                core_grid=self.grid_size,
             )  # seqlen, 1, batch, hidden_size
 
             ttnn.deallocate(attn_output_cat)

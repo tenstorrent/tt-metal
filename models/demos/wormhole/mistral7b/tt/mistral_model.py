@@ -65,12 +65,6 @@ class TtTransformer(nn.Module):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=weight_cache_path / "output.weight",
         )
-        self.output_program_config = ttnn.operations.matmul.create_matmul_1d_systolic_array_program_config(
-            input_shape_a=ttnn.Shape([1, 1, args.max_batch_size, args.dim]),
-            input_shape_b=self.output_weight.shape,
-            core_grid=args.max_grid_size,
-            fp32_dst=args.get_compute_kernel_config().fp32_dest_acc_en,
-        )
 
     def forward(
         self,
@@ -85,7 +79,7 @@ class TtTransformer(nn.Module):
         output = ttnn.linear(
             x,
             self.output_weight,
-            program_config=self.output_program_config,
             compute_kernel_config=self.args.get_compute_kernel_config(),
+            core_grid=self.args.max_grid_size,
         )
         return output
