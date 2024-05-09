@@ -268,18 +268,19 @@ struct AttentionSoftmax : public tt::operations::primary::Softmax {
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
         auto kernel_config_val = init_device_compute_kernel_config(
             input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-        operation::run(
-            AttentionSoftmax{
-                head_size.has_value() ? 1.0 / sqrt(head_size.value()) : 1.0,
-                true,
-                memory_config.value_or(input_tensor.memory_config()),
-                program_config,
-                causal_mask.value(),
-                kernel_config_val,
-                false},
-            {input_tensor},
-            {attention_mask});
-        return input_tensor;
+        auto output_tensor = operation::run(
+                                 AttentionSoftmax{
+                                     head_size.has_value() ? 1.0 / sqrt(head_size.value()) : 1.0,
+                                     in_place,
+                                     memory_config.value_or(input_tensor.memory_config()),
+                                     program_config,
+                                     causal_mask.value(),
+                                     kernel_config_val,
+                                     false},
+                                 {input_tensor},
+                                 {attention_mask})
+                                 .at(0);
+        return output_tensor;
     }
 };
 

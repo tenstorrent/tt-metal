@@ -41,7 +41,7 @@ void bind_unary(py::module& module, const unary_operation_t& operation) {
             >>> output = {1}(tensor)
     )doc",
         operation.name(),
-        operation.python_name());
+        operation.python_fully_qualified_name());
 
     bind_registered_operation(
         module,
@@ -73,7 +73,7 @@ void bind_unary_with_bool_parameter_set_to_false_by_default(py::module& module, 
             >>> output = {1}(tensor, parameter=true)
     )doc",
         operation.name(),
-        operation.python_name());
+        operation.python_fully_qualified_name());
 
     bind_registered_operation(
         module,

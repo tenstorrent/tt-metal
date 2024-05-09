@@ -264,7 +264,7 @@ def insert_operation(report_path, operation_id, operation, duration):
 
     cursor.execute(
         f"""INSERT INTO operations VALUES (
-            {operation_id}, '{operation.fully_qualified_name}', {optional_value(duration)}
+            {operation_id}, '{operation.python_fully_qualified_name}', {optional_value(duration)}
             )
         ON CONFLICT (operation_id)
         DO UPDATE
