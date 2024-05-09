@@ -136,7 +136,7 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
     // log_debug(LogOp, "OUTPUT SHARD SPEC: {}", out_shard_spec);
     auto shard_mem_config = output_mem_config;
     shard_mem_config.shard_spec = shard_spec;
-    auto output_tensor = create_sharded_device_tensor(input_shape, input_dtype, input_layout, input_tensor.device(), shard_mem_config);
+    auto output_tensor = create_device_tensor(input_shape, input_dtype, input_layout, input_tensor.device(), shard_mem_config);
     if (input_tensor.buffer()->address() == output_tensor.buffer()->address()) {
         tt::log_debug(tt::LogOp, "WARNING: No space to move the tensor. Move op's input address and output address are equal: {}", input_address);
         return output_tensor;
