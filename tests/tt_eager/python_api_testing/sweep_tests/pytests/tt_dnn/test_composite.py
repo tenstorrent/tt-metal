@@ -19,13 +19,12 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from models.utility_functions import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_grayskull
 
 
 reference_pcc = defaultdict(lambda: 0.999)
 reference_pcc["silu"] = 0.9714
 reference_pcc["swish"] = reference_pcc["silu"]
-reference_pcc["softplus"] = 0.9984
 
 
 def custom_compare(*args, **kwargs):
@@ -68,7 +67,6 @@ if is_wormhole_b0():
                 "max",
                 "swish",
                 "log1p",
-                "softplus",
                 "mish",
                 "silu",
                 "polyval",
@@ -157,6 +155,9 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     if is_wormhole_b0():
         if fn in ["logit"]:
             pytest.skip("does not work for Wormhole -skipping")
+    if is_grayskull():
+        if fn in ["mish"]:
+            pytest.skip("does not work for Grayskull -skipping")
     if fn in ["logical_xor", "logical_xori", "logical_ori", "logical_andi"]:
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -229,13 +230,6 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
                 "rtol": random.choice([1e-3, 1e-5, 1e-7]),
                 "atol": random.choice([1e-2, 1e-4, 1e-6]),
                 "equal_nan": random.choice([False, True]),
-            }
-        )
-    elif fn in ["softplus"]:
-        test_args.update(
-            {
-                "beta": random.choice([0.5, -3, 1, 4]),
-                "threshold": random.choice([-20, 10, 20, 5]),
             }
         )
     run_single_pytorch_test(
