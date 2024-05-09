@@ -151,17 +151,22 @@ inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
   return 0;
 }
 
-void risc_init();
-void replicate(uint32_t noc_id, uint32_t src_addr, uint64_t dest_addr, uint32_t chunk_size_bytes, uint32_t times_to_replicate);
-void replicate_l1(uint32_t noc_id, uint32_t src_addr, uint64_t dest_addr, uint32_t chunk_size_bytes, uint32_t times_to_replicate);
-void tile_header_buffer_init();
+// risc_init function isn't required for TRISCS
+#if !defined(COMPILE_FOR_TRISC) // BRISC, NCRISC, ERISC, IERISC
+#include "noc_nonblocking_api.h"
 
-// This call blocks until NCRISC indicates that all epoch start state
-// has been loaded from DRAM to L1.
-void risc_get_next_epoch();
-// This call signals to NCRISC that the current epoch is done and can
-// be overwritten with the next epoch state from DRAM.
-void risc_signal_epoch_done();
+#if defined(COMPILE_FOR_ERISC)
+// ERISC needs to place this function in a specific section
+__attribute__((section("code_l1")))
+#endif // defined(COMPILE_FOR_ERISC)
+void risc_init() {
+  for (uint32_t n = 0; n < NUM_NOCS; n++) {
+    uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(n, 0, NOC_NODE_ID);
+    my_x[n] = noc_id_reg & NOC_NODE_ID_MASK;
+    my_y[n] = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+  }
+}
+#endif // !defined(COMPILE_FOR_TRISC)
 
 inline void breakpoint_(uint32_t line) {
     /*

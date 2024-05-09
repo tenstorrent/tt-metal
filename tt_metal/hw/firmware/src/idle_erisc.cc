@@ -28,6 +28,8 @@
 #include "debug/status.h"
 #include "debug/dprint.h"
 
+uint8_t noc_index;
+
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
@@ -101,7 +103,7 @@ int main() {
         {
             DeviceZoneScopedMainN("ERISC-FW");
 
-            uint32_t noc_index = mailboxes->launch.brisc_noc_id;
+            noc_index = mailboxes->launch.brisc_noc_id;
 
             //UC FIXME: do i need this?
             setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
@@ -124,6 +126,7 @@ int main() {
             // Notify dispatcher core that it has completed
             if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
                 uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
+                DEBUG_SANITIZE_NOC_ADDR(dispatch_addr, 4);
                 noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
             }
 
