@@ -14,11 +14,11 @@
 #pragma once
 
 #include <utility>
-#include <stddef.h>
 
 #include "dev_msgs.h"
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_STATUS)
+#include <cstddef>
 
 template <size_t N, size_t... Is>
 constexpr uint32_t fold(const char (&s)[N], std::index_sequence<Is...>) {
