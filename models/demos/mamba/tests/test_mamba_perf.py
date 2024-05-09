@@ -115,7 +115,7 @@ def test_mamba_e2e_perf(
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, warmup, expected_device_fw_duration_ms",
-    ((32, True, 8.02),),
+    ((32, True, 2.81),),
 )
 def test_mamba_perf_device(batch, warmup, expected_device_fw_duration_ms, reset_seeds):
     subdir = "ttnn_mamba"
