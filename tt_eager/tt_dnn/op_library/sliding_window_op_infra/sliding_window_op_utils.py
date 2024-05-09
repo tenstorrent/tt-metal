@@ -179,14 +179,3 @@ def calculate_memory_config(
         ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED if is_1d_systolic else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
     )
     return ttl.tensor.MemoryConfig(shard_scheme, ttl.tensor.BufferType.L1, shard_spec)
-
-
-class SWOParallelConfig:
-    config_keys = ["num_cores", "grid_size", "shard_layout"]
-
-    def __init__(
-        self, num_cores=1, grid_size=(1, 1), shard_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
-    ) -> None:
-        self.num_cores = num_cores
-        self.grid_size = grid_size
-        self.shard_layout = shard_layout
