@@ -94,7 +94,7 @@ Tensor halo_op(const Tensor& a,
             })
             .at(0);
     };
-    std::vector<Tensor> output_tensors = { Tensor(tt::tt_metal::operation::get_workers_for_op_output({a})) };
+    std::vector<Tensor> output_tensors = { Tensor(tt::tt_metal::operation::get_workers_for_op_output({a}, {})) };
     operation::launch_op(halo_op, {a}, {output_tensors});
 
     return output_tensors.at(0);
