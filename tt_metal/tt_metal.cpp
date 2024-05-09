@@ -18,6 +18,7 @@
 #include "tools/profiler/profiler.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/program.hpp"
+#include "tt_metal/impl/trace/trace.hpp"
 
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
@@ -696,44 +697,21 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         EnqueueGetBufferAddr(buffer->device()->command_queue(), address_on_host, buffer, false);
     }
 
-    void BeginTraceCapture(Device *device) {
-        device->begin_trace();
-    }
-
-    void EndTraceCapture(Device *device) {
-        device->end_trace();
-    }
-
-    void ExecuteLastTrace(Device *device, bool blocking) {
-        device->execute_last_trace(blocking);
-    }
-
-    void ReleaseLastTrace(Device *device) {
-        device->release_last_trace();
-    }
-
-    void BeginTraceCaptures(std::map<chip_id_t, Device *> devices) {
-        for (const auto &[device_id, dev] : devices) {
-            dev->begin_trace();
-        }
-    }
-    void EndTraceCaptures(std::map<chip_id_t, Device *> devices) {
-        for (const auto &[device_id, dev] : devices) {
-            dev->end_trace();
-        }
-    }
-    void ExecuteLastTraces(std::map<chip_id_t, Device *> devices, bool blocking) {
-        for (const auto &[device_id, dev] : devices) {
-            dev->execute_last_trace(blocking);
-        }
-    }
-
     Device *GetDeviceHandle(chip_id_t device_id) {
         ZoneScoped;
         TT_ASSERT(device_id < device_pool::devices.size());
         TT_ASSERT(device_pool::devices[device_id] != nullptr);
         return device_pool::devices[device_id];
     }
+
+    void DisableAllocs(Device *device) {
+        tt::tt_metal::allocator::disable_allocs(*(device->allocator_));
+    }
+
+    void EnableAllocs(Device *device) {
+        tt::tt_metal::allocator::enable_allocs(*(device->allocator_));
+    }
+
 }   // namespace detail
 
 size_t GetNumAvailableDevices() {
@@ -971,6 +949,24 @@ std::vector< std::vector< RuntimeArgsData> >& GetRuntimeArgs(const Program &prog
 RuntimeArgsData & GetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id) {
     TT_FATAL( not CommandQueue::async_mode_set(), "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
     return detail::GetKernel(program, kernel_id)->common_runtime_args_data().at(0);
+}
+
+uint32_t BeginTraceCapture(Device *device, const uint8_t cq_id, const uint32_t trace_buff_size) {
+    const uint32_t tid = Trace::next_id();
+    device->begin_trace(cq_id, tid, trace_buff_size);
+    return tid;
+}
+
+void EndTraceCapture(Device *device, const uint8_t cq_id, const uint32_t tid) {
+    device->end_trace(cq_id, tid);
+}
+
+void ReplayTrace(Device *device, const uint8_t cq_id, const uint32_t tid, const bool blocking) {
+    device->replay_trace(cq_id, tid, blocking);
+}
+
+void ReleaseTrace(Device *device, const uint32_t tid) {
+    device->release_trace(tid);
 }
 
 }  // namespace tt_metal

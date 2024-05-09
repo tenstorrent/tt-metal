@@ -56,6 +56,7 @@ template <typename CoreRangeContainer>
 vector<pair<uint32_t, uint32_t>> extract_dst_noc_multicast_info(Device* device, const CoreRangeContainer& ranges, const CoreType core_type) {
     // This API extracts all the pairs of noc multicast encodings given a set of core ranges
     vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info;
+    dst_noc_multicast_info.reserve(ranges.size());
     for (const CoreRange& core_range : ranges) {
         CoreCoord physical_start = device->physical_core_from_logical_core(core_range.start, core_type);
         CoreCoord physical_end = device->physical_core_from_logical_core(core_range.end, core_type);

@@ -25,7 +25,7 @@ namespace tt::tt_metal{
 
     namespace device_pool {
 
-    // Definition of the global device vector
+        // Definition of the global device vector
         extern std::vector<Device*> devices;
 
     } // device_pool
@@ -46,15 +46,6 @@ namespace tt::tt_metal{
 
         void CloseDevices(std::map<chip_id_t, Device *> devices);
         Device *GetDeviceHandle(chip_id_t device_id);
-
-        void BeginTraceCapture(Device *device);
-        void EndTraceCapture(Device *device);
-        void ExecuteLastTrace(Device *device, bool blocking);
-        void ReleaseLastTrace(Device *device);
-
-        void BeginTraceCaptures(std::map<chip_id_t, Device *> devices);
-        void EndTraceCaptures(std::map<chip_id_t, Device *> devices);
-        void ExecuteLastTraces(std::map<chip_id_t, Device *> devices, bool blocking);
 
         /**
         * Copies data from a host buffer into the specified buffer
@@ -163,7 +154,7 @@ namespace tt::tt_metal{
          * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
          * | device        | The device holding the program being profiled.    | Device *        |                           | True     |
          * */
-	void InitDeviceProfiler(Device *device);
+	    void InitDeviceProfiler(Device *device);
 
         /**
          * Read device side profiler data and dump results into device side CSV log
@@ -357,6 +348,9 @@ namespace tt::tt_metal{
         {
             device->deallocate_buffers();
         }
+
+        void DisableAllocs(Device *device);
+        void EnableAllocs(Device *device);
 
         inline void GenerateDeviceHeaders(Device *device,
                                           const std::string &path)

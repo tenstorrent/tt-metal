@@ -11,7 +11,7 @@
 #include "impl/dispatch/work_executor.hpp"
 #include "tt_metal/impl/allocator/basic_allocator.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-// #include "tt_metal/impl/trace/trace.hpp"
+#include "tt_metal/impl/trace/trace_buffer.hpp"
 #include "tt_metal/jit_build/build.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "dev_msgs.h"
@@ -200,10 +200,11 @@ class Device {
     CommandQueue& command_queue(size_t cq_id = 0);
 
     // Metal trace device capture mode
-    void begin_trace();
-    void end_trace();
-    void execute_last_trace(bool blocking);
-    void release_last_trace();
+    void begin_trace(const uint8_t cq_id, const uint32_t tid, const uint32_t trace_buff_size);
+    void end_trace(const uint8_t cq_id, const uint32_t tid);
+    void replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking);
+    void release_trace(const uint32_t tid);
+    std::shared_ptr<TraceBuffer> get_trace(const uint32_t tid);
 
     bool using_slow_dispatch() const;
     void check_allocator_is_initialized() const;
@@ -298,8 +299,7 @@ class Device {
     }
 
    private:
-    std::vector<std::optional<uint32_t>> trace_insts_;
-    std::vector<std::shared_ptr<tt::tt_metal::detail::TraceDescriptor>> trace_contexts_;
+    std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
 };
 
 }  // namespace tt_metal

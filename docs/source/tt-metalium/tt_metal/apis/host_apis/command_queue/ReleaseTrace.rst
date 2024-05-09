@@ -1,0 +1,4 @@
+ReleaseTrace
+============
+
+.. doxygenfunction:: ReleaseTrace

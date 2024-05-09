@@ -99,6 +99,10 @@ uint64_t base_alloc(const AllocatorConfig & config, BankManager &bank_manager, u
 
 uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size, const BufferType &buffer_type, bool bottom_up, std::optional<uint32_t> num_shards = std::nullopt);
 
+void disable_allocs(Allocator &allocator);
+
+void enable_allocs(Allocator &allocator);
+
 void deallocate_buffer(Allocator &allocator, uint64_t address, const BufferType &buffer_type);
 void deallocate_buffers(Allocator &allocator);
 
@@ -108,6 +112,8 @@ void clear(Allocator &allocatator);
 
 struct Allocator {
     Allocator(const AllocatorConfig &alloc_config, const allocator::AllocDescriptor &alloc_descriptor);
+
+    bool disabled_allocs = false;
 
     allocator::BankManager dram_manager;
     allocator::BankManager l1_manager;

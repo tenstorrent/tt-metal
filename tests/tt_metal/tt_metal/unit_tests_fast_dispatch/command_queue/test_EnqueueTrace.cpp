@@ -91,83 +91,6 @@ constexpr bool kBlocking = true;
 constexpr bool kNonBlocking = false;
 vector<bool> blocking_flags = {kBlocking, kNonBlocking};
 
-TEST_F(CommandQueueFixture, TraceInstanceManagement) {
-    CommandQueue& cq = this->device_->command_queue();
-    vector<uint64_t> trace_size = {32*1024, 32};
-    vector<uint64_t> page_size = {HostMemDeviceCommand::PROGRAM_PAGE_SIZE, 32};
-    vector<uint64_t> buf_size_per_bank;
-
-    for (int i=0; i<trace_size.size(); i++) {
-        int banks = cq.device()->num_banks(BufferType::DRAM);
-        int pages = trace_size.at(i) / page_size.at(i);
-        int pages_per_bank = pages / banks + (pages % banks ? 1 : 0);
-        buf_size_per_bank.push_back(pages_per_bank * page_size.at(i));
-    }
-
-    auto mem_idle = cq.device()->get_memory_allocation_statistics(BufferType::DRAM);
-    log_debug(LogTest, "DRAM usage before trace buffer allocation: {}, {}, {}",
-        mem_idle.total_allocatable_size_bytes,
-        mem_idle.total_free_bytes,
-        mem_idle.total_allocated_bytes);
-
-    // Add instances scope, trace buffers go out of scope yet remain cached in memory
-    {
-        TraceBuffer trace_buffer0 = {{}, std::make_shared<Buffer>(
-            cq.device(), trace_size.at(0), page_size.at(0), BufferType::DRAM, TensorMemoryLayout::INTERLEAVED)};
-        TraceBuffer trace_buffer1 = {{}, std::make_shared<Buffer>(
-            cq.device(), trace_size.at(1), page_size.at(1), BufferType::DRAM, TensorMemoryLayout::INTERLEAVED)};
-        auto mem_multi_trace = cq.device()->get_memory_allocation_statistics(BufferType::DRAM);
-        log_debug(
-            LogTest,
-            "DRAM usage post trace buffer allocation: {}, {}, {}",
-            mem_multi_trace.total_allocatable_size_bytes,
-            mem_multi_trace.total_free_bytes,
-            mem_multi_trace.total_allocated_bytes);
-
-        // Cache the trace buffer in memory via instance pinning calls
-        Trace::add_instance(0, trace_buffer0);
-        Trace::add_instance(1, trace_buffer1);
-    }
-
-    // Some user interaction with traces, unimportant... check that traces are still cached
-    auto mem_multi_trace = cq.device()->get_memory_allocation_statistics(BufferType::DRAM);
-    EXPECT_EQ(mem_idle.total_allocated_bytes, mem_multi_trace.total_allocated_bytes - buf_size_per_bank.at(0) - buf_size_per_bank.at(1));
-    EXPECT_EQ(mem_idle.total_free_bytes, mem_multi_trace.total_free_bytes + buf_size_per_bank.at(0) + buf_size_per_bank.at(1));
-
-    // Release instances scope, trace buffers remain cached in memory until released by user
-    {
-        ReleaseTrace(1);
-        auto mem_release_one = cq.device()->get_memory_allocation_statistics(BufferType::DRAM);
-        EXPECT_EQ(mem_idle.total_allocated_bytes, mem_release_one.total_allocated_bytes - buf_size_per_bank.at(0));
-        EXPECT_EQ(mem_idle.total_free_bytes, mem_release_one.total_free_bytes + buf_size_per_bank.at(0));
-
-        ReleaseTrace(0);
-        auto mem_release_two = cq.device()->get_memory_allocation_statistics(BufferType::DRAM);
-        EXPECT_EQ(mem_idle.total_allocatable_size_bytes, mem_release_two.total_allocatable_size_bytes);
-        EXPECT_EQ(mem_idle.total_free_bytes, mem_release_two.total_free_bytes);
-        EXPECT_EQ(mem_idle.total_allocated_bytes, mem_release_two.total_allocated_bytes);
-    }
-
-    // Add instances scope, trace buffers go out of scope yet remain cached in memory
-    {
-        TraceBuffer trace_buffer0 = {{}, std::make_shared<Buffer>(
-            cq.device(), trace_size.at(0), page_size.at(0), BufferType::DRAM, TensorMemoryLayout::INTERLEAVED)};
-        TraceBuffer trace_buffer1 = {{}, std::make_shared<Buffer>(
-            cq.device(), trace_size.at(1), page_size.at(1), BufferType::DRAM, TensorMemoryLayout::INTERLEAVED)};
-        auto mem_multi_trace = cq.device()->get_memory_allocation_statistics(BufferType::DRAM);
-
-        // Cache the trace buffer in memory via instance pinning calls
-        Trace::add_instance(0, trace_buffer0);
-        Trace::add_instance(1, trace_buffer1);
-    }
-
-    ReleaseTrace(-1);
-    auto mem_release_all = cq.device()->get_memory_allocation_statistics(BufferType::DRAM);
-    EXPECT_EQ(mem_idle.total_allocatable_size_bytes, mem_release_all.total_allocatable_size_bytes);
-    EXPECT_EQ(mem_idle.total_free_bytes, mem_release_all.total_free_bytes);
-    EXPECT_EQ(mem_idle.total_allocated_bytes, mem_release_all.total_allocated_bytes);
-}
-
 TEST_F(CommandQueueFixture, InstantiateTraceSanity) {
     CommandQueue& command_queue = this->device_->command_queue();
 
@@ -176,112 +99,27 @@ TEST_F(CommandQueueFixture, InstantiateTraceSanity) {
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
     }
-
-    // Capture trace on a trace queue
-    Trace trace;
-    BeginTrace(trace);
-    EnqueueWriteBuffer(trace.queue(), input, input_data.data(), kNonBlocking);
-    EnqueueWriteBuffer(trace.queue(), input, input_data.data(), kNonBlocking);
-    EndTrace(trace);
+    Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
+    auto simple_program = std::make_shared<Program>(create_simple_unary_program(input, output));
+    EnqueueProgram(command_queue, simple_program, true);
+    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id(), 1280);
+    EnqueueProgram(command_queue, simple_program, kNonBlocking);
+    EndTraceCapture(this->device_, command_queue.id(), tid);
 
     // Instantiate a trace on a device bound command queue
-    uint32_t trace_id = InstantiateTrace(trace, command_queue);
-    auto trace_inst = Trace::get_instance(trace_id);
+    auto trace_inst = this->device_->get_trace(tid);
     vector<uint32_t> data_fd, data_bd;
 
     // Backdoor read the trace buffer
-    ::detail::ReadFromBuffer(trace_inst.buffer, data_bd);
+    ::detail::ReadFromBuffer(trace_inst->buffer, data_bd);
 
     // Frontdoor reaad the trace buffer
-    data_fd.resize(trace_inst.buffer->size() / sizeof(uint32_t));
-    EnqueueReadBuffer(command_queue, trace_inst.buffer, data_fd.data(), kBlocking);
+    data_fd.resize(trace_inst->buffer->size() / sizeof(uint32_t));
+    EnqueueReadBuffer(command_queue, trace_inst->buffer, data_fd.data(), kBlocking);
     EXPECT_EQ(data_fd, data_bd);
 
-    // Check for content correctness in the trace buffer
-    // The following commands are expected based on the trace capture
-    CQPrefetchCmd* p_cmd;
-    CQDispatchCmd* d_cmd;
-    size_t p_size = (sizeof(CQPrefetchCmd) / sizeof(uint32_t));
-    size_t d_size = (sizeof(CQDispatchCmd) / sizeof(uint32_t));
-    size_t offset = 0;
-    p_cmd = (CQPrefetchCmd*)(data_fd.data() + offset);
-    offset += p_size;
-    EXPECT_EQ(p_cmd->base.cmd_id, CQ_PREFETCH_CMD_RELAY_INLINE);
-
-    d_cmd = (CQDispatchCmd*)(data_fd.data() + offset);
-    offset += d_size;
-    EXPECT_EQ(d_cmd->base.cmd_id, CQ_DISPATCH_CMD_WAIT);
-
-    p_cmd = (CQPrefetchCmd*)(data_fd.data() + offset);
-    offset += p_size;
-    EXPECT_EQ(p_cmd->base.cmd_id, CQ_PREFETCH_CMD_RELAY_INLINE);
-
-    d_cmd = (CQDispatchCmd*)(data_fd.data() + offset);
-    offset += d_size;
-    EXPECT_EQ(d_cmd->base.cmd_id, CQ_DISPATCH_CMD_WRITE_PAGED);
-    EXPECT_EQ(d_cmd->write_paged.is_dram, true);
-    EXPECT_EQ(d_cmd->write_paged.page_size, 2048);
-
     log_trace(LogTest, "Trace buffer content: {}", data_fd);
-    ReleaseTrace(trace_id);
-}
-
-TEST_F(CommandQueueFixture, EnqueueTraceWriteBufferCommand) {
-    CommandQueue& command_queue = this->device_->command_queue();
-
-    Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
-    vector<uint32_t> input_first(input.size() / sizeof(uint32_t), 0xfaceface);
-    vector<uint32_t> input_last(input.size() / sizeof(uint32_t), 0);
-    for (uint32_t i = 0; i < input_last.size(); i++) {
-        input_last[i] = i;
-    }
-
-    // TRACE CAPTURE & INSTANTIATE MODE
-    // Capture trace on a trace queue
-    Trace trace;
-    BeginTrace(trace);
-    EnqueueWriteBuffer(trace.queue(), input, input_first.data(), kNonBlocking);
-    EnqueueWriteBuffer(trace.queue(), input, input_last.data(), kNonBlocking);
-    EndTrace(trace);
-
-    // Instantiate a trace on a device bound command queue
-    uint32_t trace_id = InstantiateTrace(trace, command_queue);
-
-    // Repeat traces, check that last write occurs correctly during each iteration
-    vector<uint32_t> readback(input.size() / sizeof(uint32_t), 0);
-    for (int i = 0; i < 10; i++) {
-        EnqueueTrace(command_queue, trace_id, true);
-        EnqueueReadBuffer(command_queue, input, readback.data(), kBlocking);
-        EXPECT_EQ(input_last, readback);
-    }
-
-    ReleaseTrace(trace_id);
-}
-
-TEST_F(CommandQueueFixture, EnqueueTraceWriteBufferCommandViaDevice) {
-    CommandQueue& command_queue = this->device_->command_queue();
-
-    Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
-    vector<uint32_t> input_first(input.size() / sizeof(uint32_t), 0xfaceface);
-    vector<uint32_t> input_last(input.size() / sizeof(uint32_t), 0);
-    for (uint32_t i = 0; i < input_last.size(); i++) {
-        input_last[i] = i;
-    }
-
-    // DEVICE CAPTURE AND REPLAY MODE
-    // Capture trace on a device rather than a trace objet
-    detail::BeginTraceCapture(this->device_);
-    EnqueueWriteBuffer(command_queue, input, input_first.data(), kNonBlocking);
-    EnqueueWriteBuffer(command_queue, input, input_last.data(), kNonBlocking);
-    detail::EndTraceCapture(this->device_);
-
-    // Repeat traces, check that last write occurs correctly during each iteration
-    vector<uint32_t> readback(input.size() / sizeof(uint32_t), 0);
-    for (int i = 0; i < 10; i++) {
-        detail::ExecuteLastTrace(this->device_, true);
-        EnqueueReadBuffer(command_queue, input, readback.data(), kBlocking);
-        EXPECT_EQ(input_last, readback);
-    }
+    ReleaseTrace(this->device_, tid);
 }
 
 TEST_F(CommandQueueFixture, EnqueueProgramTraceCapture) {
@@ -305,23 +143,19 @@ TEST_F(CommandQueueFixture, EnqueueProgramTraceCapture) {
     EnqueueProgram(command_queue, simple_program, true);
     EnqueueReadBuffer(command_queue, output, eager_output_data.data(), true);
 
-    // TRACE CAPTURE & INSTANTIATE MODE
-    Trace trace;
     EnqueueWriteBuffer(command_queue, input, input_data.data(), true);
 
-    BeginTrace(trace);
-    EnqueueProgram(trace.queue(), simple_program, false);
-    EndTrace(trace);
+    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id(), 2048);
+    EnqueueProgram(command_queue, simple_program, false);
+    EndTraceCapture(this->device_, command_queue.id(), tid);
 
-    // Instantiate a trace on a device queue
-    uint32_t trace_id = InstantiateTrace(trace, command_queue);
-
-    EnqueueTrace(command_queue, trace_id, true);
+    EnqueueTrace(command_queue, tid, true);
     EnqueueReadBuffer(command_queue, output, trace_output_data.data(), true);
     EXPECT_TRUE(eager_output_data == trace_output_data);
 
     // Done
     Finish(command_queue);
+    ReleaseTrace(this->device_, tid);
 }
 
 TEST_F(CommandQueueFixture, EnqueueProgramDeviceCapture) {
@@ -341,9 +175,10 @@ TEST_F(CommandQueueFixture, EnqueueProgramDeviceCapture) {
     trace_output_data.resize(input_data.size());
 
     bool has_eager = true;
+    std::shared_ptr<Program> simple_program;
     // EAGER MODE EXECUTION
     if (has_eager) {
-        Program simple_program = create_simple_unary_program(input, output);
+        simple_program = std::make_shared<Program>(create_simple_unary_program(input, output));
         EnqueueWriteBuffer(command_queue, input, input_data.data(), true);
         EnqueueProgram(command_queue, simple_program, true);
         EnqueueReadBuffer(command_queue, output, eager_output_data.data(), true);
@@ -351,16 +186,18 @@ TEST_F(CommandQueueFixture, EnqueueProgramDeviceCapture) {
 
     // DEVICE CAPTURE AND REPLAY MODE
     bool has_trace = false;
+    uint32_t tid = 0;
     for (int i = 0; i < 1; i++) {
         EnqueueWriteBuffer(command_queue, input, input_data.data(), true);
 
         if (!has_trace) {
-            detail::BeginTraceCapture(this->device_);
-            EnqueueProgram(command_queue, std::make_shared<Program>(create_simple_unary_program(input, output)), true);
-            detail::EndTraceCapture(this->device_);
+            // Program must be cached first
+            tid = BeginTraceCapture(this->device_, command_queue.id(), 2048);
+            EnqueueProgram(command_queue, simple_program, false);
+            EndTraceCapture(this->device_, command_queue.id(), tid);
             has_trace = true;
         }
-        detail::ExecuteLastTrace(this->device_, true);
+        ReplayTrace(this->device_, command_queue.id(), tid, true);
 
         EnqueueReadBuffer(command_queue, output, trace_output_data.data(), true);
         if (has_eager) EXPECT_TRUE(eager_output_data == trace_output_data);
@@ -368,6 +205,7 @@ TEST_F(CommandQueueFixture, EnqueueProgramDeviceCapture) {
 
     // Done
     Finish(command_queue);
+    ReleaseTrace(this->device_, tid);
 }
 
 TEST_F(CommandQueueFixture, EnqueueTwoProgramTrace) {
@@ -424,24 +262,20 @@ TEST_F(CommandQueueFixture, EnqueueTwoProgramTrace) {
     }
 
     // Capture trace on a trace queue
-    Trace trace;
-    CommandQueue& trace_queue = BeginTrace(trace);
-    EnqueueProgram(trace_queue, op0, kNonBlocking);
-    EnqueueProgram(trace_queue, op1, kNonBlocking);
-    EndTrace(trace);
-
-    // Instantiate a trace on a device bound command queue
-    uint32_t trace_id = InstantiateTrace(trace, command_queue);
+    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id(), 4096);
+    EnqueueProgram(command_queue, op0, kNonBlocking);
+    EnqueueProgram(command_queue, op1, kNonBlocking);
+    EndTraceCapture(this->device_, command_queue.id(), tid);
 
     // Trace mode execution
     for (auto i = 0; i < num_loops; i++) {
         ScopedTimer timer("Trace loop " + std::to_string(i));
         EnqueueWriteBuffer(command_queue, input, input_data.data(), kNonBlocking);
-        EnqueueTrace(command_queue, trace_id, kNonBlocking);
+        EnqueueTrace(command_queue, tid, kNonBlocking);
         EnqueueReadBuffer(command_queue, output, trace_outputs[i].data(), kNonBlocking);
     }
     Finish(command_queue);
-    ReleaseTrace(trace_id);
+    ReleaseTrace(this->device_, tid);
 
     // Expect same output across all loops
     for (auto i = 0; i < num_loops; i++) {
@@ -506,25 +340,21 @@ TEST_F(CommandQueueFixture, EnqueueMultiProgramTraceBenchmark) {
     }
 
     // Capture trace on a trace queue
-    Trace trace;
-    CommandQueue& trace_queue = BeginTrace(trace);
+    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id(), 6144);
     for (uint32_t i = 0; i < num_programs; i++) {
-        EnqueueProgram(trace_queue, programs[i], kNonBlocking);
+        EnqueueProgram(command_queue, programs[i], kNonBlocking);
     }
-    EndTrace(trace);
-
-    // Instantiate a trace on a device bound command queue
-    uint32_t trace_id = InstantiateTrace(trace, command_queue);
+    EndTraceCapture(this->device_, command_queue.id(), tid);
 
     // Trace mode execution
     for (auto i = 0; i < num_loops; i++) {
         ScopedTimer timer("Trace loop " + std::to_string(i));
         EnqueueWriteBuffer(command_queue, input, input_data.data(), kNonBlocking);
-        EnqueueTrace(command_queue, trace_id, kNonBlocking);
+        EnqueueTrace(command_queue, tid, kNonBlocking);
         EnqueueReadBuffer(command_queue, output, trace_outputs[i].data(), kNonBlocking);
     }
     Finish(command_queue);
-    ReleaseTrace(trace_id);
+    ReleaseTrace(this->device_, tid);
 }
 
 } // end namespace basic_tests

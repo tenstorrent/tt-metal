@@ -306,8 +306,17 @@ uint64_t base_alloc(const AllocatorConfig &config, BankManager &bank_manager, ui
     return bank_manager.allocate_buffer(size, page_size, bottom_up, config.compute_grid_size, num_shards);
 }
 
+void disable_allocs(Allocator &allocator) {
+    allocator.disabled_allocs = true;
+}
+
+void enable_allocs(Allocator &allocator) {
+    allocator.disabled_allocs = false;
+}
+
 uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size, const BufferType &buffer_type, bool bottom_up, std::optional<uint32_t> num_shards) {
     uint64_t address = 0;
+    TT_FATAL(!allocator.disabled_allocs, "Allocation of new buffers has been disabled");
     switch (buffer_type) {
         case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, size, page_size, bottom_up, std::nullopt);
         case BufferType::L1: return allocator.descriptor.l1.alloc(allocator.config, allocator.l1_manager, size, page_size, bottom_up, num_shards);

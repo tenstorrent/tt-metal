@@ -219,3 +219,123 @@ def test_run_resnet50_inference(
         passing_pcc, _ = comp_pcc(torch_output, tt_output, pcc=valid_pcc)
         assert passing_pcc
         # assert passing # fails because of torch.allclose
+
+
+@skip_for_wormhole_b0("This test is not supported on WHB0, please use the TTNN version.")
+@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
+@pytest.mark.parametrize("batch_size", [1, 2, 16, 20], ids=["batch_1", "batch_2", "batch_16", "batch_20"])
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+    ids=["weights_BFLOAT16", "weights_BFLOAT8_B"],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+    ids=["activations_BFLOAT16", "activations_BFLOAT8_B"],
+)
+@pytest.mark.parametrize(
+    "math_fidelity",
+    [tt_lib.tensor.MathFidelity.HiFi4, tt_lib.tensor.MathFidelity.HiFi2, tt_lib.tensor.MathFidelity.LoFi],
+    ids=["HiFi4", "HiFi2", "LoFi"],
+)
+def test_run_resnet50_trace_inference(
+    device, use_program_cache, batch_size, weights_dtype, activations_dtype, math_fidelity, imagenet_sample_input
+):
+    if is_e75(device):
+        pytest.skip("Resnet50 is not supported on E75")
+
+    if batch_size > 8 and (
+        activations_dtype != tt_lib.tensor.DataType.BFLOAT8_B or weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B
+    ):
+        pytest.skip("Batch > 8 must be run fully bfp8")
+    if batch_size <= 2:
+        pytest.skip("batch 1 and 2 are not supported with sharded data")
+    image1 = imagenet_sample_input
+    image = image1
+    model_config = {
+        "MATH_FIDELITY": math_fidelity,
+        "WEIGHTS_DTYPE": weights_dtype,
+        "ACTIVATIONS_DTYPE": activations_dtype,
+    }
+    for i in range(batch_size - 1):
+        image = torch.cat((image, image1), dim=0)
+    with torch.no_grad():
+        torch.manual_seed(1234)
+
+        tt_lib.device.EnableMemoryReports()
+
+        torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+        torch_resnet50.eval()
+
+        state_dict = torch_resnet50.state_dict()
+        storage_in_dram = False
+        sharded = False
+        if batch_size >= 8:
+            sharded = True
+        # run once to compile ops
+        tt_resnet50 = ResNet(
+            Bottleneck,
+            [3, 4, 6, 3],
+            device=device,
+            state_dict=state_dict,
+            base_address="",
+            fold_batchnorm=True,
+            storage_in_dram=storage_in_dram,
+            batch_size=batch_size,
+            model_config=model_config,
+            sharded=sharded,
+        )
+
+        torch_output = torch_resnet50(image).unsqueeze(1).unsqueeze(1)
+        interleaved_mem_config_DRAM = tt_lib.tensor.MemoryConfig(
+            memory_layout=tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=tt_lib.tensor.BufferType.DRAM,
+        )
+
+        tt_image_res = tt_resnet50.preprocessing(image).to(device, interleaved_mem_config_DRAM)
+
+        # Compile
+        tt_resnet50(tt_image_res)
+        # Trace
+        tid = tt_lib.device.BeginTraceCapture(device, 0, 1304576)
+        tt_output_res = tt_resnet50(tt_image_res)
+        tt_lib.device.EndTraceCapture(device, 0, tid)
+
+        tt_lib.device.ReplayTrace(device, 0, tid, True)
+
+        tt_output = tt_output_res.cpu().to_torch().to(torch.float)
+
+        # # run again to measure end to end perf
+        # start_time = datetime.now()
+        # tt_output = tt_resnet50(image)
+        # end_time = datetime.now()
+        # diff = end_time - start_time
+        # logger.info("End to end time (microseconds))", diff.microseconds)
+        # throughput_fps = (float) (1000000 / diff.microseconds)
+        # logger.info("Throughput (fps)", throughput_fps)
+
+        _, _, _, info = get_atol_rtol_pcc(torch_output, tt_output)
+        logger.info(info)
+
+        valid_pcc = 1.0
+        if batch_size >= 8:
+            valid_pcc = golden_pcc[batch_size][
+                (model_config["MATH_FIDELITY"], model_config["WEIGHTS_DTYPE"], model_config["ACTIVATIONS_DTYPE"])
+            ]
+        else:
+            if model_config["ACTIVATIONS_DTYPE"] == tt_lib.tensor.DataType.BFLOAT8_B:
+                if model_config["MATH_FIDELITY"] == tt_lib.tensor.MathFidelity.LoFi:
+                    valid_pcc = 0.87
+                else:
+                    valid_pcc = 0.94
+            else:
+                if model_config["MATH_FIDELITY"] == tt_lib.tensor.MathFidelity.LoFi:
+                    valid_pcc = 0.93
+                else:
+                    valid_pcc = 0.982
+        passing_pcc, _ = comp_pcc(torch_output, tt_output, pcc=valid_pcc)
+        assert passing_pcc
+        # assert passing # fails because of torch.allclose
+    # Done with the trace, can deallocate the buffers now.
+    tt_lib.device.ReleaseTrace(device, tid)

@@ -15,7 +15,7 @@
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/lock_free_queue.hpp"
-#include "tt_metal/impl/trace/trace.hpp"
+#include "tt_metal/impl/trace/trace_buffer.hpp"
 #include "tt_metal/common/base.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "common/env_lib.hpp"
@@ -59,7 +59,6 @@ string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 uint32_t get_noc_unicast_encoding(const CoreCoord &coord);
 uint32_t get_noc_multcast_encoding(const CoreCoord &start, const CoreCoord &end);
 
-class Trace;
 class CommandQueue;
 class CommandInterface;
 
@@ -389,7 +388,6 @@ class EnqueueTerminateCommand : public Command {
 };
 
 namespace detail {
-class TraceDescriptor;
 inline bool LAZY_COMMAND_QUEUE_MODE = false;
 
 /*
@@ -455,30 +453,13 @@ class HWCommandQueue {
     volatile bool is_dprint_server_hung();
     volatile bool is_noc_hung();
 
-    void record_begin(std::shared_ptr<detail::TraceDescriptor> ctx);
+    void record_begin(const uint32_t tid, std::shared_ptr<detail::TraceDescriptor> ctx);
     void record_end();
-
-    // Record all commands and metadata from run_commands function
-    template <typename Func>
-    inline std::vector<uint32_t> record_commands(std::shared_ptr<detail::TraceDescriptor> ctx, Func run_commands) {
-        this->record_begin(ctx);
-        run_commands();
-        this->record_end();
-        return std::move(this->manager.get_bypass_data());
-    }
-
-    // Force commands to be issued, overrides tracing if this called within record_commands
-    template <typename Func>
-    inline void force_commands(Func run_commands) {
-        bool bypass = this->manager.get_bypass_mode();
-        this->manager.set_bypass_mode(false, false);  // pause
-        run_commands();
-        this->manager.set_bypass_mode(bypass, false);  // resume
-    }
 
    private:
     uint32_t id;
     uint32_t size_B;
+    std::optional<uint32_t> tid;
     std::shared_ptr<detail::TraceDescriptor> trace_ctx;
     std::thread completion_queue_thread;
     SystemMemoryManager& manager;
