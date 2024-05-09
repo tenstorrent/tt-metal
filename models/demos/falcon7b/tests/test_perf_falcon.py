@@ -28,8 +28,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 
 from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
+    tt_tensors_to_torch_tensors,
     profiler,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
@@ -182,6 +181,11 @@ def run_test_FalconCausalLM_end_to_end(
     for device in devices:
         tt_lib.device.Synchronize(device)
     profiler.end("first_model_run_with_compile", force_enable=True)
+
+    # Dump device profiler data before second run to avoid exceeding profiler memory limits when using tracy
+    for device in devices:
+        tt_lib.device.DumpDeviceProfiler(device)
+
     del tt_out
     del tt_layer_past
     del tt_layer_present
@@ -263,12 +267,11 @@ def run_test_FalconCausalLM_end_to_end(
         for user_id, tt_out in enumerate(tt_outs):
             # Get outputs from all devices
             tt_out_tmp[user_id::batch] = torch.concat(
-                [tt2torch_tensor(tt_out[i]).squeeze(1) for i in range(num_devices)]
+                [tt_out_torch.squeeze(1) for tt_out_torch in tt_tensors_to_torch_tensors(tt_out)]
             )
         tt_out = tt_out_tmp
     elif llm_mode == "decode":
-        for i in range(num_devices):
-            tt_out[i] = tt2torch_tensor(tt_out[i]).squeeze(1).transpose(0, 1)
+        tt_out = [tt_out_torch.squeeze(1).transpose(0, 1) for tt_out_torch in tt_tensors_to_torch_tensors(tt_out)]
         tt_out = torch.concat(tt_out)
 
     # check outputs ----------------------------------------------------------------------
