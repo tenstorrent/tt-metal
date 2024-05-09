@@ -584,7 +584,7 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @pytest.mark.parametrize("round_off_method", ["floor"])
+    @pytest.mark.parametrize("round_off_method", ["floor", "trunc"])
     def test_run_eltwise_round_off_ops(
         self,
         round_off_method,

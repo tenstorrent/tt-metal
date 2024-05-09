@@ -487,6 +487,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.unary_floor
 
+.. autofunction:: tt_lib.tensor.trunc
+
 Tensor relational operations
 ============================
 .. autofunction:: tt_lib.tensor.gtz

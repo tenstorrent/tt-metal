@@ -53,6 +53,7 @@ Compute APIs
   right_shift_tile
   mod_tile
   floor_tile
+  trunc_tile
 
   tanh_tile
   tan_tile

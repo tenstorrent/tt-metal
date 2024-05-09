@@ -183,6 +183,8 @@ void TensorModuleXaryOPs(py::module &m_tensor) {
     detail::bind_unary_op(
         m_tensor, "unary_floor", unary_floor, R"doc(Applies floor to the elements of the input tensor ``{0}``.)doc");
     detail::bind_unary_op(
+        m_tensor, "trunc", trunc, R"doc(Applies trunc to the elements of the input tensor ``{0}``.)doc");
+    detail::bind_unary_op(
         m_tensor,
         "eqz",
         eqz,

@@ -22,6 +22,7 @@
 #include "llk_math_eltwise_unary_sfpu_tiled_prod.h"
 #include "llk_math_eltwise_unary_sfpu_topk.h"
 #include "llk_math_eltwise_unary_sfpu_trigonometry.h"
+#include "llk_math_eltwise_unary_sfpu_trunc.h"
 #include "llk_math_eltwise_unary_sfpu_unary_comp.h"
 
 namespace ckernel {

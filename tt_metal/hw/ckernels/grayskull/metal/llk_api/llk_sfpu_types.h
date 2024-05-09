@@ -68,5 +68,6 @@ enum SfpuType {
     right_shift,
     unary_floor,
     mod,
+    trunc,
     unused,
 };

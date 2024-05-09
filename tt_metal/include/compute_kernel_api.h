@@ -221,6 +221,27 @@ ALWI void floor_tile_init() { MATH((llk_math_eltwise_unary_sfpu_floor_init<APPRO
 ALWI void floor_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_floor<APPROX>(idst))); }
 
 /**
+ * Please refer to documentation for any_init.
+ */
+ALWI void trunc_tile_init() { MATH((llk_math_eltwise_unary_sfpu_trunc_init<APPROX>())); }
+
+/**
+ * Performs trunc operation on each row of a tile.
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid
+ * Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to modify the sign bit of     | uint32_t | Must be
+ * less than the size of the DST register buffer | True     |
+ */
+ALWI void trunc_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_trunc<APPROX>(idst))); }
+
+/**
  * Performs element-wise computation of absolute value on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only

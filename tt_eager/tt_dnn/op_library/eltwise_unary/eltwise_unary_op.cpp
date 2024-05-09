@@ -195,6 +195,7 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, stri
         case UnaryOpType::UNARY_FLOOR:
             op_init_and_name = {"floor_tile_init();", fmt::format("floor_tile({});", idst)};
             break;
+        case UnaryOpType::TRUNC: op_init_and_name = {"trunc_tile_init();", fmt::format("trunc_tile({});", idst)}; break;
         case UnaryOpType::SIN: op_init_and_name = {"sin_tile_init();", fmt::format("sin_tile({});", idst)}; break;
         case UnaryOpType::COS: op_init_and_name = {"cos_tile_init();", fmt::format("cos_tile({});", idst)}; break;
         case UnaryOpType::ISFINITE:
