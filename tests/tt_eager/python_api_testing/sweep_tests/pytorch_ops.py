@@ -596,6 +596,10 @@ def signbit(x, *args, **kwargs):
     return torch.signbit(x)
 
 
+def unary_floor(x, *args, **kwargs):
+    return torch.floor(x)
+
+
 def sin(x, *args, **kwargs):
     return torch.sin(x)
 

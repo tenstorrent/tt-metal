@@ -95,6 +95,7 @@ namespace tt::tt_metal::detail {
             expm1 = exp(x) - 1)doc"
         );
         detail::bind_unary_op(m_tensor, "signbit", signbit, R"doc(Applies the signbit function to the elements of the input tensor ``{0}``.)doc");
+        detail::bind_unary_op(m_tensor, "unary_floor", unary_floor, R"doc(Applies floor to the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "atan", atan, R"doc(Returns a new tensor with the arctan of the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "asin", asin, R"doc(Returns a new tensor with the arcsine of the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "acos", acos, R"doc(Returns a new tensor with the arccosine of the elements of the input tensor ``{0}``.)doc");
