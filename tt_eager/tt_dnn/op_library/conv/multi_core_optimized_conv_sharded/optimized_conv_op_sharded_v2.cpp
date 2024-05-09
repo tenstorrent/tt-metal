@@ -191,7 +191,7 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     return {cb_sharded_act, cb_output};
 }
 
-operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, const std::optional<const Tensor> conv_reader_indices, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, bool use_shallow_conv_variant, bool transpose_mcast, Tensor &output, DeviceComputeKernelConfig compute_kernel_config) {
+operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(tt_metal::Program& program, const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, const std::optional<const Tensor> conv_reader_indices, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, bool use_shallow_conv_variant, bool transpose_mcast, Tensor &output, DeviceComputeKernelConfig compute_kernel_config) {
     bool pass = true;
     tt_metal::Device *device = a.device();
     TT_ASSERT(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
@@ -396,8 +396,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     assert(num_blocks_output_w == num_blocks_weight_w);
 
     uint32_t out_block_h_datums = out_block_h_ntiles * TILE_HEIGHT;
-
-    tt_metal::Program program = tt_metal::CreateProgram();
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
     tt_metal::Buffer *src1_dram_buffer = b.buffer();
@@ -1309,6 +1307,46 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
+operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, const std::optional<const Tensor> conv_reader_indices, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, bool use_shallow_conv_variant, bool transpose_mcast, Tensor &output, DeviceComputeKernelConfig compute_kernel_config) {
+    tt_metal::Program program = tt_metal::CreateProgram();
+    return multi_core_optimized_conv_sharded_v2_impl(program, a, b, ashape, bias, conv_reader_indices, conv_params, output_channels, untilize_out, has_bias, fuse_relu, parallelization_config, block_config, extra_padding_for_32B_alignment, use_shallow_conv_variant, transpose_mcast, output, compute_kernel_config);
+}
+
+operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias,
+    const SlidingWindowConfig& sliding_window_config,
+    const ParallelConfig& parallel_config,
+    uint32_t output_channels,
+    bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
+    const OptimizedConvParallelizationConfig& parallelization_config,
+    const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment=0,
+    std::optional<MemoryConfig> output_mem_config,
+    std::optional<DataType> output_dtype,
+    std::optional<std::array<std::uint32_t, 4>> input_tensor_shape,
+    bool use_shallow_conv_variant,
+    bool tranpose_mcast,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    Tensor& output) {
+    tt_metal::Program program = tt_metal::CreateProgram();
+    // TODO: conv params need to be cleaned up and replaced with sliding window config
+    std::vector<int> conv_params = {
+        (int) sliding_window_config.window_hw_.first,
+        (int) sliding_window_config.window_hw_.second,
+        (int) sliding_window_config.stride_hw_.first,
+        (int) sliding_window_config.stride_hw_.second,
+        (int) sliding_window_config.pad_hw_.first,
+        (int) sliding_window_config.pad_hw_.second,
+    };
+
+
+    // create conv config tensors
+    auto pad_metadata = sliding_window::generate_pad_metadata(sliding_window_config);
+    auto op_trace_metadata = sliding_window::generate_op_trace_metadata(sliding_window_config);
+    auto shard_boundaries = sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
+    auto conv_sharded_input_top_left_indices = sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, true, true);
+    // call config generation functions and add to program
+    program.add_tensor()
+    return multi_core_optimized_conv_sharded_v2_impl(program, a, b, ashape, conv_reader_indices, )
+}
 }  // namespace tt_metal
 
 }  // namespace tt
