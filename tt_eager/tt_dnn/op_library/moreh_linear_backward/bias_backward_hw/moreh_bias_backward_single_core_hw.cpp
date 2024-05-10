@@ -25,18 +25,18 @@ operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor 
     Buffer *src_buffer = output_grad.buffer();
     const auto &bias_grad_shape = bias_grad.get_legacy_shape().without_padding();
     Buffer *dst_buffer = bias_grad.buffer();
-    uint32_t num_tiles = output_grad.volume() / TILE_HW;
     const auto &output_grad_shape_wo_padding = output_grad.get_legacy_shape().without_padding();
-    const bool do_mask_h = (output_grad_shape_wo_padding[2] % TILE_HEIGHT) != 0;
-    const uint32_t mask_h = do_mask_h ? output_grad_shape_wo_padding[2] % TILE_HEIGHT : TILE_HEIGHT;
-    const bool do_mask_w = (output_grad_shape_wo_padding[3] % TILE_WIDTH) != 0;
-    const uint32_t mask_w = do_mask_w ? output_grad_shape_wo_padding[3] % TILE_WIDTH : TILE_WIDTH;
+    const bool do_mask_h = (output_grad_shape_wo_padding[-2] % TILE_HEIGHT) != 0;
+    const uint32_t mask_h = do_mask_h ? output_grad_shape_wo_padding[-2] % TILE_HEIGHT : TILE_HEIGHT;
+    const bool do_mask_w = (output_grad_shape_wo_padding[-1] % TILE_WIDTH) != 0;
+    const uint32_t mask_w = do_mask_w ? output_grad_shape_wo_padding[-1] % TILE_WIDTH : TILE_WIDTH;
 
     const auto &output_grad_shape = output_grad.get_legacy_shape();
-    uint32_t B1 = output_grad_shape[0];
-    uint32_t B2 = output_grad_shape[1];
-    uint32_t Ht = output_grad_shape[2] / TILE_HEIGHT;
-    uint32_t Wt = output_grad_shape[3] / TILE_WIDTH;
+    uint32_t batch_num = output_grad.volume() / output_grad_shape[-2] / output_grad_shape[-1];
+    uint32_t Ht = output_grad_shape[-2] / TILE_HEIGHT;
+    uint32_t Wt = output_grad_shape[-1] / TILE_WIDTH;
+    uint32_t num_tiles = output_grad.volume() / TILE_HW;
+    log_debug(LogOp, "{}:{} batch_num {} Ht {} Wt {} num_tiles {}", __func__, __LINE__, batch_num, Ht, Wt, num_tiles);
 
     const uint32_t in0_t = 2;
     const uint32_t in1_t = 1;
@@ -98,7 +98,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor 
     SetRuntimeArgs(
         program, reader_kernel_id, core, {src_buffer->address(), num_tiles, 0, mask_h, mask_w, do_mask_h, do_mask_w});
     SetRuntimeArgs(program, writer_kernel_id, core, {dst_buffer->address(), 1, 0});
-    SetRuntimeArgs(program, compute_kernel_id, core, {B1, B2, Ht, Wt, do_mask_h, do_mask_w});
+    SetRuntimeArgs(program, compute_kernel_id, core, {batch_num, Ht, Wt, do_mask_h, do_mask_w});
 
     auto override_runtime_arguments_callback = [reader_kernel_id, writer_kernel_id](
                                                    const void *operation,

@@ -5,13 +5,15 @@
 #include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t start_id = get_arg_val<uint32_t>(2);
-    const uint32_t mask_h = get_arg_val<uint32_t>(3);
-    const uint32_t mask_w = get_arg_val<uint32_t>(4);
-    const bool do_mask_h = get_arg_val<uint32_t>(5) == 1;
-    const bool do_mask_w = get_arg_val<uint32_t>(6) == 1;
+
+    ArgFetcher arg_fetcher;
+    const uint32_t src_addr = arg_fetcher.get_next_arg_val<uint32_t>();
+    const uint32_t num_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
+    const uint32_t start_id = arg_fetcher.get_next_arg_val<uint32_t>();
+    const uint32_t mask_h = arg_fetcher.get_next_arg_val<uint32_t>();
+    const uint32_t mask_w = arg_fetcher.get_next_arg_val<uint32_t>();
+    const bool do_mask_h = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
+    const bool do_mask_w = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
 

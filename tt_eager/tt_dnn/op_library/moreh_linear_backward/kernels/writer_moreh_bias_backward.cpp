@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
+    ArgFetcher arg_fetcher;
+    uint32_t dst_addr = arg_fetcher.get_next_arg_val<uint32_t>();
+    uint32_t num_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
+    uint32_t start_id = arg_fetcher.get_next_arg_val<uint32_t>();
 
-    constexpr uint32_t cb_id_out = 16;
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
-
+    constexpr uint32_t cb_id_out = 16;
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
     const auto data_format = get_dataformat(cb_id_out);
