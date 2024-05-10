@@ -42,7 +42,8 @@ struct Reduce {
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     ReduceOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple("math_op", "dim", "scaler", "output_mem_config");
+    static constexpr auto attribute_names =
+        std::make_tuple("math_op", "dim", "scaler", "output_mem_config", "output_dtype");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->math_op), std::cref(this->dim), std::cref(this->scaler), std::cref(this->output_mem_config), std::cref(this->output_dtype));
