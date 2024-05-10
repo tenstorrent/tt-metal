@@ -17,14 +17,24 @@ parameters = {
     "batch_sizes": [(1,)],
     "height": [32, 384, 1024],
     "width": [64, 1024, 4096],
-    "input_dtype": [ttnn.bfloat16],
+    "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-    "layout": [ttnn.TILE_LAYOUT],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
 }
 
 
-def skip(**_) -> Tuple[bool, Optional[str]]:
+def skip(
+    batch_sizes,
+    height,
+    width,
+    input_dtype,
+    input_memory_config,
+    output_memory_config,
+    layout,
+) -> Tuple[bool, Optional[str]]:
+    if layout == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "BFLAOT16 and BFLOAT8_B is supported in TILE layout"
     return False, None
 
 

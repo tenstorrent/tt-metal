@@ -225,6 +225,8 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
                 >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
                 >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 1], [4, 4]]), dtype=torch.bfloat16)), device)
                 >>> output = ttnn.{name}(tensor1, tensor2)
+
+            {elt_binary_function.__doc__}
             """
 
     setattr(THIS_MODULE, name, elt_binary_function)
