@@ -204,7 +204,7 @@ namespace tt::tt_metal {
                     uint32_t local_idx = global_idx - input_start;
                     auto [is_pad_stick, src_idx] = tensor_metadata[global_idx];
                     auto [src_core_id, src_local_idx] = src_idx;
-                    TT_ASSERT(local_idx < pad_local && src_local_idx < pad_local, "Index overflow")
+                    TT_ASSERT(local_idx < pad_local && src_local_idx < pad_local, "Index overflow");
                     if (is_pad_stick) {
                         TT_ASSERT(src_local_idx == 0);
                         src_core_id = pad_local;
@@ -325,10 +325,10 @@ namespace tt::tt_metal {
             auto flatten_remote_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
                 // find max length
                 size_t max_len = 0;
-                for (auto& [_, data] : config) {
-                    uint32_t curr_len = 3;  // each key is len 3
-                    for (auto& [key, subdata] : data) {
-                        curr_len += 3 * subdata.size();
+                for (auto& core_config : config) {
+                    size_t curr_len = 0;
+                    for (auto& [key, subdata] : core_config) {
+                        curr_len += 3 + 3 * subdata.size();  // each key is len 3
                     }
                     max_len = std::max(max_len, curr_len);   // each key is 3, data is 3 * data.size()
                 }
@@ -414,8 +414,8 @@ namespace tt::tt_metal {
 
 
         Tensor construct_on_device_config_tensor(const std::vector<std::vector<uint16_t>>& config, const SlidingWindowConfig& sw_config, const ParallelConfig& p_config, Device* device) {
-            auto shard_shape = Shape({1, (uint32_t) config[0].size()});
-            ShardSpec shard_spec(p_config.grid, shard_shape, p_config.shard_orientation);
+            auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t) config[0].size()});
+            ShardSpec shard_spec(p_config.grid, shard_shape, p_config.shard_orientation, false);
             MemoryConfig memory_config{p_config.shard_scheme, BufferType::L1_SMALL, shard_spec};
 
             std::vector<uint16_t> config_vector = flatten(config);
