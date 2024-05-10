@@ -5,6 +5,7 @@
 import math
 import ttnn
 import torch
+import os
 import tt_lib as ttl
 from ttnn.operations.core import squeeze, unsqueeze_to_4D
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
@@ -298,13 +299,20 @@ class cross_attention:
                     ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
                     ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
                 )
+                out_subblock_h = 1
+                out_subblock_w = 8
+                slow_mm = os.environ.get("SLOW_MATMULS", "0") == "1"
+                if slow_mm:
+                    out_subblock_h = 1
+                    out_subblock_w = 1
+
                 program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=grid_size,
                     in0_block_w=t_key.shape[-2] // 32,
                     per_core_M=tiles_per_shard,
                     per_core_N=seq_len // 32,
-                    out_subblock_h=1,
-                    out_subblock_w=4,
+                    out_subblock_h=out_subblock_h,
+                    out_subblock_w=out_subblock_w,
                     fuse_batch=True,
                     fused_activation=None,
                     mcast_in0=False,
@@ -362,13 +370,19 @@ class cross_attention:
                         program_config=softmax_program_config,
                     )
 
+                out_subblock_h = tiles_per_shard
+                out_subblock_w = t_key.shape[-2] // 32
+                slow_mm = os.environ.get("SLOW_MATMULS", "0") == "1"
+                if slow_mm:
+                    out_subblock_h = 1
+                    out_subblock_w = 1
                 program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=grid_size,
                     in0_block_w=seq_len // 32,
                     per_core_M=tiles_per_shard,
                     per_core_N=t_key.shape[-2] // 32,
-                    out_subblock_h=tiles_per_shard,
-                    out_subblock_w=t_key.shape[-2] // 32,
+                    out_subblock_h=out_subblock_h,
+                    out_subblock_w=out_subblock_w,
                     fuse_batch=True,
                     fused_activation=None,
                     mcast_in0=False,
