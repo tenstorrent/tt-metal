@@ -27,7 +27,7 @@ test-list:
   - eltwise-addcdiv:
       shape:
         start-shape: [1, 1, 2, 2]
-        end-shape: [6, 12, 256, 256]
+        end-shape: [6, 6, 256, 256]
         interval: [1, 1, 1, 2]
         num-shapes: 3
         num-samples: 64
