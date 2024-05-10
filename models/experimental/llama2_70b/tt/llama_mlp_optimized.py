@@ -106,11 +106,16 @@ class TtLlamaMLP_optimized:
         )
         self.w3 = ttnn.to_device(w3_ttnn, self.device_mesh)
 
-    def prepare_inputs(self, x, device_mesh):
+    def prepare_inputs(self, x):
+        x_multichip = ttnn.from_torch(
+            x,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=self.model_config["LN_MLP_OUTPUT_DTYPE"],
+            device=self.device_mesh,
+            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+        )
+
         if self.model_config["LLM_MODE"] == "decode":
-            x_multichip = ttnn.from_torch(
-                x, layout=ttnn.TILE_LAYOUT, device=device_mesh, mesh_mapper=ReplicateTensorToMesh(device_mesh)
-            )
             x_multichip = ttnn.to_memory_config(
                 x_multichip,
                 ttnn.create_sharded_memory_config(
@@ -121,18 +126,10 @@ class TtLlamaMLP_optimized:
                     use_height_and_width_as_shard_shape=True,
                 ),
             )
-            return x_multichip
-        # elif self.model_config["LLM_MODE"] == "prefill":
-        #     x_multichip = []
-        #     for i in range(self.num_devices):
-        #         x_multichip.append(
-        #             torch2tt_tensor(
-        #                 x.clone(),
-        #                 self.devices[i],
-        #                 tt_dtype=self.model_config["LN_MLP_OUTPUT_DTYPE"],
-        #             )
-        #         )
-        #     return x_multichip
+        elif self.model_config["LLM_MODE"] == "prefill":
+            x_multichip = ttnn.to_memory_config(x_multichip, self.model_config["DRAM_MEMCFG"])
+
+        return x_multichip
 
     def __call__(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
@@ -145,69 +142,45 @@ class TtLlamaMLP_optimized:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
     def prefill_forward(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
-        hidden_states = []
-        w1_outs = []
-        w3_outs = []
-
-        seq_tiles = x[0].shape[2] // 32
-        cores_y = 8 if seq_tiles % 8 == 0 else 4  # Pick largest possible coregrid for op
-        self.model_config["PADDED_FF1_MM_PROGCFG"] = self.model_config["PADDED_FF1_MM_PROGCFG_LAMBDA"](
-            seq_tiles, cores_y
+        # TODO: Use FP32 accumulate after the issue with primary.matmul with FP32 accumulate is fixed
+        w1_out = tt_lib.operations.primary.matmul(
+            x,
+            self.w1,
+            program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
+            output_mem_config=self.model_config["MLP_BLOCK_SHARDED_MEMCFG"],
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG_LOFI"],
+            # output_dtype=self.model_config["BFP8_DTYPE"],
+            output_dtype=self.model_config["BFLOAT16_DTYPE"],
         )
-        self.model_config["PADDED_FF3_MM_PROGCFG"] = self.model_config["PADDED_FF3_MM_PROGCFG_LAMBDA"](
-            seq_tiles, cores_y
+
+        w3_out = tt_lib.operations.primary.matmul(
+            x,
+            self.w3,
+            program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
+            output_mem_config=self.model_config["MLP_BLOCK_SHARDED_MEMCFG"],
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG_LOFI"],
+            # output_dtype=self.model_config["BFP8_DTYPE"],
+            output_dtype=self.model_config["BFLOAT16_DTYPE"],
         )
-        self.model_config["PADDED_FF2_MM_PROGCFG"] = self.model_config["PADDED_FF2_MM_PROGCFG_LAMBDA"](
-            seq_tiles, cores_y
+        x.deallocate(True)
+
+        hidden_states = ttnn.mul(w1_out, w3_out, dtype=ttnn.bfloat8_b, memory_config=self.model_config["DRAM_MEMCFG"])
+        w1_out.deallocate(True)
+        w3_out.deallocate(True)
+
+        hidden_states = ttnn.all_gather(
+            hidden_states,
+            dim=3,
+            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
         )
-        block_sharded_memcfg = self.model_config["MLP_BLOCK_SHARDED_MEMCFG_LAMBDA"](x[0].shape[2], cores_y)
-        for i in range(len(x)):
-            # TODO: Use FP32 accumulate after the issue with primary.matmul with FP32 accumulate is fixed
-            w1_outs.append(
-                tt_lib.operations.primary.matmul(
-                    x[i],
-                    self.w1_list[i],
-                    program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
-                    output_mem_config=block_sharded_memcfg,
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG_LOFI"],
-                    # output_dtype=self.model_config["BFP8_DTYPE"],
-                )
-            )
 
-        for i in range(len(x)):
-            w3_outs.append(
-                tt_lib.operations.primary.matmul(
-                    x[i],
-                    self.w3_list[i],
-                    program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
-                    output_mem_config=block_sharded_memcfg,
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG_LOFI"],
-                    # output_dtype=self.model_config["BFP8_DTYPE"],
-                )
-            )
-            x[i].deallocate(True)
-
-        for i in range(len(w1_outs)):
-            hidden_states.append(ttnn.mul(w1_outs[i], w3_outs[i], dtype=ttnn.bfloat8_b))
-            w1_outs[i].deallocate(True)
-            w3_outs[i].deallocate(True)
-
-        if self.emulated:
-            hidden_states = tt_all_gather_torch(hidden_states, dim=-1)
-        else:
-            hidden_states = tt_lib.tensor.all_gather(
-                hidden_states,
-                dim=3,
-                num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            )
-
-        for i in range(len(hidden_states)):
-            hidden_states[i] = tt_lib.operations.primary.matmul(
-                hidden_states[i],
-                self.w2_list[i],
-                program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
-                compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
-            )
+        hidden_states = tt_lib.operations.primary.matmul(
+            hidden_states,
+            self.w2,
+            program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
+            output_dtype=self.model_config["BFLOAT16_DTYPE"],
+        )
 
         return hidden_states
 
@@ -216,7 +189,6 @@ class TtLlamaMLP_optimized:
         w1_outs = []
         w3_outs = []
 
-        # ttnn.matmul , use_1d_systolic =
         w1_out = tt_lib.operations.primary.matmul_1d(
             x,
             self.w1,
@@ -246,16 +218,6 @@ class TtLlamaMLP_optimized:
         hidden_states = tt_lib.tensor.sharded_to_interleaved(
             hidden_states, output_mem_config=self.model_config["L1_MEMCFG"]
         )
-
-        # if self.emulated:
-        #     hidden_states = tt_all_gather_torch(hidden_states, dim=-1)
-        # else:
-        #     hidden_states = tt_lib.tensor.all_gather(
-        #         hidden_states,
-        #         dim=3,
-        #         num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-        #         output_mem_config=self.model_config["L1_MEMCFG"],
-        #     )
 
         hidden_states = ttnn.all_gather(
             hidden_states,
