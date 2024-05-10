@@ -8,6 +8,7 @@
 #include <tuple>
 
 #include "tensor/tensor.hpp"
+#include "tensor/owned_buffer_functions.hpp"
 #include "utils.hpp"
 
 namespace tt::tt_metal {
@@ -16,6 +17,7 @@ namespace tt::tt_metal {
         CoreRangeSet grid = {{}};
         TensorMemoryLayout shard_scheme;
         ShardOrientation shard_orientation;
+
         bool operator==(const ParallelConfig &other) {
             return (grid == other.grid && shard_scheme == other.shard_scheme && shard_orientation == other.shard_orientation);
         }
@@ -363,7 +365,6 @@ namespace tt::tt_metal {
                                    max_out_nsticks_per_core);
         }
 
-<<<<<<< HEAD
         std::vector<std::vector<uint32_t>> generate_sliding_window_op_config(const std::vector<uint32_t>& op_trace_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool pad_tile = false, bool pad_last_core = false) {
             std::vector<std::vector<uint32_t>> sharded_input_top_left_indices;
             for(const auto& item : shard_boundaries) {
@@ -403,7 +404,50 @@ namespace tt::tt_metal {
             return sharded_input_top_left_indices;
         }
 
-=======
->>>>>>> #0: halo config generation in cpp done, need testing
+        std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input) {
+            std::vector<uint16_t> flattened_vector;
+            for (auto sub_vec : input) {
+                flattened_vector.insert(flattened_vector.end(), sub_vec.begin(), sub_vec.end());
+            }
+            return flattened_vector;
+        }
+
+
+        Tensor construct_on_device_config_tensor(const std::vector<std::vector<uint16_t>>& config, const SlidingWindowConfig& sw_config, const ParallelConfig& p_config, Device* device) {
+            auto shard_shape = Shape({1, (uint32_t) config[0].size()});
+            ShardSpec shard_spec(p_config.grid, shard_shape, p_config.shard_orientation);
+            MemoryConfig memory_config{p_config.shard_scheme, BufferType::L1_SMALL, shard_spec};
+
+            std::vector<uint16_t> config_vector = flatten(config);
+            Shape config_shape = {1, (uint32_t) config_vector.size()};
+            if (p_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
+                auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
+                return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR).to(device, memory_config);
+            } else if (p_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
+                TT_ASSERT(p_config.grid.ranges().size() == 1, "BLOCK_SHARDED should have just a single core range");
+                // NOTE: it is assumed that the range start is always (0, 0)
+                uint32_t ncores_y = p_config.grid.ranges().begin()->end.y + 1;
+                uint32_t ncores_x = p_config.grid.ranges().begin()->end.x + 1;
+                std::vector<uint16_t> repeat_config;
+                uint32_t repeat_factor = 0;
+                if (p_config.shard_orientation == ShardOrientation::ROW_MAJOR) {
+                    TT_ASSERT(config.size() == ncores_y, "Invalid config size for BLOCK_SHARDED ROW_MAJOR");
+                    repeat_factor = ncores_x;
+                } else if (p_config.shard_orientation == ShardOrientation::COL_MAJOR) {
+                    TT_ASSERT(config.size() == ncores_x, "Invalid config size for BLOCK_SHARDED COL_MAJOR");
+                    repeat_factor = ncores_y;
+                } else {
+                    TT_ASSERT(false, "Unsupported shard orientation");
+                }
+                for (uint32_t i = 0; i < repeat_factor; ++ i) {
+                    repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
+                }
+                auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
+                return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR).to(device, memory_config);
+            } else {
+                TT_ASSERT(false, "Unsupported shard scheme");
+            }
+        }
+
     } // namespace sliding_window
 } // namespace tt::tt_metal
