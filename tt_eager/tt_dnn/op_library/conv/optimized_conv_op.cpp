@@ -277,7 +277,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     DataType output_dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
-    const DeviceComputeKernelConfig& compute_kernel_config
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config
 ) {
     //TT_ASSERT(!untilize_out, "Optimized conv only supports tiled out");
     TT_ASSERT(b.get_layout() == Layout::TILE); // Weights should already be formatted
