@@ -62,14 +62,14 @@ inline void moreh_bmm_backward_validate(
 
     if (input_grad) {
         outputs.push_back(tt::operations::primary::moreh_matmul(
-            output_grad, mat2, input_grad->get(), false, true, output_mem_config));
+            output_grad, mat2, false, true, input_grad->get(), std::nullopt, output_mem_config));
     } else {
         outputs.push_back(nullptr);
     }
 
     if (mat2_grad) {
         outputs.push_back(tt::operations::primary::moreh_matmul(
-            input, output_grad, mat2_grad->get(), true, false, output_mem_config));
+            input, output_grad, true, false, mat2_grad->get(), std::nullopt, output_mem_config));
     } else {
         outputs.push_back(nullptr);
     }
