@@ -1,4 +1,4 @@
-name: Internal - Docs Build latest docs and deploy to GitHub pages on main
+name: "[internal] Docs build and deploy to GitHub pages on main impl"
 
 on:
   workflow_call:
