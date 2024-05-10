@@ -293,6 +293,10 @@ public:
                                 PACKET_QUEUE_REMOTE_READY_FLAG);
     }
 
+    inline void set_remote_ready_status_addr(uint8_t remote_queue_id) {
+        this->remote_ready_status_addr = STREAM_REG_ADDR(remote_queue_id, STREAM_REMOTE_SRC_REG_INDEX);
+    }
+
     inline void send_remote_finished_notification() {
         this->remote_reg_update(this->remote_ready_status_addr,
                                 PACKET_QUEUE_REMOTE_FINISHED_FLAG);

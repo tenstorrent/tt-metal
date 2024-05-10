@@ -94,11 +94,11 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device *device, CommandQueue 
     // Clear out command queue
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-    uint32_t cq_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel) / device->num_hw_cqs();
+    uint32_t cq_size = device->sysmem_manager().get_cq_size();
 
     std::vector<uint32_t> cq_zeros((cq_size - CQ_START) / sizeof(uint32_t), 0);
 
-    tt::Cluster::instance().write_sysmem(cq_zeros.data(), (cq_size - CQ_START), CQ_START, mmio_device_id, channel);
+    tt::Cluster::instance().write_sysmem(cq_zeros.data(), (cq_size - CQ_START), get_absolute_cq_offset(channel, 0, cq_size) + CQ_START, mmio_device_id, channel);
 
     for (const bool cq_write : {true, false}) {
         for (const bool cq_read : {true, false}) {
@@ -327,6 +327,7 @@ namespace dram_tests {
 TEST_F(CommandQueueSingleCardFixture, WriteOneTileToDramBank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
     for (Device *device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
@@ -428,11 +429,9 @@ TEST_F(CommandQueueFixture, TestPageSizeTooLarge) {
 // Requires enqueue write buffer
 TEST_F(CommandQueueSingleCardFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
     for (Device *device : this->devices_) {
+        tt::log_info("Running On Device {}", device->id());
         uint32_t page_size = 2048;
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-        uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
-        uint32_t command_issue_region_size = 805310400;
+        uint32_t command_issue_region_size = device->sysmem_manager().get_issue_queue_size(0);
 
         uint32_t max_command_size = command_issue_region_size - CQ_START;
         uint32_t buffer = 14240;
@@ -446,10 +445,9 @@ TEST_F(CommandQueueSingleCardFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
 
 TEST_F(CommandQueueSingleCardFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
     for (Device *device : this->devices_) {
+        tt::log_info("Running On Device {}", device->id());
         uint32_t page_size = 2048;
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-        uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
+        uint32_t command_queue_size = device->sysmem_manager().get_cq_size();
         uint32_t num_pages = command_queue_size / page_size;
 
         TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
@@ -465,10 +463,8 @@ TEST_F(CommandQueueSingleCardFixture, TestWrapCompletionQOnInsufficientSpace) {
     uint32_t small_page_size = 2048;  // page size for second read
 
     for (Device *device : devices_) {
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-        uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
-        uint32_t command_completion_region_size = 268431360;
+        tt::log_info("Running On Device {}", device->id());
+        uint32_t command_completion_region_size = device->sysmem_manager().get_completion_queue_size(0);
 
         uint32_t first_buffer_size = tt::round_up(command_completion_region_size * 0.95, large_page_size);
 
@@ -504,10 +500,8 @@ TEST_F(CommandQueueSingleCardFixture, TestWrapCompletionQOnInsufficientSpace) {
 TEST_F(CommandQueueSingleCardFixture, TestWrapCompletionQOnInsufficientSpace2) {
     // Using default 75-25 issue and completion queue split
     for (Device *device : devices_) {
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-        uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
-        uint32_t command_completion_region_size = 268431360;
+        tt::log_info("Running On Device {}", device->id());
+        uint32_t command_completion_region_size = device->sysmem_manager().get_completion_queue_size(0);
 
         uint32_t num_pages_buff_1 = 9;
         uint32_t page_size_buff_1 = 2048;
@@ -653,6 +647,7 @@ TEST_F(CommandQueueSingleCardFixture, WritesToRandomBufferTypeAndThenReadsBlocki
         .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
 
     for (Device *device : devices_) {
+        tt::log_info("Running on Device {}", device->id());
         EXPECT_TRUE(local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer<true>(
             device, device->command_queue(), config));
     }
@@ -672,34 +667,34 @@ TEST_F(CommandQueueSingleCardFixture, WritesToRandomBufferTypeAndThenReadsNonblo
 
 // TODO: Split this into separate tests
 TEST_F(CommandQueueSingleCardFixture, ShardedBufferL1ReadWrites) {
+    std::map<std::string, std::vector<std::array<uint32_t, 2>>> test_params;
+
     for (Device *device : devices_) {
-        for (const std::array<uint32_t, 2> cores :
-             {std::array<uint32_t, 2>{1, 1},
-              std::array<uint32_t, 2>{5, 1},
-              std::array<uint32_t, 2>{1, 5},
-              std::array<uint32_t, 2>{5, 3},
-              std::array<uint32_t, 2>{3, 5},
-              std::array<uint32_t, 2>{5, 5},
-              std::array<uint32_t, 2>{
-                  static_cast<uint32_t>(device->compute_with_storage_grid_size().x),
-                  static_cast<uint32_t>(device->compute_with_storage_grid_size().y)}}) {
-            for (const std::array<uint32_t, 2> num_pages : {
-                     std::array<uint32_t, 2>{1, 1},
-                     std::array<uint32_t, 2>{2, 1},
-                     std::array<uint32_t, 2>{1, 2},
-                     std::array<uint32_t, 2>{2, 2},
-                     std::array<uint32_t, 2>{7, 11},
-                     std::array<uint32_t, 2>{3, 65},
-                     std::array<uint32_t, 2>{67, 4},
-                     std::array<uint32_t, 2>{3, 137},
-                 }) {
-                for (const std::array<uint32_t, 2> page_shape : {
-                         std::array<uint32_t, 2>{32, 32},
-                         std::array<uint32_t, 2>{1, 4},
-                         std::array<uint32_t, 2>{1, 120},
-                         std::array<uint32_t, 2>{1, 1024},
-                         std::array<uint32_t, 2>{1, 2048},
-                     }) {
+        if (tt::Cluster::instance().is_galaxy_cluster()) {
+            test_params = {
+                {"cores",
+                 {{1, 1},
+                  {static_cast<uint32_t>(device->compute_with_storage_grid_size().x),
+                   static_cast<uint32_t>(device->compute_with_storage_grid_size().y)}}},
+                {"num_pages", {{3, 65}}},
+                {"page_shape", {{32, 32}}}};
+        } else {
+            test_params = {
+                {"cores",
+                 {{1, 1},
+                  {5, 1},
+                  {1, 5},
+                  {5, 3},
+                  {3, 5},
+                  {5, 5},
+                  {static_cast<uint32_t>(device->compute_with_storage_grid_size().x),
+                   static_cast<uint32_t>(device->compute_with_storage_grid_size().y)}}},
+                {"num_pages", {{1, 1}, {2, 1}, {1, 2}, {2, 2}, {7, 11}, {3, 65}, {67, 4}, {3, 137}}},
+                {"page_shape", {{32, 32}, {1, 4}, {1, 120}, {1, 1024}, {1, 2048}}}};
+        }
+        for (const std::array<uint32_t, 2> cores : test_params.at("cores")) {
+            for (const std::array<uint32_t, 2> num_pages : test_params.at("num_pages")) {
+                for (const std::array<uint32_t, 2> page_shape : test_params.at("page_shape")) {
                     for (const TensorMemoryLayout shard_strategy :
                          {TensorMemoryLayout::HEIGHT_SHARDED,
                           TensorMemoryLayout::WIDTH_SHARDED,
@@ -712,7 +707,7 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferL1ReadWrites) {
                             config.num_iterations = num_iterations;
                             config.mem_config = shard_strategy;
                             config.page_shape = page_shape;
-                            tt::log_info(tt::LogTest, fmt::format("cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, num_iterations: {}", cores[0],cores[1], num_pages[0],num_pages[1], page_shape[0],page_shape[1], magic_enum::enum_name(shard_strategy).data(), num_iterations).c_str());
+                            tt::log_info(tt::LogTest, fmt::format("Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, num_iterations: {}", device->id(), cores[0],cores[1], num_pages[0],num_pages[1], page_shape[0],page_shape[1], magic_enum::enum_name(shard_strategy).data(), num_iterations).c_str());
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 device, device->command_queue(), config, BufferType::L1, false);
                         }
@@ -800,7 +795,7 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferLargeL1ReadWrites) {
                             config.num_iterations = num_iterations;
                             config.mem_config = shard_strategy;
                             config.page_shape = page_shape;
-                            tt::log_info(tt::LogTest, fmt::format("cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, num_iterations: {}", cores[0],cores[1], num_pages[0],num_pages[1], page_shape[0],page_shape[1], magic_enum::enum_name(shard_strategy).data(), num_iterations).c_str());
+                            tt::log_info(tt::LogTest, fmt::format("Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, num_iterations: {}", device->id(), cores[0],cores[1], num_pages[0],num_pages[1], page_shape[0],page_shape[1], magic_enum::enum_name(shard_strategy).data(), num_iterations).c_str());
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 device, device->command_queue(), config, BufferType::L1, true);
                         }

@@ -1243,7 +1243,10 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
     this->size_B = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel) / device->num_hw_cqs();
-
+    if (tt::Cluster::instance().is_galaxy_cluster()) {
+        //Galaxy puts 4 devices per host channel until umd can provide one channel per device.
+        this->size_B = this->size_B / 4;
+    }
     tt_cxy_pair completion_q_writer_location =
         dispatch_core_manager::get(device->num_hw_cqs()).completion_queue_writer_core(device->id(), channel, this->id);
 

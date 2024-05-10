@@ -149,15 +149,17 @@ class Cluster {
     // Converts logical ethernet core coord to physical ethernet core coord
     CoreCoord ethernet_core_from_logical_core(chip_id_t chip_id, const CoreCoord &logical_core) const;
 
-    // Configures routing mapping of ethernet cores
-    void initialize_routing_info_for_ethernet_cores();
-
-    void reserve_ethernet_cores_for_tunneling();
+    // Bookkeeping for mmio device tunnels
+    uint32_t get_mmio_device_max_tunnel_depth(chip_id_t mmio_device) const;
+    uint32_t get_mmio_device_tunnel_count(chip_id_t mmio_device) const;
+    uint32_t get_device_tunnel_depth(chip_id_t chip_id) const;
 
     // Dispatch core is managed by device, so this is an api for device to get the each eth core used in FD tunneling.
     // Returns logical eth core that communicates with specified dispatch core
     tt_cxy_pair get_eth_core_for_dispatch_core(
         tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const;
+
+    std::tuple<tt_cxy_pair, tt_cxy_pair> get_eth_tunnel_core(chip_id_t upstream_chip_id, chip_id_t downstream_chip_id, EthRouterMode mode) const;
 
     // Internal routing for SD and FD enables launching user ethernet kernels and FD tunneling for all devices in the
     // cluster. When using multiple devices in a cluster, this should be the flow:
@@ -186,6 +188,12 @@ class Cluster {
         return this->devices_grouped_by_assoc_mmio_device_.at(mmio_device_id);
     }
 
+    // Returns vector of unique tunnels originating from mmio device.
+    // Each vecor entry is another vector of remote devices on that tunnel.
+    std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio_device(chip_id_t mmio_chip_id) const;
+
+    bool is_galaxy_cluster() const;
+
    private:
     Cluster();
     ~Cluster();
@@ -202,6 +210,8 @@ class Cluster {
     void get_metal_desc_from_tt_desc(const std::unordered_map<chip_id_t, tt_SocDescriptor> &input, const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks);
     tt_cxy_pair convert_physical_cxy_to_virtual(const tt_cxy_pair &physical_cxy) const;
 
+    // Reserves ethernet cores in cluster for tunneling
+    void reserve_ethernet_cores_for_tunneling();
     // Returns map of connected chip ids to active ethernet cores
     std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
         chip_id_t chip_id) const;
@@ -225,6 +235,10 @@ class Cluster {
     std::unordered_map<chip_id_t, std::set<chip_id_t>> devices_grouped_by_assoc_mmio_device_;
     // Save mapping of device id to associated MMIO device id for fast lookup
     std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_device_;
+
+    // Flag to tell whether we are on a TG type of system.
+    // If any device has to board type of GALAXY, we are on a TG cluster.
+    bool is_tg_cluster_;
 
     // Currently, each device is mapped to its own channel in host memory to enable fast dispatch
     // Channels are unique within a group of devices all controlled by a particular MMIO device
