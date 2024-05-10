@@ -423,6 +423,8 @@ def generate_untilize_with_halo_kernel_configs(
         local_config.append([])
         remote_config.append([])
 
+    print("per_core_gather_data", per_core_gather_data)
+
     for core_key, core_data in per_core_gather_data.items():
         src_core_id, dst_core_id = core_key
 
@@ -449,6 +451,10 @@ def generate_untilize_with_halo_kernel_configs(
             noc_x, noc_y = core_id_to_physical_coord(dst_core_id)
             remote_config[src_core_id].extend([noc_x, noc_y, len(core_data)])
             remote_config[src_core_id].extend(core_data)
+
+    print("padding_config", padding_config)
+    print("local_config", local_config)
+    print("remote_config", remote_config)
 
     # NULL plug
     for core_id in range(ncores):
