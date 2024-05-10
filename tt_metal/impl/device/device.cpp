@@ -384,6 +384,74 @@ void Device::configure_kernel_variant(
     }
 }
 
+void Device::setup_tunnel_for_remote_devices() {
+    chip_id_t mmio_device_id = this->id_;
+    std::vector<std::vector<chip_id_t>> tunnel_chips = {};
+    uint32_t num_tunnels = tt::Cluster::instance().get_mmio_device_tunnel_count(mmio_device_id);
+    if (num_tunnels == 0) {
+        //no remote device conected to this mmio device.
+        return;
+    }
+
+    tunnel_chips.resize(num_tunnels);
+
+    auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
+    uint32_t index = 0;
+    for (auto tunnel : tunnels_from_mmio) {
+        for (auto remote_dev : tunnel) {
+            log_info(tt::LogMetal, "MMIO Device {} : Tunnel {} : Device {}", mmio_device_id, index, remote_dev);
+        }
+        index++;
+    }
+
+/*
+    for (const chip_id_t &device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(this->id_)) {
+        uint32_t tunnel_stop = tt::Cluster::instance().get_device_tunnel_depth(device_id);
+        if (tunnel_stop == 0) {
+            // mmio device. i.e start of tunnel.
+            tunnel_chips.resize(tt::Cluster::instance().get_mmio_device_max_tunnel_depth(device_id) + 1);// account for mmio device.
+            for (const chip_id_t &tunnel_dev_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(this->id_)) {
+                uint32_t stop_index = tt::Cluster::instance().get_device_tunnel_depth(tunnel_dev_id);
+                tunnel_chips[stop_index] = tunnel_dev_id;
+                log_info(tt::LogMetal, " MMIO Device {} : Controlled Device {} : stop_index {}", mmio_device_id, tunnel_dev_id, stop_index);
+            }
+        } else {
+            // a remote device.
+            // tunnel_stop hops away.
+            uint8_t num_hw_cqs = 1;
+            uint32_t cq_id = 0;
+            uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
+            CoreType dispatch_core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(mmio_device_id);
+            tt_cxy_pair prefetch_location = dispatch_core_manager::get(num_hw_cqs).prefetcher_core(device_id, channel, cq_id);
+            tt_cxy_pair dispatch_location = dispatch_core_manager::get(num_hw_cqs).dispatcher_core(device_id, channel, cq_id);
+
+            if (tunnel_stop == 1) {
+                //need to allocate mux/demux on mmio chip only once.
+                //all tunnel stops, share the same mux/demux on mmio chip.
+                tt_cxy_pair mux_location = dispatch_core_manager::get(num_hw_cqs).mux_core(device_id, channel, cq_id);
+                tt_cxy_pair demux_location = dispatch_core_manager::get(num_hw_cqs).demux_core(device_id, channel, cq_id);
+                CoreCoord mux_physical_core = get_physical_core_coordinate(mux_location, dispatch_core_type);
+                CoreCoord demux_physical_core = get_physical_core_coordinate(demux_location, dispatch_core_type);
+            }
+
+            TT_ASSERT(tunnel_chips[tunnel_stop] == device_id,
+                "Tunnel Stop Device Ids dont match. {} but it is expected to be on device {}", tunnel_chips[tunnel_stop], device_id);
+            TT_ASSERT(tunnel_stop != 0, "Tunnel Stop Cannot Be 0");
+            tt_cxy_pair us_location = dispatch_core_manager::get(num_hw_cqs).tunneler_core(tunnel_chips[tunnel_stop - 1], tunnel_chips[tunnel_stop], channel, cq_id);
+            CoreCoord tunneler_logical_core = CoreCoord(us_location.x, us_location.y);
+            TT_ASSERT(us_location.chip == tunnel_chips[tunnel_stop - 1],
+                "Upstream Tunneler is on device {} but it is expected to be on device {}", us_location.chip, tunnel_chips[tunnel_stop - 1]);
+            //get it from dispatch core manager. like tunneler_core.
+            CoreCoord r_tunneler_logical_core = std::get<1>(tt::Cluster::instance().get_connected_ethernet_core(std::make_tuple(us_location.chip, CoreCoord(us_location.x, us_location.y))));
+            CoreCoord r_tunneler_physical_core = tt::Cluster::instance().ethernet_core_from_logical_core(device_id, r_tunneler_logical_core); // should be device not this-> whichis mmio device.
+
+            CoreCoord tunneler_physical_core = this->ethernet_core_from_logical_core(us_location);
+
+        }
+    }
+    */
+}
+
 void Device::compile_command_queue_programs() {
     ZoneScoped;
     unique_ptr<Program, detail::ProgramDeleter> command_queue_program_ptr(new Program);
@@ -508,6 +576,7 @@ void Device::compile_command_queue_programs() {
         }
         detail::CompileProgram(this, *command_queue_program_ptr);
         this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
+        this->setup_tunnel_for_remote_devices();
     } else {
         /////////////////Following section is for mmio device serving Remote Device
         uint8_t num_hw_cqs = 1;
@@ -542,7 +611,7 @@ void Device::compile_command_queue_programs() {
 
         tt_cxy_pair mux_core = dispatch_core_manager::get(num_hw_cqs).mux_core(device_id, channel, cq_id);
         tt_cxy_pair demux_core = dispatch_core_manager::get(num_hw_cqs).demux_core(device_id, channel, cq_id);
-        tt_cxy_pair tunneler_location = dispatch_core_manager::get(num_hw_cqs).tunneler_core(device_id, channel, cq_id);
+        tt_cxy_pair tunneler_location = dispatch_core_manager::get(num_hw_cqs).tunneler_core(mmio_device_id, device_id, channel, cq_id);
         CoreCoord tunneler_core = CoreCoord(tunneler_location.x, tunneler_location.y);
         TT_ASSERT(tunneler_location.chip == mmio_device_id,
             "Tunneler is on device {} but it is expected to be on device {}", tunneler_location.chip, mmio_device_id);

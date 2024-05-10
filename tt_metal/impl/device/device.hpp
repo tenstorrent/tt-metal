@@ -152,6 +152,8 @@ class Device {
         return tt::Cluster::instance().get_associated_mmio_device(this->id_) == this->id_;
     }
 
+    void setup_tunnel_for_remote_devices();
+
     uint32_t num_banks(const BufferType &buffer_type) const;
     uint32_t bank_size(const BufferType &buffer_type) const;
 

@@ -132,7 +132,8 @@ inline const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, 
     }
 
     std::vector<RelativeCoreCoord> dispatch_cores;
-    for (const auto& core_node : desc_yaml["dispatch_cores"]) {
+    auto dispatch_cores_string = tt::Cluster::instance().is_galaxy_cluster() ? "tg_dispatch_cores" : "dispatch_cores";
+    for (const auto& core_node : desc_yaml[dispatch_cores_string]) {
         RelativeCoreCoord coord = {};
         if (core_node.IsSequence()) {
             // Logical coord

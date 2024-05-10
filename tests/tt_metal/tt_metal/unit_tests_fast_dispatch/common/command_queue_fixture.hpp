@@ -79,7 +79,7 @@ class CommandQueueSingleCardFixture : public ::testing::Test {
         auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
         arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
 
-        const chip_id_t mmio_device_id = 1;
+        const chip_id_t mmio_device_id = 0;
         reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id});
         if (enable_remote_chip) {
             for (const auto &[id, device] : reserved_devices_) {

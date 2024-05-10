@@ -140,7 +140,6 @@ void Cluster::generate_cluster_descriptor() {
             tt_ClusterDescriptor::create_for_grayskull_cluster(logical_mmio_device_ids, physical_mmio_device_ids);
     } else {
         this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(this->cluster_desc_path_);
-        YAML::Node yaml = YAML::LoadFile(this->cluster_desc_path_);
         for (const auto &chip_id : this->cluster_desc_->get_all_chips()) {
             if (this->cluster_desc_->get_board_type(chip_id) == BoardType::GALAXY) {
                 this->is_tg_cluster_ = true;
@@ -198,9 +197,8 @@ void Cluster::assert_risc_reset() {
 void Cluster::assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids) {
     // g_MAX_HOST_MEM_CHANNELS (4) is defined in tt_SiliconDevice and denotes the max number of host memory channels per MMIO device
     // Metal currently assigns 1 channel per device. See https://github.com/tenstorrent/tt-metal/issues/4087
-    std::cout<<"controlled_device_ids.size() = "<<controlled_device_ids.size()<<std::endl;
-    // This should really be 9. By my TG has one gateway wormhole showing no connections to Galaxy.
-    // chip coordinates, 0, 1, 0, 0 has no connected ethernet links to Galaxy.
+
+    // TGG will have 16 remote chips + mmio chip accessed over one mmio chip.
     TT_ASSERT(controlled_device_ids.size() <= 17, "Unable to assign each device to its own host memory channel!");
     uint16_t channel = 0;
     this->device_to_host_mem_channel_[mmio_device_id] = channel++;
@@ -649,6 +647,75 @@ std::unordered_map<chip_id_t, std::vector<CoreCoord>> Cluster::get_ethernet_core
     return connected_chips;
 }
 
+std::vector<std::vector<chip_id_t>> Cluster::get_tunnels_from_mmio_device(chip_id_t mmio_chip_id) const {
+    std::vector<std::vector<chip_id_t>> tunnels_from_mmio = {};
+    const auto &all_eth_connections = this->cluster_desc_->get_ethernet_connections();
+    TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(mmio_chip_id));
+
+    if (all_eth_connections.find(mmio_chip_id) == all_eth_connections.end()) {
+        return {};
+    }
+
+    std::set<chip_id_t> device_ids = get_devices_controlled_by_mmio_device(mmio_chip_id);
+    device_ids.erase(mmio_chip_id);
+
+    if (device_ids.size() == 0) {
+        return {};
+    }
+
+    for (const auto &[eth_chan, connected_chip_chan] : all_eth_connections.at(mmio_chip_id)) {
+        const auto &other_chip_id = std::get<0>(connected_chip_chan);
+        if (device_ids.find(other_chip_id) != device_ids.end()) {
+            //mmio chip is connected to a remote chip in its mmio group.
+            //erase from the pool so multiple ethenret connections to same remote device do not
+            //pollute the counts.
+            device_ids.erase(other_chip_id);
+            std::vector<chip_id_t> first_stop = {other_chip_id};
+            auto it = std::find(tunnels_from_mmio.begin(), tunnels_from_mmio.end(), first_stop);
+            TT_ASSERT(it == tunnels_from_mmio.end(),"Duplicate first tunnel stop found when finding FD2 Tunnel devices.");
+            tunnels_from_mmio.push_back(first_stop);
+        }
+    }
+
+    log_info(tt::LogMetal, " Found {} FD Tunnels originating from MMIO Device {}", tunnels_from_mmio.size(), mmio_chip_id);
+
+    device_ids = get_devices_controlled_by_mmio_device(mmio_chip_id);
+    device_ids.erase(mmio_chip_id);
+
+    for (auto &tunnel : tunnels_from_mmio) {
+        TT_ASSERT(tunnel.size() == 1,"Tunnel depth must be 1 when it has only 1 stop in it.");
+        device_ids.erase(tunnel[0]);
+    }
+
+    bool tunneled_device_hit;
+    for (auto it = device_ids.begin(); it != device_ids.end();) {
+        tunneled_device_hit = false;
+        for (auto &dev_vec : tunnels_from_mmio) {
+            for (const auto &[eth_chan, connected_chip_chan] : all_eth_connections.at(dev_vec.back())) {
+                const auto &other_chip_id = std::get<0>(connected_chip_chan);
+                auto id_iter = device_ids.find(other_chip_id);
+                if (id_iter != device_ids.end()) {
+                    it = device_ids.erase(id_iter);
+                    dev_vec.push_back(other_chip_id);
+                    tunneled_device_hit = true;
+                    break;
+                }
+            }
+        }
+        TT_ASSERT(tunneled_device_hit || (it == device_ids.end()),"Loop Exit Error.");
+    }
+
+    TT_ASSERT(tunnels_from_mmio.size() != 0,"Must have at least 1 tunnel from MMIO Device.");
+    uint32_t tunnel_depth = tunnels_from_mmio[0].size();
+    log_info(tt::LogMetal, "Each FD Tunnel is {} deep.", tunnel_depth);
+
+    for (auto &dev_vec : tunnels_from_mmio)
+        TT_ASSERT(dev_vec.size() == tunnel_depth,"All tunnels from mmio device must have same depth. Found {}. Expected {}.", dev_vec.size(), tunnel_depth);
+
+    return tunnels_from_mmio;
+}
+
+
 // Ethernet cluster api
 void Cluster::initialize_ethernet_sockets() {
     for (const auto &chip_id : this->cluster_desc_->get_all_chips()) {
@@ -830,6 +897,20 @@ tt_cxy_pair Cluster::get_eth_core_for_dispatch_core(
             std::get<0>(this->get_connected_ethernet_core(std::make_tuple(local_chip_id, eth_core)));
         if (router_mode == mode and connected_tunnel_chip_id == connected_chip_id) {
             return tt_cxy_pair(local_chip_id, eth_core);
+        }
+    }
+    TT_ASSERT(false, "Cluster does not contain requested eth routing core");
+    return {};
+}
+
+std::tuple<tt_cxy_pair, tt_cxy_pair> Cluster::get_eth_tunnel_core(
+    chip_id_t upstream_chip_id, chip_id_t downstream_chip_id, EthRouterMode mode) const {
+    for (const auto &[eth_core, router_mode] : this->device_eth_routing_info_.at(downstream_chip_id)) {
+
+      // Check for connected chip id since one chip can be bi directional tunneling to multiple chips
+        const auto [tunnel_chip_id, tunnel_eth_core] = this->get_connected_ethernet_core(std::make_tuple(downstream_chip_id, eth_core));
+        if (router_mode == mode and tunnel_chip_id == upstream_chip_id) {
+            return std::make_tuple(tt_cxy_pair(tunnel_chip_id, tunnel_eth_core), tt_cxy_pair(downstream_chip_id, eth_core));
         }
     }
     TT_ASSERT(false, "Cluster does not contain requested eth routing core");

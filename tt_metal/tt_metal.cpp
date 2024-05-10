@@ -169,8 +169,16 @@ std::map<chip_id_t, Device *> CreateDevices(
                       << " Tunnel Depth: " << tt::Cluster::instance().get_device_tunnel_depth(device_id) << std::endl;
         }
         if (active_devices.find(mmio_device_id) == active_devices.end()) {
-            for (const auto &mmio_controlled_device_id :
-                 tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
+            for (const auto &mmio_controlled_device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
+                uint32_t tunnel_stop = tt::Cluster::instance().get_device_tunnel_depth(mmio_controlled_device_id);
+                if (mmio_controlled_device_id == mmio_device_id) {
+                    log_info(tt::LogMetal, " MMIO Device {} Tunnel Count: {}", mmio_controlled_device_id, tt::Cluster::instance().get_mmio_device_tunnel_count(mmio_controlled_device_id));
+                    log_info(tt::LogMetal, " MMIO Device {} Tunnel Depth: {}", mmio_controlled_device_id, tt::Cluster::instance().get_mmio_device_max_tunnel_depth(mmio_controlled_device_id));
+                    log_info(tt::LogMetal, " MMIO Device {} Tunnel Stop: {}", mmio_controlled_device_id, tunnel_stop);
+
+                } else {
+                    log_info(tt::LogMetal, " Device {} Tunnel Stop: {}", mmio_controlled_device_id, tunnel_stop);
+                }
                 //if (mmio_controlled_device_id != mmio_device_id) {
                 //    continue;
                 //}
@@ -178,9 +186,14 @@ std::map<chip_id_t, Device *> CreateDevices(
                 //Currently we only have 1 deep tunnel. So we can only handle 1 chip on galaxy. Like R chip on N300.
                 //Remove when 4 deep tunnel gets implemented.
                 if ((mmio_controlled_device_id != mmio_device_id) && is_galaxy) {
-                    log_info(tt::LogMetal, " Checking Device {}", mmio_controlled_device_id);
-                    auto one_deep_remote_chips = tt::Cluster::instance().get_ethernet_connected_device_ids(mmio_device_id);
-                    log_info(tt::LogMetal, " Device  {} is connected to {} chips.", mmio_device_id, one_deep_remote_chips.size());
+                    log_debug(tt::LogMetal, " Checking Device {}", mmio_controlled_device_id);
+                    std::unordered_set<chip_id_t> one_deep_remote_chips;
+                    auto active_eth_cores =  tt::Cluster::instance().get_active_ethernet_cores(mmio_device_id);
+                    for (auto eth_core : active_eth_cores) {
+                        one_deep_remote_chips.insert(std::get<0>(tt::Cluster::instance().get_connected_ethernet_core(std::make_tuple(mmio_device_id, eth_core))));
+                    }
+
+                    log_debug(tt::LogMetal, " Device  {} is connected to {} chips.", mmio_device_id, one_deep_remote_chips.size());
                     if (one_deep_remote_chips.find(mmio_controlled_device_id) == one_deep_remote_chips.end()) {
                         continue;
                     }

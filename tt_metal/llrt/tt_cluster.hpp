@@ -144,6 +144,8 @@ class Cluster {
     tt_cxy_pair get_eth_core_for_dispatch_core(
         tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const;
 
+    std::tuple<tt_cxy_pair, tt_cxy_pair> get_eth_tunnel_core(chip_id_t upstream_chip_id, chip_id_t downstream_chip_id, EthRouterMode mode) const;
+
     // Internal routing for SD and FD enables launching user ethernet kernels and FD tunneling for all devices in the
     // cluster. When using multiple devices in a cluster, this should be the flow:
     //       CreateDevice(0)
@@ -170,6 +172,11 @@ class Cluster {
         TT_ASSERT(this->devices_grouped_by_assoc_mmio_device_.count(mmio_device_id), "Expected device {} to be an MMIO device!", mmio_device_id);
         return this->devices_grouped_by_assoc_mmio_device_.at(mmio_device_id);
     }
+
+    // Returns vector of unique tunnels originating from mmio device.
+    // Each vecor entry is another vector of remote devices on that tunnel.
+    std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio_device(chip_id_t mmio_chip_id) const;
+
     bool is_galaxy_cluster() const;
 
    private:
@@ -195,6 +202,7 @@ class Cluster {
     // Returns map of connected chip ids to active ethernet cores
     std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
         chip_id_t chip_id) const;
+
     void initialize_ethernet_sockets();
 
     ARCH arch_;

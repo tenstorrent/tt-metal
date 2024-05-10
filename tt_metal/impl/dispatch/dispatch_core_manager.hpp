@@ -193,17 +193,22 @@ class dispatch_core_manager {
     /// @param channel assigned to the command queue where commands are enqueued
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the ethernet tunnel core
-    const tt_cxy_pair &tunneler_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+    const tt_cxy_pair &tunneler_core(chip_id_t upstream_device_id, chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
         dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.tunneler.has_value()) {
             return assignment.tunneler.value();
         }
-        TT_ASSERT(assignment.mux.has_value(), " Mux core not assigned for device {}. Must assign a Mux core before getting a tunneler core.", device_id);
+        //TT_ASSERT(assignment.mux.has_value(), " Mux core not assigned for device {}. Must assign a Mux core before getting a tunneler core.", device_id);
 
-        tt_cxy_pair tunneler_location = tt::Cluster::instance().get_eth_core_for_dispatch_core(
-                        assignment.mux.value(), EthRouterMode::BI_DIR_TUNNELING, device_id);
-        assignment.tunneler = tunneler_location;
-        log_info(tt::LogMetal, "Allocated Tunneler Core: {} for Device {}", tunneler_location.str(), device_id);
+        //tt_cxy_pair tunneler_location = tt::Cluster::instance().get_eth_core_for_dispatch_core(
+        //                assignment.mux.value(), EthRouterMode::BI_DIR_TUNNELING, device_id);
+
+        auto[us_core, ds_core] = tt::Cluster::instance().get_eth_tunnel_core(upstream_device_id, device_id, EthRouterMode::BI_DIR_TUNNELING);
+
+        assignment.tunneler = us_core;
+        assignment.tunneler_d = ds_core;
+
+        log_info(tt::LogMetal, "Allocated Tunneler Core: {} for Device {}", us_core.str(), device_id);
         return assignment.tunneler.value();
     }
 
