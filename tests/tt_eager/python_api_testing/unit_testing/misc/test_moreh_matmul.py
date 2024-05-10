@@ -247,41 +247,6 @@ def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2, r
 @pytest.mark.parametrize(
     "params",
     (
-        # input, other, output shape
-        ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32]),
-        ([1, 3, 511, 313], [3, 1, 313, 765], [3, 3, 511, 765]),
-        ([3, 1, 511, 313], [1, 3, 313, 765], [3, 3, 511, 765]),
-        ([3, 3, 511, 313], [3, 3, 313, 765], [3, 3, 511, 765]),
-    ),
-)
-def test_moreh_matmul(params, device):
-    torch.manual_seed(3072)
-    input_shape, other_shape, output_shape = params
-    tt_input, tt_other, _, _, _, _, torch_input, torch_other, _ = get_tensors(
-        input_shape, other_shape, output_shape, False, False, False, device
-    )
-
-    # tt matmul
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_output = (
-        ttl.tensor.moreh_matmul(tt_input, tt_other).cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
-    )
-
-    # torch matmul
-    torch_out = torch.matmul(torch_input, torch_other)
-
-    # test for equivalance
-    rtol = atol = 0.1
-    passing, output_pcc = comp_allclose_and_pcc(torch_out, tt_output, pcc=0.999, rtol=rtol, atol=atol)
-    logger.debug(f"Out passing={passing}")
-    logger.debug(f"Output pcc={output_pcc}")
-
-    assert passing
-
-
-@pytest.mark.parametrize(
-    "params",
-    (
         # input, other, output shape, transpose input, other
         ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], False, False),
         ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], False, True),
