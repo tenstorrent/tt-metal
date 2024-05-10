@@ -201,7 +201,7 @@ void CheckHostSanitization(Device *device) {
     try {
         llrt::read_hex_vec_from_core(device->id(), core, addr, sz_bytes);
     } catch (std::runtime_error& e) {
-        const string expected = "Host watcher: bad {} NOC coord {}\nread\n" + core.str();
+        const string expected = fmt::format("Host watcher: bad {} NOC coord {}\n", "read", core.str());
         const string error = string(e.what());
         log_info(tt::LogTest, "Caught exception (one is expected in this test)");
         EXPECT_TRUE(error.find(expected) != string::npos);
