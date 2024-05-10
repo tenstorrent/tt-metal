@@ -446,6 +446,7 @@ namespace tt::tt_metal {
                 return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR).to(device, memory_config);
             } else {
                 TT_ASSERT(false, "Unsupported shard scheme");
+                return Tensor();
             }
         }
 
