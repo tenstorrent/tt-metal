@@ -1323,7 +1323,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
     std::optional<DataType> output_dtype,
     std::optional<std::array<std::uint32_t, 4>> input_tensor_shape,
     bool use_shallow_conv_variant,
-    bool tranpose_mcast,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -1343,6 +1342,62 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(sliding_window_config);
     auto shard_boundaries = sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
     auto conv_sharded_input_top_left_indices = sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, true, true);
+    // create sharded ttnn config tensors
+    DataType indices_tt_dtype = DataType::UINT16;
+    // For 2d convs, each core in a column or row share the same specs
+    CoreCoord grid_size = parallel_config.grid.bounding_box().grid_size();
+    if(parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
+            uint32_t num_shards_nhw = conv_sharded_input_top_left_indices.size();
+            TT_ASSERT(sliding_window_config.num_cores_nhw_ == num_shards_nhw);
+            uint32_t num_shards_channels = 0;
+        if(parallel_config.shard_orientation == ShardOrientation::COL_MAJOR) {
+            num_shards_channels = grid_size.y;
+        } else {
+            num_shards_channels = grid_size.x;
+        }
+        // replicate across channel shards
+        for (uint32_t j = 1; j < num_shards_channels; j++) {
+            for (uint32_t i = 0; i < num_shards_nhw; i++) {
+                conv_sharded_input_top_left_indices.push_back(conv_sharded_input_top_left_indices[i]);
+            }
+        }
+    }
+
+    Tensor conv_reader_indices_tensor = Tensor()
+
+
+            // # Create sharded tensor on device for conv_reader_indices
+            // conv_reader_indices_torch_tensor = torch.tensor(
+            //     [[sliding_window_op_sharded_input_top_left_indices]], dtype=indices_torch_dtype
+            // )
+
+            // conv_reader_indices_tt_tensor = ttl.tensor.Tensor(
+            //     conv_reader_indices_torch_tensor,
+            //     indices_tt_dtype,
+            // )
+            // shard_grid = ttl.tensor.CoreRangeSet(
+            //     {
+            //         ttl.tensor.CoreRange(
+            //             ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_h - 1)
+            //         )
+            //     }
+            // )
+            // shard_orientation = (
+            //     ttl.tensor.ShardOrientation.ROW_MAJOR if self.transpose_mcast else ttl.tensor.ShardOrientation.COL_MAJOR
+            // )
+            // shard_spec = ttl.tensor.ShardSpec(shard_grid, [1, conv_output_shard_height], shard_orientation, False)
+            // mem_config = ttl.tensor.MemoryConfig(
+            //     ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1_SMALL, shard_spec
+            // )
+            // conv_reader_indices_sharded_tensor = (
+            //     conv_reader_indices_tt_tensor.to(device, mem_config)
+            //     if move_weights_to_device
+            //     else conv_reader_indices_tt_tensor
+            // )
+
+    // move to device
+
+    // add to program
     // call config generation functions and add to program
     program.add_tensor()
     return multi_core_optimized_conv_sharded_v2_impl(program, a, b, ashape, conv_reader_indices, )
