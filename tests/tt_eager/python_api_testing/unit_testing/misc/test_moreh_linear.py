@@ -5,7 +5,7 @@
 import pytest
 import torch
 import tt_lib as ttl
-from models.utility_functions import comp_allclose_and_pcc, skip_for_wormhole_b0
+from models.utility_functions import comp_allclose_and_pcc
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_moreh_matmul import get_tensors
 from loguru import logger
 
@@ -175,11 +175,9 @@ def moreh_linear_backward(shapes, requires_input_grad, requires_weight_grad, req
         ([1, 1, 32, 1023], [1, 1, 1536, 1023], [1, 1, 1, 1536], [1, 1, 32, 1536]),
         ([1, 1, 32, 1023], [1, 1, 1536, 1023], [1, 1, 1, 1], [1, 1, 32, 1536]),
         ([2, 4, 4, 1024], [1, 1, 1536, 1024], [1, 1, 1, 1536], [2, 4, 4, 1536]),
-        # TODO: #5868
-        # ([2, 4, 4, 1024], [1, 1, 1200, 1024], [1, 1, 1, 1], [2, 4, 4, 1200]),
+        ([2, 4, 4, 1024], [1, 1, 1200, 1024], [1, 1, 1, 1], [2, 4, 4, 1200]),
     ),
 )
-@skip_for_wormhole_b0("disabled due to watcher error, see issue #5868")
 @pytest.mark.parametrize(
     "requires_grads",
     (
@@ -206,7 +204,6 @@ def test_moreh_linear_backward(shapes, requires_grads, requires_bias_grad, devic
         ([1, 1, 32, 1023], [1, 1, 1536, 1023], [1, 1, 1, 1], [1, 1, 32, 1536]),
     ),
 )
-@skip_for_wormhole_b0("disabled due to watcher error, see issue #5868")
 def test_moreh_linear_backward_enable_cache(shapes, device, use_program_cache):
     torch.manual_seed(3072)
     requires_input_grad, requires_weight_grad, requires_bias_grad = (True, True, True)

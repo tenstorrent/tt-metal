@@ -5,18 +5,18 @@
 #include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
-    const uint32_t src0_addr = get_arg_val<uint32_t>(0);
-    const uint32_t B1B2Ht = get_arg_val<uint32_t>(1);
-    const uint32_t Wt = get_arg_val<uint32_t>(2);
-    const uint32_t Wt_per_core = get_arg_val<uint32_t>(3);
-    const uint32_t start_id = get_arg_val<uint32_t>(4);
-    const uint32_t mask_h = get_arg_val<uint32_t>(5);
-    const uint32_t mask_w = get_arg_val<uint32_t>(6);
-    const bool do_mask_h = get_arg_val<uint32_t>(7) == 1;
-    const bool do_mask_w = get_arg_val<uint32_t>(8) == 1;
+    ArgFetcher arg_fetcher;
+    const uint32_t src0_addr = arg_fetcher.get_next_arg_val<uint32_t>();
+    const uint32_t batch_num = arg_fetcher.get_next_arg_val<uint32_t>();
+    const uint32_t Wt = arg_fetcher.get_next_arg_val<uint32_t>();
+    const uint32_t Wt_per_core = arg_fetcher.get_next_arg_val<uint32_t>();
+    const uint32_t start_id = arg_fetcher.get_next_arg_val<uint32_t>();
+    const uint32_t mask_h = arg_fetcher.get_next_arg_val<uint32_t>();
+    const uint32_t mask_w = arg_fetcher.get_next_arg_val<uint32_t>();
+    const bool do_mask_h = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
+    const bool do_mask_w = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_scaler = 1;
     constexpr uint32_t cb_id_mask_h_w = 2;
@@ -41,7 +41,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     for (uint32_t wt = 0; wt < Wt_per_core; ++wt) {
         uint32_t read_tile_id = start_id + wt;
-        for (uint32_t b1b2ht = 0; b1b2ht < B1B2Ht; ++b1b2ht) {
+        for (uint32_t b= 0; b < batch_num; ++b) {
             cb_reserve_back(cb_id_in0, onetile);
             l1_write_addr_in0 = get_write_ptr(cb_id_in0);
             noc_async_read_tile(read_tile_id, s0, l1_write_addr_in0);
