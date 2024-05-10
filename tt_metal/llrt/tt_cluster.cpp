@@ -122,6 +122,23 @@ std::filesystem::path get_cluster_desc_yaml() {
     return fs::absolute(cluster_desc_path);
 }
 
+void Cluster::get_cluster_type(YAML::Node &yaml) {
+    is_tg_cluster_ = false;
+    if(yaml["boardtype"]) {
+        for (const auto& chip_board_type : yaml["boardtype"].as<std::map<int, std::string>>()) {
+            chip_id_t chip = chip_board_type.first;
+            auto board_type = chip_board_type.second;
+            if (board_type == "GALAXY") {
+                is_tg_cluster_ = true;
+            }
+        }
+    }
+}
+
+bool Cluster::is_galaxy_cluster() const {
+    return this->is_tg_cluster_;
+}
+
 void Cluster::generate_cluster_descriptor() {
     this->cluster_desc_path_ = (this->target_type_ == TargetDevice::Silicon and this->arch_ == tt::ARCH::WORMHOLE_B0) ? get_cluster_desc_yaml().string() : "";
 
@@ -136,6 +153,8 @@ void Cluster::generate_cluster_descriptor() {
             tt_ClusterDescriptor::create_for_grayskull_cluster(logical_mmio_device_ids, physical_mmio_device_ids);
     } else {
         this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(this->cluster_desc_path_);
+        YAML::Node yaml = YAML::LoadFile(this->cluster_desc_path_);
+        get_cluster_type(yaml);
     }
 
     // Use cluster descriptor to map MMIO device id to all devices on the same card (including the MMIO device)
@@ -153,9 +172,13 @@ void Cluster::generate_cluster_descriptor() {
     }
 
     uint32_t total_num_hugepages = get_num_hugepages();
-    TT_FATAL(total_num_hugepages >= this->cluster_desc_->get_all_chips().size(),
-        "Machine setup error: Insufficient number of hugepages available, expected one per device ({}) but have {}. Increase number of hugepages!", this->cluster_desc_->get_all_chips().size(), total_num_hugepages);
-
+    if (this->is_tg_cluster_) {
+        TT_FATAL(total_num_hugepages >= this->cluster_desc_->get_all_chips().size()/4,
+            "Machine setup error: Insufficient number of hugepages available, expected >= {} for {} devices but have {}. Increase number of hugepages!", this->cluster_desc_->get_all_chips().size()/4, this->cluster_desc_->get_all_chips().size(), total_num_hugepages);
+    } else {
+        TT_FATAL(total_num_hugepages >= this->cluster_desc_->get_all_chips().size(),
+            "Machine setup error: Insufficient number of hugepages available, expected one per device ({}) but have {}. Increase number of hugepages!", this->cluster_desc_->get_all_chips().size(), total_num_hugepages);
+    }
 }
 
 void Cluster::initialize_device_drivers() {
@@ -182,7 +205,10 @@ void Cluster::assert_risc_reset() {
 void Cluster::assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids) {
     // g_MAX_HOST_MEM_CHANNELS (4) is defined in tt_SiliconDevice and denotes the max number of host memory channels per MMIO device
     // Metal currently assigns 1 channel per device. See https://github.com/tenstorrent/tt-metal/issues/4087
-    TT_ASSERT(controlled_device_ids.size() <= 4, "Unable to assign each device to its own host memory channel!");
+    std::cout<<"controlled_device_ids.size() = "<<controlled_device_ids.size()<<std::endl;
+    // This should really be 9. By my TG has one gateway wormhole showing no connections to Galaxy.
+    // chip coordinates, 0, 1, 0, 0 has no connected ethernet links to Galaxy.
+    TT_ASSERT(controlled_device_ids.size() <= 17, "Unable to assign each device to its own host memory channel!");
     uint16_t channel = 0;
     this->device_to_host_mem_channel_[mmio_device_id] = channel++;
     for (const chip_id_t &device_id : controlled_device_ids) {
@@ -211,6 +237,9 @@ void Cluster::open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &c
         // Silicon driver will attempt to open this many hugepages as channels, and assert if workload uses more than available.
         // Metal currently uses assigns 1 channel per device
         uint32_t num_host_mem_ch_per_mmio_device = controlled_device_ids.size();
+        if (is_tg_cluster_) {
+            num_host_mem_ch_per_mmio_device = 4;
+        }
         std::unordered_map<std::string, std::int32_t> dynamic_tlb_config = {};
         dynamic_tlb_config["REG_TLB"] = DEVICE_DATA.REG_TLB;
         // This will remove harvested rows from the soc descriptor

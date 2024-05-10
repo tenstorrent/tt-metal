@@ -170,6 +170,7 @@ class Cluster {
         TT_ASSERT(this->devices_grouped_by_assoc_mmio_device_.count(mmio_device_id), "Expected device {} to be an MMIO device!", mmio_device_id);
         return this->devices_grouped_by_assoc_mmio_device_.at(mmio_device_id);
     }
+    bool is_galaxy_cluster() const;
 
    private:
     Cluster();
@@ -177,6 +178,7 @@ class Cluster {
 
     void detect_arch_and_target();
     void generate_cluster_descriptor();
+    void get_cluster_type(YAML::Node &yaml);
     void initialize_device_drivers();
     void assert_risc_reset();
     void assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids);
@@ -211,6 +213,10 @@ class Cluster {
     std::unordered_map<chip_id_t, std::set<chip_id_t>> devices_grouped_by_assoc_mmio_device_;
     // Save mapping of device id to associated MMIO device id for fast lookup
     std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_device_;
+
+    // Flag to tell whether we are on a TG type of system.
+    // If any device has to board type of GALAXY, we are on a TG cluster.
+    bool is_tg_cluster_;
 
     // Currently, each device is mapped to its own channel in host memory to enable fast dispatch
     // Channels are unique within a group of devices all controlled by a particular MMIO device
