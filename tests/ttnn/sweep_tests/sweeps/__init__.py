@@ -2,16 +2,28 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import datetime
 from importlib.machinery import SourceFileLoader
 import pathlib
+import pickle
+import zlib
 
 from loguru import logger
 import pandas as pd
+import sqlite3
 from tqdm import tqdm
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
 SWEEP_RESULTS_DIR = SWEEPS_DIR / "results"
+DATABASE_FILE_NAME = SWEEP_RESULTS_DIR / "db.sqlite"
+
+if not SWEEP_RESULTS_DIR.exists():
+    SWEEP_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def get_sweep_name(file_name):
+    return str(pathlib.Path(file_name).relative_to(SWEEP_SOURCES_DIR))
 
 
 def permutations(parameters):
@@ -91,11 +103,11 @@ def _run_single_test(run, skip, is_expected_to_fail, permutation, *, device):
     return status, message
 
 
-def run_single_test(test_name, index, *, device):
-    file_name = (SWEEP_SOURCES_DIR / test_name).with_suffix(".py")
+def run_single_test(file_name, index, *, device):
     logger.info(f"Running {file_name}")
 
-    sweep_module = SourceFileLoader(f"sweep_module_{file_name.stem}", str(file_name)).load_module()
+    sweep_name = get_sweep_name(file_name)
+    sweep_module = SourceFileLoader(f"sweep_module_{sweep_name}", str(file_name)).load_module()
     permutation = list(permutations(sweep_module.parameters))[index]
 
     pretty_printed_parameters = ",\n".join(
@@ -107,82 +119,69 @@ def run_single_test(test_name, index, *, device):
     )
 
 
-def run_sweep(sweep_file_name, *, device):
-    sweep_name = pathlib.Path(sweep_file_name).stem
-    sweep_module = SourceFileLoader(f"sweep_module_{sweep_name}", str(sweep_file_name)).load_module()
+def run_sweep(file_name, *, device):
+    current_datetime = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    sweep_name = get_sweep_name(file_name)
+    sweep_module = SourceFileLoader(f"sweep_module_{sweep_name}", str(file_name)).load_module()
 
     parameter_names = get_parameter_names(sweep_module.parameters)
-    column_names = ["status", "exception"] + parameter_names
+    column_names = ["sweep_name", "timestamp", "status", "exception"] + parameter_names
 
     rows = []
     for permutation in tqdm(list(permutations(sweep_module.parameters))):
         status, message = _run_single_test(
             sweep_module.run, sweep_module.skip, sweep_module.is_expected_to_fail, permutation, device=device
         )
-        rows.append([status, message] + list(get_parameter_values(parameter_names, permutation)))
+        rows.append(
+            [sweep_name, current_datetime, status, message] + list(get_parameter_values(parameter_names, permutation))
+        )
+
+    connection = sqlite3.connect(DATABASE_FILE_NAME)
+    cursor = connection.cursor()
+
+    table_hash = zlib.adler32(pickle.dumps(f"{sweep_name}_{current_datetime}"))
+    table_name = f"table_{table_hash}"
+
+    def column_names_to_string(column_names):
+        def name_to_string(name):
+            if name == "timestamp":
+                return "timestamp TIMESTAMP"
+            else:
+                return f"{name} TEXT"
+
+        column_names = [name_to_string(name) for name in column_names]
+        return ", ".join(column_names)
+
+    command = f"CREATE TABLE IF NOT EXISTS {table_name} ({column_names_to_string(column_names)})"
+    cursor.execute(command)
+
+    for row in rows:
+        row = [str(value) for value in row]
+        row_placeholders = ", ".join(["?"] * len(column_names))
+        command = f"INSERT INTO {table_name} VALUES ({row_placeholders})"
+        cursor.execute(command, row)
+    connection.commit()
+    connection.close()
 
     SWEEP_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    file_name = (SWEEP_RESULTS_DIR / sweep_name).with_suffix(".csv")
+    logger.info(f"Saved sweep results to table {table_name} in {DATABASE_FILE_NAME}")
 
-    df = pd.DataFrame(rows, columns=column_names)
-    df.to_csv(file_name)
-
-    logger.info(f"Saved sweep results to {file_name}")
+    return table_name
 
 
 def run_sweeps(*, device, include):
-    logger.info(f"Deleting old sweep results in {SWEEP_RESULTS_DIR}")
-    if SWEEP_RESULTS_DIR.exists():
-        for file_name in SWEEP_RESULTS_DIR.glob("*.csv"):
-            file_name.unlink()
-
-    for file_name in sorted(SWEEP_SOURCES_DIR.glob("*.py")):
-        name = file_name.stem
-        if include and name not in include:
+    table_names = []
+    for file_name in sorted(SWEEP_SOURCES_DIR.glob("**/*.py")):
+        sweep_name = get_sweep_name(file_name)
+        if include and sweep_name not in include:
             continue
         logger.info(f"Running {file_name}")
-        run_sweep(file_name, device=device)
+        table_name = run_sweep(file_name, device=device)
+        table_names.append(table_name)
+    return table_names
 
 
-def run_failed_and_crashed_tests(*, device, stepwise, include, exclude):
-    keep_running = True
-    for file_name in sorted(SWEEP_RESULTS_DIR.glob("*.csv")):
-        test_name = file_name.stem
-
-        if include and test_name not in include:
-            continue
-
-        if exclude and test_name in exclude:
-            continue
-
-        if not keep_running:
-            break
-
-        df = pd.read_csv(file_name)
-        failed = (df["status"] == "failed").sum()
-        crashed = (df["status"] == "crashed").sum()
-        if failed == 0 and crashed == 0:
-            continue
-
-        for index, row in enumerate(df.itertuples()):
-            if row.status not in {"failed", "crashed"}:
-                continue
-
-            status, message = run_single_test(file_name.stem, index, device=device)
-            logger.info(status)
-            if status in {"failed", "crashed"}:
-                logger.error(f"{message}")
-                if stepwise:
-                    keep_running = False
-                    break
-
-            df.at[index, "status"] = status
-            df.at[index, "message"] = message
-
-        df.to_csv(file_name)
-
-
-def print_summary(*, include):
+def print_summary(*, table_names):
     stats_df = pd.DataFrame(columns=["name", "passed", "failed", "crashed", "skipped", "is_expected_to_fail"])
 
     def add_row(df, name):
@@ -191,12 +190,15 @@ def print_summary(*, include):
         df.reset_index(inplace=True, drop=True)
         return df
 
-    for file_name in sorted(SWEEP_RESULTS_DIR.glob("*.csv")):
-        name = file_name.stem
-        if include and name not in include:
+    connection = sqlite3.connect(DATABASE_FILE_NAME)
+    cursor = connection.cursor()
+
+    for (table_name,) in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
+        if table_names is not None and table_name not in table_names:
             continue
-        df = pd.read_csv(file_name)
-        stats_df = add_row(stats_df, file_name.stem)
+        df = pd.read_sql_query(f"SELECT * FROM {table_name}", connection)
+        sweep_name = df["sweep_name"].iloc[0]
+        stats_df = add_row(stats_df, sweep_name)
         for status in stats_df.columns[1:]:
             stats_df.at[len(stats_df) - 1, status] = (df["status"] == status).sum()
 
@@ -206,25 +208,27 @@ def print_summary(*, include):
     print(stats_df)
 
 
-def print_detailed_report(*, include):
-    for file_name in sorted(SWEEP_RESULTS_DIR.glob("*.csv")):
-        name = file_name.stem
-        if include and name not in include:
+def print_detailed_report(*, table_names):
+    connection = sqlite3.connect(DATABASE_FILE_NAME)
+    cursor = connection.cursor()
+
+    for (table_name,) in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
+        if table_names is not None and table_name not in table_names:
             continue
-        df = pd.read_csv(file_name)
+        df = pd.read_sql_query(f"SELECT * FROM {table_name}", connection)
         for index, row in enumerate(df.itertuples()):
             if row.status in {"failed", "crashed"}:
-                print(f"{name}@{index}: {row.status}")
+                print(f"{table_name}@{index}: {row.status}")
                 print(f"\t{row.exception}")
             elif row.status == "skipped":
-                print(f"{name}@{index}: {row.status}")
+                print(f"{table_name}@{index}: {row.status}")
             else:
-                print(f"{name}@{index}: {row.status}")
+                print(f"{table_name}@{index}: {row.status}")
         print()
 
 
-def print_report(*, include=None, detailed=False):
+def print_report(*, table_names=None, detailed=False):
     if detailed:
-        print_detailed_report(include=include)
+        print_detailed_report(table_names=table_names)
     else:
-        print_summary(include=include)
+        print_summary(table_names=table_names)
