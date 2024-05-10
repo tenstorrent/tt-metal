@@ -55,14 +55,7 @@ Tensor _moreh_linear(
     std::optional<Tensor> output,
     const MemoryConfig& output_mem_config) {
     moreh_linear_validate(input, weight, bias, output);
-    output = moreh_matmul(input, weight, output, false, true, output_mem_config);
-
-    if (bias.has_value()) {
-        const auto& bias_tensor = bias.value();
-        const auto& bias_shape = bias_tensor.get_legacy_shape().without_padding();
-        BcastOpDim bcast_dim = is_shape_scalar(bias_shape) ? BcastOpDim::HW : BcastOpDim::H;
-        output = tt::tt_metal::bcast(output.value(), bias_tensor, BcastOpMath::ADD, bcast_dim, output_mem_config);
-    }
+    output = moreh_matmul(input, weight, false, true, output, bias, output_mem_config);
     return output.value();
 }
 

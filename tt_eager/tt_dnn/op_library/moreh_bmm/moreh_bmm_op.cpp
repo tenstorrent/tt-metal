@@ -21,7 +21,7 @@ inline void moreh_bmm_validate(const Tensor& input, const Tensor& mat2) {
 
 Tensor moreh_bmm_(const Tensor& input, const Tensor& mat2, const MemoryConfig& mem_config) {
     moreh_bmm_validate(input, mat2);
-    return moreh_matmul(input, mat2, std::nullopt, false, false, mem_config);
+    return moreh_matmul(input, mat2, false, false, std::nullopt, std::nullopt, mem_config);
 }
 
 Tensor moreh_bmm(const Tensor& input, const Tensor& mat2, const MemoryConfig& output_mem_config) {

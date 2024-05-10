@@ -15,7 +15,7 @@ namespace tt {
 namespace tt_metal {
 
 Tensor moreh_matmul(const Tensor& input_tensor, const Tensor& other_tensor, const MemoryConfig& mem_config) {
-    return operations::primary::moreh_matmul(input_tensor, other_tensor, std::nullopt, false, false, mem_config);
+    return operations::primary::moreh_matmul(input_tensor, other_tensor, false, false, std::nullopt, std::nullopt, mem_config);
 }
 
 }  // namespace tt_metal
@@ -54,20 +54,20 @@ inline void moreh_matmul_validate(
 }  // namespace
 
 operation::ProgramWithCallbacks MorehMatmul::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& other_tensor = input_tensors.at(1);
     const auto& output_tensor = output_tensors.at(0);
-    // TODO: add optimized matmul
+    const auto& bias_tensor = optional_input_tensors.at(0);
     return moreh_matmul_multi_core(
         input_tensor,
         other_tensor,
         output_tensor,
+        bias_tensor,
         this->transpose_input,
-        this->transpose_other,
-        this->input_start_tile_id,
-        this->other_start_tile_id,
-        this->output_start_tile_id);
+        this->transpose_other);
 }
 
 inline Shape compute_output_shape(
@@ -110,126 +110,70 @@ std::vector<Tensor> MorehMatmul::create_output_tensors(
 }
 
 void MorehMatmul::validate_with_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& other_tensor = input_tensors.at(1);
-    TT_ASSERT(
-        (input_tensor.get_layout() == Layout::TILE && other_tensor.get_layout() == Layout::TILE),
-        "Inputs to matmul must be tilized");
-
-    TT_ASSERT(
-        input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B,
-        "Unsupported data format");
-    TT_ASSERT(
-        input_tensor.storage_type() == StorageType::DEVICE and other_tensor.storage_type() == StorageType::DEVICE,
-        "Operands to matmul need to be on device!");
-    TT_ASSERT(input_tensor.device() == other_tensor.device(), "Operands to matmul need to be on the same device!");
-    TT_ASSERT(
-        input_tensor.buffer() != nullptr and other_tensor.buffer() != nullptr,
-        "Operands to matmul need to be allocated in buffers on device!");
-
-    moreh_matmul_validate(input_tensor, other_tensor, this->transpose_input, this->transpose_other);
-
-    if (output_tensors.empty() || !output_tensors.at(0).has_value()) {
-        // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
-        return;
-    }
-    const auto& input_shape = input_tensor.get_legacy_shape();
-    const auto& other_shape = other_tensor.get_legacy_shape();
-    const auto output_shape_required =
-        compute_output_shape(input_shape, other_shape, this->transpose_input, this->transpose_other);
-    const auto& actual_shape = output_tensors.at(0).value().get_legacy_shape();
-    bool shape_ok = output_shape_required.rank() == actual_shape.rank();
-    for (size_t i = 0; i < std::min(actual_shape.rank(), output_shape_required.rank()); i++) {
-        shape_ok &= output_shape_required[i] <= actual_shape[i];
-    }
-    TT_ASSERT(
-        shape_ok,
-        fmt::format(
-            "The input tensors need a shape of {}, however the output tensor is only {}",
-            output_shape_required,
-            actual_shape));
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+    const std::vector<std::optional<Tensor>>& output_tensors) const {
+    log_debug(LogOp, "{}:{}", __func__, __LINE__);
+    // TODO
 }
 
 const operation::Hash MorehMatmul::compute_program_hash(
-    const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& other_tensor = input_tensors.at(1);
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    const auto& input = input_tensors.at(0);
+    const auto& other = input_tensors.at(1);
+    const auto& bias = optional_input_tensors.at(0);
 
     operation::Hash hash = tt::stl::hash::hash_objects(
         0,
         typeid(*this).hash_code(),
-        input_tensor,
-        other_tensor,
+        input,
+        other,
+        bias,
         this->transpose_input,
-        this->transpose_other,
-        this->input_start_tile_id,
-        this->other_start_tile_id,
-        this->output_start_tile_id);
+        this->transpose_other);
     return hash;
 }
 
 Tensor moreh_matmul_(
-    const Tensor& input_tensor,
-    const Tensor& other_tensor,
-    std::optional<Tensor> output_tensor,
+    const Tensor& input,
+    const Tensor& other,
     bool transpose_input,
     bool transpose_other,
-    const MemoryConfig& mem_config) {
-    const auto& input_shape = input_tensor.get_legacy_shape();
-    const auto& other_shape = other_tensor.get_legacy_shape();
-    const auto& output_shape = compute_output_shape(input_shape, other_shape, transpose_input, transpose_other);
-
-    uint32_t input_other2MtKt = input_shape[1] * input_shape[2] * input_shape[3];
-    uint32_t other_other2KtNt = other_shape[1] * other_shape[2] * other_shape[3];
-    uint32_t output_other2MtNt = output_shape[1] * output_shape[2] * output_shape[3];
-
-    for (uint32_t b1 = 0; b1 < output_shape[0]; ++b1) {
-        uint32_t input_other1_index = (b1 >= input_shape[0]) ? (0) : (b1);
-        uint32_t other_other1_index = (b1 >= other_shape[0]) ? (0) : (b1);
-
-        uint32_t input_start_tile_id = input_other1_index * input_other2MtKt / TILE_HW;
-        uint32_t other_start_tile_id = other_other1_index * other_other2KtNt / TILE_HW;
-        uint32_t output_start_tile_id = b1 * output_other2MtNt / TILE_HW;
-
+    const std::optional<Tensor> &output,
+    const std::optional<Tensor> &bias,
+    const MemoryConfig& output_mem_config) {
         log_debug(
             LogOp,
-            "{}:{} run matmul {} {} {} {} {}]]",
+            "{}:{} run matmul {} {}",
             __func__,
             __LINE__,
             transpose_input,
-            transpose_other,
-            input_start_tile_id,
-            other_start_tile_id,
-            output_start_tile_id);
-        output_tensor = operation::run(
-                            MorehMatmul{
-                                .output_mem_config = mem_config,
-                                .transpose_input = transpose_input,
-                                .transpose_other = transpose_other,
-                                .input_start_tile_id = input_start_tile_id,
-                                .other_start_tile_id = other_start_tile_id,
-                                .output_start_tile_id = output_start_tile_id},
-                            {input_tensor, other_tensor},
-                            {},
-                            {output_tensor})
-                            .at(0);
-    }
-
-    return output_tensor.value();
+            transpose_other);
+        return operation::run(
+            MorehMatmul{
+                .output_mem_config = output_mem_config,
+                .transpose_input = transpose_input,
+                .transpose_other = transpose_other },
+            { input, other},
+            { bias},
+            { output})
+            .at(0);
 }
 
 Tensor moreh_matmul(
-    const Tensor& input_tensor,
-    const Tensor& other_tensor,
-    std::optional<std::reference_wrapper<const Tensor>> output_tensor,
+    const Tensor& input,
+    const Tensor& other,
     bool transpose_input,
     bool transpose_other,
-    const MemoryConfig& mem_config) {
-    if (is_dot_forward(input_tensor, other_tensor) && (!transpose_input && !transpose_other)) {
-        return moreh_dot(input_tensor, other_tensor, mem_config);
-    }
-    return moreh_matmul_(input_tensor, other_tensor, output_tensor, transpose_input, transpose_other, mem_config);
+    const std::optional<const Tensor> output,
+    const std::optional<const Tensor> bias,
+    const MemoryConfig& output_mem_config) {
+    // TODO
+    // if (is_dot_forward(input, other) && (!transpose_input && !transpose_other)) {
+    //     return moreh_dot(input, other, output_mem_config);
+    // }
+    return moreh_matmul_(input, other, transpose_input, transpose_other, output, bias, output_mem_config);
 }
 
 }  // namespace primary
