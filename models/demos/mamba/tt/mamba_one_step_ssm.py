@@ -129,7 +129,7 @@ class TtMambaSSM(torch.nn.Module):
         )
         ttnn.deallocate(delta_t0)
 
-        delta_t2 = ttnn.softplus(delta_t1, parameter1=1.0, parameter2=20.0, memory_config=ttnn.L1_MEMORY_CONFIG)
+        delta_t2 = ttnn.softplus(delta_t1, beta=1.0, threshold=20.0, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(delta_t1)
 
         # calculate abar

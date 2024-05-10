@@ -32,7 +32,7 @@ def run_eltwise_softplus_tests(
         ref_value = torch.nn.functional.softplus(x, beta=beta, threshold=threshold)
 
         x = ttnn_ops.setup_ttnn_tensor(x, device, dlayout[0], in_mem_config[0], dtype[0])
-        tt_result = ttnn.softplus(x, beta, threshold, memory_config=output_mem_config)
+        tt_result = ttnn.softplus(x, beta=beta, threshold=threshold, memory_config=output_mem_config)
 
         tt_result = ttnn_ops.ttnn_tensor_to_torch(tt_result, output_mem_config)
 
