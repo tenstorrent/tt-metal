@@ -18,6 +18,7 @@
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/impl/program/program_device_map.hpp"
 #include "dev_msgs.h"
+#include "tensor/tensor.hpp"
 
 namespace tt {
 
@@ -29,6 +30,7 @@ namespace detail{
     KernelHandle AddKernel ( Program & program, std::shared_ptr<Kernel> kernel, const CoreType &core_type);
     std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id);
     std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
+    void AddConfigTensor(Program &program, const Tensor& config_tensor);
 }
 
 struct KernelGroup {
@@ -201,6 +203,8 @@ class Program {
     std::unordered_map<CoreType, std::vector<KernelGroup>> kernel_groups_;
     std::unordered_map<CoreType, std::vector<uint8_t>> core_to_kernel_group_index_table_;
 
+    std::vector<Tensor> config_tensors_;
+
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
@@ -216,6 +220,8 @@ class Program {
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value, CoreType core_type=CoreType::WORKER);
+
+    void add_config_tensor(const Tensor& config_tensor);
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const Device *device) const;
