@@ -19,6 +19,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
     weight_to_bfp8,
 )
 import time
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import conv_cache
 
 
 def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
@@ -368,7 +369,7 @@ class resnetBlock2D:
             nonlinearity = ttnn.silu
 
         out_channels = in_channels if out_channels is None else out_channels
-
+        print("Cache Entries = ", len(conv_cache.keys()))
         # print(input_tensor.shape)
         # print(input_tensor.memory_config())
         hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -438,6 +439,7 @@ class resnetBlock2D:
                 input_width=self.input_width,
                 conv_config=conv_config,
                 reshard_if_not_optimal=True,
+                conv_op_cache=conv_cache,
             )
             print(f"Resnet nput = {self.input_height}x{self.input_width} Output = {_out_height}x{_out_width}")
 
@@ -508,6 +510,7 @@ class resnetBlock2D:
                     input_width=self.input_width,
                     conv_config=conv_config,
                     reshard_if_not_optimal=True,
+                    conv_op_cache=conv_cache,
                 )
                 print(
                     f"Resnet Block Input = {self.input_height}x{self.input_width}  Output = {_out_height}x{_out_width}"
@@ -628,6 +631,7 @@ class resnetBlock2D:
             input_width=self.input_width,
             conv_config=conv_config,
             reshard_if_not_optimal=True,
+            conv_op_cache=conv_cache,
         )
         # hidden_states = self.conv2(hidden_states)
         use_in_shortcut = in_channels != out_channels if use_in_shortcut is None else use_in_shortcut
@@ -663,6 +667,7 @@ class resnetBlock2D:
                 input_width=self.input_width,
                 conv_config=conv_config,
                 reshard_if_not_optimal=True,
+                conv_op_cache=conv_cache,
             )
             # input_tensor = self.conv_shortcut(input_tensor)
 

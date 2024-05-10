@@ -20,37 +20,22 @@ from models.utility_functions import is_grayskull
 
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_embeddings import TtTimestepEmbedding
 
-# Working Config
-# from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_mid_block_2d_cross_attn_new_conv import (
-#     unet_mid_block_2d_cross_attn,
-# )
-# from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attention_down_block_2d_new_conv import (
-#     cross_attention_down_block_2d,
-# )
-# from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attn_upblock import (
-#     cross_attention_upblock2d,
-# )
-# from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downblock_2d import downblock2d
-# from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upblock_2d import upblock_2d
-
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_mid_block_2d_cross_attn_new_conv import (
     unet_mid_block_2d_cross_attn,
 )
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attention_down_block_2d_new_conv import (
     cross_attention_down_block_2d,
 )
-
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attn_upblock_new_conv import (
     cross_attention_upblock2d,
 )
-
-# Change Downblock
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downblock_2d_new_conv import downblock2d
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upblock_2d import upblock_2d
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upblock_2d_new_conv import upblock_2d
 
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     pad_group_norm_weight,
     pre_process_input,
+    conv_cache,
 )
 
 fp32_accum = True
@@ -121,7 +106,6 @@ class UNet2DConditionModel:
         self.batch_size = batch_size
         self.input_height = input_height
         self.input_width = input_width
-
         parameters.conv_in.weight, parameters.conv_in.bias = permute_conv_weights(
             parameters.conv_in.weight, parameters.conv_in.bias
         )
@@ -462,6 +446,7 @@ class UNet2DConditionModel:
             input_height=self.input_height,
             input_width=self.input_width,
             conv_config=conv_config,
+            conv_op_cache=conv_cache,
         )
         sample = ttnn.reallocate(sample)  # TODO: Test remove
 

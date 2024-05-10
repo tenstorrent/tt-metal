@@ -12,6 +12,8 @@ from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     run_ttnn_conv_with_pre_and_post_tensor_formatting,
 )
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import conv_cache
+
 import math
 
 
@@ -143,6 +145,7 @@ class downsample_2d:
             weight_tensor=self.conv_weights,
             bias_tensor=self.conv_bias,
             conv_config=conv_config,
+            conv_op_cache=conv_cache,
         )
         # hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
         #     self.device,

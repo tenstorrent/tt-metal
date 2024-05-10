@@ -6,7 +6,9 @@ import torch
 import ttnn
 from typing import Optional, Dict
 
+
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upsample_2d_new_conv import upsample2d
+
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_transformer_2d_new_conv import (
     transformer_2d_model,

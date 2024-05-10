@@ -18,6 +18,7 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
     permute_conv_parameters,
     dealloc_input,
 )
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import conv_cache
 
 
 def ttnn_to_torch(input):
@@ -226,6 +227,7 @@ class transformer_2d_model:
         batch = self.batch_size
         height = self.input_height
         width = self.input_width
+        print("Cache Entries = ", len(conv_cache.keys()))
 
         residual = hidden_states
         spilled_residual = False
@@ -311,6 +313,7 @@ class transformer_2d_model:
             weight_tensor=self.proj_in_conv_weights,
             bias_tensor=self.proj_in_conv_bias,
             conv_config=conv_config,
+            conv_op_cache=conv_cache,
         )
 
         inner_dim = hidden_states.shape[-1]
@@ -355,6 +358,7 @@ class transformer_2d_model:
                     weight_tensor=self.proj_out_conv_weights,
                     bias_tensor=self.proj_out_conv_bias,
                     conv_config=conv_config,
+                    conv_op_cache=conv_cache,
                 )
                 if ttnn.get_memory_config(residual) != self.proj_out.conv.input_sharded_memory_config:
                     residual = ttnn.to_memory_config(residual, self.proj_out.conv.input_sharded_memory_config)
