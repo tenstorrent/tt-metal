@@ -191,3 +191,45 @@ def test_add_dram_and_l1_tensor(device, shape_a, shape_b):
 
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
     assert output_tensor.shape == shape_a
+
+
+@pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
+@pytest.mark.parametrize("activations", [None, ["relu"]])
+def test_add_and_apply_activations(device, shape, activations):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand(shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+    if activations is not None:
+        for activation in activations:
+            if activation == "relu":
+                torch_output_tensor = torch.relu(torch_output_tensor)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, activations=activations)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.99988)
+    assert output_tensor.shape == shape
+
+
+@pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
+@pytest.mark.parametrize("activations", [None, ["relu"]])
+def test_in_place_add_and_apply_activations(device, shape, activations):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand(shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+    if activations is not None:
+        for activation in activations:
+            if activation == "relu":
+                torch_output_tensor = torch.relu(torch_output_tensor)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.add_(input_tensor_a, input_tensor_b, activations=activations)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.99988)
+    assert output_tensor.shape == shape

@@ -33,6 +33,9 @@ jobs:
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Enable Performance mode
+        run: |
+          sudo cpupower frequency-set -g performance
       - name: Ensure weka mount is active
         run: |
           sudo systemctl restart mnt-MLPerf.mount
@@ -67,3 +70,7 @@ jobs:
         with:
           name: perf-report-csv-${{ matrix.model-type }}-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
+      - name: Disable Performance mode
+        if: always()
+        run: |
+          sudo cpupower frequency-set -g ondemand

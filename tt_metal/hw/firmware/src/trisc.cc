@@ -66,7 +66,7 @@ using namespace ckernel;
 
 int main(int argc, char *argv[])
 {
-    DEBUG_STATUS('I');
+    DEBUG_STATUS("I");
 
     uint tt_l1_ptr *local_l1_start_addr = (uint tt_l1_ptr *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE);
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
@@ -91,7 +91,7 @@ int main(int argc, char *argv[])
 
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
-        DEBUG_STATUS('W');
+        DEBUG_STATUS("W");
         while (*trisc_run != RUN_SYNC_MSG_GO);
         DeviceZoneScopedMainN("TRISC-FW");
 
@@ -100,9 +100,9 @@ int main(int argc, char *argv[])
         setup_cb_read_write_interfaces(0, mailboxes->launch.max_cb_index, cb_init_read, cb_init_write);
 #endif
 
-        DEBUG_STATUS('R');
+        DEBUG_STATUS("R");
         kernel_init();
-        DEBUG_STATUS('D');
+        DEBUG_STATUS("D");
 
         // Signal completion
         tensix_sync();

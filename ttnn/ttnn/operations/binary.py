@@ -86,24 +86,43 @@ for binary_function_name, ttl_binary_function, doc in TTL_BINARY_FUNCTIONS:
     register_ttl_binary_function(binary_function_name, ttl_binary_function, doc)
 
 
-def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
-    return input_tensor_a + input_tensor_b
+def apply_activations(tensor, activations):
+    import torch
+
+    string_to_function = {
+        "relu": torch.relu,
+        "gelu": torch.nn.functional.gelu,
+        "silu": torch.nn.functional.silu,
+    }
+
+    if activations is not None:
+        for activation in activations:
+            activation_function = string_to_function[activation]
+            tensor = activation_function(tensor)
+    return tensor
+
+
+def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
+    output_tensor = input_tensor_a + input_tensor_b
+    return apply_activations(output_tensor, activations)
 
 
 add = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.add)
 add_ = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.add_)
 
 
-def _golden_function(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
-    return input_tensor_a - input_tensor_b
+def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
+    output_tensor = input_tensor_a - input_tensor_b
+    return apply_activations(output_tensor, activations)
 
 
 subtract = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.subtract)
 subtract_ = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.subtract_)
 
 
-def _golden_function(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
-    return input_tensor_a * input_tensor_b
+def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
+    output_tensor = input_tensor_a * input_tensor_b
+    return apply_activations(output_tensor, activations)
 
 
 multiply = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.multiply)
@@ -119,143 +138,6 @@ ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: add(self, *args, **kwargs)
 ttnn.Tensor.__sub__ = lambda self, *args, **kwargs: sub(self, *args, **kwargs)
 ttnn.Tensor.__mul__ = lambda self, *args, **kwargs: mul(self, *args, **kwargs)
 ttnn.Tensor.__rmul__ = lambda self, *args, **kwargs: mul(self, *args, **kwargs)
-
-
-def _add_and_apply_activation_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor_a,
-        ranks=(4,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor_b,
-        ranks=(4,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-        can_be_a_scalar=False,
-    )
-
-
-def _golden_function(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, activation=None, **_):
-    import torch
-
-    output_tensor = input_tensor_a + input_tensor_b
-
-    if activation is None:
-        return output_tensor
-    elif activation == "relu":
-        return torch.relu(output_tensor)
-    else:
-        raise ValueError(f"Unknown activation: {activation}")
-
-
-@ttnn.register_operation(
-    name="ttnn.add_and_apply_activation",
-    validate_input_tensors=_add_and_apply_activation_validate_input_tensors,
-    golden_function=_golden_function,
-)
-def add_and_apply_activation(
-    input_tensor_a: ttnn.Tensor,
-    input_tensor_b: ttnn.Tensor,
-    *,
-    activation: Optional[str] = None,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-    dtype: Optional[ttnn.DataType] = None,
-) -> ttnn.Tensor:
-    r"""
-    add_and_apply_activation(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, activation: Optional[str] = None, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
-
-    Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and optionally applies an activation function to the output tensor.
-
-    .. math::
-        \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
-
-    Args:
-        * :attr:`input_tensor_a`
-        * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
-
-    Keyword args:
-        :attr:`activation`: (Optional[str]): activation to apply to the output tensor
-        :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
-        :attr:`dtype` (Optional[ttnn.DataType]): data type for the output tensor
-
-
-    """
-
-    fused_activations = []
-    if activation is not None:
-        activations_map = {
-            "relu": [ttnn.experimental.tensor.FusibleActivation.RELU],
-        }
-        fused_activations = activations_map[activation]
-
-    output = ttnn.experimental.operations.primary.add(
-        input_tensor_a,
-        input_tensor_b,
-        fused_activations=fused_activations,
-        output_mem_config=memory_config,
-        output_dtype=dtype,
-        in_place=False,
-    )
-    return output
-
-
-@ttnn.register_operation(
-    name="ttnn.add_and_apply_activation_",
-    validate_input_tensors=_add_and_apply_activation_validate_input_tensors,
-    golden_function=_golden_function,
-)
-def add_and_apply_activation_(
-    input_tensor_a: ttnn.Tensor,
-    input_tensor_b: ttnn.Tensor,
-    *,
-    activation: Optional[str] = None,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-    dtype: Optional[ttnn.DataType] = None,
-) -> ttnn.Tensor:
-    r"""
-    add_and_apply_activation_(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, activation: Optional[str] = None, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
-
-    Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` in-place of :attr:`input_tensor_a` and optionally applies an activation function to the output tensor.
-
-    .. math::
-        \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
-
-    Args:
-        * :attr:`input_tensor_a`
-        * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
-
-    Keyword args:
-        :attr:`activation`: (Optional[str]): activation to apply to the output tensor
-        :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
-        :attr:`dtype` (Optional[ttnn.DataType]): data type for the output tensor
-
-
-    """
-
-    fused_activations = []
-    if activation is not None:
-        activations_map = {
-            "relu": [ttnn.experimental.tensor.FusibleActivation.RELU],
-        }
-        fused_activations = activations_map[activation]
-
-    output = ttnn.experimental.operations.primary.add(
-        input_tensor_a,
-        input_tensor_b,
-        fused_activations=fused_activations,
-        output_mem_config=memory_config,
-        output_dtype=dtype,
-        in_place=True,
-    )
-    return output
 
 
 def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):

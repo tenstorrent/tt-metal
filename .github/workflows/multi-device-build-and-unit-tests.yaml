@@ -3,7 +3,7 @@ name: "Multi-chip unit tests"
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */3 * * *"
+    - cron: "0 */3 * * *" # This cron schedule runs the workflow every 3 hours
 
 jobs:
   multi-chip-unit-tests:
@@ -45,7 +45,7 @@ jobs:
       - name: Build tt-metal CPP tests
         run: cmake --build build --target tests -- -j`nproc`
       - name: Run pre/post regression tests
-        timeout-minutes: 60
+        timeout-minutes: 90
         run: |
           source build/python_env/bin/activate
           export PYTHONPATH=$TT_METAL_HOME

@@ -129,6 +129,8 @@ void TensorModule(py::module &m_tensor) {
     py::implicitly_convertible<std::pair<UnaryOpType, int>, UnaryWithParam>();
     py::implicitly_convertible<std::pair<UnaryOpType, bool>, UnaryWithParam>();
 
+    m_tensor.def("string_to_unary_with_param", &string_to_unary_with_param);
+
     detail::export_enum<EmbeddingsType>(m_tensor);
 
     auto py_core_coord = py::class_<CoreCoord>(m_tensor, "CoreCoord", R"doc(
@@ -776,6 +778,33 @@ void TensorModule(py::module &m_tensor) {
         py::overload_cast<const uint32_t, const CoreCoord, const bool>(&num_cores_to_corerange_set),
         R"doc(
             Create a CoreRangeSet containing the specified number of cores
+        )doc"
+    );
+
+    m_tensor.def(
+        "allocate_tensor_on_device",
+        py::overload_cast<const Shape&, DataType, Layout, Device*, const MemoryConfig&>(&allocate_tensor_on_device),
+        py::arg("shape"), py::arg("dtype"), py::arg("layout"), py::arg("device"), py::arg("memory_config") = MemoryConfig{.memory_layout=TensorMemoryLayout::INTERLEAVED},
+        R"doc(
+            Allocate a tensor with specified attributes on a device.
+        )doc"
+    );
+
+    m_tensor.def(
+        "allocate_tensor_on_device",
+        py::overload_cast<const Shape&, DataType, Layout, DeviceMesh*, const MemoryConfig&>(&allocate_tensor_on_device),
+        py::arg("shape"), py::arg("dtype"), py::arg("layout"), py::arg("device"), py::arg("memory_config") = MemoryConfig{.memory_layout=TensorMemoryLayout::INTERLEAVED},
+        R"doc(
+            Allocate a tensor with specified attributes on a device.
+        )doc"
+    );
+
+    m_tensor.def(
+        "write_tensor",
+        py::overload_cast<Tensor, Tensor, uint8_t>(&write_tensor),
+        py::arg("host_tensor"), py::arg("device_tensor"), py::arg("cq_id") = 0,
+        R"doc(
+            Copy a host tensor to its equivalent tensor on a device.
         )doc"
     );
 

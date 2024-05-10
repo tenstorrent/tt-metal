@@ -26,7 +26,7 @@ operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &input_tens
 // TODO: Group attention matmul will support sharding, mcasting, and should be faster; we should make attn_matmul (ie. KV heads = 1) a special case of group_attn_matmul and run the same op
 operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, const uint32_t out_subblock_w, CoreCoord compute_with_storage_grid_size, const bool row_major, DeviceComputeKernelConfig compute_kernel_config);
-operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size);
+operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, const uint32_t hidden_size, CoreCoord compute_with_storage_grid_size);
 operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(const Tensor &input_tensor_a, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size);
 
 struct SplitFusedQKVAndSplitHeads {
@@ -173,6 +173,7 @@ inline Tensor group_attn_matmul(const Tensor &input_tensor_a, const Tensor &inpu
 struct SSMEltwiseMul {
     MemoryConfig output_mem_config;
     DataType output_dtype;
+    const uint32_t HIDDEN_SIZE = 5120;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;

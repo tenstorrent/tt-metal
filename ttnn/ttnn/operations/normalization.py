@@ -12,6 +12,17 @@ from tt_lib.utils import find_closest_largest_divisor
 import math
 
 
+def _golden_function(input_tensor: ttnn.Tensor, dim: int, **_):
+    import torch
+
+    return torch.softmax(input_tensor, dim)
+
+
+softmax = ttnn.register_operation(
+    golden_function=_golden_function,
+)(ttnn._ttnn.operations.normalization.softmax)
+
+
 def _golden_function(
     input_tensor: ttnn.Tensor, *, epsilon=1e-12, residual_input_tensor=None, weight=None, bias=None, **_
 ):
@@ -33,74 +44,7 @@ def _golden_function(
     return torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)
 
 
-def _layer_norm_validate_input_tensors(
-    operation_name, input_tensor, *args, weight=None, bias=None, residual_input_tensor=None, **kwargs
-):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        weight,
-        ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-        is_optional=True,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        bias,
-        ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-        is_optional=True,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        residual_input_tensor,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-        is_optional=True,
-    )
-
-
-layer_norm = ttnn.register_operation(name="ttnn.layer_norm", golden_function=_golden_function)(
-    ttnn._ttnn.operations.normalization.layer_norm
-)
-
-
-def _rms_norm_validate_input_tensors(operation_name, input_tensor, weight, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        weight,
-        ranks=(1, 2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
+layer_norm = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.normalization.layer_norm)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, **_):
@@ -115,42 +59,21 @@ def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, *
     return weight * input_tensor
 
 
-def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, **_):
-    import torch
-
-    variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
-    input_tensor = input_tensor * torch.rsqrt(variance + epsilon)
-
-    if weight.dtype in [torch.float16, torch.bfloat16]:
-        input_tensor = input_tensor.to(weight.dtype)
-
-    return weight * input_tensor
-
-
-rms_norm = ttnn.register_operation(name="ttnn.rms_norm", golden_function=_golden_function)(
-    ttnn._ttnn.operations.normalization.rms_norm
-)
-
-
-def _rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float = 1e-6) -> ttnn.Tensor:
-    r"""
-    rms_norm(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, *, epsilon: float = 1e-6) -> ttnn.Tensor
-
-    Compute rms_norm over :attr:`input_tensor`.
-
-    """
-    return ttl.tensor.rmsnorm(input_tensor, epsilon, weight)
+rms_norm = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.normalization.rms_norm)
 
 
 # group norm helper function
 def determine_expected_group_norm_sharded_config_and_grid_size(
-    *, device, num_channels, num_groups, input_nhw, is_height_sharded
+    *, device, num_channels, num_groups, input_nhw, is_height_sharded, is_row_major=False
 ):
     assert num_channels % num_groups == 0
     assert num_channels % 32 == 0  # TODO: remove this later
     group_size = num_channels // num_groups
     compute_with_storage_grid_size = device.compute_with_storage_grid_size()
-    device_grid_size = (compute_with_storage_grid_size.x, compute_with_storage_grid_size.y)
+    device_grid_size = [compute_with_storage_grid_size.x, compute_with_storage_grid_size.y]
+    if is_row_major:
+        device_grid_size = [compute_with_storage_grid_size.y, compute_with_storage_grid_size.x]
+
     max_num_cores = device_grid_size[0] * device_grid_size[1]
     input_nhw_paddedto32 = math.ceil(input_nhw / 32) * 32
     num_cores_nhw = find_closest_largest_divisor(
@@ -181,11 +104,18 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
             num_cores_nhw <= grid_size[0] * grid_size[1]
         ), "Error: For height sharding, num_cores_nhw must be <= grid size"
     else:
-        grid_size = [num_cores_nhw, num_cores_channels]
+        grid_size = [num_cores_channels, num_cores_nhw] if is_row_major else [num_cores_nhw, num_cores_channels]
+    shard_shape = (
+        (1, 1, gn_nhw_per_core, gn_in_channels_per_core)
+        if is_row_major
+        else (1, 1, gn_in_channels_per_core, gn_nhw_per_core)
+    )
     shard_strategy = ttnn.ShardStrategy.HEIGHT if is_height_sharded else ttnn.ShardStrategy.BLOCK
-    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR if is_height_sharded else ttnn.ShardOrientation.COL_MAJOR
+    shard_orientation = (
+        ttnn.ShardOrientation.ROW_MAJOR if is_height_sharded or is_row_major else ttnn.ShardOrientation.COL_MAJOR
+    )
     return ttnn.create_sharded_memory_config(
-        (1, 1, gn_in_channels_per_core, gn_nhw_per_core),
+        shard_shape,
         ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
         shard_strategy,
         shard_orientation,

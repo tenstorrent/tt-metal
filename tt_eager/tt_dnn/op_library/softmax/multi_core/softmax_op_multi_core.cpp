@@ -43,6 +43,15 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     uint32_t W = shape[-1], H = (input_tensor.volume() / (shape[0] * shape[-1])), NC = shape[0];
     uint32_t HW = H*W;
 
+    bool mask_padded_data = false;
+    uint32_t num_datum_padded = 0;
+    const auto shape_unpadded = input_tensor.get_shape();
+    uint32_t W_unpadded = shape_unpadded[-1];
+    if (W > W_unpadded) {
+        mask_padded_data = true;
+        num_datum_padded = W - W_unpadded;
+    }
+
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
 
@@ -116,6 +125,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     uint32_t in2_t  = 1; // scaler for reduce coming from reader
     uint32_t in3_t  = 1; // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
     uint32_t in4_t  = div_up(Wt, block_size)*block_size; // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
+    uint32_t in5_t = 1;
 
     // cb_exps - keeps exps in CB in L1 to avoid recomputing
     uint32_t im0_t  = block_size*div_up(Wt, block_size);
@@ -172,7 +182,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     auto writer_kernels_id = CreateKernel(
         program, "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/writer_unary_interleaved_start_id_blocked_sm.cpp", all_device_cores,
         tt_metal::WriterDataMovementConfig(
-            writer_compile_time_args
+            writer_compile_time_args,
+            softmax_defines
     ));
 
     // for broadcasting in H direction we need to
@@ -205,6 +216,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     std::optional<CBHandle> cb_intermed3_id;
     std::optional<CBHandle> cb_in3_id;
     std::optional<CBHandle> cb_in4_id;
+    std::optional<CBHandle> cb_in5_id;
     if (mask.has_value()) {
         CircularBufferConfig c_intermed3_config = CircularBufferConfig(im3_t * im_tile_size, {{CB::c_intermed3, im_cb_data_format}}).set_page_size(CB::c_intermed3, im_tile_size);
         cb_intermed3_id = CreateCircularBuffer( program, all_device_cores, c_intermed3_config );
@@ -213,6 +225,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         CircularBufferConfig c_in4_config = CircularBufferConfig(in4_t * mask_tile_size, {{CB::c_in4, mask_cb_data_format}}).set_page_size(CB::c_in4, mask_tile_size);
         cb_in4_id = CreateCircularBuffer( program, all_device_cores, c_in4_config);
     }
+    CircularBufferConfig c_in5_config = CircularBufferConfig(in5_t * mask_tile_size, {{CB::c_in5, mask_cb_data_format}}).set_page_size(CB::c_in5, mask_tile_size);
+    cb_in5_id = CreateCircularBuffer( program, all_device_cores, c_in5_config);
+
     uint32_t src_addr = src0_buffer->address();
     uint32_t mask_addr = mask.has_value() ? mask.value().buffer()->address() : 0;
     uint32_t out_addr = out0_buffer->address();
@@ -223,8 +238,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         if (i >= num_cores) {
             SetRuntimeArgs(program, reader_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }); // [8]=1.0f is scaler
-            SetRuntimeArgs(program, softmax_kernels_id, core, { 0, 0, 0, 0, 0 });
-            SetRuntimeArgs(program, writer_kernels_id, core, { 0, 0, 0, 0 });
+            SetRuntimeArgs(program, softmax_kernels_id, core, { 0, 0, 0, 0, 0, 0 });
+            SetRuntimeArgs(program, writer_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0 });
             continue;
         }
         uint32_t num_tile_rows_per_core = 0;
@@ -248,8 +263,10 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             SetRuntimeArgs(program, reader_kernels_id, core, { src_addr, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_addr, curr_ht, mask_id, 0x3f803f80 }); // [10]=1.0f is scaler
         }
 
-        SetRuntimeArgs(program, softmax_kernels_id, core, { num_tile_rows_per_core, Ht, Wt, block_size, curr_ht });
-        SetRuntimeArgs(program, writer_kernels_id, core, { out_addr, num_tile_rows_per_core * Wt, tile_offset, block_size });
+        SetRuntimeArgs(program, softmax_kernels_id, core, { num_tile_rows_per_core, Ht, Wt, block_size, curr_ht, mask_padded_data });
+
+        SetRuntimeArgs(program, writer_kernels_id, core, { out_addr, num_tile_rows_per_core * Wt, tile_offset, block_size, mask_padded_data, num_datum_padded, 0xFF00FF00});
+
         curr_row += num_tile_rows_per_core;
     }
 
@@ -293,6 +310,15 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
         uint32_t Wt = W/TILE_WIDTH;
         uint32_t Ht = H/TILE_HEIGHT;
+
+        bool mask_padded_data = false;
+        uint32_t num_datum_padded = 0;
+        const auto shape_unpadded = input_tensors.at(0).get_shape();
+        uint32_t W_unpadded = shape_unpadded[-1];
+        if (W > W_unpadded) {
+            mask_padded_data = true;
+            num_datum_padded = W - W_unpadded;
+        }
 
         int32_t num_tiles = input_tensors.at(0).volume()/TILE_HW;
         uint32_t block_size = find_max_divisor(Wt, 8);
@@ -344,8 +370,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             CoreCoord core = {i % grid_size.x, i / grid_size.x};
             if (i >= num_cores) {
                 SetRuntimeArgs(program, reader_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }); // [8]=1.0f is scaler
-                SetRuntimeArgs(program, softmax_kernels_id, core, { 0, 0, 0, 0, 0 });
-                SetRuntimeArgs(program, writer_kernels_id, core, { 0, 0, 0, 0 });
+                SetRuntimeArgs(program, softmax_kernels_id, core, { 0, 0, 0, 0, 0, 0 });
+                SetRuntimeArgs(program, writer_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0});
                 continue;
             }
 
@@ -370,8 +396,10 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                 SetRuntimeArgs(program, reader_kernels_id, core, { src_buffer_address, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_buffer_address, curr_ht, mask_id, 0x3f803f80 }); // [10]=1.0f is scaler
             }
 
-            SetRuntimeArgs(program, softmax_kernels_id, core, { num_tile_rows_per_core, Ht, Wt, block_size, curr_ht });
-            SetRuntimeArgs(program, writer_kernels_id, core, { dst_buffer_address, num_tile_rows_per_core * Wt, tile_offset, block_size });
+            SetRuntimeArgs(program, softmax_kernels_id, core, { num_tile_rows_per_core, Ht, Wt, block_size, curr_ht, mask_padded_data });
+
+            SetRuntimeArgs(program, writer_kernels_id, core, { dst_buffer_address, num_tile_rows_per_core * Wt, tile_offset, block_size, mask_padded_data, num_datum_padded, 0xFF00FF00});
+
             curr_row += num_tile_rows_per_core;
         }
     };

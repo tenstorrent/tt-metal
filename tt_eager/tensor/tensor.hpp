@@ -35,6 +35,7 @@ struct Tensor {
         std::vector<bool> tensor_populated = {};
         uint32_t main_thread_ref_count = 0;
         std::atomic<uint32_t> num_sibling_workers_sharing_tensor = 0;
+        std::atomic<bool> main_thread_tensor = true;
         bool deallocated = false; // Set to true if device side storage was deallocated
         bool dynamic_storage = false; // Storage type can change, depending on op behaviour
         bool track_ref_count = false;
@@ -118,6 +119,11 @@ struct Tensor {
             }
             if (in_main_thread_based_on_first_worker) {
                 this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
+            }
+            else {
+                // This tensor is being created from scratch in a worker. Track this and allow it to be explicitly
+                // deallocated inside the worker (composite ops do this).
+                this->tensor_attributes->main_thread_tensor = false;
             }
             if (workers.size() == 1) {
                 this->tensor_attributes->storage = DeviceStorage();
@@ -349,6 +355,10 @@ void memcpy(
 void memcpy(void *dst, const Tensor &src, const std::optional<std::size_t> transfer_size = std::nullopt);
 void memcpy(Tensor &dst, const void *src, const std::optional<std::size_t> transfer_size = std::nullopt);
 void memcpy(Tensor &dst, const Tensor &src, const std::optional<std::size_t> transfer_size = std::nullopt);
+
+Tensor allocate_tensor_on_device(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config = {.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
+Tensor allocate_tensor_on_device(const Shape& shape, DataType data_type, Layout layout, DeviceMesh *device_mesh, const MemoryConfig& memory_config = {.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
+void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id = 0);
 
 }  // namespace tt_metal
 

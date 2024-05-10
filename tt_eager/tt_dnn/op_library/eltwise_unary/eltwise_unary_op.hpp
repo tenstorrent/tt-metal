@@ -15,71 +15,72 @@ namespace tt {
 
 namespace tt_metal {
 
+// These operations have a corresponding LLK available
 enum class UnaryOpType {
-    EXP = 0,
-    RECIP = 1,
-    GELU = 2,
-    RELU = 3,
-    SQRT = 4,
-    SIGMOID = 5,
-    LOG = 6,
-    TANH = 7,
-    LOG2 = 8,
-    LOG10 = 9,
-    SIN = 10,
-    COS = 11,
-    ABS = 12,
-    SIGN = 13,
-    SQUARE = 14,
-    EQZ = 15,
-    NEZ = 16,
-    GTZ = 17,
-    LTZ = 18,
-    GEZ = 19,
-    LEZ = 20,
-    RELU_MAX = 21,
-    RELU_MIN = 22,
-    POWER = 23,
-    LEAKY_RELU = 24,
-    ELU = 25,
-    EXP2 = 26,
-    HEAVISIDE = 27,
-    EXPM1 = 28,
-    SIGNBIT = 29,
-    ASIN = 30,
-    ACOS = 31,
-    RSQRT = 32,
-    RELU6 = 33,
-    ATAN = 34,
-    ERF = 35,
-    ERFC = 36,
-    ISINF = 37,
-    ISPOSINF = 38,
-    ISNEGINF = 39,
-    ISNAN = 40,
-    LOGICAL_NOT_UNARY = 41,
-    ISFINITE = 42,
-    ERFINV = 43,
-    I0 = 44,
-    TAN = 45,
-    RSUB = 46,
-    RDIV = 47,
-    SILU = 48,
-    IDENTITY = 49,
-    NEG = 50,
-    ADD_UNARY = 51,
-    SUB_UNARY = 52,
-    MUL_UNARY = 53,
-    DIV_UNARY = 54,
-    ADD_UNARY_SFPU = 55,
-    SUB_UNARY_SFPU = 56,
-    MUL_UNARY_SFPU = 57,
-    DIV_UNARY_SFPU = 58,
-    IDENTITY_UINT32 = 59,
-    UNARY_NE = 60,
-    UNARY_GT = 61,
-    UNARY_LT = 62,
-    TILED_PROD = 60
+    EXP,
+    RECIP,
+    GELU,
+    RELU,
+    SQRT,
+    SIGMOID,
+    LOG,
+    TANH,
+    LOG2,
+    LOG10,
+    SIN,
+    COS,
+    ABS,
+    SIGN,
+    SQUARE,
+    EQZ,
+    NEZ,
+    GTZ,
+    LTZ,
+    GEZ,
+    LEZ,
+    RELU_MAX,
+    RELU_MIN,
+    POWER,
+    LEAKY_RELU,
+    ELU,
+    EXP2,
+    HEAVISIDE,
+    EXPM1,
+    SIGNBIT,
+    ASIN,
+    ACOS,
+    RSQRT,
+    RELU6,
+    ATAN,
+    ERF,
+    ERFC,
+    ISINF,
+    ISPOSINF,
+    ISNEGINF,
+    ISNAN,
+    LOGICAL_NOT_UNARY,
+    ISFINITE,
+    ERFINV,
+    I0,
+    TAN,
+    RSUB,
+    RDIV,
+    SILU,
+    IDENTITY,
+    NEG,
+    ADD_UNARY,
+    SUB_UNARY,
+    MUL_UNARY,
+    DIV_UNARY,
+    ADD_UNARY_SFPU,
+    SUB_UNARY_SFPU,
+    MUL_UNARY_SFPU,
+    DIV_UNARY_SFPU,
+    IDENTITY_UINT32,
+    UNARY_NE,
+    UNARY_GT,
+    UNARY_LT,
+    TILED_PROD
 };
 
 template <typename T>
@@ -121,6 +122,42 @@ struct UnaryWithParam {
     static constexpr auto attribute_names = std::make_tuple("op_type", "param");
     const auto attribute_values() const { return std::make_tuple(std::cref(this->op_type), std::cref(this->param)); }
 };
+
+inline UnaryWithParam string_to_unary_with_param(const std::string& name) {
+    if (name == "relu")
+        return UnaryWithParam{.op_type = UnaryOpType::RELU};
+    else if (name == "gelu")
+        return UnaryWithParam{.op_type = UnaryOpType::GELU, .param = static_cast<float>(true)};
+    else if (name == "silu")
+        return UnaryWithParam{.op_type = UnaryOpType::SILU};
+    else if (name == "sigmoid")
+        return UnaryWithParam{.op_type = UnaryOpType::SIGMOID};
+    else if (name == "sqrt")
+        return UnaryWithParam{.op_type = UnaryOpType::SQRT};
+    else if (name == "exp")
+        return UnaryWithParam{.op_type = UnaryOpType::EXP, .param = static_cast<float>(true)};
+    else if (name == "recip")
+        return UnaryWithParam{.op_type = UnaryOpType::RECIP};
+    else if (name == "log")
+        return UnaryWithParam{.op_type = UnaryOpType::LOG};
+    else if (name == "tanh")
+        return UnaryWithParam{.op_type = UnaryOpType::TANH};
+    else if (name == "log2")
+        return UnaryWithParam{.op_type = UnaryOpType::LOG2};
+    else if (name == "log10")
+        return UnaryWithParam{.op_type = UnaryOpType::LOG10};
+    else if (name == "sin")
+        return UnaryWithParam{.op_type = UnaryOpType::SIN};
+    else if (name == "cos")
+        return UnaryWithParam{.op_type = UnaryOpType::COS};
+    else if (name == "abs")
+        return UnaryWithParam{.op_type = UnaryOpType::ABS};
+    else if (name == "sign")
+        return UnaryWithParam{.op_type = UnaryOpType::SIGN};
+    else if (name == "square")
+        return UnaryWithParam{.op_type = UnaryOpType::SQUARE};
+    TT_THROW("Unknown unary op: " + name);
+}
 
 enum class UnaryOpParallelizationStrategy { SINGLE_CORE = 0, MULTI_CORE = 1, SHARDED_MULTI_CORE=2 };
 

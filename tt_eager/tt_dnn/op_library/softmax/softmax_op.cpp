@@ -99,19 +99,13 @@ void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vect
     }
 }
 
-std::vector<Shape> Softmax::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    // Do nothing because it's an in-place operation
-    if (this->inplace) {
-        return {};
-    } else {
-        return {input_tensors.at(0).get_legacy_shape()};
-    }
+std::vector<Shape> Softmax::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    return {input_tensors.at(0).get_legacy_shape()};
 }
 
-std::vector<Tensor> Softmax::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
-    // Do nothing because it's an in-place operation
+std::vector<Tensor> Softmax::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     if (this->inplace) {
-        return {};
+        return {input_tensors.at(0)};
     }  else {
         return operation::generic_create_output_tensors(*this, input_tensors, input_tensors.at(0).get_dtype(), Layout::TILE, this->output_mem_config);
     }
@@ -123,7 +117,7 @@ operation::ProgramWithCallbacks Softmax::create_program(
     std::vector<Tensor> &output_tensors
 ) const {
     auto& input_tensor = input_tensors.at(0);
-    auto& output_tensor = this->inplace ? input_tensors.at(0) : output_tensors.at(0);
+    auto& output_tensor = output_tensors.at(0);
     const auto& mask = optional_input_tensors.at(0);
     // bool causal_mask = mask.has_value() ? mask.value().get_legacy_shape()[-2] == mask.value().get_legacy_shape()[-1] : false;
     bool causal_mask = this->is_causal_mask;

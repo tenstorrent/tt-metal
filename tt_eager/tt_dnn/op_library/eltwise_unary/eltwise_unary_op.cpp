@@ -324,12 +324,10 @@ const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tenso
     const auto& input_shape = input_tensor.get_legacy_shape();
 
     operation::Hash hash = tt::stl::hash::hash_objects(
-        0,
         typeid(*this).hash_code(),
         compute_volume(input_shape),
         input_tensor.get_dtype(),
         input_tensor.memory_config(),
-        input_tensor.device()->id(),
         this->output_mem_config);
 
     for (const auto& unary_with_param_op : this->op_chain) {

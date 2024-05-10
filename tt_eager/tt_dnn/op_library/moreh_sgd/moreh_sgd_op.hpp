@@ -10,6 +10,8 @@
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_eager/tensor/tensor.hpp"
 
+#include "tt_dnn/op_library/compute_kernel_config.hpp"
+
 namespace tt {
 namespace operations {
 namespace primary {
@@ -28,7 +30,8 @@ operation::ProgramWithCallbacks moreh_sgd_(
     float weight_decay,
     bool nesterov,
     bool momentum_initialized,
-    const CoreRange core_range);
+    const CoreRange core_range,
+    const DeviceComputeKernelConfig compute_kernel_config);
 
 struct MorehSGD {
     float lr;
@@ -40,6 +43,7 @@ struct MorehSGD {
     const CoreRange core_range;  // unused for now
     MemoryConfig param_out_mem_config;
     MemoryConfig momentum_buffer_out_mem_config;
+    const DeviceComputeKernelConfig compute_kernel_config;
 
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors,
@@ -53,7 +57,7 @@ struct MorehSGD {
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors) const;
     static constexpr auto attribute_names =
-        std::make_tuple("lr", "momentum", "dampening", "weight_decay", "nesterov", "momentum_initialized", "param_out_mem_config", "momentum_buffer_out_mem_config");
+        std::make_tuple("lr", "momentum", "dampening", "weight_decay", "nesterov", "momentum_initialized", "param_out_mem_config", "momentum_buffer_out_mem_config", "compute_kernel_config");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->lr),
@@ -63,7 +67,8 @@ struct MorehSGD {
             std::cref(this->nesterov),
             std::cref(this->momentum_initialized),
             std::cref(this->param_out_mem_config),
-            std::cref(this->momentum_buffer_out_mem_config));
+            std::cref(this->momentum_buffer_out_mem_config),
+            std::cref(this->compute_kernel_config));
     }
 };
 
@@ -80,7 +85,8 @@ std::vector<std::optional<Tensor>> moreh_sgd(
     bool nesterov,
     bool momentum_initialized,
     const MemoryConfig &param_out_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const MemoryConfig &momentum_buffer_out_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig &momentum_buffer_out_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 }  // namespace operations

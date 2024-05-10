@@ -17,6 +17,10 @@ void watcher_sanitize_host_noc_write(const metal_SocDescriptor &soc_d, CoreCoord
 
 int watcher_register_kernel(const string& name);
 
+// Helper functions for manually dumping watcher contents.
+void watcher_dump();
+void watcher_read_kernel_ids_from_file();
+
 // Check whether the watcher server has been killed due to an error detected, and a function to set
 // that flag. Used in test mode only.
 bool watcher_server_killed_due_to_error();

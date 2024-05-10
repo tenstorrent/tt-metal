@@ -18,7 +18,7 @@ jobs:
     environment: dev
     runs-on: build
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: actions/checkout@v4
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -28,9 +28,8 @@ jobs:
           cmake -B build
           cmake --build build --target tests -- -j`nproc`
           cmake --build build --target metal-install
-
       - name: 'Tar files'
-        run: tar -cvf ttm_${{ matrix.arch }}.tar build/hw build/lib tt_eager/tt_lib/*.so ttnn/ttnn/*.so build/programming_examples build/test
+        run: tar -cvf ttm_${{ matrix.arch }}.tar build/hw build/lib tt_eager/tt_lib/*.so ttnn/ttnn/*.so build/programming_examples build/test build/tools
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v4
         with:

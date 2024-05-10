@@ -85,6 +85,7 @@ class downsample_2d:
             use_shallow_conv_variant=False,
             # enable_auto_formatting=True,
             compute_kernel_config=compute_kernel_config,
+            transpose_mcast=False,
         )
 
         self.output_height = self.conv.output_height

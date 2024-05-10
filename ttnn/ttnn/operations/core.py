@@ -30,7 +30,7 @@ def _getitem_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
 def _golden_function(input_tensor: ttnn.Tensor, slices):
     output_tensor = input_tensor[slices]
     if output_tensor.ndim == 0:
-        raise RuntimeError("ttnn.Tensor.__getitem__: returned a scalar!")
+        raise RuntimeError("ttnn.Tensor.__getitem__: cannot return a scalar!")
     return output_tensor
 
 
@@ -360,7 +360,10 @@ def to_torch(
             if tensor.shape[0] != 1:
                 raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
             tensor = tensor.squeeze()
-    return TorchTensor(tensor)
+
+    if not ttnn.CONFIG.enable_fast_runtime_mode:
+        tensor = TorchTensor(tensor)
+    return tensor
 
 
 def _to_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):
@@ -564,7 +567,6 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = No
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file does not exist.")
     if not file_name.is_file():
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file is not a file.")
-
     return ttl.tensor.load_tensor(str(file_name), device)
 
 

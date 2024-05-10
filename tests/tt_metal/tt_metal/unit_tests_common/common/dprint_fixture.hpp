@@ -20,6 +20,9 @@ public:
     }
 
 protected:
+    // Running with dprint + watcher enabled can make the code size blow up, so let's force watcher
+    // disabled for DPRINT tests.
+    bool watcher_previous_enabled;
     void SetUp() override {
         // The core range (physical) needs to be set >= the set of all cores
         // used by all tests using this fixture, so set dprint enabled for
@@ -31,6 +34,8 @@ protected:
         // Send output to a file so the test can check after program is run.
         tt::llrt::OptionsG.set_dprint_file_name(dprint_file_name);
         tt::llrt::OptionsG.set_test_mode_enabled(true);
+        watcher_previous_enabled = tt::llrt::OptionsG.get_watcher_enabled();
+        tt::llrt::OptionsG.set_watcher_enabled(false);
 
         // By default, exclude dispatch cores from printing
         auto num_cqs_str = getenv("TT_METAL_NUM_HW_CQS");
@@ -67,6 +72,7 @@ protected:
         tt::llrt::OptionsG.set_dprint_all_chips(false);
         tt::llrt::OptionsG.set_dprint_file_name("");
         tt::llrt::OptionsG.set_test_mode_enabled(false);
+        tt::llrt::OptionsG.set_watcher_enabled(watcher_previous_enabled);
     }
 
     void RunTestOnDevice(

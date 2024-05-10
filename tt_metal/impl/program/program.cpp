@@ -630,19 +630,6 @@ void Program::populate_dispatch_data(Device* device) {
         vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
             extract_dst_noc_multicast_info<std::set<CoreRange>>(device, kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
 
-        kernel_group.launch_msg.mode = DISPATCH_MODE_DEV;
-        vector<uint32_t> go_signals_data(sizeof(launch_msg_t) / sizeof(uint32_t));
-        uint32_t* launch_message_data = (uint32_t*)&kernel_group.launch_msg;
-        for (int i = 0; i < sizeof(launch_msg_t) / sizeof(uint32_t); i++) {
-            go_signals_data[i] = launch_message_data[i];
-        }
-        transfer_info_2 transfer_info = {
-            .dst_base_addr = GET_MAILBOX_ADDRESS_HOST(launch),
-            .dst_noc_info = dst_noc_multicast_info,
-            .linked = false,
-            .data = go_signals_data};
-        this->program_transfer_info.go_signals.push_back(transfer_info);
-
         // So far, we don't support linking optimizations for kernel groups
         // which use multiple core ranges
         bool linked = dst_noc_multicast_info.size() == 1;
@@ -712,19 +699,6 @@ void Program::populate_dispatch_data(Device* device) {
     for (KernelGroup& kernel_group : this->get_kernel_groups(CoreType::ETH)) {
         vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info =
             extract_dst_noc_unicast_info(kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
-
-        kernel_group.launch_msg.mode = DISPATCH_MODE_DEV;
-        vector<uint32_t> go_signals_data(sizeof(launch_msg_t) / sizeof(uint32_t));
-        uint32_t* launch_message_data = (uint32_t*)&kernel_group.launch_msg;
-        for (int i = 0; i < sizeof(launch_msg_t) / sizeof(uint32_t); i++) {
-            go_signals_data[i] = launch_message_data[i];
-        }
-        transfer_info_2 transfer_info = {
-            .dst_base_addr = GET_ETH_MAILBOX_ADDRESS_HOST(launch),
-            .dst_noc_info = dst_noc_unicast_info,
-            .linked = false,
-            .data = go_signals_data};
-        this->program_transfer_info.go_signals.push_back(transfer_info);
 
         vector<KernelHandle> kernel_ids;
         if (kernel_group.erisc_id)

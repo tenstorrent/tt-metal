@@ -69,11 +69,11 @@ bool ActiveDevices::is_device_active(chip_id_t id) {
 }
 
 Device::Device(
-    chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap) :
+    chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal) :
     id_(device_id), num_hw_cqs_(num_hw_cqs), work_executor(device_id) {
     ZoneScoped;
     TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");
-    this->initialize(l1_small_size, l1_bank_remap);
+    this->initialize(l1_small_size, l1_bank_remap, minimal);
 }
 
 void Device::initialize_cluster() {
@@ -1420,10 +1420,9 @@ void Device::initialize_synchronous_sw_cmd_queue() {
     }
 }
 
-bool Device::initialize(size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap) {
+bool Device::initialize(size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal) {
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache.is_enabled() ? "": "NOT ");
-    bool already_initialized = this->active_devices_.activate_device(this->id_);
     this->initialize_cluster();
     this->initialize_allocator(l1_small_size, l1_bank_remap);
     this->initialize_build();
@@ -1431,6 +1430,11 @@ bool Device::initialize(size_t l1_small_size, const std::vector<uint32_t> &l1_ba
     tt::tt_metal::device_pool::devices.resize(num_devices, nullptr);
     TT_ASSERT(id_ < num_devices);
     tt::tt_metal::device_pool::devices[id_] = this;
+    // For minimal setup, don't initialize FW, watcher, dprint. They won't work if we're attaching to a hung chip.
+    if (minimal)
+        return true;
+
+    bool already_initialized = this->active_devices_.activate_device(this->id_);
     if (!already_initialized) {
         this->build_firmware();
     }

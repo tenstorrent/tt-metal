@@ -34,6 +34,7 @@ def test_mistral_rms_norm_inference(device, use_program_cache, reset_seeds):
         dtype=dtype,
         layer_num=0,
         weight_key="attention_norm",
+        model_config=model_args.get_model_config(),
     )
     input = torch.rand(1, 32, 4096)
     reference_output = reference_model(input)

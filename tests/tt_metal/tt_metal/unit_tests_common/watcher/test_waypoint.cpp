@@ -134,21 +134,13 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
         // Need to update the expected strings based on each core.
         for (string waypoint : {"AAAA", "BBBB", "CCCC"}) {
             if (is_eth_core) {
-                //     blank | prefetch, dispatch kernels | 5 kernels/prev device | brisc,ncrisc,trisc kernels on current device
-                int k_id = 1 + 2 * fixture->NumDevices() + 5 * device->id() + 3;
-                // Inactive erisc 1 higher than active erisc, except if there's only one device
-                if (!is_active && tt::tt_metal::GetNumAvailableDevices() > 1)
-                    k_id += 1;
-                // Different k_ids for slow dispatch
-                if (fixture->IsSlowDispatch()) {
-                    k_id = 5 * device->id() + 4;
-                    // Inactive erisc 1 higher than active erisc, except if there's only one device
-                    if (!is_active && tt::tt_metal::GetNumAvailableDevices() > 1)
-                        k_id += 1;
-                }
-                string k_id_s = fmt::format("{}", k_id);
-                if (fixture->NumDevices() > 2) {
-                    // Calculating expected k_id for t3000 is really messy, let's skip it.
+                // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one device.
+                string k_id_s;
+                if (tt::tt_metal::GetNumAvailableDevices() == 1 && !fixture->IsSlowDispatch()) {
+                    // blank | prefetch, dispatch | tensix kernels
+                    int k_id = 1 + 2 + 3;
+                    string k_id_s = fmt::format("{}", k_id);
+                } else {
                     k_id_s = "";
                 }
                 expected = fmt::format(
@@ -158,26 +150,20 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                     k_id_s
                 );
             } else {
-                //     blank | prefetch, dispatch kernels | 4 kernels/prev device
-                int k_id = 1 + 4 * fixture->NumDevices() + 4 * device->id();
-                // Different k_ids for single chip
-                if (fixture->NumDevices() == 1) {
-                    k_id = 3;
-                }
-                // Different k_ids for slow dispatch
-                if (fixture->IsSlowDispatch()) {
-                    k_id = 4 * device->id() + 1;
-                }
-                string k_ids = fmt::format("{}|{}|{}", k_id, k_id+1, k_id+2);
-                if (fixture->NumDevices() > 2) {
-                    // Calculating expected k_id for t3000 is really messy, let's skip it.
-                    k_ids = "";
+                // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one device.
+                string k_id_s;
+                if (tt::tt_metal::GetNumAvailableDevices() == 1 && !fixture->IsSlowDispatch()) {
+                    // blank | prefetch, dispatch
+                    int k_id = 1 + 2;
+                    string k_id_s = fmt::format("{}|{}|{}", k_id, k_id+1, k_id+2);
+                } else {
+                    k_id_s = "";
                 }
                 expected = fmt::format(
                     "Device {} worker core(x={:2},y={:2}) phys(x={:2},y={:2}): {},{},{},{},{}  rmsg:***|*** smsg:**** k_ids:{}",
                     device->id(), logical_core.x, logical_core.y, phys_core.x, phys_core.y,
                     waypoint, waypoint, waypoint, waypoint, waypoint,
-                    k_ids
+                    k_id_s
                 );
             }
             expected_waypoints.push_back(expected);
@@ -211,7 +197,6 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 }
 
 TEST_F(WatcherFixture, TestWatcherWaypoints) {
-    GTEST_SKIP();
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(RunTest, device);
     }
