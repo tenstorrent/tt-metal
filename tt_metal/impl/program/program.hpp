@@ -18,7 +18,7 @@
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/impl/program/program_device_map.hpp"
 #include "dev_msgs.h"
-#include "tensor/tensor.hpp"
+#include "tt_eager/tensor/tensor.hpp"
 
 namespace tt {
 
@@ -221,6 +221,7 @@ class Program {
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value, CoreType core_type=CoreType::WORKER);
 
+    friend void detail::AddConfigTensor(Program &program, const Tensor& config_tensor);
     void add_config_tensor(const Tensor& config_tensor);
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space

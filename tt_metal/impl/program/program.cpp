@@ -516,6 +516,12 @@ void Program::add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t
     semaphores_.emplace_back(Semaphore( crs, address, init_value, core_type));
 }
 
+void Program::add_config_tensor(const Tensor& config_tensor) {
+    this->invalidate_compile();
+    config_tensors_.emplace_back(config_tensor);
+    // TODO: what else is needed here? ...
+}
+
 std::unordered_map<CoreType, std::vector<CoreCoord>> Program::logical_cores() const {
     std::unordered_map<CoreType, std::vector<CoreCoord>> cores_in_program;
     std::unordered_map<CoreType, std::set<CoreCoord>> unique_cores;
@@ -837,11 +843,6 @@ void Program::compile( Device * device )
         detail::MemoryReporter::inst().flush_program_memory_usage(*this, device);
     }
     compile_needed_[device->id()] = false;
-}
-
-void Program::add_config_tensor(const Tensor& config_tensor) {
-    config_tensors_.emplace_back(config_tensor);
-    // TODO: what else is needed here? ...
 }
 
 Program::~Program() {
