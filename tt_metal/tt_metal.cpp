@@ -153,6 +153,8 @@ std::map<chip_id_t, Device *> CreateDevices(
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
     std::map<chip_id_t, Device *> active_devices;  // TODO: pass this to CloseDevices
+    bool tg_remote_chip_found = false;
+    bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
     for (const auto &device_id : device_ids) {
         const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         if (active_devices.find(mmio_device_id) == active_devices.end()) {
@@ -161,9 +163,25 @@ std::map<chip_id_t, Device *> CreateDevices(
                 //if (mmio_controlled_device_id != mmio_device_id) {
                 //    continue;
                 //}
+                //For galaxy only proceed for directly connected remote chip.
+                //Currently we only have 1 deep tunnel. So we can only handle 1 chip on galaxy. Like R chip on N300.
+                //Remove when 4 deep tunnel gets implemented.
+                if ((mmio_controlled_device_id != mmio_device_id) && is_galaxy) {
+                    log_info(tt::LogMetal, " Checking Device {}", mmio_controlled_device_id);
+                    auto one_deep_remote_chips = tt::Cluster::instance().get_ethernet_connected_device_ids(mmio_device_id);
+                    log_info(tt::LogMetal, " Device  {} is connected to {} chips.", mmio_device_id, one_deep_remote_chips.size());
+                    if (one_deep_remote_chips.find(mmio_controlled_device_id) == one_deep_remote_chips.end()) {
+                        continue;
+                    }
+                    tg_remote_chip_found = true;
+                }
                 Device *dev = new Device(mmio_controlled_device_id, num_hw_cqs, l1_small_size, l1_bank_remap);
                 active_devices.insert({mmio_controlled_device_id, dev});
                 detail::InitDeviceProfiler(dev);
+
+                if (tg_remote_chip_found) {
+                    break;
+                }
             }
         }
     }
