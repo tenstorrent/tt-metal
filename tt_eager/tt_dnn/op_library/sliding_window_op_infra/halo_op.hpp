@@ -45,10 +45,6 @@ struct Halo {
 };
 
 
-Tensor construct_on_device_config_tensor(const std::vector<std::vector<uint16_t>>& config, const Device* device) {
-    // TODO: ...
-}
-
 
 Tensor halo_op(const Tensor& a,
                 const SlidingWindowConfig& config,
@@ -77,7 +73,7 @@ Tensor halo_op(const Tensor& a,
             .at(0);
     };
     std::vector<Tensor> output_tensors = { Tensor(tt::tt_metal::operation::get_workers_for_op_output({a}, {})) };
-    operation::launch_op(halo_op, {a}, {output_tensors});
+    operation::launch_op(halo_op, {a}, output_tensors);
 
     return output_tensors.at(0);
 }
