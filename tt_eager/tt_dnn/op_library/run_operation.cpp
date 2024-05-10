@@ -203,6 +203,7 @@ OutputTensors run_device_operation(
         };
     }
 
+    operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
     auto output_tensors = operation.create_output_tensors(input_tensors, optional_output_tensors);
     auto program = get_or_create_program(operation, input_tensors, optional_input_tensors, output_tensors);
     uint32_t device_id = detail::get_device(input_tensors, optional_input_tensors)->id();
@@ -418,7 +419,6 @@ OutputTensors run(
     //     }
     // }
 
-    operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
     if (detail::any_tensor_on_multi_device(input_tensors)) {
         return detail::decorate_device_operation(detail::run_multi_device_operation<OutputTensors>)(
             std::nullopt, operation, input_tensors, optional_input_tensors, optional_output_tensors);
