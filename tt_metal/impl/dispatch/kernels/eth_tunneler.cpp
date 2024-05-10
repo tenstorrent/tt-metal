@@ -67,6 +67,7 @@ constexpr uint32_t test_results_buf_size_bytes = get_compile_time_arg_val(13);
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_buf_addr_arg);
 
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(14);
+constexpr uint32_t inner_stop_mux_d_bypass = get_compile_time_arg_val(15);
 
 void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
@@ -139,6 +140,11 @@ void kernel_main() {
             output_queues[i].prev_words_in_flight_check_flush();
             bool output_finished = output_queues[i].is_remote_finished();
             if (output_finished) {
+                if ((i == 1) && (inner_stop_mux_d_bypass != 0)) {
+                    input_queues[1].remote_x = inner_stop_mux_d_bypass & 0xFF;
+                    input_queues[1].remote_y = (inner_stop_mux_d_bypass >> 8) & 0xFF;
+                    input_queues[1].set_remote_ready_status_addr((inner_stop_mux_d_bypass >> 16) & 0xFF);
+                }
                 input_queues[i].send_remote_finished_notification();
             }
             all_outputs_finished &= output_finished;
