@@ -301,6 +301,14 @@ void OptimizedConvNew::validate(const std::vector<Tensor>& input_tensors, const 
     }
     if (this->output_mem_config.is_sharded()) {
         uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntiles;
+        std::vector<int> conv_params = {
+            (int) sliding_window_config.window_hw_.first,
+            (int) sliding_window_config.window_hw_.second,
+            (int) sliding_window_config.stride_hw_.first,
+            (int) sliding_window_config.stride_hw_.second,
+            (int) sliding_window_config.pad_hw_.first,
+            (int) sliding_window_config.pad_hw_.second,
+        };
         auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(input_tensor_a.get_legacy_shape(), conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
         uint32_t out_width_ntiles = this->compute_output_shapes(input_tensors).at(0)[-1] / TILE_WIDTH;
         if(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
