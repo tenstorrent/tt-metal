@@ -168,7 +168,6 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     std::optional<DataType> output_dtype=std::nullopt,
     std::optional<std::array<std::uint32_t, 4>> input_tensor_shape = std::nullopt,
     bool use_shallow_conv_variant = false,
-    bool tranpose_mcast = true,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
 );
 

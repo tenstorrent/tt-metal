@@ -363,15 +363,15 @@ namespace tt::tt_metal {
                                    max_out_nsticks_per_core);
         }
 
-        std::vector<std::vector<uint32_t>> generate_sliding_window_op_config(const std::vector<uint32_t>& op_trace_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool pad_tile = false, bool pad_last_core = false) {
-            std::vector<std::vector<uint32_t>> sharded_input_top_left_indices;
+        std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(const std::vector<uint32_t>& op_trace_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool pad_tile = false, bool pad_last_core = false) {
+            std::vector<std::vector<uint16_t>> sharded_input_top_left_indices;
             for(const auto& item : shard_boundaries) {
                 const auto& [output_shard_start, output_shard_end] = item.first;
                 const auto& [input_shard_start, input_shard_end] = item.second;
                 // sanity check
                 TT_ASSERT(output_shard_start < op_trace_metadata.size());
                 TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
-                std::vector<uint32_t> local_top_left_indices;
+                std::vector<uint16_t> local_top_left_indices;
                 for(size_t i = output_shard_start; i < output_shard_end; i++) {
                     TT_ASSERT(i < data_top_left_indices.size());
                     local_top_left_indices.push_back(op_trace_metadata[i] - op_trace_metadata[output_shard_start]);
@@ -383,7 +383,7 @@ namespace tt::tt_metal {
                 for(size_t i = 0; i < sharded_input_top_left_indices.size(); i++) {
                     uint32_t extend_with_zeroes = sharded_input_top_left_indices[i].size() % 32;
                     if (extend_with_zeroes > 0) {
-                        std::vector<uint32_t> extend_v(extend_with_zeroes, 0);
+                        std::vector<uint16_t> extend_v(extend_with_zeroes, 0);
                         sharded_input_top_left_indices[i].insert(sharded_input_top_left_indices[i].end(), extend_v.begin(), extend_v.end());
                     }
                 }
@@ -394,7 +394,7 @@ namespace tt::tt_metal {
                 uint32_t indices_length_last_core = sharded_input_top_left_indices.back().size();
                 TT_ASSERT(indices_length_last_core <= indices_length_per_core);
                 if (indices_length_per_core - indices_length_last_core > 0) {
-                    std::vector<uint32_t> extend_v(indices_length_per_core - indices_length_last_core, 0);
+                    std::vector<uint16_t> extend_v(indices_length_per_core - indices_length_last_core, 0);
                     sharded_input_top_left_indices.back().insert(sharded_input_top_left_indices.back().end(), extend_v.begin(), extend_v.end());
                 }
 
