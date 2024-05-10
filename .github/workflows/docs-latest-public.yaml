@@ -1,4 +1,4 @@
-name: Internal - Docs Build latest docs and deploy to GitHub pages on main
+name: "[internal] Docs build and deploy to GitHub pages on main impl"
 
 on:
   workflow_call:
@@ -28,7 +28,10 @@ jobs:
     environment: dev
     runs-on: ubuntu-20.04
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: false
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
