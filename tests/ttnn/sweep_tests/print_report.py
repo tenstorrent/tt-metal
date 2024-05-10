@@ -5,7 +5,7 @@
 
 import argparse
 
-from tests.ttnn.sweep_tests.sweep import print_report
+from sweeps import print_report
 
 
 def main():
