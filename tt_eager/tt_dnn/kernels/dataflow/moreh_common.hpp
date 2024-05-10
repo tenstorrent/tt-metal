@@ -471,3 +471,148 @@ FORCE_INLINE void mask_tile_if_need(uint32_t l1_addr, uint32_t origin_h, uint32_
         mask_tile_hw(l1_addr, mask_h, mask_w);
     }
 }
+
+FORCE_INLINE void generate_mask_tiles(
+    uint32_t cb_mask, uint32_t mask_h, uint32_t mask_w, uint32_t single_tile_size = 2048) {
+    constexpr uint32_t num_mask_tiles = 3;
+    Scalar one;
+    Scalar zero;
+
+    one.f = 1.0f;
+    zero.f = 0.0f;
+
+    const auto u16_one = uint16_t(one.u >> 16);
+    const auto u16_zero = uint16_t(zero.u >> 16);
+
+    cb_reserve_back(cb_mask, num_mask_tiles);
+
+    // mask_h
+    // first tile ptr
+    auto mask_h_ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_mask));
+    for (uint32_t w = 0; w < 16; w++) {
+        // sub tile 0
+        {
+            uint32_t mask_h_0 = mask_h;
+            if (mask_h_0 >= 16) {
+                mask_h_0 = 16;
+            }
+            uint32_t h = 0;
+            for (; h < mask_h_0; h++) {
+                mask_h_ptr[h * 16 + w] = u16_one;
+            }
+            for (; h < 16; h++) {
+                mask_h_ptr[h * 16 + w] = u16_zero;
+            }
+        }
+
+        // sub tile 1
+        {
+            uint32_t mask_h_0 = mask_h;
+            if (mask_h_0 >= 16) {
+                mask_h_0 = 16;
+            }
+            uint32_t h = 0;
+            for (; h < mask_h_0; h++) {
+                mask_h_ptr[h * 16 + w + 256] = u16_one;
+            }
+            for (; h < 16; h++) {
+                mask_h_ptr[h * 16 + w + 256] = u16_zero;
+            }
+        }
+
+        // sub tile 2
+        {
+            uint32_t mask_h_1 = (mask_h < 16) ? 0 : mask_h - 16;
+            uint32_t h = 0;
+            for (; h < mask_h_1; h++) {
+                mask_h_ptr[h * 16 + w + 512] = u16_one;
+            }
+            for (; h < 16; h++) {
+                mask_h_ptr[h * 16 + w + 512] = u16_zero;
+            }
+        }
+
+        // sub tile 3
+        {
+            uint32_t mask_h_1 = (mask_h < 16) ? 0 : mask_h - 16;
+            uint32_t h = 0;
+            for (; h < mask_h_1; h++) {
+                mask_h_ptr[h * 16 + w + 768] = u16_one;
+            }
+            for (; h < 16; h++) {
+                mask_h_ptr[h * 16 + w + 768] = u16_zero;
+            }
+        }
+    }
+
+    // mask_w
+    // second tile ptr
+    auto mask_w_ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_mask) + single_tile_size);
+    for (uint32_t h = 0; h < 16; h++) {
+        // sub tile 0
+        {
+            uint32_t mask_w_0 = mask_w;
+            if (mask_w_0 >= 16) {
+                mask_w_0 = 16;
+            }
+            uint32_t w = 0;
+            for (; w < mask_w_0; w++) {
+                mask_w_ptr[h * 16 + w] = u16_one;
+            }
+            for (; w < 16; w++) {
+                mask_w_ptr[h * 16 + w] = u16_zero;
+            }
+        }
+
+        // sub tile 1
+        {
+            uint32_t mask_w_1 = (mask_w < 16) ? 0 : mask_w - 16;
+            uint32_t w = 0;
+            for (; w < mask_w_1; w++) {
+                mask_w_ptr[h * 16 + w + 256] = u16_one;
+            }
+            for (; w < 16; w++) {
+                mask_w_ptr[h * 16 + w + 256] = u16_zero;
+            }
+        }
+
+        // sub tile 2
+        {
+            uint32_t mask_w_0 = mask_w;
+            if (mask_w_0 >= 16) {
+                mask_w_0 = 16;
+            }
+            uint32_t w = 0;
+            for (; w < mask_w_0; w++) {
+                mask_w_ptr[h * 16 + w + 512] = u16_one;
+            }
+            for (; w < 16; w++) {
+                mask_w_ptr[h * 16 + w + 512] = u16_zero;
+            }
+        }
+
+        // sub tile 3
+        {
+            uint32_t mask_w_1 = (mask_w < 16) ? 0 : mask_w - 16;
+            uint32_t w = 0;
+            for (; w < mask_w_1; w++) {
+                mask_w_ptr[h * 16 + w + 768] = u16_one;
+            }
+            for (; w < 16; w++) {
+                mask_w_ptr[h * 16 + w + 768] = u16_zero;
+            }
+        }
+    }
+
+    // mask_hw
+    // third tile ptr
+    auto mask_hw_ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_mask) + (single_tile_size * 2));
+    for (uint32_t i = 0; i < 1024; ++i) {
+        if (mask_h_ptr[i] == mask_w_ptr[i]) {
+            mask_hw_ptr[i] = mask_h_ptr[i];
+        } else {
+            mask_hw_ptr[i] = u16_zero;
+        }
+    }
+    cb_push_back(cb_mask, num_mask_tiles);
+}
