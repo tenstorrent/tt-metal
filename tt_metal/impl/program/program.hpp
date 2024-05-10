@@ -186,6 +186,8 @@ class Program {
     friend std::shared_ptr<Kernel> detail::GetKernel(const Program &program, KernelHandle kernel_id);
 
     friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
+    friend void AddConfigTensor(Program &program, const Tensor& config_tensor);
+
     KernelHandle add_kernel(std::shared_ptr<Kernel> kernel, const CoreType &core_type);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
