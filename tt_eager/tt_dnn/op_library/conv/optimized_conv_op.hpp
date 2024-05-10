@@ -76,7 +76,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
     DataType output_dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
-    DeviceComputeKernelConfig compute_kernel_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     Tensor& output);
 
 struct OptimizedConv {
@@ -251,7 +251,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     DataType output_dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
-    const DeviceComputeKernelConfig& compute_kernel_config
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
 );
 
 }  // namespace tt_metal
