@@ -1,4 +1,4 @@
-name: post-commit - Docs Build latest docs and deploy to GitHub pages on main
+name: "[post-commit] Docs build and deploy to GitHub pages on main"
 
 on:
   workflow_dispatch:
