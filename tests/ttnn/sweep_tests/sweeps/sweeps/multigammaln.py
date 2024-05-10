@@ -32,8 +32,8 @@ def skip(
     output_memory_config,
     layout,
 ) -> Tuple[bool, Optional[str]]:
-    if input_dtype == ttnn.bfloat8_b:
-        return True, "BFLOAT8_B is not supported"
+    if layout == ttnn.ROW_MAJOR_LAYOUT or input_dtype == ttnn.bfloat8_b:
+        return True, "Not Supported"
     return False, None
 
 
