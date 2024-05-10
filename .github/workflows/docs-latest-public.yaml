@@ -26,12 +26,18 @@ jobs:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on: ${{ matrix.arch }}
+    runs-on: ubuntu-20.04
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: ./.github/actions/install-metal-deps
+        with:
+          os: ubuntu-20.04
+      - uses: ./.github/actions/install-metal-dev-deps
+        with:
+          os: ubuntu-20.04
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.arch }}
