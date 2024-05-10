@@ -72,25 +72,44 @@ std::vector<Tensor> Halo::create_output_tensors(const std::vector<Tensor> &input
 
 operation::ProgramWithCallbacks Halo::create_program(const std::vector<Tensor>& inputs, std::vector<Tensor> &outputs) const {
     const auto& input_tensor = inputs.at(0);
-    const auto& padding_config = inputs.at(1);
-    const auto& local_config = inputs.at(2);
-    const auto& remote_config = inputs.at(3);
     auto& output_tensor = outputs.at(0);
 
+    auto device = input_tensor.device();
+
+    auto pad_metadata = sliding_window::generate_pad_metadata(config_);
+    auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config_);
+    auto shard_boundaries = sliding_window::generate_shard_boundaries(config_, op_trace_metadata);
+    auto tensor_metadata = sliding_window::generate_tensor_metadata(pad_metadata, config_, reshard_num_cores_nhw_);
+    auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(tensor_metadata, shard_boundaries, remote_read_, device);
+
+    const auto& pad_config = std::get<0>(kernel_config);
+    const auto& local_config = std::get<1>(kernel_config);
+    const auto& remote_config = std::get<2>(kernel_config);
+    uint32_t max_out_nsticks_per_core = std::get<3>(kernel_config);
+
+    auto pad_config_tensor = construct_on_device_config_tensor(pad_config, device);
+    auto local_config_tensor = construct_on_device_config_tensor(local_config, device);
+    auto remote_config_tensor = construct_on_device_config_tensor(remote_config, device);
+
     Program program = CreateProgram();
+
+    tt::tt_metal::detail::AddConfigTensor(program, pad_config_tensor);
+    tt::tt_metal::detail::AddConfigTensor(program, local_config_tensor);
+    tt::tt_metal::detail::AddConfigTensor(program, remote_config_tensor);
 
     return {untilize_with_halo_multi_core_v2(
         program,
         input_tensor,
         pad_val_,
         config_.num_cores_nhw_,
-        max_out_nsticks_per_core_,
-        padding_config,
-        local_config,
-        remote_config,
+        max_out_nsticks_per_core,
+        pad_config_tensor,
+        local_config_tensor,
+        remote_config_tensor,
         remote_read_,
         transpose_mcast_,
-        output_tensor)};
+        output_tensor
+    )};
 }
 
 
