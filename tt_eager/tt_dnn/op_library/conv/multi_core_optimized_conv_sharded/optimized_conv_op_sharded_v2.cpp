@@ -16,6 +16,7 @@
 #include "tt_dnn/op_library/sharding_utilities.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 
+#include "tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 #include "tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
@@ -1313,7 +1314,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
 }
 
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias,
-    const SlidingWindowConfig& sliding_window_config,
+    vector<int> conv_params,
     uint32_t output_channels,
     bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
     const OptimizedConvParallelizationConfig& parallelization_config,
@@ -1321,22 +1322,23 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
     DataType output_dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
-    const DeviceComputeKernelConfig compute_kernel_config,
+    DeviceComputeKernelConfig compute_kernel_config,
     Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
     // TODO: conv params need to be cleaned up and replaced with sliding window config
-    std::vector<int> conv_params = {
-        (int) sliding_window_config.window_hw_.first,
-        (int) sliding_window_config.window_hw_.second,
-        (int) sliding_window_config.stride_hw_.first,
-        (int) sliding_window_config.stride_hw_.second,
-        (int) sliding_window_config.pad_hw_.first,
-        (int) sliding_window_config.pad_hw_.second,
-    };
     ParallelConfig parallel_config;
     parallel_config.grid = a.shard_spec().value().grid;
     parallel_config.shard_scheme = a.memory_config().memory_layout;
     parallel_config.shard_orientation = a.shard_spec().value().orientation;
+    // TODO: pass sliding window config to the function instead of conv params
+    uint32_t weight_size_h = (uint32_t) conv_params[0]; // filter_h
+    uint32_t weight_size_w = (uint32_t) conv_params[1]; // filter_W
+    uint32_t stride_h = (uint32_t) conv_params[2];
+    uint32_t stride_w = (uint32_t) conv_params[3];
+    uint32_t pad_h = (uint32_t) conv_params[4];
+    uint32_t pad_w = (uint32_t) conv_params[5];
+    SlidingWindowConfig sliding_window_config = SlidingWindowConfig(input_tensor_shape[0], input_tensor_shape[1], input_tensor_shape[2], weight_size_h, weight_size_w, stride_h, stride_w,
+        pad_h, pad_w, 1, 1, parallelization_config.num_cores_nhw, parallel_config.grid);
 
     // create conv config tensors
     auto pad_metadata = sliding_window::generate_pad_metadata(sliding_window_config);
