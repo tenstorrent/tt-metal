@@ -22,7 +22,6 @@ struct Halo {
     bool remote_read_;
     bool transpose_mcast_;
     uint32_t reshard_num_cores_nhw_;
-    uint32_t max_out_nsticks_per_core_;
     MemoryConfig output_memory_config_;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
@@ -32,7 +31,7 @@ struct Halo {
     const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 
     static constexpr auto attribute_names =
-        std::make_tuple("config_", "pad_val_", "remote_read_", "transpose_mcast_", "reshard_num_cores_nhw_", "max_out_nsticks_per_core_", "output_memory_config_");
+        std::make_tuple("config_", "pad_val_", "remote_read_", "transpose_mcast_", "reshard_num_cores_nhw_", "output_memory_config_");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(config_),
@@ -40,11 +39,15 @@ struct Halo {
             std::cref(remote_read_),
             std::cref(transpose_mcast_),
             std::cref(reshard_num_cores_nhw_),
-            std::cref(max_out_nsticks_per_core_),
             std::cref(output_memory_config_)
         );
     }
 };
+
+
+Tensor construct_on_device_config_tensor(const std::vector<std::vector<uint16_t>>& config, const Device* device) {
+    // TODO: ...
+}
 
 
 Tensor halo_op(const Tensor& a,
@@ -61,21 +64,6 @@ Tensor halo_op(const Tensor& a,
 
     auto halo_op = [&config, pad_val, remote_read, transpose_mcast, reshard_num_cores_nhw, &output_memory_config]
         (const std::vector<Tensor>& input_tensors) -> std::vector<Tensor> {
-        const auto& a = input_tensors.at(0);
-
-        auto device = a.device();
-
-        auto pad_metadata = sliding_window::generate_pad_metadata(config);
-        auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config);
-        auto shard_boundaries = sliding_window::generate_shard_boundaries(config, op_trace_metadata);
-        auto tensor_metadata = sliding_window::generate_tensor_metadata(pad_metadata, config, reshard_num_cores_nhw);
-        auto kernel_config_tensors = sliding_window::generate_halo_kernel_config_tensors(tensor_metadata, shard_boundaries, remote_read, device);
-
-        const auto& padding_config = std::get<0>(kernel_config_tensors);
-        const auto& local_config = std::get<1>(kernel_config_tensors);
-        const auto& remote_config = std::get<2>(kernel_config_tensors);
-        uint32_t max_out_nsticks_per_core = std::get<3>(kernel_config_tensors);
-
         return operation::run(
             Halo{
                 .config_ = config,
@@ -83,15 +71,9 @@ Tensor halo_op(const Tensor& a,
                 .remote_read_ = remote_read,
                 .transpose_mcast_ = transpose_mcast,
                 .reshard_num_cores_nhw_ = reshard_num_cores_nhw,
-                .max_out_nsticks_per_core_ = max_out_nsticks_per_core,
                 .output_memory_config_ = output_memory_config
             },
-            {
-                a,
-                padding_config,
-                local_config,
-                remote_config
-            })
+            input_tensors)
             .at(0);
     };
     std::vector<Tensor> output_tensors = { Tensor(tt::tt_metal::operation::get_workers_for_op_output({a}, {})) };
