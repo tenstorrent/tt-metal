@@ -70,6 +70,7 @@ std::vector<Tensor> Halo::create_output_tensors(const std::vector<Tensor> &input
         output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), out_mem_config)};
 }
 
+
 operation::ProgramWithCallbacks Halo::create_program(const std::vector<Tensor>& inputs, std::vector<Tensor> &outputs) const {
     const auto& input_tensor = inputs.at(0);
     auto& output_tensor = outputs.at(0);
@@ -87,9 +88,16 @@ operation::ProgramWithCallbacks Halo::create_program(const std::vector<Tensor>& 
     const auto& remote_config = std::get<2>(kernel_config);
     uint32_t max_out_nsticks_per_core = std::get<3>(kernel_config);
 
-    auto pad_config_tensor = construct_on_device_config_tensor(pad_config, device);
-    auto local_config_tensor = construct_on_device_config_tensor(local_config, device);
-    auto remote_config_tensor = construct_on_device_config_tensor(remote_config, device);
+    ParallelConfig p_config;
+    p_config.grid = input_tensor.shard_spec().value().grid;
+    p_config.shard_scheme = input_tensor.memory_config().memory_layout;
+    p_config.shard_orientation = input_tensor.shard_spec().value().orientation;
+
+    TT_ASSERT(p_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED || (p_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED && ((transpose_mcast_ && p_config.shard_orientation == ShardOrientation::COL_MAJOR) || ((!transpose_mcast_) && p_config.shard_orientation == ShardOrientation::ROW_MAJOR))), "Transpose mcast and shard orientation should be consistent.");
+
+    auto pad_config_tensor = sliding_window::construct_on_device_config_tensor(pad_config, config_, p_config, device);
+    auto local_config_tensor = sliding_window::construct_on_device_config_tensor(local_config, config_, p_config, device);
+    auto remote_config_tensor = sliding_window::construct_on_device_config_tensor(remote_config, config_, p_config, device);
 
     Program program = CreateProgram();
 
