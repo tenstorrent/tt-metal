@@ -346,6 +346,9 @@ def register_ttl_activation_function_glu(name, ttl_activation_function, op_name,
                 >>> tensor = ttnn.from_torch(torch.tensor((32, 64), dtype=torch.bfloat16), device=device)
                 >>> output = ttnn.{(name)}(tensor, {param})
 
+            Last dimension of input tensor should be divisible by 64.
+
+            ttnn.{(name)} function is supported only for last dimension (-1 or 3).
             """
     setattr(THIS_MODULE, name, activation_function)
 
