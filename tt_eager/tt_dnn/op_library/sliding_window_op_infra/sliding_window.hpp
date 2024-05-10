@@ -414,8 +414,8 @@ namespace tt::tt_metal {
 
 
         Tensor construct_on_device_config_tensor(const std::vector<std::vector<uint16_t>>& config, const SlidingWindowConfig& sw_config, const ParallelConfig& p_config, Device* device) {
-            auto shard_shape = Shape({1, (uint32_t) config[0].size()});
-            ShardSpec shard_spec(p_config.grid, shard_shape, p_config.shard_orientation);
+            auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t) config[0].size()});
+            ShardSpec shard_spec(p_config.grid, shard_shape, p_config.shard_orientation, false);
             MemoryConfig memory_config{p_config.shard_scheme, BufferType::L1_SMALL, shard_spec};
 
             std::vector<uint16_t> config_vector = flatten(config);
