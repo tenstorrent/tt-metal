@@ -114,7 +114,7 @@ void notify_host_of_completion_queue_write_pointer() {
     uint32_t completion_wr_ptr_and_toggle = cq_write_interface.completion_fifo_wr_ptr | (cq_write_interface.completion_fifo_wr_toggle << 31);
     volatile tt_l1_ptr uint32_t* completion_wr_ptr_addr = get_cq_completion_write_ptr();
     completion_wr_ptr_addr[0] = completion_wr_ptr_and_toggle;
-    noc_async_write(CQ_COMPLETION_WRITE_PTR, pcie_address, 4);
+    noc_async_write_one_packet(CQ_COMPLETION_WRITE_PTR, pcie_address, 4);
     block_noc_writes_to_clear[rd_block_idx]++;
 }
 
@@ -255,7 +255,7 @@ void relay_to_next_cb(uint32_t data_ptr,
                     ASSERT(dispatch_cb_end - data_ptr == preamble_size);
                     if (orphan_size != 0) {
                         cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1); // XXXX optimize, take all availabl
-                        noc_async_write(data_ptr, dst, orphan_size);
+                        noc_async_write<dispatch_cb_page_size>(data_ptr, dst, orphan_size);
                         block_noc_writes_to_clear[rd_block_idx]++;
                         page_acquired = true;
                         length -= orphan_size;
@@ -295,7 +295,7 @@ void relay_to_next_cb(uint32_t data_ptr,
         if (page_acquired == false) {
             cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1); // XXXX optimize, take all available
         }
-        noc_async_write(data_ptr, dst, xfer_size);
+        noc_async_write<dispatch_cb_page_size>(data_ptr, dst, xfer_size);
         block_noc_writes_to_clear[rd_block_idx]++; // XXXXX maybe just write the noc internal api counter
         cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(1); // XXXX optimize, take all available
 
@@ -364,9 +364,9 @@ void process_write_linear(uint32_t num_mcast_dests) {
                     uint32_t orphan_size = dispatch_cb_end - data_ptr;
                     if (orphan_size != 0) {
                         if constexpr (multicast){
-                            noc_async_write_multicast(data_ptr, dst, orphan_size, num_mcast_dests);
+                            noc_async_write_multicast<dispatch_cb_page_size>(data_ptr, dst, orphan_size, num_mcast_dests);
                         } else {
-                            noc_async_write(data_ptr, dst, orphan_size);
+                            noc_async_write<dispatch_cb_page_size>(data_ptr, dst, orphan_size);
                         }
                         block_noc_writes_to_clear[rd_block_idx]++;
                         length -= orphan_size;
@@ -400,9 +400,9 @@ void process_write_linear(uint32_t num_mcast_dests) {
         }
 
         if constexpr (multicast){
-            noc_async_write_multicast(data_ptr, dst, xfer_size, num_mcast_dests);
+            noc_async_write_multicast<dispatch_cb_page_size>(data_ptr, dst, xfer_size, num_mcast_dests);
         } else {
-            noc_async_write(data_ptr, dst, xfer_size);
+            noc_async_write<dispatch_cb_page_size>(data_ptr, dst, xfer_size);
         }
         block_noc_writes_to_clear[rd_block_idx]++; // XXXXX maybe just write the noc internal api counter
 
@@ -456,7 +456,7 @@ void process_write_paged() {
                 if (rd_block_idx == dispatch_cb_blocks - 1) {
                     uint32_t orphan_size = dispatch_cb_end - data_ptr;
                     if (orphan_size != 0) {
-                        noc_async_write(data_ptr, dst, orphan_size);
+                        noc_async_write<dispatch_cb_page_size>(data_ptr, dst, orphan_size);
                         block_noc_writes_to_clear[rd_block_idx]++;
                         write_length -= orphan_size;
                         xfer_size -= orphan_size;
@@ -487,7 +487,7 @@ void process_write_paged() {
                                                                 wr_block_idx);
         }
 
-        noc_async_write(data_ptr, dst, xfer_size);
+        noc_async_write<dispatch_cb_page_size>(data_ptr, dst, xfer_size);
         block_noc_writes_to_clear[rd_block_idx]++; // XXXXX maybe just write the noc internal api counter
 
         // If paged write is not completed for a page (dispatch_cb_page_size < page_size) then add offset, otherwise incr page_id.
@@ -556,10 +556,10 @@ void process_write_packed() {
                 if (rd_block_idx == dispatch_cb_blocks - 1) {
                     orphan_size = dispatch_cb_end - data_ptr;
                     if (orphan_size != 0) {
-                        if (mcast) {
-                            noc_async_write_multicast(data_ptr, dst, remainder_xfer_size, num_dests);
+                        if constexpr (mcast) {
+                            noc_async_write_multicast<dispatch_cb_page_size>(data_ptr, dst, remainder_xfer_size, num_dests);
                         } else {
-                            noc_async_write(data_ptr, dst, orphan_size);
+                            noc_async_write<dispatch_cb_page_size>(data_ptr, dst, orphan_size);
                         }
                         block_noc_writes_to_clear[rd_block_idx]++;
                         remainder_xfer_size = xfer_size - orphan_size;
@@ -584,10 +584,10 @@ void process_write_packed() {
             // This is done here so the common case doesn't have to restore the pointers
             if (remainder_xfer_size != 0) {
                 uint64_t dst = get_noc_addr_helper(dst_noc, remainder_dst_addr);
-                if (mcast) {
-                    noc_async_write_multicast(data_ptr, dst, remainder_xfer_size, num_dests);
+                if constexpr (mcast) {
+                    noc_async_write_multicast<dispatch_cb_page_size>(data_ptr, dst, remainder_xfer_size, num_dests);
                 } else {
-                    noc_async_write(data_ptr, dst, remainder_xfer_size);
+                    noc_async_write<dispatch_cb_page_size>(data_ptr, dst, remainder_xfer_size);
                 }
                 block_noc_writes_to_clear[rd_block_idx]++;
 
@@ -598,10 +598,10 @@ void process_write_packed() {
             }
         }
 
-        if (mcast) {
-            noc_async_write_multicast(data_ptr, dst, xfer_size, num_dests);
+        if constexpr (mcast) {
+            noc_async_write_multicast<dispatch_cb_page_size>(data_ptr, dst, xfer_size, num_dests);
         } else {
-            noc_async_write(data_ptr, dst, xfer_size);
+            noc_async_write<dispatch_cb_page_size>(data_ptr, dst, xfer_size);
         }
 
         block_noc_writes_to_clear[rd_block_idx]++; // XXXXX maybe just write the noc internal api counter
