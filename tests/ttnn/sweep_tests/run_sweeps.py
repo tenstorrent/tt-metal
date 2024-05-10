@@ -7,7 +7,7 @@ import argparse
 import ttnn
 
 
-from tests.ttnn.sweep_tests.sweep import run_sweeps, print_report
+from sweeps import run_sweeps, print_report
 
 
 def convert_string_to_list(string):
@@ -28,9 +28,9 @@ def main():
     include = convert_string_to_list(include)
 
     device = ttnn.open_device(device_id=0)
-    run_sweeps(device=device, include=include)
+    table_names = run_sweeps(device=device, include=include)
     ttnn.close_device(device)
-    print_report(include=include)
+    print_report(table_names=table_names)
 
 
 if __name__ == "__main__":

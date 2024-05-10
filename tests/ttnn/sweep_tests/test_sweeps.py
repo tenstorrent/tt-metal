@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from importlib.machinery import SourceFileLoader
-from tests.ttnn.sweep_tests.sweep import (
+from .sweeps import (
     SWEEP_SOURCES_DIR,
     permutations,
     run_single_test,
@@ -24,7 +24,7 @@ class SweepTest:
 
 
 sweep_tests = []
-for file_name in sorted(SWEEP_SOURCES_DIR.glob("*.py")):
+for file_name in sorted(SWEEP_SOURCES_DIR.glob("**/*.py")):
     sweep_tests.append(file_name)
 
 
