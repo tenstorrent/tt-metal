@@ -1317,7 +1317,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
     uint32_t output_channels,
     bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
     const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment=0,
+    const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment,
     DataType output_dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
