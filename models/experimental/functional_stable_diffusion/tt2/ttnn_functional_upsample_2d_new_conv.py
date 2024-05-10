@@ -56,9 +56,9 @@ class upsample2d:
         parameters.conv.bias = torch.reshape(parameters.conv.bias, (1, 1, 1, out_channels))
         tt_weight_tensor = ttnn.from_torch(parameters.conv.weight, ttnn.float32)
         tt_bias_tensor = ttnn.from_torch(parameters.conv.bias, ttnn.float32)
-        conv_config_override = {}
+        self.conv_config_override = {}
         if (out_channels, in_channels, input_height, input_width) in config_override:
-            conv_config_override = config_override[(out_channels, in_channels, input_height, input_width)]
+            self.conv_config_override = config_override[(out_channels, in_channels, input_height, input_width)]
         self.conv = ttnn.Conv2d(
             in_channels,
             out_channels,
@@ -76,7 +76,7 @@ class upsample2d:
             bias=tt_bias_tensor,
             math_fidelity=ttnn.MathFidelity.LoFi,
             weights_dtype=ttnn.bfloat8_b,
-            conv_blocking_and_parallelization_config_override=conv_config_override,
+            conv_blocking_and_parallelization_config_override=self.conv_config_override,
             use_shallow_conv_variant=False,
             # enable_auto_formatting=True,
             deallocate_activation=True,
@@ -113,6 +113,8 @@ class upsample2d:
             height_sharding=False,
             input_channels_alignment=32,
         )
+        if self.conv_config_override and "act_block_h" in self.conv_config_override:
+            conv_config.act_block_h = self.conv_config_override["act_block_h"]
         [tt_out, _out_height, _out_width, _dev_weights, _dev_bias] = ttnn.conv2d(
             input_tensor=tt_out,
             in_channels=self.conv_in_channels,
