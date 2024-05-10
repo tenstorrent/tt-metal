@@ -91,7 +91,7 @@ struct EltwiseBinary {
         return result;
     }
     static constexpr auto attribute_names =
-        std::make_tuple("op_type", "fused_activations", "output_mem_config", "output_dtype");
+        std::make_tuple("op_type", "fused_activations", "output_mem_config", "output_dtype", "in_place");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->op_type),

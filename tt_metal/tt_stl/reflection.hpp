@@ -187,6 +187,10 @@ constexpr bool supports_runtime_time_attributes_v = std::experimental::is_detect
 
 template <typename T>
 inline constexpr std::size_t get_num_attributes() {
+    static_assert(
+        std::tuple_size_v<decltype(T::attribute_names)> ==
+            std::tuple_size_v<decltype(std::declval<T>().attribute_values())>,
+        "Number of attribute_names must match number of attribute_values");
     return std::tuple_size_v<decltype(T::attribute_names)>;
 }
 template <typename T>
@@ -566,7 +570,7 @@ inline hash_t hash_object(const T& object) noexcept {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing struct {} using run-time attributes: {}\n", get_type_name<T>(), object);
         }
-        return hash_objects(0, typeid(T).hash_code(), object.attributes());
+        return hash_objects(typeid(T).hash_code(), object.attributes());
     } else if constexpr (detail::is_specialization_v<T, std::vector>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::vector of type {}: {}\n", get_type_name<T>(), object);

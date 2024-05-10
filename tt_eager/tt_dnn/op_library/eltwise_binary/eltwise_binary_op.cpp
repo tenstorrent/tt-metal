@@ -239,7 +239,6 @@ const operation::Hash EltwiseBinary::compute_program_hash(
     const auto& input_tensor_b = input_tensors.at(1);
 
     operation::Hash hash = tt::stl::hash::hash_objects(
-        0,
         typeid(*this).hash_code(),
         this->op_type,
         parallelization_strategy,
