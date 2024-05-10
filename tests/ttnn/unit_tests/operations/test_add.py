@@ -115,6 +115,36 @@ def test_expand_and_broadcast(device, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
+@pytest.mark.parametrize("h", [500])
+@pytest.mark.parametrize("w", [512])
+def test_expand_and_broadcast_3D(device, h, w):
+    torch_input_tensor_a = torch.rand((8, h, w), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((1, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("h", [500])
+@pytest.mark.parametrize("w", [512])
+def test_expand_and_broadcast_channel_4D(device, h, w):
+    torch_input_tensor_a = torch.rand((1, 8, h, w), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
 @pytest.mark.skip(reason="4005: Unable to broadcast on batch or seq dimension")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
