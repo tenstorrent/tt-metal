@@ -253,7 +253,7 @@ def _nextafter_validate_input_tensors(operation_name, input_tensor_a, input_tens
         input_tensor_a,
         ranks=(4,),
         dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
+        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=False,
     )
@@ -262,7 +262,7 @@ def _nextafter_validate_input_tensors(operation_name, input_tensor_a, input_tens
         input_tensor_b,
         ranks=(4,),
         dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
+        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=False,
         can_be_a_scalar=False,
