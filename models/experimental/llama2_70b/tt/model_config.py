@@ -128,6 +128,13 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         ),
+        "COMPUTE_KERNEL_FP16_ACC_CONFIG_LOFI": ttl.tensor.WormholeComputeKernelConfig(
+            # math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        ),
         "LN_COMPUTE_KERNEL_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -505,11 +512,11 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
         # Llama 2 Attention Module Prefill 2D Matmul
         # Input shape is [1,1,seq_len,8192]
         # qkv_list shape is [8192,1280]
+        seq_len_tiles = seq_len // 32
+        cores_y = 8 if seq_len_tiles % 8 == 0 else 4
         per_core_M = seq_len // 32 // 4
         in0_block_w = 32 if seq_len == 128 else 8  # smaller in0_block_w for larger seq_len to fit in L1)
-        model_config[
-            "FUSED_QKV_MM_PROGCFG_LAMBDA"
-        ] = lambda cores_y: ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, cores_y),
             in0_block_w=in0_block_w,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -937,9 +944,9 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             )
         else:
             # Llama 2 MLP Module Prefill
-            model_config[
-                "PADDED_FF1_MM_PROGCFG_LAMBDA"
-            ] = lambda seq_tiles, cores_y: ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            seq_tiles = seq_len // 32
+            cores_y = 8 if seq_tiles % 8 == 0 else 4
+            model_config["PADDED_FF1_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, cores_y),
                 in0_block_w=8,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
@@ -950,9 +957,7 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
                 fused_activation=ttl.tensor.FusibleActivation.SILU,
             )
 
-            model_config[
-                "PADDED_FF3_MM_PROGCFG_LAMBDA"
-            ] = lambda seq_tiles, cores_y: ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            model_config["PADDED_FF3_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, cores_y),
                 in0_block_w=8,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
@@ -965,9 +970,7 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
 
             # input0: [1,32,128,32k]
             # input1: [1,1,32k,1k]
-            model_config[
-                "PADDED_FF2_MM_PROGCFG_LAMBDA"
-            ] = lambda seq_tiles, cores_y: ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            model_config["PADDED_FF2_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, cores_y),
                 in0_block_w=8,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
@@ -977,7 +980,7 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
                 transpose_mcast=False,
                 fused_activation=None,
             )
-            model_config["MLP_BLOCK_SHARDED_MEMCFG_LAMBDA"] = lambda seqlen, cores_y: ttl.tensor.MemoryConfig(
+            model_config["MLP_BLOCK_SHARDED_MEMCFG"] = ttl.tensor.MemoryConfig(
                 ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                 ttl.tensor.BufferType.L1,
                 ttl.tensor.ShardSpec(
@@ -990,7 +993,7 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
                         }
                     ),
                     [
-                        seqlen // cores_y,
+                        seq_len // cores_y,
                         4096 // 8,
                     ],
                     ttl.tensor.ShardOrientation.ROW_MAJOR,
