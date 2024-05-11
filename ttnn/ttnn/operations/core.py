@@ -454,6 +454,13 @@ from_device = ttnn.register_operation(
     doc=doc,
 )(ttnn._ttnn.operations.core.from_device)
 
+allocate_tensor_on_device = ttnn.register_operation(
+    name="ttnn.allocate_tensor_on_device",
+)(ttnn._ttnn.operations.core.allocate_tensor_on_device)
+
+copy_host_to_device_tensor = ttnn.register_operation(
+    name="ttnn.copy_host_to_device_tensor",
+)(ttnn._ttnn.operations.core.copy_host_to_device_tensor)
 
 doc = """
 deallocate(tensor: ttnn.Tensor, force: bool = True) -> None
@@ -660,5 +667,21 @@ def as_tensor(
             tensor = ttnn.to_device(tensor, device, memory_config=memory_config)
         return tensor
 
+
+begin_trace_capture = ttnn.register_operation(
+    name="ttnn.begin_trace_capture",
+)(ttnn._ttnn.operations.core.begin_trace_capture)
+
+end_trace_capture = ttnn.register_operation(
+    name="ttnn.end_trace_capture",
+)(ttnn._ttnn.operations.core.end_trace_capture)
+
+execute_trace = ttnn.register_operation(
+    name="ttnn.execute_trace",
+)(ttnn._ttnn.operations.core.execute_trace)
+
+release_trace = ttnn.register_operation(
+    name="ttnn.release_trace",
+)(ttnn._ttnn.operations.core.release_trace)
 
 __all__ = []

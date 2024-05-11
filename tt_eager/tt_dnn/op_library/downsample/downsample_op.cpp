@@ -80,7 +80,12 @@ operation::ProgramWithCallbacks Downsample::create_program(const std::vector<Ten
 }
 
 Tensor downsample(const Tensor &input_tensor_a, std::array<uint32_t, 5> downsample_params, std::optional<DataType> output_dtype) {
-    return operation::run_without_autoformat(Downsample{downsample_params, output_dtype.value_or(input_tensor_a.get_dtype())}, {input_tensor_a}).at(0);
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
+    operation::launch_op(
+        [downsample_params, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run_without_autoformat(Downsample{downsample_params, output_dtype.value_or(input_tensors.at(0).get_dtype())}, input_tensors);
+        }, {input_tensor_a}, output_tensors);
+    return output_tensors.at(0);
 }
 
 struct DownsampleReadPatternParams {

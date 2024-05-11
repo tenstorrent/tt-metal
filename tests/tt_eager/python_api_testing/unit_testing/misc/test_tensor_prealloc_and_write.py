@@ -7,6 +7,7 @@ import pytest
 import torch
 
 import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_pcc
 from models.utility_functions import is_grayskull
 
@@ -31,7 +32,7 @@ def test_tensor_preallocation_and_write_apis(
     for tensor_shape in shapes:
         # Preallocate tensor on device
         preallocated_tensor = ttl.tensor.allocate_tensor_on_device(
-            tensor_shape,
+            ttnn.Shape(tensor_shape),
             in_dtype,
             tensor_layout,
             device,

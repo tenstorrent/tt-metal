@@ -239,12 +239,20 @@ def test_run_resnet50_inference(
     [tt_lib.tensor.MathFidelity.HiFi4, tt_lib.tensor.MathFidelity.HiFi2, tt_lib.tensor.MathFidelity.LoFi],
     ids=["HiFi4", "HiFi2", "LoFi"],
 )
+@pytest.mark.parametrize("enable_async", [True, False])
 def test_run_resnet50_trace_inference(
-    device, use_program_cache, batch_size, weights_dtype, activations_dtype, math_fidelity, imagenet_sample_input
+    device,
+    use_program_cache,
+    batch_size,
+    weights_dtype,
+    activations_dtype,
+    math_fidelity,
+    imagenet_sample_input,
+    enable_async,
 ):
     if is_e75(device):
         pytest.skip("Resnet50 is not supported on E75")
-
+    device.enable_async(enable_async)
     if batch_size > 8 and (
         activations_dtype != tt_lib.tensor.DataType.BFLOAT8_B or weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B
     ):
@@ -339,3 +347,4 @@ def test_run_resnet50_trace_inference(
         # assert passing # fails because of torch.allclose
     # Done with the trace, can deallocate the buffers now.
     tt_lib.device.ReleaseTrace(device, tid)
+    device.enable_async(False)
