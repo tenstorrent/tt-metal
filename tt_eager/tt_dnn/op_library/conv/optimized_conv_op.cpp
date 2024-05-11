@@ -268,7 +268,7 @@ operation::OpPerformanceModel OptimizedConv::create_op_performance_model(const s
 }
 
 Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias,
-    const SlidingWindowConfig& sliding_window_config,
+    const vector<int> conv_params,
     uint32_t output_channels,
     bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
     const OptimizedConvParallelizationConfig& parallelization_config,
@@ -294,7 +294,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     bool fp32_accum = a.device()->arch() == ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::LoFi, true, fp32_accum, false);
     return operation::run_without_autoformat(
-        OptimizedConvNew(sliding_window_config, output_channels, untilize_out, bias.has_value(), fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config, output_dtype, input_tensor_shape, use_shallow_conv_variant, kernel_config_val
+        OptimizedConvNew(conv_params, output_channels, untilize_out, bias.has_value(), fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config, output_dtype, input_tensor_shape, use_shallow_conv_variant, kernel_config_val
         ),
         {a, b},
         {bias}).at(0);
@@ -310,14 +310,6 @@ void OptimizedConvNew::validate(const std::vector<Tensor>& input_tensors, const 
     }
     if (this->output_mem_config.is_sharded()) {
         uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntiles;
-        std::vector<int> conv_params = {
-            (int) sliding_window_config.window_hw_.first,
-            (int) sliding_window_config.window_hw_.second,
-            (int) sliding_window_config.stride_hw_.first,
-            (int) sliding_window_config.stride_hw_.second,
-            (int) sliding_window_config.pad_hw_.first,
-            (int) sliding_window_config.pad_hw_.second,
-        };
         auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(input_tensor_a.get_legacy_shape(), conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
         uint32_t out_width_ntiles = this->compute_output_shapes(input_tensors).at(0)[-1] / TILE_WIDTH;
         if(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -342,12 +334,12 @@ std::vector<Shape> OptimizedConvNew::compute_output_shapes(const std::vector<Ten
     uint32_t conv_activation_h = input_tensor_a_shape[1];
     uint32_t conv_activation_w = input_tensor_a_shape[2];
     // TODO: clean up here
-    uint32_t filter_h = (uint32_t) sliding_window_config.window_hw_.first;
-    uint32_t filter_w = (uint32_t) sliding_window_config.window_hw_.second;
-    uint32_t stride_h = (uint32_t) sliding_window_config.stride_hw_.first;
-    uint32_t stride_w = (uint32_t) sliding_window_config.stride_hw_.second;
-    uint32_t pad_h = (uint32_t) sliding_window_config.pad_hw_.first;
-    uint32_t pad_w = (uint32_t) sliding_window_config.pad_hw_.second;
+    uint32_t filter_h = (uint32_t) conv_params[0];
+    uint32_t filter_w = (uint32_t) conv_params[1];
+    uint32_t stride_h = (uint32_t) conv_params[2];
+    uint32_t stride_w = (uint32_t) conv_params[3];
+    uint32_t pad_h = (uint32_t) conv_params[4];
+    uint32_t pad_w = (uint32_t) conv_params[5];
     auto [conv_output_h, conv_output_w] = optimized_conv_op_utils::compute_opt_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, extra_padding_for_32B_alignment);
 
     // Tiled output shape is padded shape. Padded to tile shape.
@@ -379,15 +371,6 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             mem_config.shard_spec = shard_spec;
             return {create_sharded_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), mem_config)};
         } else {
-            // todo: remove conv params and use sliding_window_config in all functions
-            std::vector<int> conv_params = {
-                (int) sliding_window_config.window_hw_.first,
-                (int) sliding_window_config.window_hw_.second,
-                (int) sliding_window_config.stride_hw_.first,
-                (int) sliding_window_config.stride_hw_.second,
-                (int) sliding_window_config.pad_hw_.first,
-                (int) sliding_window_config.pad_hw_.second,
-            };
             auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(this->input_tensor_shape, conv_params, this->parallelization_config.per_core_out_matrix_height_ntiles, extra_padding_for_32B_alignment);
             uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
             uint32_t act_matrix_height_ntiles = act_matrix_height / TILE_HEIGHT;
@@ -418,7 +401,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
     TT_ASSERT(input_tensor_a.memory_config().is_sharded()); // TODO: move this check to validate_input_tensors
     return multi_core_optimized_conv_sharded_v2_new(
         input_tensor_a, input_tensor_b, input_tensor_bias,
-        sliding_window_config,
+        conv_params,
         output_channels,
         untilize_out, fuse_relu, math_fidelity,
         parallelization_config,
@@ -436,15 +419,6 @@ operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(cons
     uint32_t conv_activation_h = input_tensor_a_shape[1];
     uint32_t conv_activation_w = input_tensor_a_shape[2];
     uint32_t conv_activation_c = input_tensor_a_shape[3];
-    // todo: remove conv params and use sliding_window_config in all functions
-    std::vector<int> conv_params = {
-        (int) sliding_window_config.window_hw_.first,
-        (int) sliding_window_config.window_hw_.second,
-        (int) sliding_window_config.stride_hw_.first,
-        (int) sliding_window_config.stride_hw_.second,
-        (int) sliding_window_config.pad_hw_.first,
-        (int) sliding_window_config.pad_hw_.second,
-    };
     uint32_t filter_h = (uint32_t) conv_params[0];
     uint32_t filter_w = (uint32_t) conv_params[1];
     uint32_t stride_h = (uint32_t) conv_params[2];
