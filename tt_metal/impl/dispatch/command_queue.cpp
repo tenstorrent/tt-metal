@@ -874,7 +874,7 @@ void convert_interleaved_to_sharded_on_host(void * swapped, const void* host, co
         auto host_page_id = page_id;
         auto dev_page_id = buffer_page_mapping.host_page_to_dev_page_mapping_[host_page_id];
         TT_ASSERT(host_page_id < num_pages and host_page_id >= 0);
-        memcpy((char*)swapped + dev_page_id * page_size, (char*)host + host_page_id * page_size, page_size);
+        std::memcpy((char*)swapped + dev_page_id * page_size, (char*)host + host_page_id * page_size, page_size);
     }
 }
 

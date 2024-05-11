@@ -7,7 +7,6 @@
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_dnn/op_library/compute_kernel_config.hpp"
-#include "tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 
 namespace tt {
 
@@ -68,7 +67,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output);
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, const std::optional<const Tensor> conv_reader_indices, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, bool use_shallow_conv_variant, bool transpose_mcast, Tensor &output, DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias,
-    const SlidingWindowConfig& sliding_window_config,
+    vector<int> conv_params,
     uint32_t output_channels,
     bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
     const OptimizedConvParallelizationConfig& parallelization_config,
@@ -171,7 +170,7 @@ Tensor optimized_conv(const Tensor& a, const Tensor &b, std::optional<const Tens
 struct OptimizedConvNew {
     OptimizedConvParallelizationConfig parallelization_config;
     OptimizedConvBlockConfig block_config;
-    const SlidingWindowConfig sliding_window_config;
+    const std::vector<int> conv_params;
     const uint32_t output_channels;
     bool untilize_out, has_bias, fuse_relu;
     MathFidelity math_fidelity;
@@ -181,7 +180,7 @@ struct OptimizedConvNew {
     std::array<std::uint32_t, 4> input_tensor_shape; // For sharded input, input tensor shape is nonsense
     bool use_shallow_conv_variant;
     const DeviceComputeKernelConfig compute_kernel_config;
-    OptimizedConvNew(const SlidingWindowConfig&s_config,
+    OptimizedConvNew(const vector<int>& c_params,
         uint32_t output_channels, bool untile_out,
         bool has_bias, bool fuse_relu,
         MathFidelity mfidelity, const OptimizedConvParallelizationConfig& p_config,
@@ -191,7 +190,7 @@ struct OptimizedConvNew {
         std::array<std::uint32_t, 4> input_tensor_shape, bool use_shallow_conv_variant,
         const DeviceComputeKernelConfig compute_kernel_config) :
             output_channels(output_channels),
-            sliding_window_config(s_config),
+            conv_params(c_params),
             untilize_out(untile_out),
             has_bias(has_bias),
             fuse_relu(fuse_relu),
@@ -214,7 +213,7 @@ struct OptimizedConvNew {
     static constexpr auto attribute_names = std::make_tuple(
         "parallelization_config",
         "block_config",
-        "sliding_window_config",
+        "conv_params",
         "output_channels",
         "untilize_out",
         "has_bias",
@@ -228,7 +227,7 @@ struct OptimizedConvNew {
         return std::make_tuple(
             std::cref(this->parallelization_config),
             std::cref(this->block_config),
-            std::cref(this->sliding_window_config),
+            std::cref(this->conv_params),
             std::cref(this->output_channels),
             std::cref(this->untilize_out),
             std::cref(this->has_bias),
@@ -242,7 +241,7 @@ struct OptimizedConvNew {
 };
 
 Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias,
-    const SlidingWindowConfig& sliding_window_config,
+    const vector<int> conv_params,
     uint32_t output_channels,
     bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
     const OptimizedConvParallelizationConfig& parallelization_config,
