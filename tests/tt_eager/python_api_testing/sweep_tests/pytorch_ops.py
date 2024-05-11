@@ -2081,3 +2081,7 @@ def max_pool2d(x, *args, **kwargs):
     m = nn.MaxPool2d(3, stride=2)
     output = m(x)
     return output
+
+
+def repeat_2(x, *args, shape, **kwargs):
+    return x.repeat(*shape)

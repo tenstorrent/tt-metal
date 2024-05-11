@@ -3186,3 +3186,20 @@ def max_pool2d_tt(x, *args, device, dtype, layout, input_mem_config, output_mem_
     t1 = m(t0)
 
     return ttnn_tensor_to_torch(t1)
+
+
+def repeat(
+    x,
+    *args,
+    shape,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.repeat(t0, ttnn.Shape(shape))
+
+    return ttnn_tensor_to_torch(t1)

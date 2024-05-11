@@ -1864,3 +1864,27 @@ def gen_dim_args(
 
         input_info.update({"dim": dims})
         yield input_info
+
+
+def gen_repeat_args(
+    input_shapes, dtypes, layouts, mem_configs, low=-100, high=100, dtype=torch.bfloat16, do_sanitize_args=False
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        "shape",
+        low,
+        high,
+        dtype,
+    ):
+        shapes_size = len(input_shapes[0])
+        shapes = []
+
+        for i in range(0, shapes_size):
+            rand_shape = np.random.randint(1, 3)
+            shapes.append(rand_shape)
+
+        input_info.update({"shape": shapes})
+        yield input_info
