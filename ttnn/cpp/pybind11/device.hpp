@@ -27,6 +27,7 @@ void py_module(py::module& module) {
     module.def("enable_program_cache", &ttnn::enable_program_cache, py::arg("device"), py::kw_only());
 
     module.def("disable_and_clear_program_cache", &ttnn::disable_and_clear_program_cache, py::arg("device"), py::kw_only());
+
 }
 
 }  // namespace device

@@ -426,7 +426,7 @@ struct MultiDeviceHostStorage {
             return shapes[shape_index];
         }
 
-        uint32_t num_buffers() {
+        uint32_t num_buffers() const {
             std::lock_guard<std::mutex> lock(mtx);
             return buffers.size();
         }
@@ -524,7 +524,7 @@ struct MultiDeviceHostStorage {
             return shapes.at(device->id());
         }
 
-        uint32_t num_buffers() {
+        uint32_t num_buffers() const {
             std::lock_guard<std::mutex> lock(mtx);
             return buffers.size();
         }

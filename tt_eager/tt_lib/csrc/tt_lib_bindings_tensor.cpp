@@ -772,7 +772,7 @@ void TensorModule(py::module &m_tensor) {
 
     m_tensor.def(
         "allocate_tensor_on_device",
-        py::overload_cast<const Shape&, DataType, Layout, Device*, const MemoryConfig&>(&allocate_tensor_on_device),
+        py::overload_cast<const ttnn::Shape&, DataType, Layout, Device*, const MemoryConfig&>(&allocate_tensor_on_device),
         py::arg("shape"), py::arg("dtype"), py::arg("layout"), py::arg("device"), py::arg("memory_config") = MemoryConfig{.memory_layout=TensorMemoryLayout::INTERLEAVED},
         R"doc(
             Allocate a tensor with specified attributes on a device.
@@ -781,7 +781,7 @@ void TensorModule(py::module &m_tensor) {
 
     m_tensor.def(
         "allocate_tensor_on_device",
-        py::overload_cast<const Shape&, DataType, Layout, DeviceMesh*, const MemoryConfig&>(&allocate_tensor_on_device),
+        py::overload_cast<const ttnn::Shape&, DataType, Layout, DeviceMesh*, const MemoryConfig&>(&allocate_tensor_on_device),
         py::arg("shape"), py::arg("dtype"), py::arg("layout"), py::arg("device"), py::arg("memory_config") = MemoryConfig{.memory_layout=TensorMemoryLayout::INTERLEAVED},
         R"doc(
             Allocate a tensor with specified attributes on a device.

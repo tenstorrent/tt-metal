@@ -27,9 +27,9 @@ run_t3000_ttnn_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
-
+  pytest tests/ttnn/unit_tests/test_multi_device_trace.py
   pytest tests/ttnn/unit_tests/test_multi_device.py
-
+  pytest tests/ttnn/unit_tests/test_multi_device_async.py
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))

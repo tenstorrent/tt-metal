@@ -230,22 +230,28 @@ UntilizeWithUnpaddingOpParallelizationStrategy UntilizeWithUnpadding::get_parall
 Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& output_mem_config, bool use_pack_untilize) {
     // No-op (Will do a tensor copy)
     // TODO: We need to run asserts before this
-    const Shape output_tensor_shape = {
-        output_tensor_end[0] - output_tensor_start[0] + 1,
-        output_tensor_end[1] - output_tensor_start[1] + 1,
-        output_tensor_end[2] - output_tensor_start[2] + 1,
-        output_tensor_end[3] - output_tensor_start[3] + 1,
-    };
-    if (input_tensor_a.get_layout() != Layout::TILE) {
-        if (input_tensor_a.get_legacy_shape() == output_tensor_shape) {
-            log_warning("Perf warning: Untilize with unpadding called on already untilized tensor of target shape");
-            return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
-        } else {
-            TT_FATAL(false, "Cannot untilize and unpad input which is not tilized");
-        }
-    }
-    bool fp32_dest_acc_en = input_tensor_a.get_dtype() == DataType::UINT32;            // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
-    return operation::run_without_autoformat(UntilizeWithUnpadding{output_tensor_start, output_tensor_end, output_mem_config, use_pack_untilize, fp32_dest_acc_en}, {input_tensor_a}).at(0);
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
+    operation::launch_op(
+        [output_tensor_start, output_tensor_end, output_mem_config, use_pack_untilize] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            auto& input_tensor_a = input_tensors.at(0);
+            const Shape output_tensor_shape = {
+                output_tensor_end[0] - output_tensor_start[0] + 1,
+                output_tensor_end[1] - output_tensor_start[1] + 1,
+                output_tensor_end[2] - output_tensor_start[2] + 1,
+                output_tensor_end[3] - output_tensor_start[3] + 1,
+            };
+            if (input_tensor_a.get_layout() != Layout::TILE) {
+                if (input_tensor_a.get_legacy_shape() == output_tensor_shape) {
+                    log_warning("Perf warning: Untilize with unpadding called on already untilized tensor of target shape");
+                    return {AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config)};
+                } else {
+                    TT_FATAL(false, "Cannot untilize and unpad input which is not tilized");
+                }
+            }
+            bool fp32_dest_acc_en = input_tensor_a.get_dtype() == DataType::UINT32;            // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
+            return operation::run_without_autoformat(UntilizeWithUnpadding{output_tensor_start, output_tensor_end, output_mem_config, use_pack_untilize, fp32_dest_acc_en}, {input_tensor_a});
+        }, {input_tensor_a}, output_tensors);
+    return output_tensors.at(0);
 }
 
 }  // namespace tt_metal

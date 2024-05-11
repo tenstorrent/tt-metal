@@ -14,6 +14,7 @@
 #include "tt_eager/tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "tt_eager/tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/impl/trace/trace.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/op_library/to_layout/to_layout_op.hpp"
@@ -165,6 +166,20 @@ inline ttnn::Tensor to_device(
     return tensor.to(device_mesh, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
 }
 
+inline ttnn::Tensor allocate_tensor_on_device(
+    const Shape& shape, DataType data_type, Layout layout, Device *device, const std::optional<MemoryConfig>& memory_config) {
+    return tt::tt_metal::allocate_tensor_on_device(shape, data_type, layout, device, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
+}
+
+inline ttnn::Tensor allocate_tensor_on_device(
+    const Shape& shape, DataType data_type, Layout layout, DeviceMesh *device_mesh, const std::optional<MemoryConfig>& memory_config) {
+    return tt::tt_metal::allocate_tensor_on_device(shape, data_type, layout, device_mesh, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
+}
+
+inline void copy_host_to_device_tensor(ttnn::Tensor host_tensor, ttnn::Tensor device_tensor, uint8_t cq_id = 0) {
+    tt::tt_metal::write_tensor(host_tensor, device_tensor, cq_id);
+}
+
 inline ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true) { return tensor.cpu(blocking); }
 
 inline void deallocate(Tensor& tensor, bool force = true) { tensor.deallocate(force); }
@@ -174,6 +189,95 @@ inline Tensor reallocate(const Tensor& input_tensor, const std::optional<MemoryC
         return move_sharded(input_tensor, memory_config);
     } else {
         return move(input_tensor, memory_config);
+    }
+}
+
+// Trace APIs - Single Device
+inline uint32_t begin_trace_capture(Device* device, const uint32_t trace_buff_size, const uint8_t cq_id) {
+    uint32_t tid = Trace::next_id();
+    device->push_work(
+        [device, trace_buff_size, cq_id, tid] () mutable {
+            device->begin_trace(cq_id, tid, trace_buff_size);
+        });
+    return tid;
+}
+
+inline void end_trace_capture(Device* device, const uint32_t tid, const uint8_t cq_id) {
+    device->push_work(
+        [device, cq_id, tid] () mutable {
+            device->end_trace(cq_id, tid);
+        }
+    );
+}
+
+inline void execute_trace(Device* device, const uint32_t tid, const uint8_t cq_id, bool blocking) {
+    // If blocking, ensure that worker thread blocks until trace is completed
+    device->push_work(
+        [device, cq_id, tid, blocking] () mutable {
+            device->replay_trace(cq_id, tid, blocking);
+        }
+    );
+    // If blocking, wait until worker threads have completed
+    if (blocking) {
+        device->synchronize();
+    }
+}
+
+inline void release_trace(Device* device, const uint32_t tid) {
+    device->push_work(
+        [device, tid] () mutable {
+            device->release_trace(tid);
+        }
+    );
+}
+
+// Trace APIs - Multi Device
+inline uint32_t begin_trace_capture(DeviceMesh* device, const uint32_t trace_buff_size, const uint8_t cq_id = 0) {
+    auto workers = device->get_devices();
+    uint32_t tid = Trace::next_id();
+    for (auto& worker : workers) {
+        worker->push_work(
+            [worker, trace_buff_size, cq_id, tid] () mutable {
+                worker->begin_trace(cq_id, tid, trace_buff_size);
+            });
+    }
+    return tid;
+}
+
+inline void end_trace_capture(DeviceMesh* device, const uint32_t tid, const uint8_t cq_id = 0) {
+    auto workers = device->get_devices();
+    for (auto& worker : workers) {
+        worker->push_work(
+            [worker, cq_id, tid] () mutable {
+                worker->end_trace(cq_id, tid);
+            });
+    }
+}
+
+inline void execute_trace(DeviceMesh* device, const uint32_t tid, const uint8_t cq_id = 0, bool blocking = true) {
+    auto workers = device->get_devices();
+    // If blocking, ensure that each worker thread blocks until device-local trace is completed
+    for (auto& worker : workers) {
+        worker->push_work(
+            [worker, cq_id, tid, blocking] () mutable {
+                worker->replay_trace(cq_id, tid, blocking);
+            });
+    }
+    // If blocking, wait until worker threads have completed
+    if (blocking) {
+        for (auto& worker : workers) {
+            worker->synchronize();
+        }
+    }
+}
+
+inline void release_trace(DeviceMesh* device, const uint32_t tid) {
+    auto workers = device->get_devices();
+    for (auto& worker : workers) {
+        worker->push_work(
+            [worker, tid] () mutable {
+                worker->release_trace(tid);
+            });
     }
 }
 

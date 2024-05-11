@@ -260,6 +260,12 @@ from ttnn.operations.core import (
     squeeze,
     clone,
     as_tensor,
+    allocate_tensor_on_device,
+    copy_host_to_device_tensor,
+    begin_trace_capture,
+    end_trace_capture,
+    execute_trace,
+    release_trace,
 )
 
 from ttnn.operations.matmul import (
