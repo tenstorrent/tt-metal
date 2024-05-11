@@ -485,7 +485,7 @@ std::vector<Tensor> NlpKVCacheLoadSlice::create_output_tensors(const std::vector
     auto mem_config = tt::tt_metal::MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1};
     mem_config.shard_spec = shard_spec;
 
-    return {create_sharded_device_tensor(
+    return {create_device_tensor(
         this->compute_output_shapes(input_tensors).at(0),
         input_tensor_a.get_dtype(),
         input_tensor_a.get_layout(),

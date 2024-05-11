@@ -354,8 +354,8 @@ void memcpy(void *dst, const Tensor &src, const std::optional<std::size_t> trans
 void memcpy(Tensor &dst, const void *src, const std::optional<std::size_t> transfer_size = std::nullopt);
 void memcpy(Tensor &dst, const Tensor &src, const std::optional<std::size_t> transfer_size = std::nullopt);
 
-Tensor allocate_tensor_on_device(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config = {.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
-Tensor allocate_tensor_on_device(const Shape& shape, DataType data_type, Layout layout, DeviceMesh *device_mesh, const MemoryConfig& memory_config = {.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
+Tensor allocate_tensor_on_device(const ttnn::Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config = {.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
+Tensor allocate_tensor_on_device(const ttnn::Shape& shape, DataType data_type, Layout layout, DeviceMesh *device_mesh, const MemoryConfig& memory_config = {.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
 void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id = 0);
 
 }  // namespace tt_metal

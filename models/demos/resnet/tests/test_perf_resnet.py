@@ -283,6 +283,7 @@ def run_perf_resnet_trace(
         (20, 0.04, 25),
     ),
 )
+@pytest.mark.parametrize("enable_async", [True, False])
 def test_perf_trace_bare_metal(
     device,
     use_program_cache,
@@ -290,10 +291,11 @@ def test_perf_trace_bare_metal(
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
+    enable_async,
 ):
     if is_e75(device):
         pytest.skip("Resnet is not supported on E75")
-
+    device.enable_async(enable_async)
     run_perf_resnet_trace(
         batch_size,
         expected_inference_time,
@@ -301,3 +303,4 @@ def test_perf_trace_bare_metal(
         hf_cat_image_sample_input,
         device,
     )
+    device.enable_async(False)

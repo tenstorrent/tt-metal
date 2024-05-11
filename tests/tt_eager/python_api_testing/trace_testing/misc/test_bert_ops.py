@@ -35,6 +35,7 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_ze
         (False, False, False, 4608, 1024, 3072, None),  # out interleaved, in0 interleaved
     ],
 )
+@pytest.mark.parametrize("enable_async", [True, False])
 def test_bert_linear(
     device,
     fidelity,
@@ -47,7 +48,9 @@ def test_bert_linear(
     activation,
     use_program_cache,
     function_level_defaults,
+    enable_async,
 ):
+    device.enable_async(enable_async)
     has_bias = False
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
@@ -96,7 +99,6 @@ def test_bert_linear(
     in0 = torch.randn(in0_shape).bfloat16().float()
     in1 = torch.randn(in1_shape).bfloat16().float()
     bias = torch.randn(bias_shape).bfloat16().float()
-
     in0_t_res = torch2tt_tensor(
         in0, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
     )
@@ -195,7 +197,7 @@ def test_bert_linear(
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing
-    ttl.device.ReleaseLastTrace(device)
 
     # Done with the trace, can deallocate the buffers now.
     ttl.device.ReleaseTrace(device, tid)
+    device.enable_async(False)
