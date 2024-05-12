@@ -134,10 +134,10 @@ class Cluster {
     // Converts logical ethernet core coord to physical ethernet core coord
     CoreCoord ethernet_core_from_logical_core(chip_id_t chip_id, const CoreCoord &logical_core) const;
 
-    // Configures routing mapping of ethernet cores
-    void initialize_routing_info_for_ethernet_cores();
-
-    void reserve_ethernet_cores_for_tunneling();
+    // Bookkeeping for mmio device tunnels
+    uint32_t get_mmio_device_max_tunnel_depth(chip_id_t mmio_device) const;
+    uint32_t get_mmio_device_tunnel_count(chip_id_t mmio_device) const;
+    uint32_t get_device_tunnel_depth(chip_id_t chip_id) const;
 
     // Dispatch core is managed by device, so this is an api for device to get the each eth core used in FD tunneling.
     // Returns logical eth core that communicates with specified dispatch core
@@ -181,6 +181,7 @@ class Cluster {
     void get_cluster_type(YAML::Node &yaml);
     void initialize_device_drivers();
     void assert_risc_reset();
+
     void assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids);
     void open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids, const bool &skip_driver_allocs = false);
     void start_driver(chip_id_t mmio_device_id, tt_device_params &device_params) const;
@@ -190,6 +191,8 @@ class Cluster {
     tt_cxy_pair convert_physical_cxy_to_virtual(const tt_cxy_pair &physical_cxy) const;
     void configure_static_tlbs(chip_id_t mmio_device_id) const;
 
+    // Reserves ethernet cores in cluster for tunneling
+    void reserve_ethernet_cores_for_tunneling();
     // Returns map of connected chip ids to active ethernet cores
     std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
         chip_id_t chip_id) const;

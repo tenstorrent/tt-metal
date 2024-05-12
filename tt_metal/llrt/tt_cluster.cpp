@@ -387,6 +387,10 @@ Cluster::~Cluster() {
 
     this->mmio_device_id_to_driver_.clear();
     this->sdesc_per_chip_.clear();
+    this->devices_grouped_by_assoc_mmio_device_.clear();
+    this->device_to_mmio_device_.clear();
+    this->device_to_host_mem_channel_.clear();
+    this->device_eth_routing_info_.clear();
 }
 
 tt_device &Cluster::get_driver(chip_id_t device_id) const {
@@ -685,6 +689,71 @@ void Cluster::initialize_ethernet_sockets() {
     }
 }
 
+void Cluster::reserve_ethernet_cores_for_tunneling() {
+    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
+    for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
+        for (const auto &chip_id : devices) {
+            if (this->device_eth_routing_info_.find(chip_id) == this->device_eth_routing_info_.end()) {
+                this->device_eth_routing_info_.insert({chip_id, {}});
+            }
+        }
+        std::map<std::tuple<chip_id_t, chip_id_t>, bool> reserved_chip_connections = {};
+        for (const auto &chip_id : devices) {
+            if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+                for (const auto &[connected_chip_id, active_eth_cores] :
+                     this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
+                    for (const auto &eth_core : active_eth_cores) {
+                        const auto connected_eth_core =
+                            std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core)));
+                        if (this->device_eth_routing_info_.at(chip_id).find(eth_core) ==
+                            this->device_eth_routing_info_.at(chip_id).end()) {
+                            if (devices.find(connected_chip_id) != devices.end() &&
+                                reserved_chip_connections.find(std::make_tuple(chip_id, connected_chip_id)) ==
+                                    reserved_chip_connections.end() &&
+                                this->cluster_desc_->get_ethernet_link_distance(chip_id, assoc_mmio_device) !=
+                                    this->cluster_desc_->get_ethernet_link_distance(
+                                        connected_chip_id, assoc_mmio_device)) {
+                                // only setup fd tunneling for devices grouped with same mmio device and if no bi dir
+                                // tunnel found between the two chips and if link distance between both chips to mmio
+                                // chip is not the same
+                                tt_cxy_pair(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
+                                log_debug(
+                                    LogDevice,
+                                    "Reserving {} for tunneling",
+                                    tt_cxy_pair(chip_id, ethernet_core_from_logical_core(chip_id, eth_core)).str());
+                                log_debug(
+                                    LogDevice,
+                                    "Reserving {} for tunneling",
+                                    tt_cxy_pair(
+                                        connected_chip_id,
+                                        ethernet_core_from_logical_core(connected_chip_id, connected_eth_core))
+                                        .str());
+                                this->device_eth_routing_info_.at(chip_id).insert(
+                                    {eth_core, EthRouterMode::BI_DIR_TUNNELING});
+                                this->device_eth_routing_info_.at(connected_chip_id)
+                                    .insert({connected_eth_core, EthRouterMode::BI_DIR_TUNNELING});
+                                reserved_chip_connections.insert({std::make_tuple(chip_id, connected_chip_id), true});
+                                reserved_chip_connections.insert({std::make_tuple(connected_chip_id, chip_id), true});
+                            } else {
+                                this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::IDLE});
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Slow dispatch mode
+                for (const auto &[connected_chip_id, active_eth_cores] :
+                     this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
+                    for (const auto &eth_core : active_eth_cores) {
+                        this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::IDLE});
+                    }
+                }
+            }
+        }
+    }
+}
+
 std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id_t chip_id) const {
     std::unordered_set<chip_id_t> device_ids;
     const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
@@ -757,53 +826,6 @@ CoreCoord Cluster::ethernet_core_from_logical_core(chip_id_t chip_id, const Core
     const metal_SocDescriptor &soc_desc = get_soc_desc(chip_id);
     return soc_desc.get_physical_ethernet_core_from_logical(logical_core);
 }
-
-void Cluster::reserve_ethernet_cores_for_tunneling() {
-    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
-    for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
-        for (const auto &chip_id : devices) {
-            if (this->device_eth_routing_info_.find(chip_id) == this->device_eth_routing_info_.end()) {
-                this->device_eth_routing_info_.insert({chip_id, {}});
-            }
-        }
-        std::map<std::tuple<chip_id_t, chip_id_t>, bool> reserved_chip_connections = {};
-        for (const auto &chip_id : devices) {
-            if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-                for (const auto &[connected_chip_id, active_eth_cores] :
-                     this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
-                    for (const auto &eth_core : active_eth_cores) {
-                        const auto connected_eth_core =
-                            std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core)));
-                        if (this->device_eth_routing_info_.at(chip_id).find(eth_core) ==
-                            this->device_eth_routing_info_.at(chip_id).end()) {
-                            tt_cxy_pair this_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
-                            if (devices.find(connected_chip_id) != devices.end() && reserved_chip_connections.find(std::make_tuple(chip_id, connected_chip_id)) == reserved_chip_connections.end()) {
-                                // only setup fd tunneling for devices grouped with same mmio device and if no bi dir tunnel found between the two chips
-                                    this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::BI_DIR_TUNNELING});
-                                    this->device_eth_routing_info_.at(connected_chip_id)
-                                        .insert({connected_eth_core, EthRouterMode::BI_DIR_TUNNELING});
-                                    reserved_chip_connections.insert({std::make_tuple(chip_id, connected_chip_id), true});
-                                    reserved_chip_connections.insert({std::make_tuple(connected_chip_id, chip_id), true});
-                            } else {
-                                this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::IDLE});
-                            }
-                        }
-                    }
-                }
-            } else {
-                // Slow dispatch mode
-                for (const auto &[connected_chip_id, active_eth_cores] :
-                     this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
-                    for (const auto &eth_core : active_eth_cores) {
-                        this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::IDLE});
-                    }
-                }
-            }
-        }
-    }
-}
-
 
 tt_cxy_pair Cluster::get_eth_core_for_dispatch_core(
     tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const {
@@ -889,6 +911,34 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
             }
         }
     }
+}
+
+uint32_t Cluster::get_mmio_device_max_tunnel_depth(chip_id_t mmio_device) const {
+    // Assume that tunnel depth for multiple tunnels are the same
+    TT_ASSERT(
+        (this->get_associated_mmio_device(mmio_device) == mmio_device), "Called mmio device api on non-mmio device");
+    uint32_t depth = 0;
+    for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
+        for (const auto &chip_id : devices) {
+            depth =
+                std::max(depth, uint32_t(this->cluster_desc_->get_ethernet_link_distance(chip_id, assoc_mmio_device)));
+        }
+    }
+    return depth;
+}
+
+uint32_t Cluster::get_mmio_device_tunnel_count(chip_id_t mmio_device) const {
+    TT_ASSERT(
+        (this->get_associated_mmio_device(mmio_device) == mmio_device), "Called mmio device api on non-mmio device");
+    const auto &chip_eth_core_modes = this->device_eth_routing_info_.at(mmio_device);
+    uint32_t tunnel_count = std::count_if(chip_eth_core_modes.begin(), chip_eth_core_modes.end(), [](const auto &e) {
+        return e.second == EthRouterMode::BI_DIR_TUNNELING;
+    });
+    return tunnel_count;
+}
+
+uint32_t Cluster::get_device_tunnel_depth(chip_id_t chip_id) const {
+    return this->cluster_desc_->get_ethernet_link_distance(chip_id, this->get_associated_mmio_device(chip_id));
 }
 
 uint32_t Cluster::get_tensix_soft_reset_addr() const {
