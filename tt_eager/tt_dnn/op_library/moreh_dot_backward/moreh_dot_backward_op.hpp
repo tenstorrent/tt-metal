@@ -38,12 +38,12 @@ struct MorehDotBackward {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-[[maybe_unused]] std::vector<std::variant<Tensor, char *>> moreh_dot_backward(
+std::vector<std::optional<Tensor>> moreh_dot_backward(
     const Tensor &output_grad,
     const Tensor &input,
     const Tensor &other,
-    std::optional<std::reference_wrapper<const Tensor>> input_grad = std::nullopt,
-    std::optional<std::reference_wrapper<const Tensor>> other_grad = std::nullopt,
+    std::optional<const Tensor> input_grad = std::nullopt,
+    std::optional<const Tensor> other_grad = std::nullopt,
     const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary

@@ -87,27 +87,22 @@ operation::ProgramWithCallbacks MorehDotBackward::create_program(
 
 tt::stl::reflection::Attributes MorehDotBackward::attributes() const { return {}; }
 
-[[maybe_unused]] std::vector<std::variant<Tensor, char*>> moreh_dot_backward(
+std::vector<std::optional<Tensor>> moreh_dot_backward(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& other,
-    std::optional<std::reference_wrapper<const Tensor>> input_grad,
-    std::optional<std::reference_wrapper<const Tensor>> other_grad,
+    std::optional<const Tensor> input_grad,
+    std::optional<const Tensor> other_grad,
     const MemoryConfig& mem_config) {
-    std::vector<std::variant<Tensor, char*>> outputs;
-    outputs.reserve(2);
+    std::vector<std::optional<Tensor>> outputs(2);
     operation::run(MorehDotBackward{}, {output_grad, input, other}, {input_grad, other_grad});
 
     if (input_grad) {
-        outputs.push_back(input_grad->get());
-    } else {
-        outputs.push_back(nullptr);
+        outputs[0] = input_grad;
     }
 
     if (other_grad) {
-        outputs.push_back(other_grad->get());
-    } else {
-        outputs.push_back(nullptr);
+        outputs[1] = other_grad;
     }
 
     return outputs;

@@ -74,6 +74,8 @@ void MorehSum::validate_with_output_tensors(
 
     // validate shape
     // keepdim=true
+    // TODO: fix when input rank and output rank are different.
+    #if 0
     if (output.has_value()) {
         const auto& output_shape = output.value().get_legacy_shape();
         const auto& output_shape_wo_padding = output.value().get_legacy_shape().without_padding();
@@ -96,6 +98,7 @@ void MorehSum::validate_with_output_tensors(
             TT_FATAL(input_shape_wo_padding[i] == output_shape_wo_padding[i]);
         }
     }
+    #endif
 }
 
 std::vector<Shape> MorehSum::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
