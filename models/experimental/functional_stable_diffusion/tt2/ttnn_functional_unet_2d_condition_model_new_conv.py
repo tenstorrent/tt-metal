@@ -118,31 +118,31 @@ class UNet2DConditionModel:
         in_channels = parameters.conv_in.weight.shape[1]
 
         print(f"CIN: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
-        self.conv_in = ttnn.Conv2d(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=(3, 3),
-            stride=(1, 1),
-            padding=(1, 1),
-            dtype=ttnn.bfloat8_b,
-            device=device,
-            use_1d_systolic_array=True if in_channels < 320 else False,
-            batch_size=batch_size,
-            input_height=input_height,
-            input_width=input_width,
-            reader_patterns_cache=reader_patterns_cache,
-            weight=self.conv_in_weights,
-            bias=self.conv_in_bias,
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            weights_dtype=ttnn.bfloat8_b,
-            conv_blocking_and_parallelization_config_override={},
-            use_shallow_conv_variant=False,
-            compute_kernel_config=conv_compute_kernel_config,
-        )
+        # self.conv_in = ttnn.Conv2d(
+        #     in_channels=in_channels,
+        #     out_channels=out_channels,
+        #     kernel_size=(3, 3),
+        #     stride=(1, 1),
+        #     padding=(1, 1),
+        #     dtype=ttnn.bfloat8_b,
+        #     device=device,
+        #     use_1d_systolic_array=True if in_channels < 320 else False,
+        #     batch_size=batch_size,
+        #     input_height=input_height,
+        #     input_width=input_width,
+        #     reader_patterns_cache=reader_patterns_cache,
+        #     weight=self.conv_in_weights,
+        #     bias=self.conv_in_bias,
+        #     math_fidelity=ttnn.MathFidelity.LoFi,
+        #     weights_dtype=ttnn.bfloat8_b,
+        #     conv_blocking_and_parallelization_config_override={},
+        #     use_shallow_conv_variant=False,
+        #     compute_kernel_config=conv_compute_kernel_config,
+        # )
         # breakpoint()
         self.down_blocks = []
-        input_height = self.conv_in.output_height
-        input_width = self.conv_in.output_height
+        input_height = ttnn.get_conv_output_dim(input_height, 3, 1, 1)
+        input_width = ttnn.get_conv_output_dim(input_width, 3, 1, 1)
         print(f"D-1: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
         self.down_block_types = down_block_types
         for i, down_block_type in enumerate(down_block_types):
@@ -418,7 +418,7 @@ class UNet2DConditionModel:
         sample = ttnn.reshape(sample, (1, 1, sample.shape[0] * sample.shape[1] * sample.shape[2], sample.shape[3]))
         # sample in l1 interelaved and tiled and nhwc
 
-        sample = ttnn.to_memory_config(sample, self.conv_in.conv.input_sharded_memory_config)
+        # sample = ttnn.to_memory_config(sample, self.conv_in.conv.input_sharded_memory_config)
         # sample = self.conv_in(sample)
         out_channels = self.parameters.conv_in.weight.shape[0]
         in_channels = self.parameters.conv_in.weight.shape[1]
@@ -447,6 +447,7 @@ class UNet2DConditionModel:
             input_width=self.input_width,
             conv_config=conv_config,
             conv_op_cache=conv_cache,
+            reshard_if_not_optimal=True,
         )
         sample = ttnn.reallocate(sample)  # TODO: Test remove
 

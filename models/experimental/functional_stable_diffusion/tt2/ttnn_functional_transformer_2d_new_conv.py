@@ -47,28 +47,28 @@ class transformer_2d_model:
 
         self.fallback_on_groupnorm = os.environ.get("FALLBACK_ON_GROUPNORM", "0") == "1"
 
-        self.proj_in = ttnn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=(1, 1),
-            stride=(1, 1),
-            padding=(0, 0),
-            dtype=ttnn.bfloat8_b,
-            device=device,
-            use_1d_systolic_array=False,
-            batch_size=batch_size,
-            input_height=input_height,
-            input_width=input_width,
-            reader_patterns_cache=reader_patterns_cache,
-            weight=self.proj_in_conv_weights,
-            bias=self.proj_in_conv_bias,
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            weights_dtype=ttnn.bfloat8_b,
-            conv_blocking_and_parallelization_config_override={},
-            use_shallow_conv_variant=False,
-            deallocate_activation=True,
-            compute_kernel_config=compute_kernel_config,
-        )
+        # self.proj_in = ttnn.Conv2d(
+        #     in_channels,
+        #     out_channels,
+        #     kernel_size=(1, 1),
+        #     stride=(1, 1),
+        #     padding=(0, 0),
+        #     dtype=ttnn.bfloat8_b,
+        #     device=device,
+        #     use_1d_systolic_array=False,
+        #     batch_size=batch_size,
+        #     input_height=input_height,
+        #     input_width=input_width,
+        #     reader_patterns_cache=reader_patterns_cache,
+        #     weight=self.proj_in_conv_weights,
+        #     bias=self.proj_in_conv_bias,
+        #     math_fidelity=ttnn.MathFidelity.LoFi,
+        #     weights_dtype=ttnn.bfloat8_b,
+        #     conv_blocking_and_parallelization_config_override={},
+        #     use_shallow_conv_variant=False,
+        #     deallocate_activation=True,
+        #     compute_kernel_config=compute_kernel_config,
+        # )
         self.proj_in_in_channels = in_channels
         self.proj_in_out_channels = out_channels
         norm_num_groups = 32
@@ -139,31 +139,32 @@ class transformer_2d_model:
         self.proj_out_conv_bias = ttnn.from_torch(parameters.proj_out.bias, ttnn.float32)
         out_channels = parameters.proj_out.weight.shape[0]
         in_channels = parameters.proj_out.weight.shape[1]
-        self.proj_out = ttnn.Conv2d(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=(1, 1),
-            stride=(1, 1),
-            padding=(0, 0),
-            dtype=ttnn.bfloat8_b,
-            device=device,
-            use_1d_systolic_array=False,
-            batch_size=batch_size,
-            input_height=input_height,
-            input_width=input_width,
-            reader_patterns_cache=reader_patterns_cache,
-            weight=self.proj_out_conv_weights,
-            bias=self.proj_out_conv_bias,
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            weights_dtype=ttnn.bfloat8_b,
-            conv_blocking_and_parallelization_config_override={},
-            use_shallow_conv_variant=False,
-            deallocate_activation=True,
-            compute_kernel_config=compute_kernel_config,
-        )
+        # self.proj_out = ttnn.Conv2d(
+        #     in_channels=in_channels,
+        #     out_channels=out_channels,
+        #     kernel_size=(1, 1),
+        #     stride=(1, 1),
+        #     padding=(0, 0),
+        #     dtype=ttnn.bfloat8_b,
+        #     device=device,
+        #     use_1d_systolic_array=False,
+        #     batch_size=batch_size,
+        #     input_height=input_height,
+        #     input_width=input_width,
+        #     reader_patterns_cache=reader_patterns_cache,
+        #     weight=self.proj_out_conv_weights,
+        #     bias=self.proj_out_conv_bias,
+        #     math_fidelity=ttnn.MathFidelity.LoFi,
+        #     weights_dtype=ttnn.bfloat8_b,
+        #     conv_blocking_and_parallelization_config_override={},
+        #     use_shallow_conv_variant=False,
+        #     deallocate_activation=True,
+        #     compute_kernel_config=compute_kernel_config,
+        # )
 
-        self.output_height = self.proj_out.output_height
-        self.output_width = self.proj_out.output_width
+        self.output_height = ttnn.get_conv_output_dim(input_height, 1, 1, 0)
+        self.output_width = ttnn.get_conv_output_dim(input_width, 1, 1, 0)
+        print(f"Transformer Input = {input_height}x{input_width} Output = {self.output_height}x{self.output_width}")
         self.proj_out_in_channels = in_channels
         self.proj_out_out_channels = out_channels
         self.blocks = [basic_transformer_block(device, block) for block in parameters.transformer_blocks]
@@ -246,7 +247,7 @@ class transformer_2d_model:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
             hidden_states = ttnn.reshape(
                 hidden_states,
-                (self.proj_in.batch_size, self.proj_in.input_height, self.proj_in.input_width, in_channels),
+                (self.batch_size, self.input_height, self.input_width, in_channels),
             )
             hidden_states = ttnn.permute(hidden_states, (0, 3, 1, 2))
             hidden_states = ttnn.operations.normalization._fallback_group_norm(
@@ -288,7 +289,7 @@ class transformer_2d_model:
             output_mem_config=hidden_states.memory_config(),
             output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
         )
-        hidden_states = ttnn.to_memory_config(hidden_states, self.proj_in.conv.input_sharded_memory_config)
+        # hidden_states = ttnn.to_memory_config(hidden_states, self.proj_in.conv.input_sharded_memory_config)
 
         # hidden_states = self.proj_in(hidden_states)
         conv_config = ttnn.ConvConfig(
@@ -340,8 +341,8 @@ class transformer_2d_model:
         out_channels = in_channels if out_channels is None else out_channels
         if is_input_continuous:
             if not use_linear_projection:
-                if hidden_states.memory_config() != self.proj_out.conv.input_sharded_memory_config:
-                    assert False
+                # if hidden_states.memory_config() != self.proj_out.conv.input_sharded_memory_config:
+                #     assert False
                 # hidden_states = ttnn.to_memory_config(hidden_states, self.proj_out.conv.input_sharded_memory_config)
                 # hidden_states = self.proj_out(hidden_states)
                 [hidden_states, _out_height, _out_width, _dev_weights, _dev_bias] = ttnn.conv2d(
@@ -360,8 +361,8 @@ class transformer_2d_model:
                     conv_config=conv_config,
                     conv_op_cache=conv_cache,
                 )
-                if ttnn.get_memory_config(residual) != self.proj_out.conv.input_sharded_memory_config:
-                    residual = ttnn.to_memory_config(residual, self.proj_out.conv.input_sharded_memory_config)
+                # if ttnn.get_memory_config(residual) != self.proj_out.conv.input_sharded_memory_config:
+                #     residual = ttnn.to_memory_config(residual, self.proj_out.conv.input_sharded_memory_config)
                 if output_bfloat16:
                     hidden_states = dealloc_input(
                         ttnn.add,

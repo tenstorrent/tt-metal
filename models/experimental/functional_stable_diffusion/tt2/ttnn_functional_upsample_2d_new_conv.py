@@ -59,29 +59,29 @@ class upsample2d:
         self.conv_config_override = {}
         if (out_channels, in_channels, input_height, input_width) in config_override:
             self.conv_config_override = config_override[(out_channels, in_channels, input_height, input_width)]
-        self.conv = ttnn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=(3, 3),
-            stride=(1, 1),
-            padding=(1, 1),
-            dtype=ttnn.bfloat8_b,
-            device=device,
-            use_1d_systolic_array=False,
-            batch_size=batch_size,
-            input_height=input_height,
-            input_width=input_width,
-            reader_patterns_cache=reader_patterns_cache,
-            weight=tt_weight_tensor,
-            bias=tt_bias_tensor,
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            weights_dtype=ttnn.bfloat8_b,
-            conv_blocking_and_parallelization_config_override=self.conv_config_override,
-            use_shallow_conv_variant=False,
-            # enable_auto_formatting=True,
-            deallocate_activation=True,
-            compute_kernel_config=compute_kernel_config,
-        )
+        # self.conv = ttnn.Conv2d(
+        #     in_channels,
+        #     out_channels,
+        #     kernel_size=(3, 3),
+        #     stride=(1, 1),
+        #     padding=(1, 1),
+        #     dtype=ttnn.bfloat8_b,
+        #     device=device,
+        #     use_1d_systolic_array=False,
+        #     batch_size=batch_size,
+        #     input_height=input_height,
+        #     input_width=input_width,
+        #     reader_patterns_cache=reader_patterns_cache,
+        #     weight=tt_weight_tensor,
+        #     bias=tt_bias_tensor,
+        #     math_fidelity=ttnn.MathFidelity.LoFi,
+        #     weights_dtype=ttnn.bfloat8_b,
+        #     conv_blocking_and_parallelization_config_override=self.conv_config_override,
+        #     use_shallow_conv_variant=False,
+        #     # enable_auto_formatting=True,
+        #     deallocate_activation=True,
+        #     compute_kernel_config=compute_kernel_config,
+        # )
         self.conv_in_channels = in_channels
         self.conv_out_channels = out_channels
         self.conv_weight_tensor = tt_weight_tensor
@@ -89,9 +89,9 @@ class upsample2d:
         self.conv_input_height = input_height
         self.conv_input_width = input_width
 
-        self.output_height = self.conv.output_height
-        self.output_width = self.conv.output_width
-        print(f"Upsample Input = {input_height}x{input_width} Output = {self.output_height}x{self.output_width}")
+        self.output_height = ttnn.get_conv_output_dim(input_height, 3, 1, 1)
+        self.output_width = ttnn.get_conv_output_dim(input_width, 3, 1, 1)
+        print(f"Upsample Output = {self.output_height}x{self.output_width}")
 
     def __call__(self, input, in_channels, out_channels):
         if input.layout == ttnn.TILE_LAYOUT:
@@ -102,8 +102,8 @@ class upsample2d:
         tt_out = upsample_nearest2d(input, self.scale_factor)
         del input
         tt_out = ttnn.reshape(tt_out, (1, 1, tt_out.shape[0] * tt_out.shape[1] * tt_out.shape[2], tt_out.shape[3]))
-        if ttnn.get_memory_config(tt_out) != self.conv.conv.input_sharded_memory_config:
-            tt_out = ttnn.to_memory_config(tt_out, self.conv.conv.input_sharded_memory_config)
+        # if ttnn.get_memory_config(tt_out) != self.conv.conv.input_sharded_memory_config:
+        #     tt_out = ttnn.to_memory_config(tt_out, self.conv.conv.input_sharded_memory_config)
         # tt_out = self.conv(tt_out)
         conv_config = ttnn.ConvConfig(
             dtype=ttnn.bfloat8_b,
