@@ -21,26 +21,6 @@ namespace primary {
 
 namespace {
 
-void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
-    const auto rank = shape.rank();
-    for (auto i = 0; i < rank; ++i) {
-        auto idx = rank - 1 - i;
-
-        // last 2-dim
-        if (idx == rank - 1 || idx == rank - 2) {
-            dim[i] = shape[idx] / TILE_HEIGHT;
-        }
-        else {
-            dim[i] = shape[idx];
-        }
-    }
-
-    log_debug(LogOp, "rank {}", rank);
-    for (auto i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
-        log_debug(LogOp, "dim[{}] = {}", i, dim[i]);
-    }
-}
-
 void get_tensor_stride(std::vector<uint32_t>& stride,
     std::vector<uint32_t>& dim) {
     stride[0] = 1;
