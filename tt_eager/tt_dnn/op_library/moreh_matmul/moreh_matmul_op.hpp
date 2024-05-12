@@ -16,6 +16,8 @@ namespace primary {
 
 using namespace tt_metal;
 
+void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape);
+
 operation::ProgramWithCallbacks moreh_matmul_multi_core(
     const Tensor &input,
     const Tensor &other,

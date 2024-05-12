@@ -262,6 +262,8 @@ def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2, r
     "params",
     (
         # input, other, output shape, transpose input, other
+        ([3, 1, 2, 1, 4, 1, 319, 95], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], False, False),
+        ([2, 319, 95], [2, 1, 3, 4, 1, 95, 470], [2, 1, 3, 4, 2, 319, 470], False, False),
         ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], False, False),
         ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], False, True),
         ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], True, False),
