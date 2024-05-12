@@ -89,7 +89,7 @@ inline Shape compute_output_shape(
 
     Shape output_shape{output_dim};
     auto padding = output_shape.padding();
-    // padding for matrix dims
+    // padding for t logmatrix dims
     padding[output_rank - 2] = Padding::PadDimension{0, h - h_wo_padding};
     padding[output_rank - 1] = Padding::PadDimension{0, w - w_wo_padding};
     return {Shape(output_shape, padding)};
@@ -215,10 +215,7 @@ void MorehMatmul::validate_with_output_tensors(
     if (bias.has_value()) {
         const auto& bias_wo_shape = bias.value().get_legacy_shape().without_padding();
         uint32_t bias_w = bias_wo_shape[-1];
-        // bias size must be a scalar or the same as other_n
-        if (bias_w != 1) {
-            TT_FATAL(other_n == bias_w, fmt::format("bias_w must be the same as other_n. bias_w {}, other_n {}", bias_w, other_n));
-        }
+        TT_FATAL(bias_w == 1 || bias_w == other_n, fmt::format("bias_w must be one or the same as other_n. bias_w {}, other_n {}", bias_w, other_n));
     }
 }
 
