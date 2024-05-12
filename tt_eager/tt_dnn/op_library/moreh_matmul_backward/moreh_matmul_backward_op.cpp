@@ -20,6 +20,10 @@ namespace primary {
 //                         Util
 ////////////////////////////////////////////////////////////////////////////
 inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, const Tensor& other) {
+    // TODO: non-4d support for dot backward.
+    if (output_grad.get_legacy_shape().rank() != 4 || input.get_legacy_shape().rank() != 4 || other.get_legacy_shape().rank() != 4) {
+        return false;
+    }
     return is_scalar(output_grad) && is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
 }
 
