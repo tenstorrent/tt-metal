@@ -43,12 +43,6 @@ inline bool is_same_shape(const Tensor &tensor_a, const Tensor &tensor_b) {
     return (tensor_a_shape == tensor_b_shape);
 }
 
-inline bool is_same_batch_shape(const Tensor &tensor_a, const Tensor &tensor_b) {
-    const auto &tensor_a_shape = tensor_a.get_legacy_shape().without_padding();
-    const auto &tensor_b_shape = tensor_b.get_legacy_shape().without_padding();
-    return (tensor_a_shape[0] == tensor_b_shape[0] && tensor_a_shape[1] == tensor_b_shape[1]);
-}
-
 std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
     CoreRangeSet all_cores, CoreRangeSet core_group_1, CoreRangeSet core_group_2, uint32_t offset_x, uint32_t offset_y);
 

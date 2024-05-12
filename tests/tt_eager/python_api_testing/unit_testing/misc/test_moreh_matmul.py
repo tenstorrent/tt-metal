@@ -21,7 +21,7 @@ def get_tensors(input_shape, other_shape, output_shape, require_input_grad, requ
     other = torch.randint(-2, 3, other_shape, dtype=cpu_dtype)
     output = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
 
-    tt_input = ttl.tensor.Tensor(input, npu_dtype).pad_to_tile(1).to(npu_layout).to(device)
+    tt_input = ttl.tensor.Tensor(input, npu_dtype).pad_to_tile(float(1)).to(npu_layout).to(device)
     tt_other = ttl.tensor.Tensor(other, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
     tt_output = ttl.tensor.Tensor(output, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
 
@@ -33,7 +33,7 @@ def get_tensors(input_shape, other_shape, output_shape, require_input_grad, requ
     if require_input_grad or require_other_grad:
         output_grad = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
         # tt_output_grad = ttl.tensor.Tensor(output_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-        tt_output_grad = ttl.tensor.Tensor(output_grad, npu_dtype).pad_to_tile(0).to(npu_layout).to(device)
+        tt_output_grad = ttl.tensor.Tensor(output_grad, npu_dtype).pad_to_tile(float(-1)).to(npu_layout).to(device)
         torch_output_grad = output_grad[0][0][0][0] if is_1d else output_grad
 
         if require_input_grad:
@@ -179,13 +179,9 @@ def test_moreh_matmul_1d_backward(input_shape, requires_grad, device):
     "params",
     (
         # input, other, output shape
-        ([1, 1, 511, 255], [1, 1, 255, 765], [1, 1, 511, 765]),
+        ([3, 1, 2, 1, 4, 1, 319, 95], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470]),
     ),
 )
-@pytest.mark.parametrize("input_b1", (1, 2))
-@pytest.mark.parametrize("input_b2", (1, 3))
-@pytest.mark.parametrize("other_b1", (1, 2))
-@pytest.mark.parametrize("other_b2", (1, 3))
 @pytest.mark.parametrize(
     "requires_grad",
     (
@@ -194,16 +190,9 @@ def test_moreh_matmul_1d_backward(input_shape, requires_grad, device):
         (True, True),
     ),
 )
-def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2, requires_grad, device):
+def test_moreh_matmul_backward(params, requires_grad, device):
     torch.manual_seed(3072)
     input_shape, other_shape, output_shape = params
-    input_shape[0] = input_b1
-    input_shape[1] = input_b2
-    other_shape[0] = other_b1
-    other_shape[1] = other_b2
-    output_shape[0] = max(input_b1, other_b1)
-    output_shape[1] = max(input_b2, other_b2)
-
     require_input_grad, require_other_grad = requires_grad
 
     # get tensors
@@ -235,11 +224,6 @@ def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2, r
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
     if require_input_grad:
         ttcpu_input_grad = tt_input_grad.cpu().to(cpu_layout).unpad_from_tile(input_shape).to_torch()
-
-        # TODO(dongjin.na): Check this case.
-        if input_b1 == 1 and input_b2 == 1 and other_b1 == 2 and other_b2 == 3 and input_shape[2] == 511:
-            atol = 1
-
         passing, output_pcc = comp_allclose_and_pcc(torch_input.grad, ttcpu_input_grad, pcc=0.999, rtol=rtol, atol=atol)
         logger.debug(f"input_grad passing={passing}")
         logger.debug(f"input_grad pcc={output_pcc}")
@@ -249,7 +233,6 @@ def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2, r
 
     if require_other_grad:
         ttcpu_other_grad = tt_other_grad.cpu().to(cpu_layout).unpad_from_tile(other_shape).to_torch()
-
         passing, output_pcc = comp_allclose_and_pcc(torch_other.grad, ttcpu_other_grad, pcc=0.999, rtol=rtol, atol=atol)
         logger.debug(f"other_grad passing={passing}")
         logger.debug(f"other_grad pcc={output_pcc}")
