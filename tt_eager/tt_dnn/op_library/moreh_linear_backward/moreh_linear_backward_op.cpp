@@ -118,11 +118,19 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
     }
 
     if (weight_required_grad) {
-        const auto& temp_weight_grad =
-            moreh_matmul(output_grad, input, true, false, std::nullopt, std::nullopt, weight_grad_mem_config);
-        std::vector<int64_t> dims{0, 1};
         TT_ASSERT(weight_grad.has_value(), "weight_grad tensor should not be std::nullopt");
-        result[1] = moreh_sum(temp_weight_grad, dims, weight_grad.value());
+        const auto& weight_grad_tensor = weight_grad.value();
+        if (is_same_batch_dim(output_grad, weight_grad_tensor)) {
+            moreh_matmul(output_grad, input, true, false, weight_grad_tensor, std::nullopt, weight_grad_mem_config);
+        }
+        else {
+            const auto& temp_weight_grad =
+                moreh_matmul(output_grad, input, true, false, std::nullopt, std::nullopt, weight_grad_mem_config);
+            TT_ASSERT(weight_grad.has_value(), "weight_grad tensor should not be std::nullopt");
+            std::vector<int64_t> dims = find_reduce_dim(temp_weight_grad.get_legacy_shape(), weight_grad.value().get_legacy_shape());
+            moreh_sum(temp_weight_grad, dims, weight_grad.value());
+        }
+        result[1] = weight_grad_tensor;
     }
 
     if (bias_required_grad) {

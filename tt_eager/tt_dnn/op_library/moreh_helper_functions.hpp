@@ -28,13 +28,27 @@ inline bool is_dram(const std::optional<std::reference_wrapper<const Tensor>> te
 inline bool is_dram(const Buffer *buffer) { return buffer->buffer_type() == BufferType::DRAM; }
 
 inline bool is_scalar(const Tensor &tensor) {
+    //TODO(dongjin): current impl requires finding a scalar in a 2d shape
     const auto &shape = tensor.get_legacy_shape().without_padding();
-    return (shape[0] == 1 && shape[1] == 1 && shape[2] == 1 && shape[3] == 1);
+    const uint32_t rank = shape.rank();
+
+    //TODO(dongjin): refactor dot op
+    if (rank == 4) {
+        return (shape[0] == 1 && shape[1] == 1 && shape[2] == 1 && shape[3] == 1);
+    }
+    return (rank == 2 && shape[-1] == 1 && shape[-2] == 1);
 }
 
 inline bool is_1d_tensor(const Tensor &tensor) {
+    //TODO(dongjin): current impl requires finding a 1d in a 2d shape
     const auto &shape = tensor.get_legacy_shape().without_padding();
-    return (shape[0] == 1 && shape[1] == 1 && shape[2] == 1);
+    const uint32_t rank = shape.rank();
+
+    //TODO(dongjin): refactor dot op
+    if (rank == 4) {
+        return (shape[0] == 1 && shape[1] == 1 && shape[2] == 1);
+    }
+    return (rank == 2 && shape[-2] == 1);
 }
 
 inline bool is_same_shape(const Tensor &tensor_a, const Tensor &tensor_b) {
