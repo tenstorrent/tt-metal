@@ -65,40 +65,45 @@ def get_tensors(input_shape, other_shape, output_shape, require_input_grad, requ
     )
 
 
-# TODO
-# @pytest.mark.parametrize(
-#     "input_shape",
-#     (
-#         [1, 1, 1, 10],  # test not mutiple of 32 case
-#         [1, 1, 1, 32],  # test single tile
-#         [1, 1, 1, 352],  # test multiple tiles
-#         [1, 1, 1, 323],  # test multiple tiles, not a multiple of 32
-#     ),
-# )
-# def test_moreh_matmul_1d(input_shape, device):
-#     torch.manual_seed(3072)
-#     # get tensors
-#     output_shape = [1, 1, 1, 1]
-#     tt_input, tt_other, _, _, _, _, torch_input, torch_other, _ = get_tensors(
-#         input_shape, input_shape, output_shape, False, False, True, device
-#     )
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+        [1, 1, 1, 10],  # test not mutiple of 32 case
+        [1, 1, 1, 32],  # test single tile
+        [1, 1, 1, 352],  # test multiple tiles
+        [1, 1, 1, 323],  # test multiple tiles, not a multiple of 32
+    ),
+)
+def test_moreh_matmul_1d(input_shape, device):
+    torch.manual_seed(3072)
+    # get tensors
+    output_shape = [1, 1, 1, 1]
+    tt_input, tt_other, _, _, _, _, torch_input, torch_other, _ = get_tensors(
+        input_shape, input_shape, output_shape, False, False, True, device
+    )
 
-#     # tt matmul
-#     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-#     tt_out = ttl.tensor.moreh_matmul(tt_input, tt_other).cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
+    # tt matmul
+    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    tt_out = (
+        ttl.operations.primary.moreh_matmul(tt_input, tt_other)
+        .cpu()
+        .to(cpu_layout)
+        .unpad_from_tile(output_shape)
+        .to_torch()
+    )
 
-#     # torch matmul
-#     torch_input = torch.reshape(torch_input, (torch_input.shape[-1],))
-#     torch_other = torch.reshape(torch_other, (torch_other.shape[-1],))
-#     torch_out = torch.matmul(torch_input, torch_other)
+    # torch matmul
+    torch_input = torch.reshape(torch_input, (torch_input.shape[-1],))
+    torch_other = torch.reshape(torch_other, (torch_other.shape[-1],))
+    torch_out = torch.matmul(torch_input, torch_other)
 
-#     # test for equivalance
-#     rtol = atol = 0.1
-#     passing, output_pcc = comp_allclose_and_pcc(torch_out, tt_out[0][0][0][0], pcc=0.999, rtol=rtol, atol=atol)
-#     logger.debug(f"Out passing={passing}")
-#     logger.debug(f"Output pcc={output_pcc}")
+    # test for equivalance
+    rtol = atol = 0.1
+    passing, output_pcc = comp_allclose_and_pcc(torch_out, tt_out[0][0][0][0], pcc=0.999, rtol=rtol, atol=atol)
+    logger.debug(f"Out passing={passing}")
+    logger.debug(f"Output pcc={output_pcc}")
 
-#     assert passing
+    assert passing
 
 
 @pytest.mark.parametrize(

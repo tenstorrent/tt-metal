@@ -19,7 +19,16 @@ namespace primary {
 //                         Util
 ////////////////////////////////////////////////////////////////////////////
 namespace {
-inline bool is_dot_forward(const Tensor& input, const Tensor& other) {
+inline bool is_dot_forward(const Tensor& input, const Tensor& other, bool transpose_input, bool transpose_other) {
+    // TODO: non-4d support for dot.
+    if (input.get_legacy_shape().rank() != 4 || other.get_legacy_shape().rank() != 4) {
+        return false;
+    }
+
+    if (transpose_input || transpose_other) {
+        return false;
+    }
+
     return is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
 }
 
@@ -159,11 +168,12 @@ Tensor moreh_matmul(
     const std::optional<const Tensor> output,
     const std::optional<const Tensor> bias,
     const MemoryConfig& output_mem_config) {
-    // TODO
+
     // TODO(seunghwan100): Add the argument "output_tensor" to moreh_dot.
-    // if (is_dot_forward(input, other) && (!transpose_input && !transpose_other)) {
-    //     return moreh_dot(input, other, output_mem_config);
-    // }
+    if (is_dot_forward(input, other, transpose_input, transpose_other)) {
+        TT_ASSERT(!bias.has_value());
+        return moreh_dot(input, other, output_mem_config);
+    }
     return moreh_matmul_(input, other, transpose_input, transpose_other, output, bias, output_mem_config);
 }
 
