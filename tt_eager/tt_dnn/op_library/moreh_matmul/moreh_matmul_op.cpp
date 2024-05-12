@@ -117,6 +117,44 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
     }
 }
 
+std::vector<int64_t> find_reduce_dim(const Shape& a_shape, const Shape& b_shape) {
+    std::vector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    std::vector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    get_tensor_dim(a_dim, a_shape);
+    get_tensor_dim(b_dim, b_shape);
+    int32_t rank = std::max(a_shape.rank(), b_shape.rank());
+    log_debug(LogOp, "find_reduce_dim :{} rank {} a {} b {}", __LINE__, rank, a_shape.rank(), b_shape.rank());
+    std::vector<int64_t> dims;
+    // batch dims
+    for (int i = 0; i < rank - 2; ++i) {
+        int idx = rank - 1 - i;
+        TT_ASSERT(idx >= 0);
+        if (a_dim[idx] != b_dim[idx]) {
+            dims.push_back(i);
+            log_debug(LogOp, "find_reduce_dim :{} push {} dim", __LINE__, i);
+        }
+    }
+    return dims;
+}
+
+bool is_same_batch_dim(const Tensor &tensor_a, const Tensor &tensor_b) {
+    // check batch dims
+    const auto &a_shape = tensor_a.get_legacy_shape();
+    const auto &b_shape = tensor_b.get_legacy_shape();
+    std::vector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    std::vector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    get_tensor_dim(a_dim, a_shape);
+    get_tensor_dim(b_dim, b_shape);
+    for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+        if (a_dim[i] != b_dim[i]) {
+            log_debug(LogOp, "{}:{} {} a_dim {} - b_dim {}", __func__, __LINE__, i, a_dim[i], b_dim[i]);
+            return false;
+        }
+    }
+    log_debug(LogOp, "{}:{} batch dims are the same.", __func__, __LINE__);
+    return true;
+}
+
 operation::ProgramWithCallbacks MorehMatmul::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -214,7 +252,9 @@ void MorehMatmul::validate_with_output_tensors(
     // check bias size
     if (bias.has_value()) {
         const auto& bias_wo_shape = bias.value().get_legacy_shape().without_padding();
+        uint32_t bias_rank = bias_wo_shape.rank();
         uint32_t bias_w = bias_wo_shape[-1];
+        TT_FATAL(bias_rank == 2, fmt::format("bias rank {} must be 2 (tilized).", bias_rank));
         TT_FATAL(bias_w == 1 || bias_w == other_n, fmt::format("bias_w must be one or the same as other_n. bias_w {}, other_n {}", bias_w, other_n));
     }
 }

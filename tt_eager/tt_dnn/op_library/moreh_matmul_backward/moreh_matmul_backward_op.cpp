@@ -29,24 +29,6 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
     return is_scalar(output_grad) && is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
 }
 
-inline bool is_same_batch_dim(const Tensor &tensor_a, const Tensor &tensor_b) {
-    // check batch dims
-    const auto &a_shape = tensor_a.get_legacy_shape();
-    const auto &b_shape = tensor_b.get_legacy_shape();
-    std::vector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-    std::vector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-    get_tensor_dim(a_dim, a_shape);
-    get_tensor_dim(b_dim, b_shape);
-    for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
-        if (a_dim[i] != b_dim[i]) {
-            log_debug(LogOp, "{}:{} {} a_dim {} - b_dim {}", __func__, __LINE__, i, a_dim[i], b_dim[i]);
-            return false;
-        }
-    }
-    log_debug(LogOp, "{}:{} batch dims are the same.", __func__, __LINE__);
-    return true;
-}
-
 }
 
 ////////////////////////////////////////////////////////////////////////////
@@ -62,27 +44,6 @@ std::vector<std::optional<Tensor>> moreh_matmul_backward_(
     const MemoryConfig& output_mem_config) {
     std::vector<std::optional<Tensor>> outputs(2);
     outputs.reserve(2);
-
-    auto find_reduce_dim = [](const Shape& a_shape, const Shape& b_shape) -> std::vector<int64_t> {
-
-        std::vector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        std::vector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        get_tensor_dim(a_dim, a_shape);
-        get_tensor_dim(b_dim, b_shape);
-        int32_t rank = std::max(a_shape.rank(), b_shape.rank());
-        log_debug(LogOp, "find_reduce_dim :{} rank {} a {} b {}", __LINE__, rank, a_shape.rank(), b_shape.rank());
-        std::vector<int64_t> dims;
-        // batch dims
-        for (int i = 0; i < rank - 2; ++i) {
-            int idx = rank - 1 - i;
-            TT_ASSERT(idx >= 0);
-            if (a_dim[idx] != b_dim[idx]) {
-                dims.push_back(i);
-                log_debug(LogOp, "find_reduce_dim :{} push {} dim", __LINE__, i);
-            }
-        }
-        return dims;
-    };
 
     const bool input_requires_grad = are_required_outputs.at(0);
     const bool other_requires_grad = are_required_outputs.at(1);
