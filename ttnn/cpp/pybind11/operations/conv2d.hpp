@@ -32,8 +32,8 @@ void py_module(py::module& module) {
             std::array<uint32_t, 2> padding,
             std::array<uint32_t, 2> dilation,
             uint32_t groups,
-            std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
-            std::optional<const ConvConfig>& conv_config_ = std::nullopt) -> std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> {
+            std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
+            std::optional<const ConvConfig> conv_config_ = std::nullopt) -> std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> {
             return ttnn::operations::conv2d::conv2d(
                 input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation,
                     groups, bias_tensor, conv_config_);
