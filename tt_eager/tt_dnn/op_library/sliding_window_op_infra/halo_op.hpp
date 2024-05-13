@@ -8,9 +8,9 @@
 #include <tuple>
 
 #include "tensor/tensor.hpp"
-#include "run_operation.hpp"
-#include "sliding_window_op_infra/sliding_window.hpp"
-#include "untilize/untilize_op.hpp"
+#include "tt_dnn/op_library/run_operation.hpp"
+#include "tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
+#include "tt_dnn/op_library/untilize/untilize_op.hpp"
 
 
 namespace ttnn::operations {
@@ -46,7 +46,7 @@ struct Halo {
 
 
 
-Tensor halo_op(const Tensor& a,
+Tensor halo_op(const Tensor& input_tensor,
                 const SlidingWindowConfig& config,
                 uint32_t pad_val = 0x0,
                 bool remote_read = false,
@@ -73,7 +73,7 @@ Tensor halo_op(const Tensor& a,
             .at(0);
     };
     std::vector<Tensor> output_tensors = { Tensor(tt::tt_metal::operation::get_workers_for_op_output({a}, {})) };
-    operation::launch_op(halo_op, {a}, output_tensors);
+    operation::launch_op(halo_op, {input_tensor}, output_tensors);
 
     return output_tensors.at(0);
 }

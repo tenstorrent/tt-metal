@@ -9,6 +9,7 @@
 
 #include "ccl.hpp"
 #include "core.hpp"
+#include "conv2d.hpp"
 #include "data_movement.hpp"
 #include "embedding.hpp"
 #include "kv_cache.hpp"
