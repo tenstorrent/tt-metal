@@ -320,7 +320,7 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(cons
     };
 }
 
-std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_required(const Device& device, const ttnn::Tensor& input_tensor_, const ConvConfig& conv_config, uint32_t batch_size, uint32_t height, uint32_t width, uint32_t in_channels, uint32_t out_channels) {
+std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_required(Device& device, const ttnn::Tensor& input_tensor_, const ConvConfig& conv_config, uint32_t batch_size, uint32_t height, uint32_t width, uint32_t in_channels, uint32_t out_channels) {
     ttnn::Tensor input_tensor = input_tensor_; // tensor to return
     const auto& input_memory_config = input_tensor_.memory_config();
     bool needs_shard_or_reshard = false;
@@ -388,13 +388,15 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_requi
         if(!input_is_on_device) {
             uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
             //TT_ASSERT(input_tensor.get_legacy_shape() == input_tensor.get_shape());
-            uint32_t input_tensor_height_snapped_to_tile = round_up(input_tensor.get_shape()[2], input_num_cores_nhw * 32);
-            TT_ASSERT(input_tensor_height_snapped_to_tile >= input_tensor.get_shape()[2]);
+            uint32_t tensor_height = input_tensor.get_shape()[2];
+            uint32_t input_tensor_height_snapped_to_tile = round_up(tensor_height, input_num_cores_nhw * 32);
+            TT_ASSERT(input_tensor_height_snapped_to_tile >= tensor_height);
+            uint32_t tensor_width = input_tensor.get_shape()[3];
             uint32_t input_tensor_width_snapped_to_channels_alignment = round_up(
-                input_tensor.get_shape()[3], conv_config.input_channels_alignment
+                tensor_width, conv_config.input_channels_alignment
             )
-            TT_ASSERT(input_tensor_width_snapped_to_channels_alignment >= input_tensor.get_shape()[3]);
-            if (input_tensor_height_snapped_to_tile != input_tensor.get_shape()[2] || input_tensor_width_snapped_to_channels_alignment != input_tensor.get_shape()[3]) {
+            TT_ASSERT(input_tensor_width_snapped_to_channels_alignment >= tensor_width);
+            if (input_tensor_height_snapped_to_tile != tensor_height || input_tensor_width_snapped_to_channels_alignment != tensor_height) {
                 input_tensor = tt::tt_metal::pad_on_host(
                     input_tensor,
                     {input_tensor.get_shape()[0], input_tensor.get_shape()[1], input_tensor_height_snapped_to_tile, input_tensor_width_snapped_to_channels_alignment},
@@ -430,7 +432,7 @@ void validate_weight_and_bias_tensors(const ttnn::Tensor& weight_tensor, std::op
     }
 }
 
-std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor, uint32_t input_channels_alignment, DataType weights_bias_dtype, uint32_t weight_block_h_ntiles, uint32_t weight_block_w_ntiles, const ParallelConfig& parallel_config, const Device& device) {
+std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor, uint32_t input_channels_alignment, DataType weights_bias_dtype, uint32_t weight_block_h_ntiles, uint32_t weight_block_w_ntiles, const ParallelConfig& parallel_config, Device& device) {
     validate_weight_and_bias_tensors(weight_tensor, bias_tensor);
     ttnn::Tensor weight_tensor_; // tensor to return
     ttnn::Tensor bias_tensor_;
@@ -519,8 +521,8 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
     std::array<uint32_t, 2> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
-    std::optional<const ConvConfig>& conv_config_ = std::nullopt) {
+    std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
+    std::optional<const ConvConfig> conv_config_ = std::nullopt) {
     ttnn::validate_input_tensor("ttnn.conv2d", input_tensor, input_schemas[0]);
     ttnn::validate_input_tensor("ttnn.conv2d", weight_tensor, input_schemas[1]);
     if(bias_tensor.has_value()) {
