@@ -28,41 +28,6 @@ import os
 #     plt.close()
 
 
-def prepare_conv_input_and_copy_to_device_interleaved(
-    device, torch_input_tensor_nhwc, input_tensor_shape, use_shallow_conv_variant, mem_config=None
-):
-    # Pad for 16 byte alignnment
-    # TODO: for bfp16, pad to 8 only
-    padded_input_channels = math.ceil(torch_input_tensor_nhwc.shape[3] / 16) * 16
-    torch_input_tensor_nhwc = torch.nn.functional.pad(
-        torch_input_tensor_nhwc, (0, 0, 0, 0, 0, padded_input_channels - torch_input_tensor_nhwc.shape[3])
-    )
-    # Reshape 4d to 2d
-    torch_input_tensor_nhwc = torch.reshape(
-        torch_input_tensor_nhwc,
-        (1, 1, input_tensor_shape[0] * input_tensor_shape[1] * input_tensor_shape[2], input_tensor_shape[3]),
-    )
-
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor_nhwc, ttnn.bfloat16)
-
-    if mem_config is not None:
-        # Remove the else block when resolved (https://github.com/tenstorrent/tt-metal/issues/6310):
-        if mem_config.memory_layout == tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED:
-            tt_input_tensor_on_device = tt_input_tensor.to(device, mem_config)
-        else:
-            interleaved_mem_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-            )
-            tt_input_tensor_on_device = tt_input_tensor.to(device, interleaved_mem_config)
-            tt_input_tensor_on_device = tt_lib.tensor.interleaved_to_sharded(tt_input_tensor_on_device, mem_config)
-    else:
-        tt_input_tensor_on_device = ttnn.to_device(tt_input_tensor, device)
-
-        if not use_shallow_conv_variant:
-            tt_input_tensor_on_device = ttnn.to_layout(tt_input_tensor_on_device, ttnn.TILE_LAYOUT)
-    return tt_input_tensor_on_device
-
-
 def run_conv(
     device,
     math_fidelity,
@@ -125,7 +90,7 @@ def run_conv(
         )
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
-
+    # breakpoint()
     conv_config = ttnn.ConvConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
