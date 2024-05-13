@@ -117,7 +117,7 @@ void TensorModule(py::module &m_tensor) {
         .def(py::init<UnaryOpType, float>())
         .def(py::init<>(
             [](std::pair<UnaryOpType, float> arg) {
-                return UnaryWithParam{.op_type=arg.first, .param=arg.second};
+                return UnaryWithParam{arg.first, arg.second};
             }
         ))
         .def_readonly("op_type", &UnaryWithParam::op_type);

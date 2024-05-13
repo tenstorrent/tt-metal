@@ -103,7 +103,7 @@ void test_operation_infrastructure() {
     auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE).to(device);
 
     auto op = operation::DeviceOperation(EltwiseUnary{
-        {tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::SQRT, std::nullopt}},
+        {tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::SQRT}},
         MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}});
 
     auto program_hash = op.compute_program_hash({input_tensor}, {});
@@ -139,7 +139,7 @@ void test_shape_padding() {
     auto output_tensor =
         tt::tt_metal::operation::run(
             tt::tt_metal::EltwiseUnary{
-                {tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::SQRT, std::nullopt}},
+                {tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::SQRT}},
                 tt::tt_metal::MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}},
             {padded_input_tensor})
             .at(0);

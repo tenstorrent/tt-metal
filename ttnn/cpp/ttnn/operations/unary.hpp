@@ -63,7 +63,7 @@ struct Unary : public EltwiseUnary {
 
     static Tensor execute(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         return detail::execute(
-            input_tensor, {UnaryWithParam{.op_type = unary_op_type, .param = std::nullopt}}, memory_config);
+            input_tensor, {UnaryWithParam{unary_op_type}}, memory_config);
     }
 };
 
@@ -82,7 +82,7 @@ struct Exp : public EltwiseUnary {
         return detail::execute(
             input_tensor,
             {UnaryWithParam{
-                .op_type = ttnn::operations::unary::UnaryOpType::EXP, .param = static_cast<float>(parameter)}},
+                ttnn::operations::unary::UnaryOpType::EXP, static_cast<float>(parameter)}},
             memory_config);
     }
 };

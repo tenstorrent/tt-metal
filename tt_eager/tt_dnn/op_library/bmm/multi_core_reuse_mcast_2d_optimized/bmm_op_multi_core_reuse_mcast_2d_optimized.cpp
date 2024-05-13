@@ -347,7 +347,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         if (fused_activation.value().op_type == UnaryOpType::RELU) {
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
-            mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(fused_activation.value().op_type, fused_activation.value().param, "ACTIVATION", "i"));
+            mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
         }
     }
     if (packer_l1_acc_en) {
