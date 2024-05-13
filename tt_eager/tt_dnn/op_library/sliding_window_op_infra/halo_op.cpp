@@ -63,7 +63,7 @@ std::vector<Tensor> Halo::create_output_tensors(const std::vector<Tensor> &input
     }
 
     auto out_mem_config = output_memory_config_;
-    out_mem_config.shard_spec->shape[0] = div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw_);
+    out_mem_config.shard_spec->shape[0] = tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw_);
     out_mem_config.shard_spec->shape[1] = input_tensor.memory_config().shard_spec->shape[1];
     out_mem_config.shard_spec->halo = true;
     return {create_sharded_device_tensor(
@@ -73,47 +73,33 @@ std::vector<Tensor> Halo::create_output_tensors(const std::vector<Tensor> &input
 
 operation::ProgramWithCallbacks Halo::create_program(const std::vector<Tensor>& inputs, std::vector<Tensor> &outputs) const {
     const auto& input_tensor = inputs.at(0);
-    auto& output_tensor = outputs.at(0);
 
+    // each of these input config tensors is on host
+    const auto& pad_config_tensor = inputs.at(1);
+    const auto& local_config_tensor = inputs.at(2);
+    const auto& remote_config_tensor = inputs.at(3);
+    auto& output_tensor = outputs.at(0);
     auto device = input_tensor.device();
 
-    auto pad_metadata = sliding_window::generate_pad_metadata(config_);
-    auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config_);
-    auto shard_boundaries = sliding_window::generate_shard_boundaries(config_, op_trace_metadata);
-    auto tensor_metadata = sliding_window::generate_tensor_metadata(pad_metadata, config_, reshard_num_cores_nhw_);
-    auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(tensor_metadata, shard_boundaries, remote_read_, device);
-
-    const auto& pad_config = std::get<0>(kernel_config);
-    const auto& local_config = std::get<1>(kernel_config);
-    const auto& remote_config = std::get<2>(kernel_config);
-    uint32_t max_out_nsticks_per_core = std::get<3>(kernel_config);
-
-    ParallelConfig p_config;
-    p_config.grid = input_tensor.shard_spec().value().grid;
-    p_config.shard_scheme = input_tensor.memory_config().memory_layout;
-    p_config.shard_orientation = input_tensor.shard_spec().value().orientation;
-
-    TT_ASSERT(p_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED || (p_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED && ((transpose_mcast_ && p_config.shard_orientation == ShardOrientation::COL_MAJOR) || ((!transpose_mcast_) && p_config.shard_orientation == ShardOrientation::ROW_MAJOR))), "Transpose mcast and shard orientation should be consistent.");
-
-    auto pad_config_tensor = sliding_window::construct_on_device_config_tensor(pad_config, config_, p_config, device);
-    auto local_config_tensor = sliding_window::construct_on_device_config_tensor(local_config, config_, p_config, device);
-    auto remote_config_tensor = sliding_window::construct_on_device_config_tensor(remote_config, config_, p_config, device);
+    auto pad_config_device_tensor = sliding_window::move_config_tensor_to_device(pad_config_tensor, parallel_config_, device);
+    auto local_config_device_tensor = sliding_window::move_config_tensor_to_device(local_config_tensor, parallel_config_, device);
+    auto remote_config_device_tensor = sliding_window::move_config_tensor_to_device(remote_config_tensor, parallel_config_, device);
 
     Program program = CreateProgram();
 
-    tt::tt_metal::detail::AddConfigTensor(program, pad_config_tensor);
-    tt::tt_metal::detail::AddConfigTensor(program, local_config_tensor);
-    tt::tt_metal::detail::AddConfigTensor(program, remote_config_tensor);
+    tt::tt_metal::detail::AddConfigTensor(program, pad_config_device_tensor);
+    tt::tt_metal::detail::AddConfigTensor(program, local_config_device_tensor);
+    tt::tt_metal::detail::AddConfigTensor(program, remote_config_device_tensor);
 
     return {untilize_with_halo_multi_core_v2(
         program,
         input_tensor,
         pad_val_,
         config_.num_cores_nhw_,
-        max_out_nsticks_per_core,
-        pad_config_tensor,
-        local_config_tensor,
-        remote_config_tensor,
+        max_out_nsticks_per_core_,
+        pad_config_device_tensor,
+        local_config_device_tensor,
+        remote_config_device_tensor,
         remote_read_,
         transpose_mcast_,
         output_tensor
