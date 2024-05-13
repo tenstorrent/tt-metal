@@ -476,6 +476,44 @@ def conv2d(
     reshard_if_not_optimal=False,  # default
     conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
+    run_new_conv = True
+    if run_new_conv:
+        conv_config_ = ttnn._ttnn.operations.conv2d.ConvConfig(
+            math_fidelity=conv_config.math_fidelity,
+            dtype=conv_config.dtype,
+            weights_dtype=conv_config.weights_dtype,
+            math_approx_mode_enabled=conv_config.math_approx_mode,
+            fp32_dest_acc_enabled=conv_config.fp32_dest_acc_en,
+            activation=conv_config.fp32_dest_acc_en,
+            input_channels_alignment=conv_config.input_channels_alignment,
+            deallocate_activation=conv_config.deallocate_activation,
+            reallocate_halo_output=conv_config.reallocate_halo_output,
+            act_block_h_override=conv_config.act_block_h,
+            reshard_if_not_optimal=reshard_if_not_optimal,
+            override_sharding_config=False,  # TODO: pass in config
+            height_sharding=conv_config.height_sharding,
+            core_grid=conv_config.core_grid,
+            transpose_shards=True,  # TODO: pass in config
+            output_layout=True,  # TODO: pass in config
+        )
+        return ttnn._ttnn.operations.conv2d.conv2d(
+            input_tensor,
+            weight_tensor,
+            device,
+            in_channels,
+            out_channels,
+            batch_size,
+            input_height,
+            input_width,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            groups,
+            bias_tensor,
+            conv_config_,
+        )
+
     output_height = ((int)((input_height - kernel_size[0] + 2 * padding[0]) / stride[0])) + 1
     output_width = ((int)((input_width - kernel_size[1] + 2 * padding[1]) / stride[1])) + 1
     if "reader_patterns_cache" not in conv_op_cache:
