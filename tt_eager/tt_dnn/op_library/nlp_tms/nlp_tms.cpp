@@ -452,10 +452,10 @@ void NlpKVCacheUnpadToSharded::validate(const std::vector<Tensor> &input_tensors
     auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
     // Need at least fused_batch_heads cores to unpad into sharded tensor
 
-    log_info("output_tensor_shape: {}", output_tensor_shape);
-    log_info("output_tensor_start: {}", this->output_tensor_start);
-    log_info("output_tensor_end: {}", this->output_tensor_end);
-    log_info("input_shape: {}", input_shape);
+    // log_info("output_tensor_shape: {}", output_tensor_shape);
+    // log_info("output_tensor_start: {}", this->output_tensor_start);
+    // log_info("output_tensor_end: {}", this->output_tensor_end);
+    // log_info("input_shape: {}", input_shape);
 
     TT_FATAL(fused_batch_heads <= core_grid.x * core_grid.y);
     TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);

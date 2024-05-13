@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 import tt_lib as ttl
-from models.utility_functions import is_grayskull
+from models.utility_functions import is_grayskull, comp_pcc
 
 
 def unpadding_test(
@@ -47,25 +47,30 @@ def unpadding_test(
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),
-    ids=["bfloat16", "float"],
+    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),
+    ids=["bfloat8_b", "bfloat16", "float"],
 )
 @pytest.mark.parametrize(
     "kv_cache_shape, seq_len_start, seq_len_end",
     (
-        ((8, 1, 64, 64), 0, 32),
-        # ((3, 1, 64, 64), 32, 64),
-        # ((1, 1, 64, 64), 32, 64),
-        # ((1, 1, 128, 96), 32, 64),
-        # ((1, 1, 128, 96), 64, 96),
-        # ((1, 3, 32, 32), 0, 32),
-        # ((1, 6, 32, 32), 0, 32),
-        # ((1, 6, 128, 64), 32, 128),
-        # ((4, 6, 128, 64), 96, 128),
-        # ((1, 32, 2048, 64), 0, 1024),
-        # ((32, 1, 2048, 64), 1024, 1056),
-        # ((32, 1, 2048, 64), 0, 2016),
-        # ((32, 1, 2048, 64), 0, 2048),
+        ((9, 1, 64, 64), 0, 32),
+        ((9, 2, 64, 64), 0, 32),
+        ((9, 3, 64, 64), 32, 64),
+        ((3, 2, 64, 64), 32, 64),
+        ((1, 1, 64, 64), 32, 64),
+        ((1, 1, 128, 96), 32, 64),
+        ((1, 1, 128, 96), 64, 96),
+        ((1, 3, 32, 32), 0, 32),
+        ((1, 6, 32, 32), 0, 32),
+        ((1, 6, 128, 64), 32, 128),
+        ((4, 6, 128, 64), 96, 128),
+        ((1, 32, 2048, 64), 0, 1024),
+        ((1, 32, 2048, 64), 128, 1024),
+        ((32, 1, 2048, 64), 1024, 1056),
+        ((32, 1, 2048, 64), 0, 2016),
+        ((32, 1, 2048, 64), 0, 2048),
+        ((32, 1, 2048 + 128, 128), 0, 2048),  # llama2 70B use case
+        ((1, 32, 2048 + 128, 128), 0, 2048),  # llama2 70B use case
     ),
 )
 def test_run_unpadding_test(
@@ -88,7 +93,11 @@ def test_run_unpadding_test(
             dtype,
         )
         assert a_pt.shape == a_ref.shape
-        eq = torch.equal(a_pt, a_ref)
+        if dtype == ttl.tensor.DataType.BFLOAT8_B:
+            # inevitable precision loss for bfloat8_b
+            eq = comp_pcc(a_pt, a_ref, 0.999)
+        else:
+            eq = torch.equal(a_pt, a_ref)
         assert eq
 
         logger.info(memory_config)
@@ -110,7 +119,11 @@ def test_run_unpadding_test(
             dtype,
         )
         assert a_pt.shape == a_ref.shape
-        eq = torch.equal(a_pt, a_ref)
+        if dtype == ttl.tensor.DataType.BFLOAT8_B:
+            # inevitable precision loss for bfloat8_b
+            eq = comp_pcc(a_pt, a_ref, 0.999)
+        else:
+            eq = torch.equal(a_pt, a_ref)
         assert eq
 
         logger.info(memory_config)
