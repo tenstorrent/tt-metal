@@ -13,15 +13,14 @@ from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs
     "input_shapes",
     (
         (torch.Size([1, 1, 1, 10])),
-        (torch.Size([1, 1, 1, 20])),
-        (torch.Size([1, 1, 1, 3])),
+        (torch.Size([1, 1, 10, 20])),
+        (torch.Size([1, 1, 30, 3])),
+        (torch.Size([1, 4, 3, 5])),
+        (torch.Size([5, 4, 3, 20])),
     ),
 )
-@pytest.mark.parametrize(
-    "dim",
-    (3,),
-)
-@pytest.mark.parametrize("all", (True,))
+@pytest.mark.parametrize("dim", (3, 2, -1, -2))
+@pytest.mark.parametrize("all", (True, False))
 class TestArgmax:
     def test_argmax(self, input_shapes, dim, all, device):
         torch.manual_seed(10)
@@ -47,10 +46,15 @@ class TestArgmax:
                 tt_out_tensor = tt_out_tensor[0]
             else:
                 if input_shapes[1] != 1 or input_shapes[0] != 1:
-                    tt_out_tensor = tt_out_tensor[0]
+                    if dim == 2 or dim == -2:
+                        tt_out_tensor = tt_out_tensor[0, :, :, 0 : input_shapes[3]]
+                    else:
+                        tt_out_tensor = tt_out_tensor[0, :, :, 0 : input_shapes[2]]
                 else:
-                    tt_out_tensor = tt_out_tensor[0, 0, 0]
-
+                    if dim == 2 or dim == -2:
+                        tt_out_tensor = tt_out_tensor[0, 0, 0, 0 : input_shapes[3]]
+                    else:
+                        tt_out_tensor = tt_out_tensor[0, 0, 0, 0 : input_shapes[2]]
         pt_out_tensor = golden_tensor
         comp_pass, comp_out = comparison_funcs.comp_pcc(pt_out_tensor, tt_out_tensor, pcc=0.99)
         comp_all, _ = comparison_funcs.comp_allclose(pt_out_tensor, tt_out_tensor, atol=4, rtol=1e-1)
