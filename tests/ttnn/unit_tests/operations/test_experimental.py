@@ -167,12 +167,9 @@ def test_ttnn_experimental_operations_primary_matmul_1d(
 
 @pytest.mark.parametrize("H, num_cores", [[64, 64]])
 @pytest.mark.parametrize("num_slices", [2])
-def test_sharded_partial_op(
-    device,
-    H,
-    num_cores,
-    num_slices,
-):
+@pytest.mark.parametrize("enable_async", [True, False])
+def test_sharded_partial_op(device, H, num_cores, num_slices, enable_async):
+    device.enable_async(enable_async)
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
