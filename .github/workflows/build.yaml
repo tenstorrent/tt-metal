@@ -96,7 +96,7 @@ jobs:
       # So we can get all the makefile output we want
       SILENT: 0
     runs-on: ${{ matrix.config.runs-on }}
-    name: build ${{ matrix.config.type }} ${{ matrix.arch }}
+    name: make build ${{ matrix.config.type }} ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -131,7 +131,7 @@ jobs:
         arch: [grayskull, wormhole_b0]
         os: [ubuntu-20.04]
     needs: build-lib
-    name: build cpptest ${{ matrix.config }} ${{ matrix.arch }}
+    name: make build cpptest ${{ matrix.config }} ${{ matrix.arch }}
     env:
       ARCH_NAME: ${{ matrix.arch }}
       CONFIG: ${{ matrix.config }}

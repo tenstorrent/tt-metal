@@ -5,9 +5,9 @@ EAGER_OUTPUT_DIR = $(OUT)/dist
 
 TT_EAGER_INCLUDES = $(TT_METAL_BASE_INCLUDES) -Itt_eager/ -I ttnn/cpp/
 
+include tt_eager/queue/module.mk
 include tt_eager/tensor/module.mk
 include tt_eager/tt_dnn/module.mk
-include tt_eager/queue/module.mk
 include tt_eager/tt_lib/module.mk
 
 TT_LIBS_TO_BUILD = tt_eager/tensor \
