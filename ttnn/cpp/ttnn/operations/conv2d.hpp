@@ -122,7 +122,7 @@ ParallelConfig determine_parallel_config(
     uint32_t output_height,
     uint32_t output_width,
     uint32_t output_channels,
-    const Device& device,
+    Device& device,
     ShardOrientation block_shard_orientation,
     bool is_out_tiled=true
 ) {
@@ -508,7 +508,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    ttnn::Device device,
+    ttnn::Device& device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -519,8 +519,8 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
     std::array<uint32_t, 2> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
-    const std::optional<const ConvConfig>& conv_config_ = std::nullopt) {
+    std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
+    std::optional<const ConvConfig>& conv_config_ = std::nullopt) {
     ttnn::validate_input_tensor("ttnn.conv2d", input_tensor, input_schemas[0]);
     ttnn::validate_input_tensor("ttnn.conv2d", weight_tensor, input_schemas[1]);
     if(bias_tensor.has_value()) {
