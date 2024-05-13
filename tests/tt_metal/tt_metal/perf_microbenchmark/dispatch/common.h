@@ -16,11 +16,11 @@
 extern bool debug_g;
 extern bool use_coherent_data_g;
 extern uint32_t dispatch_buffer_page_size_g;
-extern CoreCoord first_worker_g;
 extern uint32_t min_xfer_size_bytes_g;
 extern uint32_t max_xfer_size_bytes_g;
 extern bool send_to_all_g;
 extern bool perf_test_g;
+extern uint32_t hugepage_issue_buffer_size_g;
 
 struct one_core_data_t {
     CoreType core_type;
@@ -37,19 +37,23 @@ class DeviceData {
     bool banked;  // TODO banked and unbanked tests still don't play nicely together
     int amt_written;
     // 10 is a hack...bigger than any core_type
-    uint32_t base_data_addr[10];
-    uint32_t base_result_data_addr[10];
+    uint64_t base_data_addr[10];
+    uint64_t base_result_data_addr[10];
     unordered_map<CoreCoord, unordered_map<uint32_t, one_core_data_t>> all_data;
+    CoreCoord host_core;
 
     // Validate a single core's worth of results vs expected
-    bool validate_one_core(Device *device, const one_core_data_t& one_core_data,
+    bool validate_one_core(Device *device, std::unordered_set<CoreCoord> &validated_cores,
+                           const one_core_data_t& one_core_data,
                            const uint32_t start_index, uint32_t result_addr);
+    bool validate_host(std::unordered_set<CoreCoord> &validated_cores,
+                       const one_core_data_t& one_core_data);
 
     void prepopulate_dram(Device *device, uint32_t size_words);
 
  public:
     DeviceData(Device *device, CoreRange workers,
-               uint32_t l1_data_addr, uint32_t dram_data_addr, uint32_t pcie_data_addr,
+               uint32_t l1_data_addr, uint32_t dram_data_addr, void * pcie_data_addr,
                bool is_banked, uint32_t dram_data_size_words);
 
     // Add expected data to a core
@@ -70,6 +74,7 @@ class DeviceData {
     uint32_t get_result_data_addr(CoreCoord core, int bank_id = 0);
 
     bool validate(Device *device);
+    void overflow_check(Device *device);
 
     int size() { return amt_written; }
     int size(CoreCoord core, int bank_id = 0) { return this->all_data[core][bank_id].data.size(); }
@@ -79,23 +84,43 @@ class DeviceData {
     CoreType get_core_type(CoreCoord core) { return this->all_data[core][0].core_type; }
     uint32_t size_at(CoreCoord core, int bank_id);
     uint32_t at(CoreCoord core, int bank_id, uint32_t addr);
+    CoreCoord get_host_core() { return this->host_core; }
+    bool core_and_bank_present(CoreCoord core, uint32_t bank);
 };
 
 DeviceData::DeviceData(Device *device,
                        CoreRange workers,
-                       uint32_t l1_data_addr, uint32_t dram_data_addr, uint32_t pcie_data_addr,
+                       uint32_t l1_data_addr, uint32_t dram_data_addr, void * pcie_data_addr,
                        bool is_banked,
                        uint32_t dram_data_size_words) {
 
     this->base_data_addr[static_cast<int>(CoreType::WORKER)] = l1_data_addr;
-    this->base_data_addr[static_cast<int>(CoreType::PCIE)] = pcie_data_addr;
+    this->base_data_addr[static_cast<int>(CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
     this->base_result_data_addr[static_cast<int>(CoreType::WORKER)] = l1_data_addr;
-    this->base_result_data_addr[static_cast<int>(CoreType::PCIE)] = pcie_data_addr;
+    this->base_result_data_addr[static_cast<int>(CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_result_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
 
     this->banked = is_banked;
     this->amt_written = 0;
+
+    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
+    const std::vector<CoreCoord>& pcie_cores = soc_d.get_pcie_cores();
+    for (CoreCoord core : pcie_cores) {
+        // TODO: make this all work w/ phys coords
+        // this is really annoying
+        // the PCIE phys core conflicts w/ worker logical cores
+        // so we hack the physical core for tracking, blech
+        // no simple way to handle this, need to use phys cores
+        core = {100,100};
+        this->all_data[core][0] = one_core_data_t();
+        this->all_data[core][0].logical_core = core;
+        this->all_data[core][0].phys_core = core;
+        this->all_data[core][0].core_type = CoreType::PCIE;
+        this->all_data[core][0].bank_id = 20;
+        this->all_data[core][0].bank_offset = 0;
+        this->host_core = core;
+    }
 
     // Always populate DRAM
     auto num_banks = device->num_banks(BufferType::DRAM);
@@ -178,18 +203,30 @@ void DeviceData::prepopulate_dram(Device *device, uint32_t size_words) {
     }
 }
 
+bool DeviceData::core_and_bank_present(CoreCoord core, uint32_t bank) {
+    if (this->all_data.find(core) != this->all_data.end()) {
+        unordered_map<uint32_t, one_core_data_t>& core_data = this->all_data.find(core)->second;
+        if (core_data.find(bank) != core_data.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void DeviceData::push_one(CoreCoord core, int bank, uint32_t datum) {
-    this->amt_written++;
-    TT_ASSERT(this->all_data.find(core) != this->all_data.end());
-    this->all_data[core][bank].data.push_back(datum);
-    this->all_data[core][bank].valid.push_back(true);
+    if (core_and_bank_present(core, bank)) {
+        this->amt_written++;
+        this->all_data[core][bank].data.push_back(datum);
+        this->all_data[core][bank].valid.push_back(true);
+    }
 }
 
 void DeviceData::push_one(CoreCoord core, uint32_t datum) {
-    this->amt_written++;
-    TT_ASSERT(this->all_data.find(core) != this->all_data.end());
-    this->all_data[core][0].data.push_back(datum);
-    this->all_data[core][0].valid.push_back(true);
+    if (core_and_bank_present(core, 0)) {
+        this->amt_written++;
+        this->all_data[core][0].data.push_back(datum);
+        this->all_data[core][0].valid.push_back(true);
+    }
 }
 
 void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool is_mcast) {
@@ -198,11 +235,12 @@ void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool is_mcas
     for (auto y = cores.start.y; y <= cores.end.y; y++) {
         for (auto x = cores.start.x; x <= cores.end.x; x++) {
             CoreCoord core = {x, y};
-            if (this->all_data.find(core) != this->all_data.end()) {
+            if (core_and_bank_present(core, 0)) {
                 if (not counted || not is_mcast) {
                     this->amt_written++;
                     counted = true;
                 }
+
                 TT_ASSERT(this->all_data.find(core) != this->all_data.end());
                 this->all_data[core][0].data.push_back(datum);
                 this->all_data[core][0].valid.push_back(true);
@@ -216,9 +254,11 @@ inline uint32_t padded_size(uint32_t size, uint32_t alignment) {
 }
 
 void DeviceData::pad(CoreCoord core, int bank, uint32_t alignment) {
-    uint32_t padded = padded_size(this->all_data[core][bank].data.size(), alignment / sizeof(uint32_t));
-    this->all_data[core][bank].data.resize(padded);
-    this->all_data[core][bank].valid.resize(padded); // pushes false
+    if (core_and_bank_present(core, bank)) {
+        uint32_t padded = padded_size(this->all_data[core][bank].data.size(), alignment / sizeof(uint32_t));
+        this->all_data[core][bank].data.resize(padded);
+        this->all_data[core][bank].valid.resize(padded); // pushes false
+    }
 }
 
 // Some tests write to the same address across multiple cores
@@ -272,7 +312,9 @@ uint32_t DeviceData::at(CoreCoord core, int bank_id, uint32_t offset) {
     return this->all_data[core][bank_id].data[offset];
 }
 
-inline bool DeviceData::validate_one_core(Device *device, const one_core_data_t& one_core_data,
+inline bool DeviceData::validate_one_core(Device *device,
+                                          std::unordered_set<CoreCoord> &validated_cores,
+                                          const one_core_data_t& one_core_data,
                                           const uint32_t start_index,
                                           uint32_t result_addr) {
     int fail_count = 0;
@@ -309,6 +351,7 @@ inline bool DeviceData::validate_one_core(Device *device, const one_core_data_t&
     for (int i = 0; i <  size_bytes / sizeof(uint32_t); i++) {
         int index = start_index + i;
         if (!dev_valid[index]) continue;
+        validated_cores.insert(phys_core);
 
         if (results[i] != dev_data[index]) {
             if (!fail_count) {
@@ -326,10 +369,45 @@ inline bool DeviceData::validate_one_core(Device *device, const one_core_data_t&
     return fail_count;
 }
 
+bool DeviceData::validate_host(std::unordered_set<CoreCoord> &validated_cores,
+                               const one_core_data_t& host_data) {
+
+    log_info(tt::LogTest, "Validating data from hugepage");
+
+    bool failed = false;
+
+    static int host_data_index = 0;
+    uint32_t *results = (uint32_t *)this->base_data_addr[static_cast<int>(CoreType::PCIE)];
+
+    int fail_count = 0;
+    bool done = false;
+    for (int data_index = 0; data_index < host_data.data.size(); data_index++) {
+        validated_cores.insert(this->host_core);
+        if (host_data.data[data_index] != results[host_data_index] && fail_count < 5000) {
+            if (!failed) {
+                log_fatal(tt::LogTest, "Data mismatch - First 20 host data failures: [idx] expected->read");
+            }
+
+            log_fatal(tt::LogTest, "  [{:02d}] 0x{:08x}->0x{:08x}", host_data_index, (unsigned int)host_data.data[data_index], (unsigned int)results[host_data_index]);
+
+            failed = true;
+            fail_count++;
+        }
+
+        host_data_index++;
+
+        if (host_data_index * sizeof(uint32_t) > hugepage_issue_buffer_size_g) {
+            TT_THROW("Host test hugepage data wrap not (yet) supported, reduce test size/iterations");
+        }
+    }
+
+    return failed;
+}
+
 bool DeviceData::validate(Device *device) {
 
     bool failed = false;
-    int count = 0;
+    std::unordered_set<CoreCoord> validated_cores;
 
     for (const auto & [core, bank_device_data] : this->all_data) {
         for (auto & [bank, one_core_data] : bank_device_data) {
@@ -338,16 +416,35 @@ bool DeviceData::validate(Device *device) {
             const uint32_t start_index = (this->base_result_data_addr[static_cast<int>(one_core_data.core_type)] -
                                           this->base_data_addr[static_cast<int>(one_core_data.core_type)]) / sizeof(uint32_t);
             uint32_t result_addr = this->base_result_data_addr[static_cast<int>(one_core_data.core_type)];
-            failed |= validate_one_core(device, one_core_data, start_index, result_addr);
-            count++;
+            if (one_core_data.phys_core == this->host_core) {
+                failed |= validate_host(validated_cores, one_core_data);
+            } else {
+                failed |= validate_one_core(device, validated_cores, one_core_data, start_index, result_addr);
+            }
         }
     }
 
-    log_info(tt::LogTest, "Validated {} non-empty cores total.", count);
+    log_info(tt::LogTest, "Validated {} non-empty cores total.", validated_cores.size());
 
     return !failed;
 }
 
+void DeviceData::overflow_check(Device *device) {
+
+    for (const auto & [core, bank_device_data] : this->all_data) {
+        for (auto & [bank, one_core_data] : bank_device_data) {
+            if (one_core_data.core_type == CoreType::WORKER) {
+                TT_FATAL(one_core_data.data.size() * sizeof(uint32_t) + base_data_addr[static_cast<int>(CoreType::WORKER)] <= device->l1_size_per_core(),
+                         "Test overflowed L1 memory");
+            } else if (one_core_data.core_type == CoreType::PCIE) {
+                TT_FATAL(one_core_data.data.size() * sizeof(uint32_t)  <= hugepage_issue_buffer_size_g,
+                         "Test overflowed PCIE memory");
+            } else if (one_core_data.core_type == CoreType::DRAM) {
+                // TODO
+            }
+        }
+    }
+}
 
 template<bool is_dram_variant,
          bool is_host_variant>
@@ -418,10 +515,24 @@ inline void generate_random_payload(vector<uint32_t>& cmds,
                                     const CoreRange& workers,
                                     DeviceData& data,
                                     uint32_t length_words,
-                                    bool is_mcast = false) {
+                                    CQDispatchCmd cmd,
+                                    bool is_mcast = false,
+                                    bool prepend_cmd = false) {
 
     static uint32_t coherent_count = 0;
     const uint32_t bank_id = 0; // No interleaved pages here.
+
+    // Host data puts the command in the datastream...
+    if (prepend_cmd) {
+        uint32_t datum = *(uint32_t *)&cmd;
+        data.push_range(workers, datum, is_mcast);
+        datum = *(((uint32_t *)&cmd) + 1);
+        data.push_range(workers, datum, is_mcast);
+        datum = *(((uint32_t *)&cmd) + 2);
+        data.push_range(workers, datum, is_mcast);
+        datum = *(((uint32_t *)&cmd) + 3);
+        data.push_range(workers, datum, is_mcast);
+    }
 
     // Note: the dst address marches in unison regardless of whether or not a core is written to
     for (uint32_t i = 0; i < length_words; i++) {
@@ -568,13 +679,14 @@ inline void add_dispatcher_cmd(vector<uint32_t>& cmds,
                                DeviceData& device_data,
                                CQDispatchCmd cmd,
                                uint32_t length,
-                               bool is_mcast = false) {
+                               bool is_mcast = false,
+                               bool prepend_cmd = false) {
 
     size_t prior_end = debug_prologue(cmds);
 
     add_bare_dispatcher_cmd(cmds, cmd);
     uint32_t length_words = length / sizeof(uint32_t);
-    generate_random_payload(cmds, workers, device_data, length_words, is_mcast);
+    generate_random_payload(cmds, workers, device_data, length_words, cmd, is_mcast, prepend_cmd);
 
     debug_epilogue(cmds, prior_end);
 }
@@ -764,22 +876,24 @@ inline void gen_rnd_dispatcher_packed_write_cmd(Device *device,
     }
 
     vector<CoreCoord> gets_data;
-    for (auto & [coord, one_worker] : device_data.get_data()) {
-        if (one_worker[0].core_type == CoreType::WORKER) {
-            if (send_to_all_g || std::rand() % 2) {
-                gets_data.push_back(coord);
+    while (gets_data.size() == 0) {
+        for (auto & [core, one_worker] : device_data.get_data()) {
+            if (device_data.core_and_bank_present(core, 0) &&
+                one_worker[0].core_type == CoreType::WORKER) {
+                if (send_to_all_g || std::rand() % 2) {
+                    gets_data.push_back(core);
+                }
             }
         }
-    }
-    if (gets_data.size() == 0) {
-        gets_data.push_back(device_data.get_data().begin()->first);
     }
 
     gen_dispatcher_packed_write_cmd(device, cmds, gets_data, device_data,
                                     xfer_size_bytes / sizeof(uint32_t));
 }
 
-inline void gen_dispatcher_host_write_cmd(vector<uint32_t>& cmds, uint32_t length) {
+inline void gen_dispatcher_host_write_cmd(vector<uint32_t>& cmds,
+                                          DeviceData& device_data,
+                                          uint32_t length) {
 
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
@@ -788,7 +902,7 @@ inline void gen_dispatcher_host_write_cmd(vector<uint32_t>& cmds, uint32_t lengt
     // Include cmd in transfer
     cmd.write_linear_host.length = length + sizeof(CQDispatchCmd);
 
-    add_dispatcher_cmd(cmds, cmd, length);
+    add_dispatcher_cmd(cmds, device_data.get_host_core(), device_data, cmd, length, false, true);
 }
 
 inline void gen_bare_dispatcher_host_write_cmd(vector<uint32_t>& cmds, uint32_t length) {

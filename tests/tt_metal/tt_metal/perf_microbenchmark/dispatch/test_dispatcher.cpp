@@ -63,6 +63,7 @@ bool fire_once_g;
 bool use_coherent_data_g;
 bool send_to_all_g;
 bool perf_test_g;
+uint32_t hugepage_issue_buffer_size_g;
 
 CoreCoord first_worker_g = { 0, 1 };
 CoreRange all_workers_g = {

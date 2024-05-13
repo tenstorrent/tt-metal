@@ -23,6 +23,7 @@ bool use_coherent_data_g = false;
 uint32_t hugepage_buffer_size_g = 256 * 1024 * 1024;
 uint32_t dev_hugepage_base = dispatch_buffer_page_size_g;
 std::pair<uint32_t, uint32_t> default_ptrs = std::make_pair(dev_hugepage_base, 0);
+uint32_t hugepage_issue_buffer_size_g;
 
 inline void gen_dispatcher_pad_to_page(vector<uint32_t>& cmds, uint32_t page_size) {
     uint32_t num_words_in_page = page_size / sizeof(uint32_t);
@@ -98,7 +99,11 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
     uint32_t l1_buf_base = align(L1_UNRESERVED_BASE, dispatch_buffer_page_size_g);
 
     std::vector<uint32_t> dispatch_cmds;
-    gen_dispatcher_host_write_cmd(dispatch_cmds, data_size);
+    CQDispatchCmd cmd;
+    memset(&cmd, 0, sizeof(CQDispatchCmd));
+    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
+    cmd.write_linear_host.length = data_size + sizeof(CQDispatchCmd);
+    add_dispatcher_cmd(dispatch_cmds, cmd, data_size);
     gen_dispatcher_pad_to_page(dispatch_cmds, dispatch_buffer_page_size_g);
     uint32_t dev_output_num_words = total_size / sizeof(uint32_t);
     gen_dispatcher_terminate_cmd(dispatch_cmds);
