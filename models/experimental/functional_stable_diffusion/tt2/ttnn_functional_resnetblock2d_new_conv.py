@@ -441,7 +441,7 @@ class resnetBlock2D:
                 reshard_if_not_optimal=True,
                 conv_op_cache=conv_cache,
             )
-            print(f"Resnet nput = {self.input_height}x{self.input_width} Output = {_out_height}x{_out_width}")
+            print(f"Resnet input = {self.input_height}x{self.input_width} Output = {_out_height}x{_out_width}")
 
         else:
             split_hidden_states = []
