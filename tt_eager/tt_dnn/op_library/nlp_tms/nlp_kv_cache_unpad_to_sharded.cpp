@@ -63,12 +63,12 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
-    log_info("[xuncai] get_unpad_runtime_args_tile_sharded");
-    log_info("[xuncai] input_shape: {}", input_shape);
-    log_info("[xuncai] output_shape: {}", output_shape);
-    log_info("[xuncai] num_unpadded_tiles_per_dim: {}", num_unpadded_tiles_per_dim);
-    log_info("[xuncai] num_padded_tiles_per_dim: {}", num_padded_tiles_per_dim);
-    log_info("[xuncai] accumulated_total_per_dim: {}", accumulated_total_per_dim);
+    // log_info("[xuncai] get_unpad_runtime_args_tile_sharded");
+    // log_info("[xuncai] input_shape: {}", input_shape);
+    // log_info("[xuncai] output_shape: {}", output_shape);
+    // log_info("[xuncai] num_unpadded_tiles_per_dim: {}", num_unpadded_tiles_per_dim);
+    // log_info("[xuncai] num_padded_tiles_per_dim: {}", num_padded_tiles_per_dim);
+    // log_info("[xuncai] accumulated_total_per_dim: {}", accumulated_total_per_dim);
 
     vector<uint32_t> common_reader_kernel_args = {
         input_buffer->address(),
@@ -98,9 +98,9 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
             num_tiles_per_core = 0;
         }
 
-        log_info("[xuncai] Iteration: {} ------------------------------------------", i);
-        log_info("[xuncai] core: {}", core);
-        log_info("[xuncai] num_tiles_per_core: {}", num_tiles_per_core);
+        // log_info("[xuncai] Iteration: {} ------------------------------------------", i);
+        // log_info("[xuncai] core: {}", core);
+        // log_info("[xuncai] num_tiles_per_core: {}", num_tiles_per_core);
 
         id_per_dim[0] = num_tiles_written % num_unpadded_tiles_per_dim[0];
         uint32_t unpadded_written = num_tiles_written / num_unpadded_tiles_per_dim[0];
@@ -112,10 +112,10 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
 
-        log_info("[xuncai] num_tiles_written: {}", num_tiles_written);
+        // log_info("[xuncai] num_tiles_written: {}", num_tiles_written);
         // log_info("[xuncai] unpadded_written: {}", unpadded_written);
         // log_info("[xuncai] start_id: {}", start_id);
-        log_info("[xuncai] id_per_dim: {}", id_per_dim);
+        // log_info("[xuncai] id_per_dim: {}", id_per_dim);
 
         // reader kernel args
         vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
@@ -204,23 +204,23 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_unpad_to_sharded(const T
     num_cores_total = num_cores;
     auto first_core_range = *all_cores.ranges().begin();
     num_cores_x = first_core_range.grid_size().x;
-    num_cores_y = first_core_range.grid_size().y;
+    num_cores_y = first_core_range.grid_size().y; //std::min(first_core_range.grid_size().y+1, compute_with_storage_grid_size.y);
     CoreRange total_cores({0, 0}, {num_cores_x-1, num_cores_y-1});
     core_group_1 = shard_spec.grid; // all cores should evenly devide the work if shard_spec is correct
     uint32_t num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
     uint32_t num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
     num_tiles_per_core_group_1 = num_units_per_shard_height * num_units_per_shard_width;
-    num_tiles_per_core_group_2 = 0;
-    log_info("[xuncai] num_cores_x: {}", num_cores_x);
-    log_info("[xuncai] num_cores_y: {}", num_cores_y);
-    log_info("[xuncai] num_cores_total: {}", num_cores_total);
-    log_info("[xuncai] num_cores: {}", num_cores);
-    log_info("[xuncai] all_cores: {}", all_cores);
-    log_info("[xuncai] core_group_1: {}", core_group_1);
-    log_info("[xuncai] core_group_2: {}", core_group_2);
-    log_info("[xuncai] num_tiles_per_core_group_1: {}", num_tiles_per_core_group_1);
-    log_info("[xuncai] num_tiles_per_core_group_2: {}", num_tiles_per_core_group_2);
-    log_info("[xuncai] total_cores: {}", total_cores);
+    num_tiles_per_core_group_2 = num_units_per_shard_height * num_units_per_shard_width;
+    // log_info("[xuncai] num_cores_x: {}", num_cores_x);
+    // log_info("[xuncai] num_cores_y: {}", num_cores_y);
+    // log_info("[xuncai] num_cores_total: {}", num_cores_total);
+    // log_info("[xuncai] num_cores: {}", num_cores);
+    // log_info("[xuncai] all_cores: {}", all_cores);
+    // log_info("[xuncai] core_group_1: {}", core_group_1);
+    // log_info("[xuncai] core_group_2: {}", core_group_2);
+    // log_info("[xuncai] num_tiles_per_core_group_1: {}", num_tiles_per_core_group_1);
+    // log_info("[xuncai] num_tiles_per_core_group_2: {}", num_tiles_per_core_group_2);
+    // log_info("[xuncai] total_cores: {}", total_cores);
 
 
     tt_metal::Buffer *src0_buffer = a.buffer();
@@ -240,7 +240,7 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_unpad_to_sharded(const T
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
 	 	.set_page_size(src0_cb_index, single_tile_size)
         .set_globally_allocated_address(*output.buffer());
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
 
 
@@ -259,7 +259,7 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_unpad_to_sharded(const T
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id_shard_optimized.cpp",
-        total_cores,
+        all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)src0_is_dram};
@@ -286,7 +286,7 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_unpad_to_sharded(const T
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
-        total_cores,
+        all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
 
@@ -345,13 +345,13 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_unpad_to_sharded(const T
         num_cores_total = num_cores;
         auto first_core_range = *all_cores.ranges().begin();
         num_cores_x = first_core_range.grid_size().x;
-        num_cores_y = first_core_range.grid_size().y;
+        num_cores_y = first_core_range.grid_size().y; //std::min(first_core_range.grid_size().y+1, compute_with_storage_grid_size.y);
         CoreRange total_cores({0, 0}, {num_cores_x-1, num_cores_y-1});
         core_group_1 = shard_spec.grid; // all cores should evenly devide the work if shard_spec is correct
         uint32_t num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
         uint32_t num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
         num_tiles_per_core_group_1 = num_units_per_shard_height * num_units_per_shard_width;
-        num_tiles_per_core_group_2 = 0;
+        num_tiles_per_core_group_2 = num_units_per_shard_height * num_units_per_shard_width;
 
         const auto tensor_start = static_cast<const Unpad*>(operation)->output_tensor_start;
         auto all_runtime_args = get_unpad_runtime_args_tile_sharded(src_tensor, dst_tensor, tensor_start, num_cores_total,  num_cores, num_cores_x, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2);
