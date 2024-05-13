@@ -212,88 +212,35 @@ def _concat_validate_input_tensors(operation_name, tensors, dim, *args, **kwargs
         )
 
 
-@ttnn.register_operation(
+doc = r"""
+concat(tensors: List[ttnn.Tensor], dim: int = 0, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+
+Concats :attr:`tensors` in the given :attr:`dim`.
+
+Args:
+    * :attr:`tensors`: the tensors to be concatenated.
+    * :attr:`dim`: the concatenating dimension.
+
+Keyword Args:
+    * :attr:`memory_config`: the memory configuration to use for the operation
+
+Example::
+
+    >>> tensor = ttnn.concat(ttnn.from_torch(torch.zeros((1, 1, 64, 32), ttnn.from_torch(torch.zeros((1, 1, 64, 32), dim=3)), device)
+
+    >>> tensor1 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
+    >>> tensor2 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
+    >>> output = ttnn.concat([tensor1, tensor2], dim=4)
+    >>> print(output.shape)
+    [1, 1, 32, 64]
+
+"""
+concat = ttnn.register_operation(
     name="ttnn.concat",
     validate_input_tensors=_concat_validate_input_tensors,
     golden_function=_golden_function,
-    allow_to_fallback_to_golden_function_on_failure=True,
-)
-def concat(
-    tensors: List[ttnn.Tensor],
-    dim: int = 0,
-    *,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    r"""
-    concat(tensors: List[ttnn.Tensor], dim: int = 0, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-    Concats :attr:`tensors` in the given :attr:`dim`.
-
-    Args:
-        * :attr:`tensors`: the tensors to be concatenated.
-        * :attr:`dim`: the concatenating dimension.
-
-    Keyword Args:
-        * :attr:`memory_config`: the memory configuration to use for the operation
-
-    Example::
-
-        >>> tensor = ttnn.concat(ttnn.from_torch(torch.zeros((1, 1, 64, 32), ttnn.from_torch(torch.zeros((1, 1, 64, 32), dim=3)), device)
-
-        >>> tensor1 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
-        >>> tensor2 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
-        >>> output = ttnn.concat([tensor1, tensor2], dim=4)
-        >>> print(output.shape)
-        [1, 1, 32, 64]
-
-    """
-    if len(tensors) < 1:
-        raise RuntimeError("ttnn.concat: expected a non-empty list of Tensors!")
-
-    if len(tensors) == 1:
-        return ttnn.to_memory_config(tensors[0], memory_config)
-
-    first_tensor = tensors[0]
-    first_tensor_shape = first_tensor.shape
-    for tensor in tensors:
-        shape = tensor.shape
-        if (
-            len(shape) != len(first_tensor_shape)
-            or any(shape[i] != first_tensor_shape[i] for i in range(len(shape)) if i != dim)
-            or any(
-                shape.with_tile_padding()[i] != first_tensor_shape.with_tile_padding()[i]
-                for i in range(len(shape))
-                if i != dim
-            )
-        ):
-            raise ValueError(
-                "All dimensions must be the same size except for the dimension along which the contenation is taking place."
-            )
-
-    rank = len(tensors[0].shape)
-    original_dim = dim
-    if dim < 0:
-        dim = rank + dim
-    if dim < 0 or dim >= rank:
-        raise RuntimeError(
-            f"ttnn: Dimension out of range: dim {original_dim} cannot be used for tensors of rank {rank}"
-        )
-
-    rank = len(tensors[0].shape)
-
-    all_tensors_are_tile_layout_without_padding = all(
-        tensor.layout == ttnn.TILE_LAYOUT and not ttnn.has_tile_padding(tensor) for tensor in tensors
-    )
-
-    if rank <= 4 and all_tensors_are_tile_layout_without_padding:
-        tensors_4d = [ttnn.unsqueeze_to_4D(tensor) for tensor in tensors]
-        dim = dim + 4 - rank
-        output_tensor = ttl.tensor.concat(tensors_4d, dim=dim, output_mem_config=memory_config)
-        while len(output_tensor.shape) > rank:
-            output_tensor = ttnn.squeeze(output_tensor, dim=0)
-        return output_tensor
-    else:
-        raise NotImplementedError
+    doc=doc,
+)(ttnn._ttnn.operations.data_movement.concat)
 
 
 def _golden_function(input_tensor, split_size, dim):
