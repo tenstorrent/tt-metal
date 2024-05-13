@@ -77,7 +77,6 @@ def _pad_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
     golden_function=_golden_function,
     preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
     postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
-    allow_to_fallback_to_golden_function_on_failure=True,
 )
 def pad(
     input_tensor: ttnn.Tensor,
@@ -265,7 +264,6 @@ def _split_validate_input_tensors(operation_name, input_tensor, *args, **kwargs)
     name="ttnn.split",
     validate_input_tensors=_split_validate_input_tensors,
     golden_function=_golden_function,
-    allow_to_fallback_to_golden_function_on_failure=True,
 )
 def split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> ttnn.Tensor:
     r"""
@@ -303,7 +301,6 @@ def _repeat_interleave_validate_input_tensors(operation_name, input_tensor, *arg
     name="ttnn.repeat_interleave",
     validate_input_tensors=_repeat_interleave_validate_input_tensors,
     golden_function=_golden_function,
-    allow_to_fallback_to_golden_function_on_failure=True,
 )
 def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int], dim: int = 0) -> ttnn.Tensor:
     r"""
@@ -386,7 +383,6 @@ def _repeat_validate_input_tensors(operation_name, input_tensor, *args, **kwargs
     name="ttnn.repeat",
     validate_input_tensors=_repeat_validate_input_tensors,
     golden_function=_golden_function,
-    allow_to_fallback_to_golden_function_on_failure=True,
 )
 def repeat(
     input_tensor: ttnn.Tensor,
