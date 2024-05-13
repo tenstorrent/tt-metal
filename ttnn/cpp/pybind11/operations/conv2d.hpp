@@ -54,6 +54,28 @@ void py_module(py::module& module) {
         py::arg("groups"),
         py::arg("bias_tensor") = std::nullopt,
         py::arg("conv_config") = std::nullopt);
+
+    py::class_<ConvConfig>(module, "ConvConfig")
+        .def(
+            py::init<DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, bool, bool, bool, CoreRangeSet, bool, Layout>(),
+            py::kw_only(),
+            py::arg("math_fidelity") = MathFidelity::HiFi4,
+            py::arg("dtype") = DataType::BFLOAT16,
+            py::arg("weights_dtype") = DataType::BFLOAT16,
+            py::arg("math_approx_mode_enabled") = true,
+            py::arg("fp32_dest_acc_enabled") = true,
+            py::arg("activation") = "",
+            py::arg("input_channels_alignment") = 32,
+            py::arg("deallocate_activation") = false,
+            py::arg("reallocate_halo_output") = false,
+            py::arg("act_block_h_override") = 0,
+            py::arg("reshard_if_not_optimal") = false,
+            py::arg("override_sharding_config") = false,
+            py::arg("height_sharding") = true,
+            py::arg("core_grid") = CoreRangeSet({CoreRange({})}),
+            py::arg("transpose_shards") = true,
+            py::arg("output_layout") = Layout::TILE,
+        )
 }
 
 }  // namespace conv2d
