@@ -19,6 +19,8 @@ void kernel_main() {
     const uint32_t shards_per_eth_l1_buffer = get_arg_val<uint32_t>(arg_index++);
     const uint32_t writer_send_sem_addr = get_arg_val<uint32_t>(arg_index++);
     const uint32_t num_transfers = get_arg_val<uint32_t>(arg_index++);
+    const uint32_t num_input_shards_from_local_ring_index = get_arg_val<uint32_t>(arg_index++);
+    const uint32_t half_cb_n_shards = get_arg_val<uint32_t>(arg_index++);
 
     ShardAddrGen<shard_type>::build_with_placement_new(&addr_gen, arg_index);
     arg_index += addr_gen.get_num_args_consumed();
@@ -36,20 +38,17 @@ void kernel_main() {
     const uint64_t eth_l1_sender_semaphore_addr =
         get_noc_addr(eth_sender_noc_x, eth_sender_noc_y, eth_sender_l1_sem_addr);
 
+    constexpr bool use_optimized = true;
     // one input shard per core for the local chip forward to output tensor
-    const uint32_t num_input_shards_from_local_ring_index = addr_gen.get_num_dest_cores();
     const uint32_t shard_size = addr_gen.get_shard_size_in_bytes();
     for (uint32_t i = 0; i < num_input_shards_from_local_ring_index; i += shards_per_eth_l1_buffer) {
         uint32_t num_shards_to_send = std::min(shards_per_eth_l1_buffer, num_input_shards_from_local_ring_index - i);
         noc_semaphore_wait(writer_send_semaphore_addr_ptr, 1);
         noc_semaphore_set(writer_send_semaphore_addr_ptr, 0);
-        for (uint32_t c = 0; c < num_shards_to_send; c++) {
-            uint64_t eth_l1_dest_noc_addr = eth_l1_sender_base_noc_addr + shard_size * c;
-            write_and_send_chunk_sharded(
-                cb_id_in0, addr_gen, 1 /*1 page == 1 shard for this call*/,
-                eth_l1_dest_noc_addr);
+        write_and_send_chunk_sharded(cb_id_in0, addr_gen, num_shards_to_send, eth_l1_sender_base_noc_addr, eth_l1_sender_semaphore_addr);
+        if (half_cb_n_shards - num_shards_to_send) {
+            pop_filler_pages_from_cb(cb_id_in0, half_cb_n_shards - num_shards_to_send);
         }
-        noc_semaphore_inc(eth_l1_sender_semaphore_addr, 1);
     }
 
     // num_transfers = num_devices - 1
@@ -58,11 +57,10 @@ void kernel_main() {
             uint32_t num_shards_to_send = std::min(shards_per_eth_l1_buffer, num_input_shards_from_local_ring_index - i);
             noc_semaphore_wait(writer_send_semaphore_addr_ptr, 1);
             noc_semaphore_set(writer_send_semaphore_addr_ptr, 0);
-            for (uint32_t c = 0; c < num_shards_to_send; ++c) {
-                uint64_t eth_l1_dest_noc_addr = eth_l1_sender_base_noc_addr + shard_size * c;
-                send_chunk_sharded(cb_id_in0, 1, shard_size, eth_l1_dest_noc_addr);
+            send_chunk_sharded(cb_id_in0, num_shards_to_send, shard_size, eth_l1_sender_base_noc_addr, eth_l1_sender_semaphore_addr);
+            if (half_cb_n_shards - num_shards_to_send) {
+                pop_filler_pages_from_cb(cb_id_in0, half_cb_n_shards - num_input_shards_from_local_ring_index);
             }
-            noc_semaphore_inc(eth_l1_sender_semaphore_addr, 1);
         }
     }
 }

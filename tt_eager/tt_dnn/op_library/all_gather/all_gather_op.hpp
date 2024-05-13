@@ -4,10 +4,14 @@
 
 #pragma once
 
+#include <cstdint>
+#include "common/core_coord.h"
+#include "impl/buffers/buffer.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
 
 #include "tt_dnn/op_library/run_operation.hpp"
 
@@ -26,12 +30,12 @@ enum AllGatherMode {
 };
 
 namespace all_gather_op {
-enum Topology {
-    Ring = 0,
-    Linear = 1,
-    Meash = 2
-};
+using ccl::Topology;
 }; // namespace all_gather_op
+
+using ccl::EriscDatamoverBuilder;
+
+AllGatherMode choose_all_gather_mode(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim);
 
 class AllGatherConfig {
    public:
@@ -42,11 +46,24 @@ class AllGatherConfig {
 
         erisc_handshake_address(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE),
         topology(topology),
-        enable_bidirectional(false),
+        enable_bidirectional(/*false*/topology == all_gather_op::Topology::Ring && dim != 0 && dim != 1),
 
         input_is_dram(input_tensor.buffer()->buffer_type() == BufferType::DRAM),
-        output_is_dram(output_tensor.buffer()->buffer_type() == BufferType::DRAM)
+        output_is_dram(output_tensor.buffer()->buffer_type() == BufferType::DRAM),
+
+        mode(choose_all_gather_mode(input_tensor, output_tensor, dim))
     {
+        if (input_tensor.get_layout() == Layout::TILE && dim != 3) {
+            // See issue #6448
+            int outer_dims_size = 1;
+            for (std::size_t i = 0; i < dim; i++) {
+                outer_dims_size *= input_tensor.get_legacy_shape()[i];
+            }
+            if (outer_dims_size > 1) {
+                this->enable_bidirectional = false;
+            }
+        }
+
         // "duplicate" directions are a short hand to enable linear/mesh all-gather topologies with
         // less code-changes. Ideally a new concept is added amongst "num_eth_buffers", "num_workers_per_link", etc.
         uint32_t num_duplicate_directions = topology == all_gather_op::Topology::Ring ? 1 : 2;
@@ -54,7 +71,7 @@ class AllGatherConfig {
         constexpr uint32_t total_l1_buffer_space = eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
         this->is_sharded = input_tensor.is_sharded();
-        this->num_eth_buffers = (this->enable_bidirectional ? 8 : (this->is_sharded && topology != all_gather_op::Topology::Linear? 8 : 4));
+        this->num_eth_buffers = (this->enable_bidirectional ? 8 : (this->is_sharded && topology != all_gather_op::Topology::Linear ? 8 : 4));
         if (this->is_sharded) {
             this->num_eth_buffers = std::min(this->num_eth_buffers, input_tensor.shard_spec()->num_cores());
             if ((input_tensor.shard_spec()->num_cores() / this->num_eth_buffers) % (ring_size) != 0 &&
@@ -64,6 +81,7 @@ class AllGatherConfig {
             }
             log_trace(tt::LogOp, "this->num_buffers: {}", this->num_eth_buffers);
         }
+
         this->num_workers_per_link = this->num_eth_buffers;
         this->eth_sems_l1_base_byte_address = this->erisc_handshake_address + 16;
         this->semaphore_offset = this->semaphore_size * this->num_eth_buffers * num_duplicate_directions; // TODO: Remove this once dedicated semaphore space for user kernels are added
@@ -155,9 +173,31 @@ class AllGatherConfig {
     const all_gather_op::Topology topology;
     AllGatherMode mode;
     bool is_sharded;
-    const bool enable_bidirectional;
+    bool enable_bidirectional;
     const bool input_is_dram;
     const bool output_is_dram;
+};
+
+struct RingInterleavedAllGatherVariantConfig : public AllGatherConfig {
+
+    std::string const& send_reader_kernel_path = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_send_reader.cpp";
+    std::string const& sender_writer_kernel_path = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_send_writer.cpp";
+    std::string const& receiver_reader_kernel_path = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_receive_reader.cpp";
+    std::string const& receiver_writer_kernel_path = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_interleaved_ring_gather_receive_writer.cpp";
+};
+
+struct SingleTileHighWidthShardedAllGatherVariantConfig : public AllGatherConfig {
+
+    std::string const& send_reader_kernel_path = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_send_reader.cpp";
+    std::string const& sender_writer_kernel_path = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_send_writer.cpp";
+    std::string const& receiver_reader_kernel_path = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_receive_reader.cpp";
+    std::string const& receiver_writer_kernel_path = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_ring_gather_receive_writer.cpp";
+};
+
+struct FullWorkerGridShardedAllGatherVariantConfig : public AllGatherConfig {
+
+    std::string const& reader_kernel = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_all_shard_workers_ring_gather_reader.cpp";
+    std::string const& writer_kernel = "tt_eager/tt_dnn/op_library/all_gather/kernels/dataflow/worker_sharded_all_shard_workers_ring_gather_writer.cpp";
 };
 
 struct AllGather {
@@ -276,7 +316,7 @@ struct ShardedAllGatherConfig {
 
 struct ShardAddrGenArgGenerator {
 
-    using shard_cores_t = CoreRangeSet;//std::variant<std::vector<CoreCoord>, CoreRange, CoreRangeSet>;
+    using shard_cores_t = CoreRangeSet;
 
     ShardAddrGenArgGenerator(ccl::ShardAddrGenArgs<true> const& args_struct) :
         args_struct(args_struct), initialized(true) {}
@@ -288,20 +328,24 @@ struct ShardAddrGenArgGenerator {
         std::vector<uint32_t> args;
         args.reserve(7 * this->args_struct.num_dest_cores * 2);
 
-        TT_ASSERT(this->args_struct.shard_size_in_bytes != ccl::ShardAddrGenArgs<true>::UNINITIALIZED_VALUE);
-        TT_ASSERT(this->args_struct.chunks_per_core_before_advance != ccl::ShardAddrGenArgs<true>::UNINITIALIZED_VALUE);
-        TT_ASSERT(this->args_struct.shards_start_address != ccl::ShardAddrGenArgs<true>::UNINITIALIZED_VALUE);
-        TT_ASSERT(this->args_struct.starting_core_index != ccl::ShardAddrGenArgs<true>::UNINITIALIZED_VALUE);
-        TT_ASSERT(this->args_struct.starting_chunk_into_shard != ccl::ShardAddrGenArgs<true>::UNINITIALIZED_VALUE);
-        TT_ASSERT(this->args_struct.num_dest_cores != ccl::ShardAddrGenArgs<true>::UNINITIALIZED_VALUE);
+        TT_ASSERT(this->args_struct.shard_size_in_bytes != ccl::UNINITIALIZED_VALUE_U32);
+        TT_ASSERT(this->args_struct.total_chunks_per_core != ccl::UNINITIALIZED_VALUE_U16);
+        TT_ASSERT(this->args_struct.shards_start_address != ccl::UNINITIALIZED_VALUE_U32);
+        TT_ASSERT(this->args_struct.starting_core_index != ccl::UNINITIALIZED_VALUE_U16);
+        TT_ASSERT(this->args_struct.starting_chunk_into_shard != ccl::UNINITIALIZED_VALUE_U16);
+        TT_ASSERT(this->args_struct.intra_core_stride_in_shards != ccl::UNINITIALIZED_VALUE_U16);
+        TT_ASSERT(this->args_struct.contiguous_chunks_before_stride != ccl::UNINITIALIZED_VALUE_U16);
+        TT_ASSERT(this->args_struct.num_dest_cores != ccl::UNINITIALIZED_VALUE_U16);
         TT_ASSERT(this->args_struct.dest_cores.size() != 0);
 
         args.push_back(this->args_struct.is_clockwise);
         args.push_back(this->args_struct.shard_size_in_bytes);
-        args.push_back(this->args_struct.chunks_per_core_before_advance);
+        args.push_back(this->args_struct.total_chunks_per_core);
         args.push_back(this->args_struct.shards_start_address);
         args.push_back(this->args_struct.starting_core_index);
         args.push_back(this->args_struct.starting_chunk_into_shard);
+        args.push_back(this->args_struct.intra_core_stride_in_shards);
+        args.push_back(this->args_struct.contiguous_chunks_before_stride);
         args.push_back(this->args_struct.num_dest_cores);
         for (ccl::WorkerXY const& core : this->args_struct.dest_cores) {
             args.push_back(core.to_uint32());
@@ -316,14 +360,20 @@ struct ShardAddrGenArgGenerator {
         log_trace(tt::LogOp, "ShardAddrGenArgGenerator:");
         log_trace(tt::LogOp, "\tis_clockwise: {}", this->args_struct.is_clockwise);
         log_trace(tt::LogOp, "\tshard_size_in_bytes: {}", this->args_struct.shard_size_in_bytes);
-        log_trace(tt::LogOp, "\tchunks_per_core_before_advance: {}", this->args_struct.chunks_per_core_before_advance);
+        log_trace(tt::LogOp, "\ttotal_chunks_per_core: {}", this->args_struct.total_chunks_per_core);
         log_trace(tt::LogOp, "\tshards_start_address: {}", this->args_struct.shards_start_address);
         log_trace(tt::LogOp, "\tstarting_core_index: {}", this->args_struct.starting_core_index);
         log_trace(tt::LogOp, "\tstarting_chunk_into_shard: {}", this->args_struct.starting_chunk_into_shard);
+        log_trace(tt::LogOp, "\tintra_core_stride_in_shards: {}", this->args_struct.intra_core_stride_in_shards);
+        log_trace(tt::LogOp, "\tcontiguous_chunks_before_stride: {}", this->args_struct.contiguous_chunks_before_stride);
         log_trace(tt::LogOp, "\tnum_dest_cores: {}", this->args_struct.num_dest_cores);
         for (auto n = 0; n < this->args_struct.num_dest_cores; ++n) {
             log_trace(tt::LogOp, "\t\tdest_core[{}]: x={},y={}", n, this->args_struct.dest_cores.at(n).x, this->args_struct.dest_cores.at(n).y);
         }
+
+        TT_ASSERT(this->args_struct.dest_cores.size() == this->args_struct.num_dest_cores);
+        TT_ASSERT(this->args_struct.starting_core_index < this->args_struct.num_dest_cores);
+        TT_ASSERT(this->args_struct.starting_core_index < this->args_struct.dest_cores.size());
     }
 
     ccl::ShardAddrGenArgs<true> args_struct;
@@ -332,6 +382,30 @@ struct ShardAddrGenArgGenerator {
 };
 
 struct InputTensorShardAddrGenArgGenerator final : public ShardAddrGenArgGenerator {
+    static std::vector<CoreCoord> ctor_generate_dest_cores(
+        CoreRangeSet const& all_shard_cores,
+        uint32_t worker_index,
+        uint32_t num_workers
+    ) {
+        bool row_wise = true;
+        auto const& all_shard_cores_vec = corerange_to_cores(all_shard_cores, std::nullopt, row_wise);
+        uint32_t num_shard_cores = all_shard_cores_vec.size();
+        uint32_t shards_per_worker = num_shard_cores / num_workers;
+        uint32_t num_dest_cores = shards_per_worker;
+        bool has_extra_worker = worker_index < num_shard_cores % num_workers;
+        if (has_extra_worker) {
+            num_dest_cores++;
+        }
+
+        uint32_t worker_cores_start = worker_index * shards_per_worker + std::min(num_shard_cores % num_workers, worker_index);
+        std::vector<CoreCoord> dest_cores;
+        dest_cores.reserve(num_dest_cores);
+        for (uint32_t c = worker_cores_start; c < worker_cores_start + num_dest_cores; ++c) {
+            CoreCoord const& worker_core = all_shard_cores_vec.at(c);
+            dest_cores.push_back(worker_core);
+        }
+        return dest_cores;
+    }
     InputTensorShardAddrGenArgGenerator(
         Device const* device,
         Tensor const& input_tensor,
@@ -348,34 +422,35 @@ struct InputTensorShardAddrGenArgGenerator final : public ShardAddrGenArgGenerat
         uint32_t sharded_tensor_num_cores = tensor_shard_grid.num_cores();
         this->args_struct.is_clockwise = is_worker_in_clockwise_ring;
         this->args_struct.shard_size_in_bytes = input_tensor.shard_spec()->numel() * input_tensor.element_size();
-        this->args_struct.chunks_per_core_before_advance = 1;
+        this->args_struct.total_chunks_per_core = 1;
         this->args_struct.shards_start_address = input_tensor.buffer()->address();
 
         this->args_struct.starting_core_index = starting_dest_core_index;
         this->args_struct.starting_chunk_into_shard = starting_chunk_into_shard;
-        this->args_struct.num_dest_cores = sharded_tensor_num_cores / num_workers;
         TT_ASSERT(sharded_tensor_num_cores > 0);
 
-        bool has_extra_worker = worker_index < sharded_tensor_num_cores % num_workers;
-        if (has_extra_worker) {
-            this->args_struct.num_dest_cores++;
-        }
+        this->args_struct.intra_core_stride_in_shards = 1;
+        this->args_struct.contiguous_chunks_before_stride = 1;
 
-        uint32_t worker_cores_start = worker_index * sharded_tensor_num_cores / num_workers;
-        worker_cores_start += sharded_tensor_num_cores % num_workers != 0 ?
-            std::min(sharded_tensor_num_cores % num_workers, worker_index) :
-            worker_index;
-
-        auto buffer_page_mapping = generate_buffer_page_mapping(*input_tensor.buffer());
-        std::vector<CoreCoord> const& all_shard_cores = buffer_page_mapping.all_cores_;
-        for (uint32_t c = worker_cores_start; c < worker_cores_start + this->args_struct.num_dest_cores; ++c) {
-            CoreCoord const& worker_core = all_shard_cores.at(c);
-            ccl::WorkerXY worker_xy(
-                static_cast<uint16_t>(device->worker_core_from_logical_core(worker_core).x),
-                static_cast<uint16_t>(device->worker_core_from_logical_core(worker_core).y));
-            this->args_struct.dest_cores.push_back(worker_xy);
-        }
+        std::vector<CoreCoord> const& dest_core_coords = ctor_generate_dest_cores(
+            input_tensor.buffer()->shard_spec().grid(),
+            worker_index,
+            num_workers
+        );
+        this->args_struct.dest_cores.reserve(dest_core_coords.size());
+        std::transform(dest_core_coords.begin(), dest_core_coords.end(), std::back_inserter(this->args_struct.dest_cores),
+            [&device](CoreCoord const& core) {
+                return ccl::WorkerXY(
+                    static_cast<uint16_t>(device->worker_core_from_logical_core(core).x),
+                    static_cast<uint16_t>(device->worker_core_from_logical_core(core).y)
+                    );
+            });
         TT_ASSERT(this->args_struct.dest_cores.size() > 0);
+
+        this->args_struct.num_dest_cores = this->args_struct.dest_cores.size();
+        TT_ASSERT(this->args_struct.starting_chunk_into_shard < this->args_struct.num_dest_cores);
+        TT_ASSERT(this->args_struct.starting_chunk_into_shard < this->args_struct.dest_cores.size());
+        TT_ASSERT(this->args_struct.dest_cores.size() == this->args_struct.num_dest_cores);
 
         this->initialized = true;
     }
@@ -407,7 +482,6 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
             uint32_t const contiguous_dest_cores_before_stride = input_shards_per_input_worker < input_shards_per_dest_core ? 1 : input_shards_per_input_worker / input_shards_per_dest_core;
             TT_ASSERT(contiguous_dest_cores_before_stride != 0);
 
-            // uint32_t current_dest_core_offset = worker_index * (input_shards_per_input_worker * contiguous_dest_cores_before_stride);
             uint32_t const worker_input_shard_index = worker_index * input_shards_per_input_worker;
             uint32_t current_dest_core_offset = worker_input_shard_index / input_shards_per_dest_core;
             TT_ASSERT(current_dest_core_offset < global_shard_dest_cores.size(), "Out of bounds index generated");
@@ -472,8 +546,6 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
         uint32_t ring_index,
         uint32_t ring_size,
         uint32_t serving_worker_index) {
-        // TODO: update to support block sharding
-        // TODO: update if input grid != output grid
 
         uint32_t const global_num_buffers_per_chip = num_workers;
         uint32_t const num_dest_shard_cores = input_tensor_shard_grid_size;
@@ -503,8 +575,6 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
         Tensor const& output_tensor,
         uint32_t ring_index,
         uint32_t serving_worker_index) {
-        // TODO: update to support block sharding
-        // TODO: update if input grid != output grid
         return get_first_output_shard_starting_location(
             all_gather_config.get_num_eth_buffers_per_edm(),
             input_tensor.shard_spec()->grid.num_cores(),
@@ -513,8 +583,23 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
             serving_worker_index);
     }
 
+    static uint16_t get_intra_core_stride_in_shards(uint32_t input_shard_grid_size, uint32_t num_workers, uint32_t ring_size) {
+        // This function isn't generalized properly yet so it has some hardcoded behaviour. We need to generalize it
+        if (input_shard_grid_size == num_workers && num_workers == ring_size) {
+            return input_shard_grid_size;
+        }
+        auto stride = (num_workers == 1) ? 1 : (input_shard_grid_size / num_workers) + 1;
+        TT_ASSERT(stride > 0, "Stride must be greater than 0");
+        return stride;
+
+    }
+    static uint16_t get_contiguous_chunks_before_stride(uint32_t input_shard_grid_size, uint32_t num_workers, uint32_t ring_size) {
+        auto n_contiguous = (num_workers == 1) ? 1 : input_shard_grid_size / num_workers;
+        TT_ASSERT(n_contiguous > 0, "Stride must be greater than 0");
+        return n_contiguous;
+    }
+
     using shard_cores_t = std::variant<std::vector<CoreCoord>, CoreRange, CoreRangeSet>;
-    // TODO: consider moving the tensors into the all gather config
     OutputTensorShardAddrGenArgGenerator(
         AllGatherConfig const& all_gather_config,
         Device const* device,
@@ -528,30 +613,21 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
         uint32_t starting_chunk_into_shard,
         bool is_worker_in_clockwise_ring
         ) {
-        bool is_shard_orientation_row_major = true; // hardcoded for now
-        // TODO: update to support block sharding
+        bool is_shard_orientation_row_major = true; // hardcoded until the switch is flipped for col_major. Just needs test cycles and transpose when iterating dest cores
 
         auto const& tensor_shard_grid = input_tensor.buffer()->shard_spec().grid();
         uint32_t sharded_tensor_num_cores = tensor_shard_grid.num_cores();
         TT_ASSERT(sharded_tensor_num_cores == output_tensor.buffer()->shard_spec().grid().num_cores(), "Input and output tensor must have the same number of cores");
         this->args_struct.is_clockwise = is_worker_in_clockwise_ring;
         this->args_struct.shard_size_in_bytes = input_tensor.shard_spec()->numel() * input_tensor.element_size();
-        this->args_struct.chunks_per_core_before_advance = ring_size;
+        this->args_struct.total_chunks_per_core = ring_size;
         this->args_struct.shards_start_address = output_tensor.buffer()->address();
 
+        this->args_struct.intra_core_stride_in_shards = get_intra_core_stride_in_shards(sharded_tensor_num_cores, num_workers, ring_size);
+        this->args_struct.contiguous_chunks_before_stride = get_contiguous_chunks_before_stride(sharded_tensor_num_cores, num_workers, ring_size);
+
         this->args_struct.starting_chunk_into_shard = starting_chunk_into_shard;
-        this->args_struct.num_dest_cores = sharded_tensor_num_cores / num_workers;
         TT_ASSERT(sharded_tensor_num_cores > 0);
-
-        bool has_extra_worker = worker_index < sharded_tensor_num_cores % num_workers;
-        if (has_extra_worker) {
-            this->args_struct.num_dest_cores++;
-        }
-
-        uint32_t worker_cores_start = worker_index * sharded_tensor_num_cores / num_workers;
-        worker_cores_start += sharded_tensor_num_cores % num_workers != 0 ?
-            std::min(sharded_tensor_num_cores % num_workers, worker_index) :
-            worker_index;
 
         uint32_t input_num_shards = sharded_tensor_num_cores;
         uint32_t output_num_shards = input_num_shards * ring_size;
@@ -564,6 +640,7 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
                 num_workers,
                 worker_index,
                 is_shard_orientation_row_major);
+        this->args_struct.num_dest_cores = this->args_struct.dest_cores.size();
 
         TT_ASSERT(this->args_struct.dest_cores.size() > 0);
         std::vector<CoreCoord> const& global_shard_dest_cores = corerange_to_cores(tensor_shard_grid, std::nullopt, is_shard_orientation_row_major);
@@ -575,6 +652,9 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
         auto it = std::find(this->args_struct.dest_cores.begin(), this->args_struct.dest_cores.end(), noc0_starting_dest_core_xy);
         TT_ASSERT(it != this->args_struct.dest_cores.end(), "Didn't find starting dest core in dest cores. Internal logic error");
         this->args_struct.starting_core_index = std::distance(this->args_struct.dest_cores.begin(), it);
+        TT_ASSERT(this->args_struct.starting_core_index < this->args_struct.dest_cores.size());
+        TT_ASSERT(this->args_struct.starting_core_index < this->args_struct.num_dest_cores);
+        TT_ASSERT(this->args_struct.dest_cores.size() == this->args_struct.num_dest_cores);
 
         this->initialized = true;
 
@@ -582,165 +662,91 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
 
 };
 
+struct FullWorkerGridShardAddrGenArgGenerator {
 
-class EriscDatamoverBuilder {
-   public:
-    struct ChannelBufferInterface {
-        uint32_t eth_buffer_l1_address;
-        uint32_t eth_semaphore_l1_address;
-    };
-
-    EriscDatamoverBuilder(AllGatherConfig const& all_gather_config, std::vector<uint32_t> const& local_semaphore_addresses, std::vector<uint32_t> const& local_buffer_addresses) :
-        local_semaphore_addresses(local_semaphore_addresses),
-        local_buffer_addresses(local_buffer_addresses),
-        eth_buffer_size_bytes(all_gather_config.get_eth_buffer_size()),
-        handshake_addr(all_gather_config.get_erisc_handshake_address()),
-        num_channel_buffers(all_gather_config.get_num_eth_buffers_per_edm()),
-        enable_sender(false),
-        enable_receiver(false),
-        num_senders(0),
-        num_receivers(0)
-        {
-            active_channels.reserve(num_channel_buffers);
-            TT_ASSERT(eth_buffer_size_bytes < 163000);
-            log_trace(tt::LogOp, "EriscDatamoverBuilder:");
-            for (auto const& addr : local_semaphore_addresses) {
-                log_trace(tt::LogOp, "\tsemaphore_address: {}", addr);
-            }
-            for (auto const& addr : local_buffer_addresses) {
-                log_trace(tt::LogOp, "\tbuffer_address: {}", addr);
-            }
-        }
-
-    [[nodiscard]]
-    ChannelBufferInterface add_sender_channel(uint32_t worker_semaphore_address, uint32_t num_eth_messages_to_forward, std::vector<ccl::WorkerXY> const& worker_coords) {
-        this->enable_sender = true;
-        this->num_senders++;
-        auto channel = active_channels.size();
-        active_channels.emplace_back(true, worker_semaphore_address, num_eth_messages_to_forward, channel, worker_coords);
-        log_trace(tt::LogOp, "Adding sender channel:");
-        log_trace(tt::LogOp, "\tworker_semaphore_address: {}", active_channels.back().worker_semaphore_address);
-        log_trace(tt::LogOp, "\tnum_eth_messages_to_forward: {}", active_channels.back().num_eth_messages_to_forward);
-        log_trace(tt::LogOp, "\tchannel: {}", active_channels.back().channel);
-        log_trace(tt::LogOp, "\tis_sender: {}", active_channels.back().is_sender ? 1 : 0);
-        log_trace(tt::LogOp, "\tbuffer_address: {}", local_buffer_addresses.at(channel));
-        log_trace(tt::LogOp, "\tsemaphore_address: {}", local_semaphore_addresses.at(channel));
-
-        return ChannelBufferInterface{local_buffer_addresses.at(channel), local_semaphore_addresses.at(channel)};
-    }
-    [[nodiscard]]
-    ChannelBufferInterface add_receiver_channel(uint32_t worker_semaphore_address, uint32_t num_eth_messages_to_forward, std::vector<ccl::WorkerXY> const& worker_coords) {
-        this->enable_receiver = true;
-        this->num_receivers++;
-        auto channel = active_channels.size();
-        active_channels.emplace_back(false, worker_semaphore_address, num_eth_messages_to_forward, channel, worker_coords);
-        log_trace(tt::LogOp, "Adding receiver channel:");
-        log_trace(tt::LogOp, "\tworker_semaphore_address: {}", active_channels.back().worker_semaphore_address);
-        log_trace(tt::LogOp, "\tnum_eth_messages_to_forward: {}", active_channels.back().num_eth_messages_to_forward);
-        log_trace(tt::LogOp, "\tchannel: {}", active_channels.back().channel);
-        log_trace(tt::LogOp, "\tis_sender: {}", active_channels.back().is_sender ? 1 : 0);
-        return ChannelBufferInterface{local_buffer_addresses.at(channel), local_semaphore_addresses.at(channel)};
-    }
-
-    [[nodiscard]]
-    std::vector<uint32_t> emit_compile_time_args() const {
-        return std::vector<uint32_t>{
-            static_cast<uint32_t>(this->enable_sender ? 1 : 0),
-            static_cast<uint32_t>(this->enable_receiver ? 1 : 0),
-            this->num_senders,
-            this->num_receivers};
-    }
-
-    [[nodiscard]]
-    std::vector<uint32_t> emit_runtime_args() const {
+    std::vector<uint32_t> generate() const {
+        TT_ASSERT(initialized, "Didn't initialize ShardAddrGenArgGenerator before use");
         std::vector<uint32_t> args;
-        uint32_t size = 3 + active_channels.size() * 6;
-        for (auto const& channel : active_channels) {
-            size += channel.worker_coords.size();
+        args.reserve(12 + args_struct.total_num_cores);
+
+        TT_ASSERT(args_struct.dest_cores.size() > 0, "dest_cores was uninitialized");
+        TT_ASSERT(args_struct.tile_size_in_bytes != ccl::UNINITIALIZED_VALUE_U32, "tile_size_in_bytes was uninitialized");
+        TT_ASSERT(args_struct.shards_start_address != ccl::UNINITIALIZED_VALUE_U32, "shards_start_address was uninitialized");
+        TT_ASSERT(args_struct.curr_core_index != ccl::UNINITIALIZED_VALUE_U16, "curr_core_index was uninitialized");
+        TT_ASSERT(args_struct.total_num_cores != ccl::UNINITIALIZED_VALUE_U16, "total_num_cores was uninitialized");
+        TT_ASSERT(args_struct.curr_shard_tile_x != ccl::UNINITIALIZED_VALUE_U16, "curr_shard_tile_x was uninitialized");
+        TT_ASSERT(args_struct.curr_shard_tile_y != ccl::UNINITIALIZED_VALUE_U16, "curr_shard_tile_y was uninitialized");
+        TT_ASSERT(args_struct.curr_tile_index != ccl::UNINITIALIZED_VALUE_U16, "curr_tile_index was uninitialized");
+        TT_ASSERT(args_struct.curr_shard != ccl::UNINITIALIZED_VALUE_U16, "curr_shard was uninitialized");
+        TT_ASSERT(args_struct.input_shard_num_tiles_x != ccl::UNINITIALIZED_VALUE_U16, "input_shard_num_tiles_x was uninitialized");
+        TT_ASSERT(args_struct.input_shard_num_tiles_y != ccl::UNINITIALIZED_VALUE_U16, "input_shard_num_tiles_y was uninitialized");
+        TT_ASSERT(args_struct.total_shards_x != ccl::UNINITIALIZED_VALUE_U16, "total_shards_x was uninitialized");
+
+        args.push_back(args_struct.tile_size_in_bytes);
+        args.push_back(args_struct.shards_start_address);
+        args.push_back(args_struct.curr_shard_tile_x);
+        args.push_back(args_struct.curr_shard_tile_y);
+        args.push_back(args_struct.curr_tile_index);
+        args.push_back(args_struct.curr_shard);
+        args.push_back(args_struct.input_shard_num_tiles_x);
+        args.push_back(args_struct.input_shard_num_tiles_y);
+        args.push_back(args_struct.total_shards_x);
+        args.push_back(args_struct.is_clockwise);
+        args.push_back(args_struct.curr_core_index);
+        args.push_back(args_struct.total_num_cores);
+        for (ccl::WorkerXY const& core : args_struct.dest_cores) {
+            args.push_back(core.to_uint32());
         }
-        args.reserve(size);
 
-        // Handshake address
-        args.push_back(handshake_addr);
-
-        bool senders_below_receivers = active_channels.size() == 0 || this->active_channels.front().is_sender;
-
-        // Sender channel args
-        uint32_t sender_channels_offset = senders_below_receivers ? 0 : this->num_receivers;
-        args.push_back(sender_channels_offset);
-        for (auto const& channel : this->active_channels) {
-            if (!channel.is_sender) {
-                continue;
-            }
-            push_back_channel_args(args, channel);
-        }
-
-        // Receiver channel args
-        uint32_t receiver_channels_offset = senders_below_receivers ? this->num_senders : 0;
-        args.push_back(receiver_channels_offset);
-        for (auto const& channel : this->active_channels) {
-            if (channel.is_sender) {
-                continue;
-            }
-            push_back_channel_args(args, channel);
-        }
+        TT_ASSERT(args.size() == args_struct.get_expected_num_args(), "Generated args size doesn't match expected size");
 
         return args;
     }
 
-    void dump_to_log() const {
-        auto const& rt_args = this->emit_runtime_args();
-        log_trace(tt::LogOp, "EDM RT Args:");
-        for (auto const& arg : rt_args) {
-            log_trace(tt::LogOp, "\t{}", arg);
+    FullWorkerGridShardAddrGenArgGenerator(
+        AllGatherConfig const& all_gather_config,
+        Device const* device,
+        Tensor const& input_tensor,
+        Tensor const& output_tensor,
+        uint32_t ring_index,
+        uint32_t ring_size,
+        uint32_t worker_index,
+        uint32_t starting_dest_core_index,
+        uint32_t starting_tile_index,
+        bool is_worker_in_clockwise_ring
+        ) {
+            bool is_shard_orientation_row_major = true;
+            auto *input_buffer = input_tensor.buffer();
+            this->args_struct.tile_size_in_bytes = input_buffer->page_size();
+            this->args_struct.shards_start_address = output_tensor.buffer()->address();
+            this->args_struct.curr_shard_tile_x = 0;
+            this->args_struct.curr_shard_tile_y = 0;
+            this->args_struct.curr_tile_index = starting_tile_index;
+            this->args_struct.curr_shard = ring_index;
+            this->args_struct.input_shard_num_tiles_x = input_buffer->shard_spec().tensor2d_shape[1];
+            this->args_struct.input_shard_num_tiles_y = input_buffer->shard_spec().tensor2d_shape[0];
+            this->args_struct.total_shards_x = ring_size;
+            this->args_struct.is_clockwise = is_worker_in_clockwise_ring;
+
+            this->args_struct.curr_core_index = starting_dest_core_index;
+
+            auto const& tensor_shard_grid = input_tensor.buffer()->shard_spec().grid();
+            this->args_struct.dest_cores = OutputTensorShardAddrGenArgGenerator::compute_worker_dest_cores (
+                    ccl::ShardType::Width,
+                    *device,
+                    tensor_shard_grid,
+                    tensor_shard_grid.num_cores(),
+                    ring_size * tensor_shard_grid.num_cores(),
+                    tensor_shard_grid.num_cores(),
+                    worker_index,
+                    is_shard_orientation_row_major);
+            this->args_struct.total_num_cores = this->args_struct.dest_cores.size();
+
+            this->initialized = true;
         }
-    };
 
-   private:
-    struct ChannelBufferSpec {
-        ChannelBufferSpec(
-            bool is_sender,
-            uint32_t worker_semaphore_address,
-            uint32_t num_eth_messages_to_forward,
-            uint32_t channel,
-            std::vector<ccl::WorkerXY> const& worker_coords
-        ) :
-            worker_coords(worker_coords),
-            worker_semaphore_address(worker_semaphore_address),
-            num_eth_messages_to_forward(num_eth_messages_to_forward),
-            channel(channel),
-            is_sender(is_sender) {}
-
-        std::vector<ccl::WorkerXY> const worker_coords;
-        uint32_t worker_semaphore_address;
-        uint32_t num_eth_messages_to_forward;
-        uint32_t channel;
-        bool is_sender;
-    };
-
-    void push_back_channel_args (std::vector<uint32_t> &args, ChannelBufferSpec const& channel) const {
-        args.push_back(this->local_buffer_addresses.at(channel.channel));
-        args.push_back(channel.num_eth_messages_to_forward);
-        args.push_back(this->eth_buffer_size_bytes);
-        args.push_back(this->local_semaphore_addresses.at(channel.channel));
-        args.push_back(channel.worker_semaphore_address);
-        args.push_back(channel.worker_coords.size());
-        for (auto const& worker_coord : channel.worker_coords) {
-            args.push_back(worker_coord.to_uint32());
-        }
-    }
-
-    std::vector<ChannelBufferSpec> active_channels;
-    std::vector<uint32_t> const local_semaphore_addresses;
-    std::vector<uint32_t> const local_buffer_addresses;
-    uint32_t eth_buffer_size_bytes;
-    uint32_t handshake_addr;
-    uint32_t const num_channel_buffers;
-    uint32_t num_senders;
-    uint32_t num_receivers;
-
-    bool enable_sender;
-    bool enable_receiver;
+    ccl::FullWorkerGridShardAddrGenArgs<true> args_struct;
+    bool initialized;
 };
 
 }  // namespace tt_metal
