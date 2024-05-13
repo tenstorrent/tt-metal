@@ -50,6 +50,8 @@ constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
 
 constexpr uint32_t dev_hugepage_base_g = 128; // HOST_CQ uses some at the start address
 
+constexpr uint32_t host_data_dirty_pattern = 0xbaadf00d;
+
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance
 //
@@ -104,8 +106,6 @@ uint32_t max_xfer_size_bytes_g = dispatch_buffer_page_size_g;
 uint32_t min_xfer_size_bytes_g = 4;
 uint32_t l1_buf_base_g;
 uint32_t prefetch_h_exec_buf_sem_addr_g;
-
-vector<uint32_t> host_data_g;
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -190,46 +190,9 @@ void init(int argc, char **argv) {
 void dirty_host_completion_buffer(uint32_t *host_hugepage_completion_buffer) {
 
     for (int i = 0; i < DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE / sizeof(uint32_t); i++) {
-        host_hugepage_completion_buffer[i] = 0xbaadf00d;
+        host_hugepage_completion_buffer[i] = host_data_dirty_pattern;
     }
-}
-
-// Note: this doesn't handle wrap, so don't write too much data to PCIe
-// cmds are prefetcher cmds w/ embedded data, this more or less parses the data out
-// device writes the cmd back with the data
-bool validate_host_results(
-    Device *device,
-    const vector<uint32_t>& data,
-    uint32_t*& host_hugepage_completion_buffer) {
-
-    log_info(tt::LogTest, "Validating data from hugepage");
-
-    bool failed = false;
-
-    static int host_data_index = 0;
-    uint32_t *results = (uint32_t *)host_hugepage_completion_buffer;
-
-    int fail_count = 0;
-    bool done = false;
-    for (int data_index = 0; data_index < data.size(); data_index++) {
-        if (data[data_index] != results[host_data_index] && fail_count < 20) {
-            if (!failed) {
-                tt::log_fatal("Data mismatch");
-                fprintf(stderr, "First 20 host data failures: [idx] expected->read\n");
-            }
-
-            fprintf(stderr, "  [%02d] 0x%08x->0x%08x\n", host_data_index, (unsigned int)data[data_index], (unsigned int)results[host_data_index]);
-
-            failed = true;
-            fail_count++;
-        }
-
-        host_data_index++;
-    }
-
-    host_hugepage_completion_buffer += host_data_index;
-
-    return !failed;
+    _mm_sfence();
 }
 
 uint32_t round_cmd_size_up(uint32_t size) {
@@ -644,13 +607,30 @@ void gen_pcie_test(Device *device,
     }
 }
 
+static void pad_host_data(DeviceData& device_data) {
+
+    one_core_data_t& host_data = device_data.get_data()[device_data.get_host_core()][0];
+
+    int pad = dispatch_buffer_page_size_g - ((host_data.data.size() * sizeof(uint32_t)) % dispatch_buffer_page_size_g);
+    pad = pad % dispatch_buffer_page_size_g;
+    for (int i = 0; i < pad / sizeof(uint32_t); i++) {
+        device_data.push_one(device_data.get_host_core(), 0, host_data_dirty_pattern);
+    }
+
+    if (host_data.data.size() * sizeof(uint32_t) > hugepage_issue_buffer_size_g) {
+        TT_THROW("Host test hugepage data wrap not (yet) supported, reduce test size");
+    }
+}
+
 void gen_host_test(Device *device,
                    vector<uint32_t>& prefetch_cmds,
-                   vector<uint16_t>& cmd_sizes) {
+                   vector<uint16_t>& cmd_sizes,
+                   DeviceData& device_data) {
 
-#if 0
     constexpr uint32_t data_size = 614400;
 
+    // Read data from a worker so we can get reasonable BW measurements
+    // TODO: extend the DRAM mechanism for pre-fill to workers
     vector<uint32_t>data;
     for (uint32_t i = 0; i < data_size / sizeof(uint32_t); i++) {
         data.push_back(i);
@@ -659,7 +639,6 @@ void gen_host_test(Device *device,
     llrt::write_hex_vec_to_core(device->id(), phys_worker_core, data, l1_buf_base_g);
     tt::Cluster::instance().l1_barrier(device->id());
 
-    host_data_g.resize(0);
     for (int count = 0; count < 50; count++) {
         std::vector<uint32_t> dispatch_cmds;
         gen_bare_dispatcher_host_write_cmd(dispatch_cmds, data_size);
@@ -670,36 +649,13 @@ void gen_host_test(Device *device,
         cmd_sizes.push_back(new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE);
 
         for (auto datum : dispatch_cmds) {
-            host_data_g.push_back(datum);
+            device_data.push_one(device_data.get_host_core(), 0, datum);
         }
         for (auto datum : data) {
-            host_data_g.push_back(datum);
+            device_data.push_one(device_data.get_host_core(), 0, datum);
         }
-
-        int pad = dispatch_buffer_page_size_g - ((host_data_g.size() * sizeof(uint32_t)) % dispatch_buffer_page_size_g);
-        pad = pad % dispatch_buffer_page_size_g;
-        for (int i = 0; i < pad / sizeof(uint32_t); i++) {
-            host_data_g.push_back(0xbaadf00d);
-        }
+        pad_host_data(device_data);
     }
-#else
-    std::vector<uint32_t> dispatch_cmds;
-
-    gen_dispatcher_host_write_cmd(dispatch_cmds, 32);
-    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
-    dispatch_cmds.resize(0);
-    gen_dispatcher_host_write_cmd(dispatch_cmds, 36);
-    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
-    dispatch_cmds.resize(0);
-    gen_dispatcher_host_write_cmd(dispatch_cmds, 1024);
-    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
-    dispatch_cmds.resize(0);
-    gen_dispatcher_host_write_cmd(dispatch_cmds, dispatch_buffer_page_size_g - sizeof(CQDispatchCmd));
-    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
-    dispatch_cmds.resize(0);
-    gen_dispatcher_host_write_cmd(dispatch_cmds, 16384);
-    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
-#endif
 }
 
 void gen_rnd_dram_paged_cmd(Device *device,
@@ -1028,6 +984,34 @@ void gen_smoke_test(Device *device,
     gen_wait_and_stall_cmd(device, prefetch_cmds, cmd_sizes);
     gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, 32, device_data.size_at(worker_core, 0) - 32 / sizeof(uint32_t));
 
+    // Test host
+    if (!use_dram_exec_buf_g) {
+        dispatch_cmds.resize(0);
+        gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, 32);
+        add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+        pad_host_data(device_data);
+
+        dispatch_cmds.resize(0);
+        gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, 36);
+        add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+        pad_host_data(device_data);
+
+        dispatch_cmds.resize(0);
+        gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, 1024);
+        add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+        pad_host_data(device_data);
+
+        dispatch_cmds.resize(0);
+        gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, dispatch_buffer_page_size_g - sizeof(CQDispatchCmd));
+        add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+        pad_host_data(device_data);
+
+        dispatch_cmds.resize(0);
+        gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, 16384);
+        add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+        pad_host_data(device_data);
+    }
+
     // Test Paged DRAM Write and Read. FIXME - Needs work - hits asserts.
     // gen_dram_write_cmd(device, prefetch_cmds, cmd_sizes, device_data, 0, 32, 64, 128);
     // gen_wait_and_stall_cmd(device, prefetch_cmds, cmd_sizes);
@@ -1060,7 +1044,7 @@ void gen_prefetcher_cmds(Device *device,
         gen_paged_write_read_dram_test(device, prefetch_cmds, cmd_sizes, device_data, first_worker_g, dst_addr);
         break;
     case 6:
-        gen_host_test(device, prefetch_cmds, cmd_sizes);
+        gen_host_test(device, prefetch_cmds, cmd_sizes, device_data);
         break;
     case 7:
         log_fatal("Unknown test");
@@ -1068,8 +1052,7 @@ void gen_prefetcher_cmds(Device *device,
         break;
     }
 
-    TT_FATAL(device_data.size() * sizeof(uint32_t) + l1_buf_base_g <= device->l1_size_per_core(),
-             "Test overflowed L1 memory");
+    device_data.overflow_check(device);
 }
 
 void gen_terminate_cmds(vector<uint32_t>& prefetch_cmds,
@@ -1363,7 +1346,7 @@ int main(int argc, char **argv) {
 
         vector<uint32_t> cmds, terminate_cmds;
         vector<uint16_t> cmd_sizes, terminate_sizes;
-        DeviceData device_data(device, all_workers_g, l1_buf_base_g, DRAM_DATA_BASE_ADDR, 0, false, DRAM_DATA_SIZE_WORDS);
+        DeviceData device_data(device, all_workers_g, l1_buf_base_g, DRAM_DATA_BASE_ADDR, host_hugepage_completion_buffer, false, DRAM_DATA_SIZE_WORDS);
         num_dram_banks_g = device->num_banks(BufferType::DRAM);
 
         if (debug_g) {
@@ -1909,11 +1892,7 @@ int main(int argc, char **argv) {
                 device_data.reset();
                 gen_prefetcher_cmds(device, cmds, cmd_sizes, device_data, l1_buf_base_g);
                 run_test(1, device, program, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g);
-                if (test_type_g == 6) {
-                    pass &= validate_host_results(device, host_data_g, host_hugepage_completion_buffer);
-                } else {
-                    pass &= device_data.validate(device);
-                }
+                pass &= device_data.validate(device);
                 if (!pass) {
                     break;
                 }
