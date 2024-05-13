@@ -7,8 +7,8 @@
 #include <string>
 #include <tuple>
 
-#include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
+// #include "tensor/tensor.hpp"
+// #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 
@@ -18,32 +18,35 @@ namespace halo {
 
 struct Halo {
     SlidingWindowConfig config_;
+    ParallelConfig parallel_config_;
     uint32_t pad_val_;
     bool remote_read_;
     bool transpose_mcast_;
     uint32_t reshard_num_cores_nhw_;
+    uint32_t max_out_nsticks_per_core_;
     MemoryConfig output_memory_config_;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
+    // const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 
     static constexpr auto attribute_names =
-        std::make_tuple("config_", "pad_val_", "remote_read_", "transpose_mcast_", "reshard_num_cores_nhw_", "output_memory_config_");
+        std::make_tuple("config_", "parallel_config_", "pad_val_", "remote_read_", "transpose_mcast_", "reshard_num_cores_nhw_", "max_out_nsticks_per_core_", "output_memory_config_");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(config_),
+            std::cref(parallel_config_),
             std::cref(pad_val_),
             std::cref(remote_read_),
             std::cref(transpose_mcast_),
             std::cref(reshard_num_cores_nhw_),
+            std::cref(max_out_nsticks_per_core_),
             std::cref(output_memory_config_)
         );
     }
 };
-
 
 
 Tensor halo_op(const Tensor& input_tensor,
@@ -52,31 +55,7 @@ Tensor halo_op(const Tensor& input_tensor,
                 bool remote_read = false,
                 bool transpose_mcast = true,
                 uint32_t reshard_num_cores_nhw = 0,
-                MemoryConfig output_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    TT_ASSERT(input_tensor.memory_config().is_sharded());
-    TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
-    // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
-    //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along width)
-
-    auto halo_op = [&config, pad_val, remote_read, transpose_mcast, reshard_num_cores_nhw, &output_memory_config]
-        (const std::vector<Tensor>& input_tensors) -> std::vector<Tensor> {
-        return operation::run(
-            Halo{
-                .config_ = config,
-                .pad_val_ = pad_val,
-                .remote_read_ = remote_read,
-                .transpose_mcast_ = transpose_mcast,
-                .reshard_num_cores_nhw_ = reshard_num_cores_nhw,
-                .output_memory_config_ = output_memory_config
-            },
-            input_tensors)
-            .at(0);
-    };
-    std::vector<Tensor> output_tensors = { Tensor(tt::tt_metal::operation::get_workers_for_op_output({a}, {})) };
-    operation::launch_op(halo_op, {input_tensor}, output_tensors);
-
-    return output_tensors.at(0);
-}
+                MemoryConfig output_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 } // namespace halo
 
