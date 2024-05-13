@@ -55,54 +55,14 @@ std::tuple<CoreRangeSet,CoreRangeSet> select_worker_cores(AllGatherConfig const&
     return {CoreRangeSet(receiver_worker_cores), CoreRangeSet(sender_worker_cores)};
 }
 
-class AllGatherOpTensorConfig {
-   public:
-    AllGatherOpTensorConfig(Tensor const& input_tensor) :
-        df(tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype()))
-    {}
-
-   protected:
-    uint32_t page_size;
-    DataFormat df;
-};
-
-class AllGatherOpInterleavedTensorConfig final : public AllGatherOpTensorConfig {
-   public:
-    AllGatherOpInterleavedTensorConfig(Tensor const& input_tensor) :
-        AllGatherOpTensorConfig(input_tensor),
-        shard_spec(input_tensor.shard_spec().value()) {
-        if (input_tensor.get_layout() == Layout::TILE) {
-            this->page_size = tt_metal::detail::TileSize(this->df);
-            this->unit_size = page_size;
-        } else {
-            this->unit_size = shard_spec.shape[1] * input_tensor.element_size();
-            this->page_size = input_tensor.get_legacy_shape()[-1] * input_tensor.element_size();
-        }
+std::unique_ptr<AllGatherOpTensorConfig> AllGatherOpTensorConfig::build_all_gather_tensor_config(Tensor const& tensor) {
+    if (tensor.is_sharded()) {
+        return std::make_unique<AllGatherOpShardedTensorConfig>(tensor);
+    } else {
+        return std::make_unique<AllGatherOpInterleavedTensorConfig>(tensor);
     }
+}
 
-   private:
-    uint32_t unit_size;
-    ShardSpec const shard_spec;
-};
-
-class AllGatherOpShardedTensorConfig final : public AllGatherOpTensorConfig {
-   public:
-    AllGatherOpShardedTensorConfig(Tensor const& input_tensor) :
-        AllGatherOpTensorConfig(input_tensor),
-        shard_spec(input_tensor.shard_spec().value()) {
-        if (input_tensor.get_layout() == Layout::TILE) {
-            this->page_size = tt_metal::detail::TileSize(this->df);
-            this->unit_size = page_size;
-        } else {
-            this->unit_size = shard_spec.shape[1] * input_tensor.element_size();
-            this->page_size = input_tensor.get_legacy_shape()[-1] * input_tensor.element_size();
-        }
-    }
-
-   private:
-    uint32_t unit_size;
-    ShardSpec const shard_spec;
-};
 
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
@@ -111,6 +71,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
     TT_FATAL(!(receiver_device_id == std::nullopt && sender_device_id == std::nullopt), "At least one of receiver_device_id or sender_device_id must be specified");
 
     bool is_linear = topology == all_gather_op::Topology::Linear;
+    std::unique_ptr<AllGatherOpTensorConfig> input_tensor_config = AllGatherOpTensorConfig::build_all_gather_tensor_config(input_tensor);
+    std::unique_ptr<AllGatherOpTensorConfig> output_tensor_config = AllGatherOpTensorConfig::build_all_gather_tensor_config(output_tensor);
 
     tt_metal::Program program{};
     const auto& device = input_tensor.device();
@@ -129,18 +91,18 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
     const auto output_buffer = output_tensor.buffer();
 
     int32_t shard_size_in_bytes = is_sharded ?
-        (input_buffer->page_size() * input_buffer->shard_spec().tensor2d_shape[0] * input_buffer->shard_spec().tensor2d_shape[1]) / input_tensor.shard_spec()->num_cores() :
+        (input_tensor_config->get_page_size() * input_buffer->shard_spec().tensor2d_shape[0] * input_buffer->shard_spec().tensor2d_shape[1]) / input_tensor.shard_spec()->num_cores() :
         -1;
-    uint32_t input_page_size = is_sharded ? shard_size_in_bytes : input_buffer->page_size();
-    uint32_t output_page_size = is_sharded ? shard_size_in_bytes : output_buffer->page_size();
+    uint32_t input_page_size = is_sharded ? shard_size_in_bytes : input_tensor_config->get_page_size();
+    uint32_t output_page_size = is_sharded ? shard_size_in_bytes : output_tensor_config->get_page_size();
     if (is_sharded) {
-        log_trace(tt::LogOp, "input_buffer->page_size: {}", input_buffer->page_size());
+        log_trace(tt::LogOp, "input_buffer->page_size: {}", input_tensor_config->get_page_size());
         log_trace(tt::LogOp, "input_buffer->shard_spec().tensor2d_shape[0]: {}", input_buffer->shard_spec().tensor2d_shape[0]);
         log_trace(tt::LogOp, "input_buffer->shard_spec().tensor2d_shape[1]: {}", input_buffer->shard_spec().tensor2d_shape[1]);
     }
     const uint32_t max_buffer_per_chunk = is_sharded ?
         round_down(all_gather_config.get_eth_buffer_size(), shard_size_in_bytes):
-        round_down(all_gather_config.get_eth_buffer_size(), input_page_size);
+        round_down(all_gather_config.get_eth_buffer_size(), input_tensor_config->get_page_size());
     const uint32_t max_pages_per_chunk = is_sharded ?
         max_buffer_per_chunk / shard_size_in_bytes :
         max_buffer_per_chunk / input_page_size;
@@ -385,7 +347,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                 for(uint32_t b = 0; b < all_gather_config.get_num_eth_buffers_per_edm(); ++b) {
                     auto input_tensor_shard_arg_generator = InputTensorShardAddrGenArgGenerator(
                                     device,
-                                    input_tensor,
+                                    dynamic_cast<tt::tt_metal::AllGatherOpShardedTensorConfig*>(input_tensor_config.get()),
                                     ring_index,
                                     ring_size,
                                     global_num_workers,
@@ -397,7 +359,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                     false
                                 );
                     uint32_t max_shards_per_eth_buffer = std::min<uint32_t>(all_gather_config.get_eth_buffer_size() / input_tensor_shard_arg_generator.args_struct.shard_size_in_bytes, input_tensor_shard_arg_generator.args_struct.num_dest_cores);
-                    TT_ASSERT(max_shards_per_eth_buffer > 0, "Codepath needs further generalization to support computing multiple sends per shard");
+                    TT_ASSERT(max_shards_per_eth_buffer > 0, "Codepath needs further generalization to support computing multiple sends per shard. Shard size: {}", input_tensor_shard_arg_generator.args_struct.shard_size_in_bytes);
                     num_full_chunks_per_worker.at(b) = input_tensor_shard_arg_generator.args_struct.num_dest_cores < max_shards_per_eth_buffer ? 1 : input_tensor_shard_arg_generator.args_struct.num_dest_cores / max_shards_per_eth_buffer;
                     rem_pages_per_worker.at(b) = max_shards_per_eth_buffer > input_tensor_shard_arg_generator.args_struct.num_dest_cores ? 0 : input_tensor_shard_arg_generator.args_struct.num_dest_cores - (num_full_chunks_per_worker.at(b) * max_shards_per_eth_buffer);
                     TT_ASSERT(rem_pages_per_worker.at(b) == 0 || input_tensor_shard_arg_generator.args_struct.num_dest_cores >= num_full_chunks_per_worker.at(b) * max_shards_per_eth_buffer);
@@ -576,7 +538,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             auto input_tensor_shard_arg_generator =
                                 InputTensorShardAddrGenArgGenerator(
                                     device,
-                                    input_tensor,
+                                    dynamic_cast<tt::tt_metal::AllGatherOpShardedTensorConfig*>(input_tensor_config.get()),
                                     ring_index,
                                     ring_size,
                                     global_num_workers,
@@ -599,8 +561,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 OutputTensorShardAddrGenArgGenerator(
                                     all_gather_config,
                                     device,
-                                    input_tensor,
-                                    output_tensor,
+                                    dynamic_cast<tt::tt_metal::AllGatherOpShardedTensorConfig*>(input_tensor_config.get()),
+                                    dynamic_cast<tt::tt_metal::AllGatherOpShardedTensorConfig*>(output_tensor_config.get()),
                                     ring_index,
                                     ring_size,
                                     global_num_workers,
@@ -743,7 +705,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 global_worker_index);
                             auto input_tensor_shard_arg_generator = InputTensorShardAddrGenArgGenerator(
                                     device,
-                                    input_tensor,
+                                    dynamic_cast<tt::tt_metal::AllGatherOpShardedTensorConfig*>(input_tensor_config.get()),
                                     ring_index,
                                     ring_size,
                                     global_num_workers,
@@ -758,8 +720,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 OutputTensorShardAddrGenArgGenerator(
                                     all_gather_config,
                                     device,
-                                    input_tensor,
-                                    output_tensor,
+                                    dynamic_cast<tt::tt_metal::AllGatherOpShardedTensorConfig*>(input_tensor_config.get()),
+                                    dynamic_cast<tt::tt_metal::AllGatherOpShardedTensorConfig*>(output_tensor_config.get()),
                                     ring_index,
                                     ring_size,
                                     global_num_workers,
@@ -942,7 +904,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             CoreCoord const& worker_eth_receiver_core = is_clockwise_direction ? eth_receiver_cores.at(i) : eth_sender_cores.at(i);
                             auto input_tensor_shard_arg_generator = InputTensorShardAddrGenArgGenerator(
                                     device,
-                                    input_tensor,
+                                    dynamic_cast<tt::tt_metal::AllGatherOpShardedTensorConfig*>(input_tensor_config.get()),
                                     ring_index,
                                     ring_size,
                                     global_num_workers,
@@ -1097,8 +1059,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             OutputTensorShardAddrGenArgGenerator output_tensor_shard_arg_generator(
                                 all_gather_config,
                                 device,
-                                input_tensor,
-                                output_tensor,
+                                dynamic_cast<tt::tt_metal::AllGatherOpShardedTensorConfig*>(input_tensor_config.get()),
+                                dynamic_cast<tt::tt_metal::AllGatherOpShardedTensorConfig*>(output_tensor_config.get()),
                                 ring_index,
                                 ring_size,
                                 global_num_workers,

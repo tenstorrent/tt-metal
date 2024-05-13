@@ -317,6 +317,92 @@ struct ShardedAllGatherConfig {
     bool is_sharding_enabled;
 };
 
+
+class AllGatherOpTensorConfig {
+   public:
+    static std::unique_ptr<AllGatherOpTensorConfig> build_all_gather_tensor_config(Tensor const& tensor);
+    // static AllGatherOpTensorConfig *build_all_gather_tensor_config(Tensor const& tensor);
+
+    AllGatherOpTensorConfig(
+        Tensor const& tensor
+    ) :
+        buffer_start_address(tensor.buffer()->address()),
+        df(tt_metal::datatype_to_dataformat_converter(tensor.get_dtype()))
+    {}
+
+    virtual uint32_t get_page_size() const = 0;
+    virtual uint32_t get_unit_size() const = 0;
+
+    uint32_t get_buffer_start_address() const {
+        return this->buffer_start_address;
+    }
+
+    virtual ~AllGatherOpTensorConfig() {};
+
+   protected:
+    uint32_t buffer_start_address;
+    DataFormat df;
+};
+
+class AllGatherOpInterleavedTensorConfig final : public virtual AllGatherOpTensorConfig {
+   public:
+    AllGatherOpInterleavedTensorConfig(Tensor const& input_tensor) :
+        AllGatherOpTensorConfig(input_tensor) {
+        if (input_tensor.get_layout() == Layout::TILE) {
+            this->page_size = tt_metal::detail::TileSize(this->df);
+        } else {
+            this->page_size = input_tensor.buffer()->page_size();
+        }
+    }
+    virtual uint32_t get_page_size() const override {
+        return this->page_size;
+    }
+    virtual uint32_t get_unit_size() const override {
+        return this->page_size;
+    }
+
+
+   private:
+    uint32_t page_size;
+
+};
+
+class AllGatherOpShardedTensorConfig final : public virtual AllGatherOpTensorConfig {
+   public:
+    AllGatherOpShardedTensorConfig(Tensor const& tensor) :
+        AllGatherOpTensorConfig(tensor),
+        shard_spec(tensor.shard_spec().value()) {
+        if (tensor.get_layout() == Layout::TILE) {
+            this->page_size = tt_metal::detail::TileSize(this->df);
+            TT_ASSERT(this->shard_spec.shape.at(0) * this->shard_spec.shape.at(1) % (TILE_HEIGHT * TILE_WIDTH) == 0);
+            this->unit_size = (this->shard_spec.shape.at(0) * this->shard_spec.shape.at(1) / (TILE_HEIGHT * TILE_WIDTH)) * this->page_size;
+        } else {
+            this->page_size = tensor.get_legacy_shape()[-1] * tensor.element_size();
+            this->unit_size = (this->page_size * this->shard_spec.shape.at(0) * this->shard_spec.shape.at(1)) / tensor.shard_spec()->num_cores();
+        }
+    }
+
+    virtual uint32_t get_page_size() const override {
+        return this->page_size;
+    }
+    virtual uint32_t get_unit_size() const override {
+        return this->unit_size;
+    }
+
+    uint32_t get_shard_size_in_bytes() const {
+        return this->get_unit_size();
+    }
+
+    ShardSpec const& get_shard_spec() const {
+        return this->shard_spec;
+    }
+
+   private:
+    uint32_t page_size;
+    uint32_t unit_size;
+    ShardSpec const shard_spec;
+};
+
 struct ShardAddrGenArgGenerator {
 
     using shard_cores_t = CoreRangeSet;
@@ -411,7 +497,7 @@ struct InputTensorShardAddrGenArgGenerator final : public ShardAddrGenArgGenerat
     }
     InputTensorShardAddrGenArgGenerator(
         Device const* device,
-        Tensor const& input_tensor,
+        AllGatherOpShardedTensorConfig *input_tensor_config,
         uint32_t ring_index,
         uint32_t ring_size,
         uint32_t num_workers,
@@ -421,12 +507,13 @@ struct InputTensorShardAddrGenArgGenerator final : public ShardAddrGenArgGenerat
         uint32_t starting_chunk_into_shard,
         bool is_worker_in_clockwise_ring
         ) {
-        auto const& tensor_shard_grid = input_tensor.buffer()->shard_spec().grid();
+        TT_ASSERT(input_tensor_config != nullptr);
+        auto const& tensor_shard_grid = input_tensor_config->get_shard_spec().grid;
         uint32_t sharded_tensor_num_cores = tensor_shard_grid.num_cores();
         this->args_struct.is_clockwise = is_worker_in_clockwise_ring;
-        this->args_struct.shard_size_in_bytes = input_tensor.shard_spec()->numel() * input_tensor.element_size();
+        this->args_struct.shard_size_in_bytes = input_tensor_config->get_shard_size_in_bytes();
         this->args_struct.total_chunks_per_core = 1;
-        this->args_struct.shards_start_address = input_tensor.buffer()->address();
+        this->args_struct.shards_start_address = input_tensor_config->get_buffer_start_address();
 
         this->args_struct.starting_core_index = starting_dest_core_index;
         this->args_struct.starting_chunk_into_shard = starting_chunk_into_shard;
@@ -436,7 +523,7 @@ struct InputTensorShardAddrGenArgGenerator final : public ShardAddrGenArgGenerat
         this->args_struct.contiguous_chunks_before_stride = 1;
 
         std::vector<CoreCoord> const& dest_core_coords = ctor_generate_dest_cores(
-            input_tensor.buffer()->shard_spec().grid(),
+            input_tensor_config->get_shard_spec().grid,
             worker_index,
             num_workers
         );
@@ -606,8 +693,8 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
     OutputTensorShardAddrGenArgGenerator(
         AllGatherConfig const& all_gather_config,
         Device const* device,
-        Tensor const& input_tensor,
-        Tensor const& output_tensor,
+        AllGatherOpShardedTensorConfig *input_tensor_config,
+        AllGatherOpShardedTensorConfig *output_tensor_config,
         uint32_t ring_index,
         uint32_t ring_size,
         uint32_t num_workers,
@@ -618,13 +705,13 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
         ) {
         bool is_shard_orientation_row_major = true; // hardcoded until the switch is flipped for col_major. Just needs test cycles and transpose when iterating dest cores
 
-        auto const& tensor_shard_grid = input_tensor.buffer()->shard_spec().grid();
+        auto const& tensor_shard_grid = input_tensor_config->get_shard_spec().grid;
         uint32_t sharded_tensor_num_cores = tensor_shard_grid.num_cores();
-        TT_ASSERT(sharded_tensor_num_cores == output_tensor.buffer()->shard_spec().grid().num_cores(), "Input and output tensor must have the same number of cores");
+        TT_ASSERT(sharded_tensor_num_cores == output_tensor_config->get_shard_spec().grid.num_cores(), "Input and output tensor must have the same number of cores");
         this->args_struct.is_clockwise = is_worker_in_clockwise_ring;
-        this->args_struct.shard_size_in_bytes = input_tensor.shard_spec()->numel() * input_tensor.element_size();
+        this->args_struct.shard_size_in_bytes = input_tensor_config->get_shard_size_in_bytes();
         this->args_struct.total_chunks_per_core = ring_size;
-        this->args_struct.shards_start_address = output_tensor.buffer()->address();
+        this->args_struct.shards_start_address = output_tensor_config->get_buffer_start_address();
 
         this->args_struct.intra_core_stride_in_shards = get_intra_core_stride_in_shards(sharded_tensor_num_cores, num_workers, ring_size);
         this->args_struct.contiguous_chunks_before_stride = get_contiguous_chunks_before_stride(sharded_tensor_num_cores, num_workers, ring_size);
