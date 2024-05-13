@@ -42,7 +42,7 @@ void update_sfpu_op_to_hlk_op()
                 sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_block_defines({tt::tt_metal::UnaryWithParam{unary_op_type, 0.5}});
             }
         } else {
-            sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_block_defines({tt::tt_metal::UnaryWithParam{unary_op_type, std::nullopt}});
+            sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_block_defines({tt::tt_metal::UnaryWithParam{unary_op_type}});
         }
     }
 }

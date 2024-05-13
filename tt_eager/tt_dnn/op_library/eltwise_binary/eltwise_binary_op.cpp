@@ -52,13 +52,13 @@ std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<s
         case BinaryOpType::BIAS_GELU:
             op_name = "add_tiles";
             op_code = "0";
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GELU, 0, "0", idst));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GELU, std::vector<float>{0}, "0", idst));
             break;
         case BinaryOpType::LOGADDEXP:
             // PRE_IN0_0 ===> Applies prescaling for first input
             // PRE_IN1_0 ====> Applies prescaling for second input
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP, false, "PRE_IN0_0"));
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP, false, "PRE_IN1_0"));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN0_0"));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN1_0"));
             op_name = "add_tiles";
             op_code = "0";
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LOG, std::nullopt, "0", idst));
@@ -253,8 +253,8 @@ const operation::Hash EltwiseBinary::compute_program_hash(
     if (this->fused_activations.has_value()) {
         for (const auto& unary_with_param_op : this->fused_activations.value()) {
             hash = tt::stl::hash::hash_objects(hash, static_cast<uint16_t>(unary_with_param_op.op_type));
-            if (unary_with_param_op.param.has_value()) {
-                hash = tt::stl::hash::hash_objects(hash, static_cast<uint16_t>(unary_with_param_op.param.value()));
+            if (unary_with_param_op.has_parameter()) {
+                hash = tt::stl::hash::hash_objects(hash, unary_with_param_op.params);
             }
         }
     }
