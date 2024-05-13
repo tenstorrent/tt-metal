@@ -57,13 +57,14 @@ void py_module(py::module& module) {
 
     py::class_<ConvConfig>(module, "ConvConfig")
         .def(
-            py::init<DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, bool, bool, bool, CoreRangeSet, bool, Layout>(),
+            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, bool, bool, bool, CoreRangeSet, bool, Layout>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::HiFi4,
             py::arg("dtype") = DataType::BFLOAT16,
             py::arg("weights_dtype") = DataType::BFLOAT16,
             py::arg("math_approx_mode_enabled") = true,
-            py::arg("fp32_dest_acc_enabled") = true,
+            py::arg("fp32_dest_acc_enabled") = false,
+            py::arg("packer_l1_accum_enabled") = false,
             py::arg("activation") = "",
             py::arg("input_channels_alignment") = 32,
             py::arg("deallocate_activation") = false,

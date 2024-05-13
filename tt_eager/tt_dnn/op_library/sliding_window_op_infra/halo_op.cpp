@@ -22,9 +22,9 @@ void Halo::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor.shard_spec().has_value(), "Shard spec should not be empty");
 }
 
-const operation::Hash Halo::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    return operation::hash_operation<Halo>(this->attribute_values());
-}
+// const operation::Hash Halo::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+//     return operation::hash_operation<Halo>(this->attribute_values());
+// }
 
 std::vector<tt::tt_metal::Shape> Halo::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input = input_tensors.at(0);

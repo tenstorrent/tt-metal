@@ -7,6 +7,362 @@
 
 namespace tt::tt_metal::sliding_window {
 
-    // ... ?
+    std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
+        uint32_t padded_input_h = config.input_hw_.first + 2 * config.pad_hw_.first;
+        uint32_t padded_input_w = config.input_hw_.second + 2 * config.pad_hw_.second;
+        std::vector<bool> pad_metadata(config.batch_size_ * padded_input_h * padded_input_w, false);
 
-} // namespace tt::tt_metal::sliding_window
+        for (uint32_t b = 0; b < config.batch_size_; ++b) {
+            for (uint32_t h = 0; h < padded_input_h; ++h) {
+                for (uint32_t w = 0; w < padded_input_w; ++w) {
+                    if (h < config.pad_hw_.first || h >= config.pad_hw_.first + config.input_hw_.first ||
+                        w < config.pad_hw_.second || w >= config.pad_hw_.second + config.input_hw_.second) {
+                        pad_metadata[b * padded_input_h * padded_input_w + h * padded_input_w + w] = true;
+                    }
+                }
+            }
+        }
+        return pad_metadata;
+    }
+
+    std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config) {
+        Shape output_shape = config.get_output_shape();
+        uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
+        uint32_t padded_input_h = config.input_hw_.first + 2 * config.pad_hw_.first;
+        uint32_t padded_input_w = config.input_hw_.second + 2 * config.pad_hw_.second;
+
+        std::vector<uint32_t> op_trace_metadata(output_nhw, 0);
+        for (uint32_t b = 0; b < output_shape[0]; ++b) {
+            for (uint32_t h = 0; h < output_shape[1]; ++h) {
+                for (uint32_t w = 0; w < output_shape[2]; ++w) {
+                    uint32_t input_index = b * padded_input_h * padded_input_w + h * config.stride_hw_.first * padded_input_w + w * config.stride_hw_.second;
+                    op_trace_metadata[b * output_shape[1] * output_shape[2] + h * output_shape[2] + w] = input_index;
+                }
+            }
+        }
+        return op_trace_metadata;
+    }
+
+    std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(const SlidingWindowConfig& config, const std::vector<uint32_t>& op_trace_metadata) {
+        std::vector<std::pair<uint32_pair_t, uint32_pair_t>> shard_boundaries;
+        uint32_t num_cores = config.num_cores_nhw_;
+        uint32_t output_shard_h = config.get_output_shard_y();
+        uint32_t padded_input_w = config.input_hw_.second + 2 * config.pad_hw_.second;
+        uint32_t max_index = op_trace_metadata.size();
+        uint32_t halo_with_pad_len = (config.window_hw_.first - 1) * padded_input_w + config.window_hw_.second - 1;
+        uint32_t output_index_start = 0;
+        for (uint32_t core = 0; core < num_cores; ++ core) {
+            uint32_t output_index_end = std::min(output_index_start + output_shard_h, max_index) - 1;
+            uint32_t input_index_start = op_trace_metadata[output_index_start];
+            uint32_t input_index_end = op_trace_metadata[output_index_end] + halo_with_pad_len;
+            shard_boundaries.push_back({{output_index_start, output_index_end}, {input_index_start, input_index_end}});
+            output_index_start += output_shard_h;
+        }
+        return shard_boundaries;
+    }
+
+    std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(const std::vector<bool>& pad_metadata, const SlidingWindowConfig& config, uint32_t reshard_num_cores_nhw) {
+        Shape input_shape = config.get_input_shape();
+        uint32_t input_nhw = input_shape[0] * input_shape[1] * input_shape[2];
+        uint32_t input_shard_height = input_nhw / config.num_cores_nhw_;
+        uint32_t input_reshard_height = reshard_num_cores_nhw == 0 ? input_shard_height : input_nhw / reshard_num_cores_nhw;
+
+        auto remap = [input_shard_height, input_reshard_height](uint32_t core_id, uint32_t local_idx) -> std::pair<uint32_t, uint32_t> {
+            if (input_shard_height == input_reshard_height) {
+                return std::make_pair(core_id, local_idx);
+            } else {
+                uint32_t global_idx = core_id * input_shard_height + local_idx;
+                return std::make_pair(global_idx / input_reshard_height, global_idx % input_reshard_height);
+            }
+        };
+
+        std::vector<std::pair<bool, uint32_pair_t>> tensor_metadata;
+        uint32_t core_id = 0;
+        uint32_t input_reshard_local_idx = 0;
+        for (bool is_pad_stick : pad_metadata) {
+            if (is_pad_stick) {
+                tensor_metadata.push_back(std::make_pair(is_pad_stick, std::make_pair(0, 0)));
+            } else {
+                tensor_metadata.push_back(std::make_pair(is_pad_stick, remap(core_id, input_reshard_local_idx++)));
+                if (input_reshard_local_idx == input_shard_height) {
+                    core_id++;
+                    input_reshard_local_idx = 0;
+                }
+            }
+        }
+
+        return tensor_metadata;
+    }
+
+    std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, uint32_t> generate_halo_kernel_config_tensors(const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool remote_read, Device* device) {
+        bool is_block_sharding = false; // TODO: get this from config
+        bool transpose_mcast = true;    // TODO: get this from config
+        auto core_id_to_noc_coords = [is_block_sharding, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
+            auto num_cores_x = device->compute_with_storage_grid_size().x;
+            auto core_coord = is_block_sharding ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id)) : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
+            return device->worker_core_from_logical_core(core_coord);
+        };
+
+        const uint16_t pad_local = 0xFFFF;
+        std::map<uint32_pair_t, std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>> per_core_gather_data;
+
+        uint32_t num_core_nhw = shard_boundaries.size();
+
+        uint32_t core_id = 0;
+        for (auto [output_boundary, input_boundary] : shard_boundaries) {
+            auto [input_start, input_end] = input_boundary;
+            for (uint32_t global_idx = input_start; global_idx <= input_end; ++global_idx) {
+                uint32_t dst_core_id = core_id;
+                uint32_t local_idx = global_idx - input_start;
+                auto [is_pad_stick, src_idx] = tensor_metadata[global_idx];
+                auto [src_core_id, src_local_idx] = src_idx;
+                TT_ASSERT(local_idx < pad_local && src_local_idx < pad_local, "Index overflow");
+                if (is_pad_stick) {
+                    TT_ASSERT(src_local_idx == 0);
+                    src_core_id = pad_local;
+                }
+                if (per_core_gather_data.find({src_core_id, dst_core_id}) != per_core_gather_data.end()) {
+                    auto& [src_start, dst_start, length] = per_core_gather_data[{src_core_id, dst_core_id}].back();
+                    // src idx is 0 if it is a pad
+                    if ((src_local_idx == (src_start + length) || is_pad_stick) && local_idx == (dst_start + length)) {
+                        ++ length;
+                        continue;
+                    }
+                }
+                // insert new tuple
+                per_core_gather_data[{src_core_id, dst_core_id}].push_back({src_local_idx, local_idx, 1});
+            }
+            ++ core_id;
+        }
+
+        // calculate max_out_nsticks_per_core
+        uint32_t max_out_nsticks_per_core = 0;
+        for (auto [_, in_shard] : shard_boundaries) {
+            auto [in_start, in_end] = in_shard;
+            max_out_nsticks_per_core = std::max(max_out_nsticks_per_core, in_end - in_start + 1);
+        }
+
+        // construct the config tensors
+        /**
+         * pad_config: length num_cores_nhw
+         *     each element (for core i): [dst_start0, length0, dst_start1, length1, ...]
+         * local_config: length num_cores_nhw
+         *     each element (for core i): (nocx, nocy, len) -> [src_start0, dst_start0, length0, src_start1, dst_start1, length1, ...]
+         * remote_config: length num_cores_nhw
+         *     each element (for core i): { (nocx, nocy, len) -> [src_start0, dst_start0, length0, src_start1, dst_start1, length1, ...],
+         *                                  (nocx, nocy, len) -> [src_start0, dst_start0, length0, src_start1, dst_start1, length1, ...], ...}
+         */
+        using uint32_triplet_t = std::tuple<uint32_t, uint32_t, uint32_t>;
+        std::vector<std::vector<uint32_pair_t>> pad_config;
+        std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>> local_config;
+        std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>> remote_config;
+        pad_config.reserve(num_core_nhw);
+        local_config.reserve(num_core_nhw);
+        remote_config.reserve(num_core_nhw);
+
+        for (auto [src_dst, data] : per_core_gather_data) {
+            auto [src_core_id, dst_core_id] = src_dst;
+            bool is_pad = src_core_id == pad_local;
+            bool is_local = src_core_id == dst_core_id;
+            bool is_remote = !is_local && !is_pad;
+            if (is_pad) {
+                for (auto [src_start, dst_start, length] : data) {
+                    pad_config[dst_core_id].push_back({dst_start, length});
+                }
+            } else if (is_local) {
+                CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
+                local_config[src_core_id].first = {noc_xy.x, noc_xy.y, 3 * data.size()};
+                local_config[src_core_id].second = data;
+            } else if (is_remote) {
+                if (remote_read) {
+                    CoreCoord noc_xy = core_id_to_noc_coords(src_core_id);
+                    remote_config[dst_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
+                } else {
+                    CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
+                    remote_config[src_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
+                }
+            }
+        }
+
+        // TODO: need null at end?
+
+        // flatten and uniformize the lengths of each config list
+        auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
+            // find max length
+            size_t max_len = 0;
+            for (auto& data : config) {
+                max_len = std::max(max_len, 2 * data.size());   // each data is 2 * data.size()
+            }
+            std::vector<std::vector<uint16_t>> flattened_config;
+            flattened_config.reserve(config.size());
+            for (auto& data : config) {
+                std::vector<uint16_t> flat_data(max_len, 0);
+                uint32_t idx = 0;
+                for (auto data_elem : data) {
+                    auto [dst_start, length] = data_elem;
+                    flat_data[idx++] = dst_start;
+                    flat_data[idx++] = length;
+                }
+            }
+            return flattened_config;
+        };
+
+        auto flatten_local_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
+            // find max length
+            size_t max_len = 0;
+            for (auto& [_, data] : config) {
+                max_len = std::max(max_len, 3 * data.size());   // each key is 3, data is 3 * data.size()
+            }
+            max_len += 3;   // key tuple
+            std::vector<std::vector<uint16_t>> flattened_config;
+            flattened_config.reserve(config.size());
+            for (auto& [key, data]: config) {
+                auto [nocx, nocy, len] = key;
+                std::vector<uint16_t> flat_data(max_len, 0);
+                flat_data[0] = nocx;
+                flat_data[1] = nocy;
+                flat_data[2] = len;
+                uint32_t idx = 3;
+                for (size_t i = 0; i < data.size(); ++i) {
+                    auto [src_start, dst_start, length] = data[i];
+                    flat_data[idx++] = src_start;
+                    flat_data[idx++] = dst_start;
+                    flat_data[idx++] = length;
+                }
+                flattened_config.push_back(flat_data);
+            }
+            return flattened_config;
+        };
+
+        auto flatten_remote_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
+            // find max length
+            size_t max_len = 0;
+            for (auto& core_config : config) {
+                size_t curr_len = 0;
+                for (auto& [key, subdata] : core_config) {
+                    curr_len += 3 + 3 * subdata.size();  // each key is len 3
+                }
+                max_len = std::max(max_len, curr_len);   // each key is 3, data is 3 * data.size()
+            }
+            std::vector<std::vector<uint16_t>> flattened_config;
+            flattened_config.reserve(config.size());
+            for (auto& core_config : config) {
+                std::vector<uint16_t> flat_data(max_len, 0);
+                uint32_t idx = 0;
+                for (auto& [key, data]: core_config) {
+                    auto [nocx, nocy, len] = key;
+                    flat_data[0] = nocx;
+                    flat_data[1] = nocy;
+                    flat_data[2] = len;
+                    idx += 3;
+                    for (size_t i = 0; i < data.size(); ++i) {
+                        auto [src_start, dst_start, length] = data[i];
+                        flat_data[idx++] = src_start;
+                        flat_data[idx++] = dst_start;
+                        flat_data[idx++] = length;
+                    }
+                }
+                flattened_config.push_back(flat_data);
+            }
+            return flattened_config;
+        };
+
+        auto flattened_pad_config = flatten_pad_config(pad_config);
+        auto flattened_local_config = flatten_local_config(local_config);
+        auto flattened_remote_config = flatten_remote_config(remote_config);
+
+        return std::make_tuple(flattened_pad_config,
+                                flattened_local_config,
+                                flattened_remote_config,
+                                max_out_nsticks_per_core);
+    }
+
+    std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(const std::vector<uint32_t>& op_trace_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool pad_tile, bool pad_last_core) {
+        std::vector<std::vector<uint16_t>> sharded_input_top_left_indices;
+        for(const auto& item : shard_boundaries) {
+            const auto& [output_shard_start, output_shard_end] = item.first;
+            const auto& [input_shard_start, input_shard_end] = item.second;
+            // sanity check
+            TT_ASSERT(output_shard_start < op_trace_metadata.size());
+            TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
+            std::vector<uint16_t> local_top_left_indices;
+            for(size_t i = output_shard_start; i < output_shard_end; i++) {
+                TT_ASSERT(i < local_top_left_indices.size());
+                local_top_left_indices.push_back(op_trace_metadata[i] - op_trace_metadata[output_shard_start]);
+            }
+            sharded_input_top_left_indices.push_back(local_top_left_indices);
+        }
+        if (pad_tile) {
+            // Pad indices to tile-multiple
+            for(size_t i = 0; i < sharded_input_top_left_indices.size(); i++) {
+                uint32_t extend_with_zeroes = sharded_input_top_left_indices[i].size() % 32;
+                if (extend_with_zeroes > 0) {
+                    std::vector<uint16_t> extend_v(extend_with_zeroes, 0);
+                    sharded_input_top_left_indices[i].insert(sharded_input_top_left_indices[i].end(), extend_v.begin(), extend_v.end());
+                }
+            }
+        }
+        if (pad_last_core) {
+            // Pad indices for last core if not equal to other cores
+            uint32_t indices_length_per_core = sharded_input_top_left_indices[0].size();
+            uint32_t indices_length_last_core = sharded_input_top_left_indices.back().size();
+            TT_ASSERT(indices_length_last_core <= indices_length_per_core);
+            if (indices_length_per_core - indices_length_last_core > 0) {
+                std::vector<uint16_t> extend_v(indices_length_per_core - indices_length_last_core, 0);
+                sharded_input_top_left_indices.back().insert(sharded_input_top_left_indices.back().end(), extend_v.begin(), extend_v.end());
+            }
+
+        }
+        return sharded_input_top_left_indices;
+    }
+
+    std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input) {
+        std::vector<uint16_t> flattened_vector;
+        for (auto sub_vec : input) {
+            flattened_vector.insert(flattened_vector.end(), sub_vec.begin(), sub_vec.end());
+        }
+        return flattened_vector;
+    }
+
+    Tensor construct_on_host_config_tensor(const std::vector<std::vector<uint16_t>>& config, const SlidingWindowConfig& sw_config, const ParallelConfig& p_config) {
+        std::vector<uint16_t> config_vector = flatten(config);
+        Shape config_shape = {1, (uint32_t) config_vector.size()};
+        if (p_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
+            auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
+            return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
+        } else if (p_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
+            TT_ASSERT(p_config.grid.ranges().size() == 1, "BLOCK_SHARDED should have just a single core range");
+            // NOTE: it is assumed that the range start is always (0, 0)
+            uint32_t ncores_y = p_config.grid.ranges().begin()->end.y + 1;
+            uint32_t ncores_x = p_config.grid.ranges().begin()->end.x + 1;
+            std::vector<uint16_t> repeat_config;
+            uint32_t repeat_factor = 0;
+            if (p_config.shard_orientation == ShardOrientation::ROW_MAJOR) {
+                TT_ASSERT(config.size() == ncores_y, "Invalid config size for BLOCK_SHARDED ROW_MAJOR");
+                repeat_factor = ncores_x;
+            } else if (p_config.shard_orientation == ShardOrientation::COL_MAJOR) {
+                TT_ASSERT(config.size() == ncores_x, "Invalid config size for BLOCK_SHARDED COL_MAJOR");
+                repeat_factor = ncores_y;
+            } else {
+                TT_ASSERT(false, "Unsupported shard orientation");
+            }
+            for (uint32_t i = 0; i < repeat_factor; ++ i) {
+                repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
+            }
+            auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
+            return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
+        } else {
+            TT_ASSERT(false, "Unsupported shard scheme");
+            return Tensor();
+        }
+    }
+
+    Tensor move_config_tensor_to_device(const Tensor& config_tensor, const ParallelConfig& p_config, Device* device) {
+        auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t) config_tensor.get_shape()[-1]});
+        ShardSpec shard_spec(p_config.grid, shard_shape, p_config.shard_orientation, false);
+        MemoryConfig memory_config{p_config.shard_scheme, BufferType::L1_SMALL, shard_spec};
+
+        return config_tensor.to(device, memory_config);
+    }
+
+} // namespace sliding_window

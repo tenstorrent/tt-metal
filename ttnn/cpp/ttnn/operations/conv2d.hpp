@@ -394,7 +394,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_requi
             uint32_t tensor_width = input_tensor.get_shape()[3];
             uint32_t input_tensor_width_snapped_to_channels_alignment = round_up(
                 tensor_width, conv_config.input_channels_alignment
-            )
+            );
             TT_ASSERT(input_tensor_width_snapped_to_channels_alignment >= tensor_width);
             if (input_tensor_height_snapped_to_tile != tensor_height || input_tensor_width_snapped_to_channels_alignment != tensor_height) {
                 input_tensor = tt::tt_metal::pad_on_host(
@@ -596,3 +596,13 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
 }  // namespace conv2d
 }  // namespace operations
 }  // namespace ttnn
+
+
+
+template <> struct fmt::formatter<ttnn::operations::conv2d::ConvConfig> : formatter<string_view> {
+    // constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const ttnn::operations::conv2d::ConvConfig& t, fmt::format_context& ctx) {
+        std::string str = fmt::format("ConvConfig(math_fidelity={}, dtype={}, weights_dtype={}, math_approx_mode_enabled={}, fp32_dest_acc_enabled={}, packer_l1_accum_enabled={}, activation={}, input_channels_alignment={}, deallocate_activation={}, reallocate_halo_output={}, act_block_h_override={}, reshard_if_not_optimal={}, override_sharding_config={}, height_sharding={}, core_grid={}, transpose_shards={}, output_layout={})", t.math_fidelity, t.dtype, t.weights_dtype, t.math_approx_mode_enabled, t.fp32_dest_acc_enabled, t.packer_l1_accum_enabled, t.activation, t.input_channels_alignment, t.deallocate_activation, t.reallocate_halo_output, t.act_block_h_override, t.reshard_if_not_optimal, t.override_sharding_config, t.height_sharding, t.core_grid.str(), t.transpose_shards, t.output_layout);
+        return format_to(ctx.out(), "{}", str);
+    }
+};
