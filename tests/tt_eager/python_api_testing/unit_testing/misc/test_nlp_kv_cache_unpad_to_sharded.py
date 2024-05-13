@@ -95,7 +95,8 @@ def test_run_unpadding_test(
         assert a_pt.shape == a_ref.shape
         if dtype == ttl.tensor.DataType.BFLOAT8_B:
             # inevitable precision loss for bfloat8_b
-            eq = comp_pcc(a_pt, a_ref, 0.999)
+            eq, pcc = comp_pcc(a_pt, a_ref, 0.999)
+            logger.info(f"comp_pcc: {pcc}")
         else:
             eq = torch.equal(a_pt, a_ref)
         assert eq
@@ -121,7 +122,8 @@ def test_run_unpadding_test(
         assert a_pt.shape == a_ref.shape
         if dtype == ttl.tensor.DataType.BFLOAT8_B:
             # inevitable precision loss for bfloat8_b
-            eq = comp_pcc(a_pt, a_ref, 0.999)
+            eq, pcc = comp_pcc(a_pt, a_ref, 0.999)
+            logger.info(f"comp_pcc: {pcc}")
         else:
             eq = torch.equal(a_pt, a_ref)
         assert eq
