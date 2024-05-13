@@ -19,7 +19,7 @@ parameters = {
         (
             (2, 3),
             (1600, 224, 896),
-            True,
+            False,
             dict(core_grid=ttnn.CoreGrid(y=5, x=7), strategy=ttnn.ShardStrategy.BLOCK),
             None,
         ),
@@ -27,7 +27,7 @@ parameters = {
         (
             (2, 3),
             (1600, 224, 896),
-            True,
+            False,
             dict(
                 core_grid=ttnn.CoreGrid(y=7, x=5),
                 strategy=ttnn.ShardStrategy.BLOCK,
@@ -39,7 +39,7 @@ parameters = {
         (
             (2, 1),
             (128, 256, 512),
-            True,
+            False,
             dict(core_grid=ttnn.CoreGrid(y=2, x=2), strategy=ttnn.ShardStrategy.BLOCK),
             None,
         ),
@@ -47,7 +47,7 @@ parameters = {
         (
             (2, 3),
             (64, 32 * 7, 1024),
-            True,
+            False,
             dict(
                 core_grid=ttnn.CoreGrid(y=1, x=7),
                 strategy=ttnn.ShardStrategy.WIDTH,
@@ -58,7 +58,7 @@ parameters = {
         (
             (2, 3),
             (160 * 7, 64, 64),
-            True,
+            False,
             dict(
                 core_grid=ttnn.CoreGrid(y=7, x=1),
                 strategy=ttnn.ShardStrategy.HEIGHT,
@@ -69,7 +69,7 @@ parameters = {
         (
             (7, 7),
             (384, 64, 384),
-            False,
+            True,
             dict(
                 core_grid=ttnn.CoreGrid(y=7, x=7),
                 strategy=ttnn.ShardStrategy.HEIGHT,
@@ -126,13 +126,9 @@ def run(
     input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
     output_memory_config = ttnn.DRAM_MEMORY_CONFIG
     if input_a_sharded_memory_config_specs:
-        input_a_sharded_memory_config = ttnn.create_sharded_memory_config(
-            input_shape_a, **input_a_sharded_memory_config_specs
-        )
+        input_a_memory_config = ttnn.create_sharded_memory_config(input_shape_a, **input_a_sharded_memory_config_specs)
     if input_b_sharded_memory_config_specs:
-        input_b_sharded_memory_config = ttnn.create_sharded_memory_config(
-            input_shape_b, **input_b_sharded_memory_config_specs
-        )
+        input_b_memory_config = ttnn.create_sharded_memory_config(input_shape_b, **input_b_sharded_memory_config_specs)
 
     input_a_layout = input_layout
     input_b_layout = input_layout

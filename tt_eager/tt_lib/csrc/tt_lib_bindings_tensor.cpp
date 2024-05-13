@@ -286,6 +286,11 @@ void TensorModule(py::module &m_tensor) {
             return fmt::format("{}", core_range_set);
         });
 
+    m_tensor.def(
+        "num_cores_to_core_range_set", &num_cores_to_core_range_set, py::arg().noconvert(), py::arg().noconvert(), py::arg("row_wise").noconvert() = false, R"doc(
+            Returns a CoreRangeSet from number of cores
+        )doc");
+
     auto pyShardSpec = py::class_<ShardSpec>(m_tensor, "ShardSpec", R"doc(
         Class defining the specs required for sharding.
     )doc");
