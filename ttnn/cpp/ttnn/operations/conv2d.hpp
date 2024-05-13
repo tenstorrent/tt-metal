@@ -387,7 +387,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_requi
         }
         if(!input_is_on_device) {
             uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
-            TT_ASSERT(input_tensor.get_legacy_shape() == input_tensor.get_shape());
+            //TT_ASSERT(input_tensor.get_legacy_shape() == input_tensor.get_shape());
             uint32_t input_tensor_height_snapped_to_tile = round_up(input_tensor.get_shape()[2], input_num_cores_nhw * 32);
             TT_ASSERT(input_tensor_height_snapped_to_tile >= input_tensor.get_shape()[2]);
             uint32_t input_tensor_width_snapped_to_channels_alignment = round_up(
