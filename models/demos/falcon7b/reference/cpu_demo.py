@@ -23,9 +23,7 @@ def post_process(logits):
     return ids
 
 
-def generate_next_id(
-    causalLMModel, post_processor, input_ids, kv_cache=None, use_cache=None
-):
+def generate_next_id(causalLMModel, post_processor, input_ids, kv_cache=None, use_cache=None):
     outputs = causalLMModel(input_ids, past_key_values=kv_cache, use_cache=use_cache)
     return (
         post_processor(logits=outputs.logits),
@@ -46,18 +44,14 @@ def test_cpu_demo_no_kv(batch_size):
     prompt_text = ["Write a poem about Valencia"] * batch_size
 
     logger.info("Tokenizing inputs")
-    tokenized_inputs = tokenizer(
-        prompt_text, padding=False, add_special_tokens=False, return_tensors="pt"
-    )
+    tokenized_inputs = tokenizer(prompt_text, padding=False, add_special_tokens=False, return_tensors="pt")
     input_ids = tokenized_inputs["input_ids"]
 
     logger.info("Initializing CausalLM Model")
     causalLM = FalconForCausalLM.from_pretrained(MODEL_VERSION, device_map="auto", offload_folder="offload")
     causalLM.eval()
 
-    generator = partial(
-        generate_next_id, causalLMModel=causalLM, post_processor=post_processor
-    )
+    generator = partial(generate_next_id, causalLMModel=causalLM, post_processor=post_processor)
 
     logger.info("Generating new ids")
     ids = input_ids
@@ -91,18 +85,14 @@ def test_cpu_demo_kv(batch_size):
     prompt_text = ["Write a poem about Valencia"] * batch_size
 
     logger.info("Tokenizing inputs")
-    tokenized_inputs = tokenizer(
-        prompt_text, padding=False, add_special_tokens=False, return_tensors="pt"
-    )
+    tokenized_inputs = tokenizer(prompt_text, padding=False, add_special_tokens=False, return_tensors="pt")
     input_ids = tokenized_inputs["input_ids"]
 
     logger.info("Initializing CausalLM Model")
     causalLM = FalconForCausalLM.from_pretrained(MODEL_VERSION, device_map="auto", offload_folder="offload")
     causalLM.eval()
 
-    generator = partial(
-        generate_next_id, causalLMModel=causalLM, post_processor=post_processor
-    )
+    generator = partial(generate_next_id, causalLMModel=causalLM, post_processor=post_processor)
 
     logger.info("Generating new ids")
     ids = input_ids
@@ -153,9 +143,7 @@ def test_cpu_demo_with_kv_split(batch_size):
     logger.info("Tokenizing inputs")
     input_ids = []
     for i in range(batch_size):
-        tokenized_inputs = tokenizer(
-            prompts[i], padding=False, add_special_tokens=False, return_tensors="pt"
-        )
+        tokenized_inputs = tokenizer(prompts[i], padding=False, add_special_tokens=False, return_tensors="pt")
         input_ids.append(tokenized_inputs["input_ids"])
 
     logger.info("Initializing CausalLM Model")
@@ -163,9 +151,7 @@ def test_cpu_demo_with_kv_split(batch_size):
     for i in range(batch_size):
         causalLM = FalconForCausalLM.from_pretrained(MODEL_VERSION, device_map="auto", offload_folder="offload")
         causalLM.eval()
-        generator = partial(
-            generate_next_id, causalLMModel=causalLM, post_processor=post_processor
-        )
+        generator = partial(generate_next_id, causalLMModel=causalLM, post_processor=post_processor)
         generators.append(generator)
 
     assert len(generators) == len(prompts)

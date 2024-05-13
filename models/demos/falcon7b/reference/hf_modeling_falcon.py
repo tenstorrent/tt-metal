@@ -118,22 +118,14 @@ class FalconRotaryEmbedding(nn.Module):
             self.sin_cached = self.sin_cached.type(dtype)
 
         return (
-            self.cos_cached[
-                :, past_key_values_length : seq_len + past_key_values_length
-            ],
-            self.sin_cached[
-                :, past_key_values_length : seq_len + past_key_values_length
-            ],
+            self.cos_cached[:, past_key_values_length : seq_len + past_key_values_length],
+            self.sin_cached[:, past_key_values_length : seq_len + past_key_values_length],
         )
 
     def forward(self, query, key, past_key_values_length=0):
         batch, seq_len, head_dim = query.shape
-        cos, sin = self.cos_sin(
-            seq_len, past_key_values_length, query.device, query.dtype
-        )
-        return (query * cos) + (rotate_half(query) * sin), (key * cos) + (
-            rotate_half(key) * sin
-        )
+        cos, sin = self.cos_sin(seq_len, past_key_values_length, query.device, query.dtype)
+        return (query * cos) + (rotate_half(query) * sin), (key * cos) + (rotate_half(key) * sin)
 
 
 def _make_causal_mask(
@@ -153,13 +145,9 @@ def _make_causal_mask(
     # If past_key_values_length is 0 this is an empty tensor and the concatenation is a no-op.
     # This code style is an unfortunate consequence of getting your TF engineer to port models; doing it this
     # way avoids a data-dependent conditional, which will help me when I have to port this to XLA later.
-    past_mask = torch.zeros(
-        (target_length, past_key_values_length), dtype=torch.bool, device=device
-    )
+    past_mask = torch.zeros((target_length, past_key_values_length), dtype=torch.bool, device=device)
     mask = torch.cat([past_mask, mask], dim=-1)
-    expanded_mask = mask[None, None, :, :].expand(
-        batch_size, 1, target_length, target_length + past_key_values_length
-    )
+    expanded_mask = mask[None, None, :, :].expand(batch_size, 1, target_length, target_length + past_key_values_length)
     return expanded_mask
 
 
@@ -168,19 +156,13 @@ def _expand_mask(mask: torch.Tensor, past_key_values_length: int) -> torch.BoolT
     Expands attention_mask from `[batch_size, seq_length]` to `[batch_size, 1, seq_length, seq_length + past_length]`.
     """
     batch_size, total_length = mask.shape
-    seq_length = (
-        total_length - past_key_values_length
-        if past_key_values_length is not None
-        else total_length
-    )
+    seq_length = total_length - past_key_values_length if past_key_values_length is not None else total_length
 
     expanded_mask = ~(mask[:, None, None, :].to(torch.bool))
     return expanded_mask.expand(batch_size, 1, seq_length, total_length)
 
 
-def build_alibi_tensor(
-    attention_mask: torch.Tensor, num_heads: int, dtype: torch.dtype
-) -> torch.Tensor:
+def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int, dtype: torch.dtype) -> torch.Tensor:
     batch_size, seq_length = attention_mask.shape
     closest_power_of_2 = 2 ** math.floor(math.log2(num_heads))
     base = torch.tensor(
@@ -188,9 +170,7 @@ def build_alibi_tensor(
         device=attention_mask.device,
         dtype=torch.float32,
     )
-    powers = torch.arange(
-        1, 1 + closest_power_of_2, device=attention_mask.device, dtype=torch.int32
-    )
+    powers = torch.arange(1, 1 + closest_power_of_2, device=attention_mask.device, dtype=torch.int32)
     slopes = torch.pow(base, powers)
 
     if closest_power_of_2 != num_heads:
@@ -221,9 +201,7 @@ def build_alibi_tensor(
 
 
 # Copied from transformers.models.bloom.modeling_bloom.dropout_add
-def dropout_add(
-    x: torch.Tensor, residual: torch.Tensor, prob: float, training: bool
-) -> torch.Tensor:
+def dropout_add(x: torch.Tensor, residual: torch.Tensor, prob: float, training: bool) -> torch.Tensor:
     """
     Dropout add function
 
@@ -243,9 +221,7 @@ def dropout_add(
 
 
 class TT_functional:
-    def scaled_dot_product_attention(
-        Q, K, V, attn_mask=None, dropout_p=0.0, is_causal=False
-    ):
+    def scaled_dot_product_attention(Q, K, V, attn_mask=None, dropout_p=0.0, is_causal=False):
         DTYPE = Q.dtype
         L, S = Q.size(-2), K.size(-2)
         # print("QKV:", Q.dtpye, K.dtype, V.dtype)
@@ -253,27 +229,17 @@ class TT_functional:
         def make_mask(L, S, DTYPE):
             attn_mask = torch.ones(L, S, dtype=DTYPE).tril(diagonal=0).to(K.device)
             inverted_mask = 1.0 - attn_mask
-            return inverted_mask.masked_fill(
-                inverted_mask.to(torch.bool), torch.finfo(DTYPE).min
-            )
+            return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(DTYPE).min)
 
-        assert (
-            is_causal or attn_mask is not None
-        ), "attn_mask must be provided if is_causal is False"
-        assert (
-            not is_causal or attn_mask is None
-        ), "attn_mask must be None if is_causal is True"
+        assert is_causal or attn_mask is not None, "attn_mask must be provided if is_causal is False"
+        assert not is_causal or attn_mask is None, "attn_mask must be None if is_causal is True"
 
         if attn_mask is None or is_causal:
             attn_mask = make_mask(L, S, DTYPE)
 
         # attn_weight = torch.softmax((Q @ K.transpose(-2, -1) / torch.sqrt(torch.tensor(Q.size(-1), dtype=DTYPE))) + attn_mask, dim=-1)
         # attn_weight = torch.dropout(attn_weight, dropout_p, train)
-        ATT = (
-            Q
-            @ K.transpose(-2, -1)
-            / torch.tensor(Q.size(-1) ** (1 / 2), dtype=DTYPE).to(K.device)
-        )
+        ATT = Q @ K.transpose(-2, -1) / torch.tensor(Q.size(-1) ** (1 / 2), dtype=DTYPE).to(K.device)
         attn_weight = F.softmax(ATT + attn_mask, dim=-1, dtype=DTYPE)
         attn_weight = nn.Dropout(p=dropout_p)(attn_weight)
         # print(attn_weight.shape, attn_weight.dtype, V.shape, V.dtype)
@@ -296,39 +262,25 @@ class FalconAttention(nn.Module):
                 f" {self.num_heads})."
             )
 
-        self.maybe_rotary = (
-            FalconRotaryEmbedding(config.head_dim)
-            if config.rotary
-            else lambda q, k, t: (q, k)
-        )
+        self.maybe_rotary = FalconRotaryEmbedding(config.head_dim) if config.rotary else lambda q, k, t: (q, k)
 
         # Layer-wise attention scaling
         self.inv_norm_factor = 1.0 / math.sqrt(self.head_dim)
         self.beta = self.inv_norm_factor
         if config.new_decoder_architecture:
-            qkv_out_dim = (
-                config.num_kv_heads * 2 + config.num_attention_heads
-            ) * self.head_dim
+            qkv_out_dim = (config.num_kv_heads * 2 + config.num_attention_heads) * self.head_dim
         elif config.multi_query:
             qkv_out_dim = self.hidden_size + 2 * self.head_dim
         else:
             qkv_out_dim = 3 * self.hidden_size
-        self.query_key_value = FalconLinear(
-            self.hidden_size, qkv_out_dim, bias=config.bias
-        )
+        self.query_key_value = FalconLinear(self.hidden_size, qkv_out_dim, bias=config.bias)
         self.new_decoder_architecture = config.new_decoder_architecture
         self.multi_query = config.multi_query
         self.dense = FalconLinear(self.hidden_size, self.hidden_size, bias=config.bias)
         self.attention_dropout = nn.Dropout(config.attention_dropout)
-        self.num_kv_heads = (
-            config.num_kv_heads
-            if (self.new_decoder_architecture or not self.multi_query)
-            else 1
-        )
+        self.num_kv_heads = config.num_kv_heads if (self.new_decoder_architecture or not self.multi_query) else 1
 
-    def _split_heads(
-        self, fused_qkv: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _split_heads(self, fused_qkv: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Split the last dimension into (num_heads, head_dim), results share same memory storage as `fused_qkv`
 
@@ -358,15 +310,11 @@ class FalconAttention(nn.Module):
             return query, key, value
         elif not self.multi_query:
             batch_size, seq_length, three_times_hidden_size = fused_qkv.shape
-            fused_qkv = fused_qkv.view(
-                batch_size, seq_length, self.num_heads, 3, self.head_dim
-            )
+            fused_qkv = fused_qkv.view(batch_size, seq_length, self.num_heads, 3, self.head_dim)
             return fused_qkv[..., 0, :], fused_qkv[..., 1, :], fused_qkv[..., 2, :]
         else:
             batch_size, seq_length, three_times_hidden_size = fused_qkv.shape
-            fused_qkv = fused_qkv.view(
-                batch_size, seq_length, self.num_heads + 2, self.head_dim
-            )
+            fused_qkv = fused_qkv.view(batch_size, seq_length, self.num_heads + 2, self.head_dim)
             return (
                 fused_qkv[..., :-2, :],
                 fused_qkv[..., [-2], :],
@@ -409,33 +357,23 @@ class FalconAttention(nn.Module):
         use_cache: bool = False,
         output_attentions: bool = False,
     ):
-        fused_qkv = self.query_key_value(
-            hidden_states
-        )  # [batch_size, seq_length, 3 x hidden_size]
-        num_kv_heads = (
-            self.num_heads if self.new_decoder_architecture else self.num_kv_heads
-        )
+        fused_qkv = self.query_key_value(hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
+        num_kv_heads = self.num_heads if self.new_decoder_architecture else self.num_kv_heads
         # 3 x [batch_size, seq_length, num_heads, head_dim]
         (query_layer, key_layer, value_layer) = self._split_heads(fused_qkv)
 
         batch_size, query_length, _, _ = query_layer.shape
 
-        query_layer = query_layer.transpose(1, 2).reshape(
-            batch_size * self.num_heads, query_length, self.head_dim
-        )
+        query_layer = query_layer.transpose(1, 2).reshape(batch_size * self.num_heads, query_length, self.head_dim)
         key_layer = key_layer.transpose(1, 2).reshape(
             batch_size * num_kv_heads,
             query_length,
             self.head_dim,
         )
-        value_layer = value_layer.transpose(1, 2).reshape(
-            batch_size * num_kv_heads, query_length, self.head_dim
-        )
+        value_layer = value_layer.transpose(1, 2).reshape(batch_size * num_kv_heads, query_length, self.head_dim)
 
         past_kv_length = 0 if layer_past is None else layer_past[0].shape[1]
-        query_layer, key_layer = self.maybe_rotary(
-            query_layer, key_layer, past_kv_length
-        )
+        query_layer, key_layer = self.maybe_rotary(query_layer, key_layer, past_kv_length)
 
         if layer_past is not None:
             past_key, past_value = layer_past
@@ -451,15 +389,9 @@ class FalconAttention(nn.Module):
         else:
             present = None
 
-        attention_mask_float = (
-            (attention_mask * 1.0)
-            .masked_fill(attention_mask, float("-1e9"))
-            .to(query_layer.dtype)
-        )
+        attention_mask_float = (attention_mask * 1.0).masked_fill(attention_mask, float("-1e9")).to(query_layer.dtype)
 
-        query_layer_ = query_layer.reshape(
-            batch_size, self.num_heads, -1, self.head_dim
-        )
+        query_layer_ = query_layer.reshape(batch_size, self.num_heads, -1, self.head_dim)
         key_layer_ = key_layer.reshape(batch_size, num_kv_heads, -1, self.head_dim)
         value_layer_ = value_layer.reshape(batch_size, num_kv_heads, -1, self.head_dim)
 
@@ -487,13 +419,9 @@ class FalconAttention(nn.Module):
                 )
                 attention_scores = None
 
-            attn_output = attn_output.view(
-                batch_size, self.num_heads, query_length, self.head_dim
-            )
+            attn_output = attn_output.view(batch_size, self.num_heads, query_length, self.head_dim)
             attn_output = attn_output.permute(0, 2, 1, 3)
-            attn_output = attn_output.reshape(
-                batch_size, query_length, self.num_heads * self.head_dim
-            )
+            attn_output = attn_output.reshape(batch_size, query_length, self.num_heads * self.head_dim)
 
             output_tensor = self.dense(attn_output)
 
@@ -506,9 +434,7 @@ class FalconAttention(nn.Module):
             matmul_result = query_layer_ @ key_layer_.transpose(-1, -2)
 
             # change view to [batch_size, num_heads, q_length, kv_length]
-            attention_scores = matmul_result.view(
-                batch_size, self.num_heads, query_length, kv_length
-            )
+            attention_scores = matmul_result.view(batch_size, self.num_heads, query_length, kv_length)
 
             # cast attention scores to fp32, compute scaled softmax and cast back to initial dtype - [batch_size, num_heads, q_length, kv_length]
             input_dtype = attention_scores.dtype
@@ -519,9 +445,7 @@ class FalconAttention(nn.Module):
             # adding (alibi * self.inv_norm_factor) to attention_mask_float. I think this would be mathematically
             # equivalent and more performant, but there might be a numerical difference. If you're reading this
             # and you'd like to experiment and maybe file a PR, feel free!
-            attention_logits = attention_scores + alibi.view(
-                batch_size, self.num_heads, 1, -1
-            )
+            attention_logits = attention_scores + alibi.view(batch_size, self.num_heads, 1, -1)
             attention_logits *= self.inv_norm_factor
             attention_probs = F.softmax(
                 attention_logits + attention_mask_float,
@@ -535,9 +459,7 @@ class FalconAttention(nn.Module):
                 attention_probs = attention_probs * head_mask
 
             # change view [batch_size, num_heads, q_length, kv_length]
-            attention_probs_reshaped = attention_probs.view(
-                batch_size, self.num_heads, query_length, kv_length
-            )
+            attention_probs_reshaped = attention_probs.view(batch_size, self.num_heads, query_length, kv_length)
 
             # matmul: [batch_size * num_heads, q_length, head_dim]
             context_layer = (attention_probs_reshaped @ value_layer_).flatten(0, 1)
@@ -558,13 +480,9 @@ class FalconMLP(nn.Module):
         super().__init__()
         hidden_size = config.hidden_size
 
-        self.dense_h_to_4h = FalconLinear(
-            hidden_size, 4 * hidden_size, bias=config.bias
-        )
+        self.dense_h_to_4h = FalconLinear(hidden_size, 4 * hidden_size, bias=config.bias)
         self.act = nn.GELU()
-        self.dense_4h_to_h = FalconLinear(
-            4 * hidden_size, hidden_size, bias=config.bias
-        )
+        self.dense_4h_to_h = FalconLinear(4 * hidden_size, hidden_size, bias=config.bias)
         self.hidden_dropout = config.hidden_dropout
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -591,9 +509,7 @@ class FalconDecoderLayer(nn.Module):
         else:
             self.input_layernorm = LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
             if not config.parallel_attn:
-                self.post_attention_layernorm = LayerNorm(
-                    hidden_size, eps=config.layer_norm_epsilon
-                )
+                self.post_attention_layernorm = LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
 
     def forward(
         self,
@@ -646,9 +562,7 @@ class FalconDecoderLayer(nn.Module):
         if self.config.new_decoder_architecture or self.config.parallel_attn:
             mlp_output += attention_output
 
-        output = dropout_add(
-            mlp_output, residual, self.config.hidden_dropout, training=self.training
-        )
+        output = dropout_add(mlp_output, residual, self.config.hidden_dropout, training=self.training)
 
         if use_cache:
             outputs = (output,) + outputs
@@ -816,9 +730,7 @@ class FalconModel(FalconPreTrainedModel):
         self.word_embeddings = nn.Embedding(config.vocab_size, self.embed_dim)
 
         # Transformer blocks
-        self.h = nn.ModuleList(
-            [FalconDecoderLayer(config) for _ in range(config.num_hidden_layers)]
-        )
+        self.h = nn.ModuleList([FalconDecoderLayer(config) for _ in range(config.num_hidden_layers)])
 
         # Final Layer Norm
         self.ln_f = LayerNorm(self.embed_dim, eps=config.layer_norm_epsilon)
@@ -859,13 +771,9 @@ class FalconModel(FalconPreTrainedModel):
             )
 
         # [batch_size, seq_length + past_key_values_length] -> [batch_size, 1, seq_length, seq_length + past_key_values_length]
-        expanded_attn_mask = _expand_mask(
-            attention_mask, past_key_values_length=past_key_values_length
-        )
+        expanded_attn_mask = _expand_mask(attention_mask, past_key_values_length=past_key_values_length)
         combined_attention_mask = (
-            expanded_attn_mask
-            if combined_attention_mask is None
-            else expanded_attn_mask | combined_attention_mask
+            expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask | combined_attention_mask
         )
 
         return combined_attention_mask
@@ -891,25 +799,15 @@ class FalconModel(FalconPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple[torch.Tensor, ...], BaseModelOutputWithPastAndCrossAttentions]:
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError(
-                "You cannot specify both input_ids and inputs_embeds at the same time"
-            )
+            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
         elif input_ids is not None:
             batch_size, seq_length = input_ids.shape
         elif inputs_embeds is not None:
@@ -940,9 +838,7 @@ class FalconModel(FalconPreTrainedModel):
         # Compute alibi tensor: check build_alibi_tensor documentation
         past_key_values_length = 0
         if past_key_values[0] is not None:
-            past_key_values_length = past_key_values[0][0].shape[
-                1
-            ]  # 1 because RW-cache, not standard format
+            past_key_values_length = past_key_values[0][0].shape[1]  # 1 because RW-cache, not standard format
         if attention_mask is None:
             attention_mask = torch.ones(
                 (batch_size, seq_length + past_key_values_length),
@@ -952,9 +848,7 @@ class FalconModel(FalconPreTrainedModel):
             attention_mask = attention_mask.to(hidden_states.device)
 
         if self.use_alibi:
-            alibi = build_alibi_tensor(
-                attention_mask, self.num_heads, dtype=hidden_states.dtype
-            )
+            alibi = build_alibi_tensor(attention_mask, self.num_heads, dtype=hidden_states.dtype)
         else:
             alibi = None
 
@@ -1009,9 +903,7 @@ class FalconModel(FalconPreTrainedModel):
                 presents = presents + (outputs[1],)
 
             if output_attentions:
-                all_self_attentions = all_self_attentions + (
-                    outputs[2 if use_cache else 1],
-                )
+                all_self_attentions = all_self_attentions + (outputs[2 if use_cache else 1],)
 
         # Add last hidden state
         hidden_states = self.ln_f(hidden_states)
@@ -1106,9 +998,7 @@ class FalconForCausalLM(FalconPreTrainedModel):
             are ignored (masked), the loss is only computed for labels in `[0, ..., config.vocab_size]`
         """
 
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         transformer_outputs = self.transformer(
             input_ids,
@@ -1165,9 +1055,7 @@ class FalconForCausalLM(FalconPreTrainedModel):
 
         # Get a copy of `beam_idx` on all the devices where we need those indices.
         device_to_beam_idx = {
-            past_state.device: beam_idx.to(past_state.device)
-            for layer_past in past
-            for past_state in layer_past
+            past_state.device: beam_idx.to(past_state.device) for layer_past in past for past_state in layer_past
         }
         reordered_past = tuple(
             (
@@ -1230,9 +1118,7 @@ class FalconForSequenceClassification(FalconPreTrainedModel):
             `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
         """
 
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         transformer_outputs = self.transformer(
             input_ids,
@@ -1255,16 +1141,12 @@ class FalconForSequenceClassification(FalconPreTrainedModel):
             batch_size = inputs_embeds.shape[0]
 
         if self.config.pad_token_id is None and batch_size != 1:
-            raise ValueError(
-                "Cannot handle batch sizes > 1 if no padding token is defined."
-            )
+            raise ValueError("Cannot handle batch sizes > 1 if no padding token is defined.")
         if self.config.pad_token_id is None:
             sequence_lengths = -1
         else:
             if input_ids is not None:
-                sequence_lengths = (
-                    torch.ne(input_ids, self.config.pad_token_id).sum(dim=-1) - 1
-                ).to(logits.device)
+                sequence_lengths = (torch.ne(input_ids, self.config.pad_token_id).sum(dim=-1) - 1).to(logits.device)
             else:
                 sequence_lengths = -1
                 logger.warning(
@@ -1272,18 +1154,14 @@ class FalconForSequenceClassification(FalconPreTrainedModel):
                     "unexpected if using padding tokens in conjunction with `inputs_embeds.`"
                 )
 
-        pooled_logits = logits[
-            torch.arange(batch_size, device=logits.device), sequence_lengths
-        ]
+        pooled_logits = logits[torch.arange(batch_size, device=logits.device), sequence_lengths]
 
         loss = None
         if labels is not None:
             if self.config.problem_type is None:
                 if self.num_labels == 1:
                     self.config.problem_type = "regression"
-                elif self.num_labels > 1 and (
-                    labels.dtype == torch.long or labels.dtype == torch.int
-                ):
+                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
                     self.config.problem_type = "single_label_classification"
                 else:
                     self.config.problem_type = "multi_label_classification"
@@ -1364,9 +1242,7 @@ class FalconForTokenClassification(FalconPreTrainedModel):
             `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
         """
 
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         transformer_outputs = self.transformer(
             input_ids,
@@ -1444,9 +1320,7 @@ class FalconForQuestionAnswering(FalconPreTrainedModel):
             Positions are clamped to the length of the sequence (`sequence_length`). Position outside of the sequence
             are not taken into account for computing the loss.
         """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         outputs = self.transformer(
             input_ids,
