@@ -28,11 +28,11 @@ Tensor lossfunction(
     std::vector<UnaryWithParam> fused_ops;
     switch(loss_kind) {
         case LossFunction::MAE:
-            fused_ops = {UnaryWithParam{.op_type=UnaryOpType::ABS}};
+            fused_ops = {UnaryWithParam{UnaryOpType::ABS}};
             result = sub(ref,prediction, fused_ops);
             break;
         case LossFunction::MSE:
-            fused_ops = {UnaryWithParam{.op_type=UnaryOpType::SQUARE}};
+            fused_ops = {UnaryWithParam{UnaryOpType::SQUARE}};
             result = sub(ref,prediction, fused_ops);
             break;
         default:
