@@ -538,7 +538,6 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
     void WaitProgramDone(Device *device, Program &program) {
         auto device_id = device->id();
-        std::cout<<"Waiting for Program on Device "<<(uint32_t) device->id()<<std::endl;
         std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
         std::unordered_set<CoreCoord> not_done_cores;
         for (const auto &[core_type, logical_cores] : logical_cores_used_in_program) {

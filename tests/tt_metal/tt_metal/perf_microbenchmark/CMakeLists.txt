@@ -4,7 +4,6 @@ set(PERF_MICROBENCH_TESTS_SRCS
     dispatch/test_bw_and_latency
     dispatch/test_dispatcher
     dispatch/test_prefetcher
-    dispatch/test_prefetcher_multichip
     ethernet/test_ethernet_read_and_send_data
     ethernet/test_workers_and_erisc_datamover_unidirectional
     ethernet/test_ethernet_bidirectional_bandwidth_no_edm
