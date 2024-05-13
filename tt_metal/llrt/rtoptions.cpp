@@ -51,6 +51,9 @@ RunTimeOptions::RunTimeOptions() {
         if (clear_l1_enabled_str[0] == '0') clear_l1 = false;
         if (clear_l1_enabled_str[0] == '1') clear_l1 = true;
     }
+
+    const char *riscv_debug_info_enabled_str = std::getenv("TT_METAL_RISCV_DEBUG_INFO");
+    set_riscv_debug_info_enabled(riscv_debug_info_enabled_str != nullptr);
 }
 
 const std::string& RunTimeOptions::get_root_dir() {
