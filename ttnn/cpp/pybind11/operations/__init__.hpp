@@ -11,6 +11,7 @@
 #include "binary.hpp"
 #include "core.hpp"
 #include "matmul.hpp"
+#include "conv2d.hpp"
 #include "transformer.hpp"
 #include "normalization.hpp"
 

@@ -1322,7 +1322,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
     DataType output_dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
-    DeviceComputeKernelConfig compute_kernel_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
     // TODO: conv params need to be cleaned up and replaced with sliding window config
@@ -1370,7 +1370,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
 
     // add config tensor to program
     tt::tt_metal::detail::AddConfigTensor(program, conv_reader_indices_tensor);
-    return multi_core_optimized_conv_sharded_v2_impl(program, a, b, Shape(input_tensor_shape), bias, conv_reader_indices_tensor, conv_params, output_channels, untilize_out, bias.has_value(), fuse_relu, parallelization_config, block_config, extra_padding_for_32B_alignment, use_shallow_conv_variant, parallel_config.shard_orientation == ShardOrientation::COL_MAJOR, output, compute_kernel_config);
+    return multi_core_optimized_conv_sharded_v2_impl(program, a, b, Shape(input_tensor_shape), bias, conv_reader_indices_tensor, conv_params, output_channels, untilize_out, bias.has_value(), fuse_relu, parallelization_config, block_config, extra_padding_for_32B_alignment, use_shallow_conv_variant, parallel_config.shard_orientation == ShardOrientation::COL_MAJOR, output, compute_kernel_config.value());
 }
 }  // namespace tt_metal
 
