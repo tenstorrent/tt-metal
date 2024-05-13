@@ -22,7 +22,7 @@ def get_expected_times(functional_whisper):
     }[functional_whisper]
 
 
-@skip_for_wormhole_b0()
+@skip_for_wormhole_b0(reason_str="Not tested on single WH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["openai/whisper-base"])

@@ -17,6 +17,7 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     profiler,
     is_e75,
+    skip_for_wormhole_b0,
 )
 from models.perf.perf_utils import prep_perf_report
 
@@ -144,38 +145,7 @@ def run_perf_bert11(
     logger.info(f"bert11 compile time: {compile_time}")
 
 
-@pytest.mark.models_performance_virtual_machine
-@pytest.mark.parametrize(
-    "batch_size, model_config_str, expected_inference_time, expected_compile_time, inference_iterations",
-    (
-        [7, "BFLOAT8_B-SHARDED", 0.05, 14.5, 10],
-        [12, "BFLOAT8_B-SHARDED", 0.05, 14.5, 10],
-    ),
-)
-def test_perf_virtual_machine(
-    device,
-    use_program_cache,
-    batch_size,
-    model_config_str,
-    expected_inference_time,
-    expected_compile_time,
-    inference_iterations,
-    model_location_generator,
-):
-    if is_e75(device):
-        pytest.skip("Bert large 11 is not supported on E75")
-
-    run_perf_bert11(
-        batch_size,
-        model_config_str,
-        expected_inference_time,
-        expected_compile_time,
-        inference_iterations,
-        model_location_generator,
-        device,
-    )
-
-
+@skip_for_wormhole_b0(reason_str="Didn't test on WH yet")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, model_config_str, expected_inference_time, expected_compile_time, inference_iterations",

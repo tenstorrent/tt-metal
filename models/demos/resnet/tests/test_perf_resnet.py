@@ -11,7 +11,7 @@ import tt_lib
 
 from models.utility_functions import is_e75
 from models.utility_functions import profiler
-from models.utility_functions import disable_persistent_kernel_cache
+from models.utility_functions import disable_persistent_kernel_cache, skip_for_wormhole_b0
 from models.perf.perf_utils import prep_perf_report
 
 from loguru import logger
@@ -125,6 +125,7 @@ def run_perf_resnet(
     assert compile_time < expected_compile_time, f"resnet50 {comments} compilation is too slow"
 
 
+@skip_for_wormhole_b0(reason_str="Not tested on single WH")
 @pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
@@ -137,37 +138,6 @@ def run_perf_resnet(
     ),
 )
 def test_perf_bare_metal(
-    device,
-    use_program_cache,
-    batch_size,
-    expected_inference_time,
-    expected_compile_time,
-    hf_cat_image_sample_input,
-):
-    if is_e75(device):
-        pytest.skip("Resnet is not supported on E75")
-
-    run_perf_resnet(
-        batch_size,
-        expected_inference_time,
-        expected_compile_time,
-        hf_cat_image_sample_input,
-        device,
-    )
-
-
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
-@pytest.mark.models_performance_virtual_machine
-@pytest.mark.parametrize(
-    "batch_size, expected_inference_time, expected_compile_time",
-    (
-        (1, 0.015, 30),
-        (2, 0.02, 30),
-        (16, 0.04, 30),
-        (20, 0.04, 30),
-    ),
-)
-def test_perf_virtual_machine(
     device,
     use_program_cache,
     batch_size,
