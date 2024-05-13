@@ -178,7 +178,6 @@ class Cluster {
 
     void detect_arch_and_target();
     void generate_cluster_descriptor();
-    void get_cluster_type(YAML::Node &yaml);
     void initialize_device_drivers();
     void assert_risc_reset();
 

@@ -122,19 +122,6 @@ std::filesystem::path get_cluster_desc_yaml() {
     return fs::absolute(cluster_desc_path);
 }
 
-void Cluster::get_cluster_type(YAML::Node &yaml) {
-    is_tg_cluster_ = false;
-    if(yaml["boardtype"]) {
-        for (const auto& chip_board_type : yaml["boardtype"].as<std::map<int, std::string>>()) {
-            chip_id_t chip = chip_board_type.first;
-            auto board_type = chip_board_type.second;
-            if (board_type == "GALAXY") {
-                is_tg_cluster_ = true;
-            }
-        }
-    }
-}
-
 bool Cluster::is_galaxy_cluster() const {
     return this->is_tg_cluster_;
 }
@@ -154,7 +141,12 @@ void Cluster::generate_cluster_descriptor() {
     } else {
         this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(this->cluster_desc_path_);
         YAML::Node yaml = YAML::LoadFile(this->cluster_desc_path_);
-        get_cluster_type(yaml);
+        for (const auto &chip_id : this->cluster_desc_->get_all_chips()) {
+            if (this->cluster_desc_->get_board_type(chip_id) == BoardType::GALAXY) {
+                this->is_tg_cluster_ = true;
+                break;
+            }
+        }
     }
 
     // Use cluster descriptor to map MMIO device id to all devices on the same card (including the MMIO device)
@@ -173,6 +165,7 @@ void Cluster::generate_cluster_descriptor() {
 
     uint32_t total_num_hugepages = get_num_hugepages();
     if (this->is_tg_cluster_) {
+        // TODO: don't think this check is correct, we want to have total num hugepages == num chips even for Galaxy
         TT_FATAL(total_num_hugepages >= this->cluster_desc_->get_all_chips().size()/4,
             "Machine setup error: Insufficient number of hugepages available, expected >= {} for {} devices but have {}. Increase number of hugepages!", this->cluster_desc_->get_all_chips().size()/4, this->cluster_desc_->get_all_chips().size(), total_num_hugepages);
     } else {

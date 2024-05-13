@@ -157,6 +157,17 @@ std::map<chip_id_t, Device *> CreateDevices(
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
     for (const auto &device_id : device_ids) {
         const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+        if (device_id == mmio_device_id) {
+            std::cout << " MMIO Device " << device_id
+                      << " Tunnel Count: " << tt::Cluster::instance().get_mmio_device_tunnel_count(mmio_device_id)
+                      << std::endl;
+            std::cout << " MMIO Device " << device_id
+                      << " Tunnel Depth: " << tt::Cluster::instance().get_mmio_device_max_tunnel_depth(mmio_device_id)
+                      << std::endl;
+        } else {
+            std::cout << " Device " << device_id
+                      << " Tunnel Depth: " << tt::Cluster::instance().get_device_tunnel_depth(device_id) << std::endl;
+        }
         if (active_devices.find(mmio_device_id) == active_devices.end()) {
             for (const auto &mmio_controlled_device_id :
                  tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
