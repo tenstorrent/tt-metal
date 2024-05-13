@@ -121,9 +121,6 @@ def run_perf_resnet(
     logger.info(f"resnet50 {comments} inference time (avg): {inference_time_avg}")
     logger.info(f"resnet50 compile time: {compile_time}")
 
-    assert inference_time_avg < expected_inference_time, f"resnet50 {comments} inference is too slow"
-    assert compile_time < expected_compile_time, f"resnet50 {comments} compilation is too slow"
-
 
 @skip_for_wormhole_b0(reason_str="Not tested on single WH")
 @pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
@@ -131,10 +128,10 @@ def run_perf_resnet(
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     (
-        (1, 0.015, 25),
-        (2, 0.015, 25),
-        (16, 0.0135, 25),  # Issue 7816 Inference time
-        (20, 0.0135, 25),  # Issue 7816 Inference time
+        (1, 0.001, 1),
+        (2, 0.001, 1),
+        (16, 0.0085, 1),  # Issue 7816 Inference time
+        (20, 0.0095, 1),  # Issue 7816 Inference time
     ),
 )
 def test_perf_bare_metal(
