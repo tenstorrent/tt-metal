@@ -165,7 +165,7 @@ struct Binary {
             ttnn::Shape(std::array<std::uint32_t, 2>{1, 1}, std::array<std::uint32_t, 2>{TILE_HEIGHT, TILE_WIDTH}),
             DataType::BFLOAT16,
             Layout::TILE);
-        Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.get_workers());
+        Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.device());
         // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
         return Binary::execute(
             input_tensor_a, scalar_tensor_device, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, activations);
