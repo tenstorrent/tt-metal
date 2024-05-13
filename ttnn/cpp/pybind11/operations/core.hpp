@@ -159,29 +159,24 @@ Args:
                const ttnn::Layout layout,
                const std::optional<ttnn::DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               Device* device) -> ttnn::Tensor {
-                return self(tensor, layout, dtype, memory_config, device);
-               },
-               py::arg("tensor"),
-               py::arg("layout"),
-               py::arg("dtype") = std::nullopt,
-               py::arg("memory_config") = std::nullopt,
-               py::arg("device") = std::nullopt},
+               Device* device) -> ttnn::Tensor { return self(tensor, layout, dtype, memory_config, device); },
+            py::arg("tensor"),
+            py::arg("layout"),
+            py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("device") = nullptr},
         ttnn::pybind_overload_t{
             [](const std::decay_t<decltype(ttnn::to_layout)> self,
                const ttnn::Tensor& tensor,
                const ttnn::Layout layout,
                const std::optional<ttnn::DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               DeviceMesh* device) -> ttnn::Tensor {
-                return self(tensor, layout, dtype, memory_config, device);
-               },
-               py::arg("tensor"),
-               py::arg("layout"),
-               py::arg("dtype") = std::nullopt,
-               py::arg("memory_config") = std::nullopt,
-               py::arg("device") = std::nullopt});
-
+               DeviceMesh* device) -> ttnn::Tensor { return self(tensor, layout, dtype, memory_config, device); },
+            py::arg("tensor"),
+            py::arg("layout"),
+            py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("device") = nullptr});
 }
 
 }  // namespace core

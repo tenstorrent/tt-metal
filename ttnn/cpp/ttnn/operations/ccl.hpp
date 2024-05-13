@@ -29,14 +29,6 @@ struct AllGather {
         return std::make_tuple(input_tensor);
     }
 
-    template <typename... Args>
-    static auto map_launch_op_args_to_execute(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        Args&&... args) {
-        return std::make_tuple(input_tensors.at(0), std::forward<Args>(args)...);
-    }
-
     static ttnn::Tensor execute_async(
         const ttnn::Tensor& input_tensor,
         const uint32_t dim,

@@ -42,21 +42,19 @@ struct ToLayout {
         return std::make_tuple(tensor_arg);
     }
 
-
-    template <typename... Args>
-    static auto map_launch_op_args_to_execute(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        Args&&... args) {
-            return std::make_tuple(input_tensors.at(0), std::forward<Args>(args)...);
-    }
+    static Tensor execute(
+        const ttnn::Tensor& tensor_arg,
+        const ttnn::Layout layout,
+        const std::optional<ttnn::DataType>& dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        Device* device = nullptr);
 
     static Tensor execute(
         const ttnn::Tensor& tensor_arg,
         const ttnn::Layout layout,
-        const std::optional<ttnn::DataType>& dtype,
-        const std::optional<ttnn::MemoryConfig>& memory_config,
-        std::variant<DeviceMesh*, Device*> device);
+        const std::optional<ttnn::DataType>& dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        DeviceMesh* device = nullptr);
 };
 
 }  // namespace core
