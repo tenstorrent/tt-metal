@@ -581,10 +581,12 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
         // run conv as matmul
+        // TODO add support for running downsample here for stride 2
         auto matmul_output = ttnn::operations::matmul::linear(input_tensor_post_tm, weight_tensor_on_device, bias_tensor_on_device, input_tensor_post_tm.memory_config(), conv_config.dtype, conv_config.activation, compute_kernel_config);
         if (conv_config.deallocate_activation) {
             input_tensor_post_tm.deallocate();
         }
+        return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
 }
 
