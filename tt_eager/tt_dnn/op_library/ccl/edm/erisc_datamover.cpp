@@ -100,7 +100,7 @@ struct sender_receiver_index_t {
         } else {
             index.combined += COMBINED_INCR;
             index.sender = index.sender >= num_senders ? 0 : index.sender;
-            index.receiver = index.receiver >= num_senders ? 0 : index.receiver;
+            index.receiver = index.receiver >= num_receivers ? 0 : index.receiver;
             real_index.combined = start.combined + index.combined;
         }
     }
@@ -195,6 +195,8 @@ void kernel_main() {
     bool act_as_sender_in_handshake =
         (sender_channels_start < receiver_channels_start || receiver_num_channels == 0) && sender_num_channels > 0;
     erisc::datamover::eth_setup_handshake(handshake_addr, act_as_sender_in_handshake);
+    uint32_t eth_transaction_ack_word_addr = handshake_addr + 16;
+    uint32_t eth_transaction_complete_addr = handshake_addr + 32;
 
     constexpr uint32_t SWITCH_INTERVAL = 4000000;
     uint32_t did_nothing_count = 0;
@@ -250,7 +252,7 @@ void kernel_main() {
 
             switch (current_receiver.get_state()) {
                 case erisc::datamover::ChannelBuffer<edm_buffer_sharing_mode>::STATE::WAITING_FOR_ETH:
-                did_something_receiver = erisc::datamover::receiver_eth_accept_payload_sequence(current_receiver);
+                did_something_receiver = erisc::datamover::receiver_eth_accept_payload_sequence(current_receiver, eth_transaction_ack_word_addr);
                 break;
 
                 case erisc::datamover::ChannelBuffer<edm_buffer_sharing_mode>::STATE::SIGNALING_WORKER:
@@ -260,7 +262,7 @@ void kernel_main() {
 
                 case erisc::datamover::ChannelBuffer<edm_buffer_sharing_mode>::STATE::WAITING_FOR_WORKER:
                 did_something_receiver = erisc::datamover::receiver_noc_read_worker_completion_check_sequence(
-                                    current_receiver, num_receivers_complete);
+                                    current_receiver, num_receivers_complete, eth_transaction_complete_addr);
                 receivers_in_progress = receivers_in_progress && num_receivers_complete != receiver_num_channels;
                 break;
 
@@ -283,4 +285,27 @@ void kernel_main() {
         }
     }
 
+    for (uint32_t s = 0; s < num_senders + num_receivers; s++ ) {
+        auto const& channel = buffer_channels[s];
+        // We need to explicitly check for channel send done because we may
+        // advance sender channel state as soon as we receive an ack. Since we
+        // may be the last active channel, and advance to done state just from ack
+        // from the receiver ("I got a payload"), then we need to wait for done
+        // at the very end here. Otherise if we invoke another erisc op back-to-back,
+        // we may mess up transaction state because it's possible for receiver of this
+        // op to send the completion done after that one has already started.
+        uint32_t wait_count = 0;
+        uint32_t wait_max = 50000;
+        while(!channel.eth_is_receiver_channel_send_done()) {
+            wait_count++;
+            if (wait_count > wait_max) {
+
+                DEBUG_STATUS("STK");
+                run_routing();
+                wait_count = 0;
+            }
+        }
+    }
+
+    DEBUG_STATUS("DONE");
 }

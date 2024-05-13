@@ -267,7 +267,24 @@ class QueueIndexPointer {
 };
 
 FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, bool is_sender) {
+
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[4] = 1;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[5] = 1;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[6] = 0x1c0ffee1;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[7] = 0x1c0ffee2;
+
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[8] = 0;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[9] = 0;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[10] = 0x4c0ffee1;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[11] = 0x5c0ffee2;
+    erisc_info->channels[0].receiver_ack = 0;
+    for (uint32_t i = 1; i < eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS; i++) {
+        erisc_info->channels[i].bytes_sent = 0;
+        erisc_info->channels[i].receiver_ack = 0;
+    }
+    *(volatile tt_l1_ptr uint32_t*)handshake_register_address = 0;
     if (is_sender) {
+        eth_wait_receiver_done();
         eth_send_bytes(handshake_register_address, handshake_register_address, 16);
         eth_wait_for_receiver_done();
     } else {
@@ -401,12 +418,12 @@ FORCE_INLINE bool receiver_eth_notify_workers_payload_available_sequence(Channel
  *
  */
 template <EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE>
-FORCE_INLINE bool receiver_eth_accept_payload_sequence(ChannelBuffer<BUFFER_SHARING_MODE> &buffer_channel) {
+FORCE_INLINE bool receiver_eth_accept_payload_sequence(ChannelBuffer<BUFFER_SHARING_MODE> &buffer_channel, uint32_t eth_transaction_ack_word_addr) {
     bool did_something = false;
 
     if (buffer_channel.eth_bytes_are_available_on_channel()) {
         if (!eth_txq_is_busy()) {
-            eth_receiver_channel_ack(buffer_channel.get_eth_transaction_channel());
+            eth_receiver_channel_ack(buffer_channel.get_eth_transaction_channel(), eth_transaction_ack_word_addr);
             buffer_channel.goto_state(ChannelBuffer<BUFFER_SHARING_MODE>::SIGNALING_WORKER);
             did_something = true;
 
@@ -428,7 +445,7 @@ FORCE_INLINE bool receiver_eth_accept_payload_sequence(ChannelBuffer<BUFFER_SHAR
  */
 template <EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE>
 FORCE_INLINE bool receiver_noc_read_worker_completion_check_sequence(
-    ChannelBuffer<BUFFER_SHARING_MODE> &buffer_channel, uint32_t &num_receivers_complete) {
+    ChannelBuffer<BUFFER_SHARING_MODE> &buffer_channel, uint32_t &num_receivers_complete, uint32_t eth_transaction_complete_addr) {
     bool did_something = false;
 
     bool workers_are_finished_reading = buffer_channel.is_local_semaphore_full();
@@ -588,14 +605,15 @@ bool receiver_eth_accept_payload_sequence(
     QueueIndexPointer<uint8_t> noc_writer_buffer_wrptr,
     QueueIndexPointer<uint8_t> noc_writer_buffer_ackptr,
     QueueIndexPointer<uint8_t> &eth_receiver_ptr,
-    QueueIndexPointer<uint8_t> &eth_receiver_ackptr) {
+    QueueIndexPointer<uint8_t> &eth_receiver_ackptr,
+    uint32_t eth_channel_sync_ack_addr) {
     bool did_something = false;
     bool receive_pointers_full = QueueIndexPointer<uint8_t>::full(eth_receiver_ptr, eth_receiver_ackptr);
 
     if (!receive_pointers_full) {
         if (eth_bytes_are_available_on_channel(eth_receiver_ptr.index())) {
             // DPRINT << "rx: accepting payload, sending receive ack on channel " << (uint32_t)eth_receiver_ptr << "\n";
-            eth_receiver_channel_ack(eth_receiver_ptr.index());
+            eth_receiver_channel_ack(eth_receiver_ptr.index(), eth_channel_sync_ack_addr);
             eth_receiver_ptr.increment();
             did_something = true;
         }
