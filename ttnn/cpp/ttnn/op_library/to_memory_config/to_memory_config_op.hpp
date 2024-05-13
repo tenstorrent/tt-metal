@@ -50,14 +50,6 @@ struct ToMemoryConfig {
         return {{Tensor(operation::get_workers_for_op_output({tensor_arg}))}};
     }
 
-    template <typename... Args>
-    static auto map_launch_op_args_to_execute(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        Args&&... args) {
-        return std::make_tuple(input_tensors.at(0), std::forward<Args>(args)...);
-    }
-
     // TODO: Move to cpp once we merge with tt_eager
     static Tensor execute(
         const ttnn::Tensor tensor,

@@ -316,6 +316,14 @@ std::ostream& operator<<(std::ostream& os, const std::variant<Ts...>& variant) {
     return os;
 }
 
+template <typename... Ts>
+std::ostream& operator<<(std::ostream& os, const std::tuple<Ts...>& tuple) {
+    [&os, &tuple]<std::size_t... Ns>(std::index_sequence<Ns...>) {
+        ([&os, &tuple]() { os << (Ns == 0 ? "" : ", ") << std::get<Ns>(tuple); }(), ...);
+    }(std::make_index_sequence<sizeof...(Ts)>{});
+    return os;
+}
+
 template <typename T, std::size_t N>
 std::ostream& operator<<(std::ostream& os, const std::array<T, N>& array) {
     os << "{";
@@ -432,6 +440,17 @@ struct fmt::formatter<std::variant<Ts...>> {
     }
 };
 
+template <typename... Ts>
+struct fmt::formatter<std::tuple<Ts...>> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const std::tuple<Ts...>& tuple, format_context& ctx) const -> format_context::iterator {
+        using tt::stl::reflection::operator<<;
+        std::stringstream ss;
+        ss << tuple;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
 
 template <typename T, std::size_t N>
 struct fmt::formatter<std::array<T, N>> {
