@@ -69,6 +69,11 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
         break;
     }
     common_flags += "-std=c++17 -flto -ffast-math ";
+
+    if (tt::llrt::OptionsG.get_riscv_debug_info_enabled()) {
+        common_flags += "-g ";
+    }
+
     this->cflags_ = common_flags;
     this->cflags_ +=
         "-fno-use-cxa-atexit -fno-exceptions "

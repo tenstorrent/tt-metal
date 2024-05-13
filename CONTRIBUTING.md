@@ -319,7 +319,7 @@ running such tests.
   - Files with the kernel configurations will be automatically generated. For example: `built/0/kernels/kernel_args.csv`
 - To examine the compile time arguments of a kernel:
   - Within your kernel, assign the arguments to **constexpr** like this: `constexpr uint32_t in1_mcast_sender_noc_y = get_compile_time_arg_val(0);`
-  - Run `dump-constexprs.py` script on the generated ELF file. E.g. `python tt_metal/tools/dump-consts.py built/0/kernels/command_queue_producer/1129845549852061924/brisc/brisc.elf --function kernel_main`
+  - Run `dump-constexprs.py` script on the generated ELF file. E.g. `python tt_metal/tools/dump-consts.py built/0/kernels/command_queue_producer/1129845549852061924/brisc/brisc.elf --function kernel_main`. Note: debug information (DWARF) must be present in ELF files (compiler option `-g`). To enable, add TT_METAL_RISCV_DEBUG_INFO=1 environment variable.
 
 ### Tips for debugging hangs with watcher
 

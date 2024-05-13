@@ -49,6 +49,8 @@ class RunTimeOptions {
 
     bool clear_l1 = false;
 
+    bool riscv_debug_info_enabled = false;
+
    public:
     RunTimeOptions();
 
@@ -141,6 +143,10 @@ class RunTimeOptions {
 
     inline bool get_clear_l1() { return clear_l1; }
     inline void set_clear_l1(bool clear) { clear_l1 = clear; }
+
+    // Whether to compile with -g to include DWARF debug info in the binary.
+    inline bool get_riscv_debug_info_enabled() { return riscv_debug_info_enabled; }
+    inline void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_enabled = enable; }
 
 private:
     // Helper functions to parse DPrint-specific environment vaiables.
