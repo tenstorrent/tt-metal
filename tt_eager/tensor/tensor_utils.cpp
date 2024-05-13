@@ -15,7 +15,19 @@ namespace tt_metal {
     template <typename T>
     Tensor to_weight_special_padding_tile_layout(const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype) {
         auto w_shape = conv_weight_tensor.get_legacy_shape();
-        auto input_buffer = owned_buffer::get_as<T>(conv_weight_tensor);
+        // auto input_buffer = std::visit(
+        // [](auto&& storage) {
+        //     using StorageType = std::decay_t<decltype(storage)>;
+        // 	if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+        //     	return owned_buffer::get_as<T>(storage.buffer);
+        // 	} else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+        //      	return borrowed_buffer::get_as<T>(storage.buffer);
+		// 	} else {
+        //         TT_ASSERT(false);
+        //     }
+        // },
+        // conv_weight_tensor.get_storage());
+        auto input_buffer = borrowed_buffer::get_as<T>(conv_weight_tensor);
         uint32_t in1_block_h_datums = in1_block_h * constants::TILE_HEIGHT;
         uint32_t in1_block_w_datums = in1_block_w * constants::TILE_WIDTH;
         auto weight_matrix_cols = w_shape[0];
