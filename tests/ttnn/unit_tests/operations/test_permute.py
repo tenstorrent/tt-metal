@@ -49,11 +49,11 @@ def test_permute_on_4D_tensor_with_smaller_tuple_size(device, h, w):
     torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor)
     input_tensor = ttnn.to_device(input_tensor, device)
-    with pytest.raises(RuntimeError) as exception:
+    with pytest.raises(
+        RuntimeError,
+        match="The number of dimensions in the tensor input does not match the length of the desired ordering",
+    ) as exception:
         ttnn.permute(input_tensor, (0, 1, 2))
-    assert "The number of dimensions in the tensor input does not match the length of the desired ordering" in str(
-        exception.value
-    )
 
 
 @pytest.mark.parametrize(

@@ -168,67 +168,29 @@ def _permute_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
     )
 
 
-@ttnn.register_operation(
+doc = r"""
+permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor
+
+Permutes :attr:`input_tensor` using :attr:`order`.
+
+Args:
+    * :attr:`input_tensor`: the input tensor
+    * :attr:`order`: the desired ordering of dimensions.
+
+Example::
+
+    >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
+    >>> output = ttnn.permute(tensor, (0, 1, 3, 2))
+    >>> print(output.shape)
+    [1, 1, 32, 64]
+
+"""
+permute = ttnn.register_operation(
     name="ttnn.permute",
     validate_input_tensors=_permute_validate_input_tensors,
     golden_function=_golden_function,
-    allow_to_fallback_to_golden_function_on_failure=True,
-)
-def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
-    r"""
-    permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor
-
-    Permutes :attr:`input_tensor` using :attr:`order`.
-
-    Args:
-        * :attr:`input_tensor`: the input tensor
-        * :attr:`order`: the desired ordering of dimensions.
-
-    Example::
-
-        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
-        >>> output = ttnn.permute(tensor, (0, 1, 3, 2))
-        >>> print(output.shape)
-        [1, 1, 32, 64]
-
-    """
-    if not isinstance(order, tuple):
-        raise RuntimeError("order must be a tuple")
-
-    if len(input_tensor.shape) != len(order):
-        raise RuntimeError(
-            "The number of dimensions in the tensor input does not match the length of the desired ordering"
-        )
-
-    on_device = ttnn.is_tensor_storage_on_device(input_tensor)
-    layout = input_tensor.layout
-    rank = len(input_tensor.shape)
-
-    if len(input_tensor.shape) < 4:
-        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        adjusted_order_for_4D_tensor = order
-        while len(adjusted_order_for_4D_tensor) < 4:
-            adjusted_order_for_4D_tensor = (0,) + tuple(x + 1 for x in adjusted_order_for_4D_tensor)
-        order = adjusted_order_for_4D_tensor
-
-    if ttnn.has_tile_padding(input_tensor):
-        input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-
-    if ttnn.is_tensor_storage_on_device(input_tensor) and len(input_tensor.shape) == 4:
-        output_tensor = ttl.tensor.permute(input_tensor, order)
-        output_tensor = ttnn.to_layout(output_tensor, layout)
-        rank_should_be_updated = len(output_tensor.shape) > rank
-        while rank_should_be_updated:
-            prior_rank = len(output_tensor.shape)
-            output_tensor = ttnn.squeeze(output_tensor, dim=0)
-            rank_should_be_updated = prior_rank != len(output_tensor.shape) and len(output_tensor.shape) > rank
-
-        if on_device and not ttnn.is_tensor_storage_on_device(output_tensor):
-            device = input_tensor.device()
-            output_tensor = ttnn.to_device(output_tensor, device)
-        return output_tensor
-    else:
-        raise NotImplementedError
+    doc=doc,
+)(ttnn._ttnn.operations.data_movement.permute)
 
 
 def _golden_function(tensors, dim=0, **_):
