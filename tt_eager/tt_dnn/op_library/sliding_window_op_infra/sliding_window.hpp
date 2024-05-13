@@ -130,7 +130,21 @@ struct std::hash<tt::tt_metal::ParallelConfig> {
 
 template <> struct fmt::formatter<tt::tt_metal::SlidingWindowConfig>: formatter<string_view> {
     auto format(const tt::tt_metal::SlidingWindowConfig& t, fmt::format_context& ctx) {
-        std::string str = fmt::format("SlidingWindowConfig");   //(batch_size_={}, input_hw_={}, window_hw_={}, stride_hw_={}, pad_hw_={}, dilation_hw_={}, num_cores_nhw_={}, core_range_set_={})", t.batch_size_, t.input_hw_, t.window_hw_, t.stride_hw_, t.pad_hw_, t.dilation_hw_, t.num_cores_nhw_, t.core_range_set_.str());
+        // std::string str = fmt::format("SlidingWindowConfig(batch_size_={}, input_hw_={}, window_hw_={}, stride_hw_={}, pad_hw_={}, dilation_hw_={}, num_cores_nhw_={}, core_range_set_=)",
+        std::string str = fmt::format("SlidingWindowConfig(batch_size_={}, input_hw_=({},{}), window_hw_=({},{}), stride_hw_=({},{}), pad_hw_=({},{}), dilation_hw_=({},{}), num_cores_nhw_={}, core_range_set_={})",
+            t.batch_size_,
+            t.input_hw_.first,
+            t.input_hw_.second,
+            t.window_hw_.first,
+            t.window_hw_.second,
+            t.stride_hw_.first,
+            t.stride_hw_.second,
+            t.pad_hw_.first,
+            t.pad_hw_.second,
+            t.dilation_hw_.first,
+            t.dilation_hw_.second,
+            t.num_cores_nhw_,
+            t.core_range_set_.str());
         return fmt::format_to(ctx.out(), "{}", str);
     }
 };
