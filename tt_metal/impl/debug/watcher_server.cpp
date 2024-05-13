@@ -980,6 +980,9 @@ void watcher_attach(Device *device) {
     if (!watcher::enabled && tt::llrt::OptionsG.get_watcher_enabled()) {
 
         watcher::create_log_file();
+        if (!watcher::kernel_file) {
+            watcher::create_kernel_file();
+        }
         watcher::watcher_killed_due_to_error = false;
         watcher::watcher_exception_message = "";
 
