@@ -114,7 +114,6 @@ struct UntilizeWithHaloV2 {
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 
     static constexpr auto attribute_names =
         std::make_tuple("pad_val_", "ncores_nhw_", "max_out_nsticks_per_core_", "out_mem_config_", "remote_read_", "transpose_mcast_");

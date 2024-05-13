@@ -13,6 +13,7 @@
 #include "core.hpp"
 #include "matmul.hpp"
 #include "data_movement.hpp"
+#include "conv2d.hpp"
 #include "transformer.hpp"
 #include "normalization.hpp"
 #include "kv_cache.hpp"

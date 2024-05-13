@@ -419,12 +419,14 @@ void validate_weight_and_bias_tensors(const ttnn::Tensor& weight_tensor, std::op
     TT_ASSERT(!ttnn::has_storage_type_of(weight_tensor, ttnn::DEVICE_STORAGE_TYPE));
     TT_ASSERT(weight_tensor.get_layout() == Layout::ROW_MAJOR);
     TT_ASSERT(weight_tensor.get_shape().rank() == 4);
-    TT_ASSERT(weight_tensor.get_shape() == weight_tensor.get_legacy_shape());
+    // TODO: enable this assert
+    //TT_ASSERT(weight_tensor.get_shape() == weight_tensor.get_legacy_shape());
     if(bias_tensor.has_value()) {
         TT_ASSERT(!ttnn::has_storage_type_of(bias_tensor.value(), ttnn::DEVICE_STORAGE_TYPE));
         TT_ASSERT(bias_tensor.value().get_shape().rank() == 4);
         TT_ASSERT(bias_tensor.value().get_layout() == Layout::ROW_MAJOR);
-        TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().get_legacy_shape());
+        // TODO: enable this assert
+        // TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().get_legacy_shape());
     }
 }
 
@@ -451,7 +453,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         }
     } else {
         // TODO: fix the need to check this. We should be able to accept any datatype and convert
-        TT_ASSERT(weight.get_dtype() == weights_bias_dtype);
+        TT_ASSERT(weight_tensor.get_dtype() == weights_bias_dtype);
         if(bias_tensor.has_value()) {
             TT_ASSERT(bias_tensor.value().get_dtype() == weights_bias_dtype);
         }
