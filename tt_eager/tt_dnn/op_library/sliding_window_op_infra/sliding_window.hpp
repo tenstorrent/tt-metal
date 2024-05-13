@@ -412,17 +412,12 @@ namespace tt::tt_metal {
             return flattened_vector;
         }
 
-
-        Tensor construct_on_device_config_tensor(const std::vector<std::vector<uint16_t>>& config, const SlidingWindowConfig& sw_config, const ParallelConfig& p_config, Device* device) {
-            auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t) config[0].size()});
-            ShardSpec shard_spec(p_config.grid, shard_shape, p_config.shard_orientation, false);
-            MemoryConfig memory_config{p_config.shard_scheme, BufferType::L1_SMALL, shard_spec};
-
+        Tensor construct_on_host_config_tensor(const std::vector<std::vector<uint16_t>>& config, const SlidingWindowConfig& sw_config, const ParallelConfig& p_config) {
             std::vector<uint16_t> config_vector = flatten(config);
             Shape config_shape = {1, (uint32_t) config_vector.size()};
             if (p_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
                 auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
-                return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR).to(device, memory_config);
+                return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
             } else if (p_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
                 TT_ASSERT(p_config.grid.ranges().size() == 1, "BLOCK_SHARDED should have just a single core range");
                 // NOTE: it is assumed that the range start is always (0, 0)
@@ -443,11 +438,19 @@ namespace tt::tt_metal {
                     repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
                 }
                 auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
-                return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR).to(device, memory_config);
+                return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
             } else {
                 TT_ASSERT(false, "Unsupported shard scheme");
                 return Tensor();
             }
+        }
+
+        Tensor move_config_tensor_to_device(const Tensor& config_tensor, const ParallelConfig& p_config, Device* device) {
+            auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t) config_tensor.get_shape()[-1]});
+            ShardSpec shard_spec(p_config.grid, shard_shape, p_config.shard_orientation, false);
+            MemoryConfig memory_config{p_config.shard_scheme, BufferType::L1_SMALL, shard_spec};
+
+            return config_tensor.to(device, memory_config);
         }
 
     } // namespace sliding_window
