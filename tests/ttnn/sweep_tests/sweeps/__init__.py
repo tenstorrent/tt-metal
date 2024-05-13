@@ -139,7 +139,9 @@ def run_sweep(file_name, *, device):
     connection = sqlite3.connect(DATABASE_FILE_NAME)
     cursor = connection.cursor()
 
-    table_hash = zlib.adler32(pickle.dumps(f"{sweep_name}_{current_datetime}"))
+    # TODO: Add current_datetime back if we want to save history
+    # table_hash = zlib.adler32(pickle.dumps(f"{sweep_name}_{current_datetime}"))
+    table_hash = zlib.adler32(pickle.dumps(f"{sweep_name}"))
     table_name = f"table_{table_hash}"
 
     def column_names_to_string(column_names):
