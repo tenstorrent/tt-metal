@@ -28,29 +28,7 @@ def get_bias_tensors(bias_shape, require_bias_grad, device):
     return tt_bias, bias, tt_bias_grad
 
 
-@pytest.mark.parametrize(
-    "shapes",
-    (
-        # input, weight, bias(1d or scalar), output
-        ([31, 31], [30, 31], [1, 30], [31, 30]),
-        ([31, 31], [30, 31], [1, 1], [31, 30]),
-        ([4, 4, 2, 31], [30, 31], [1, 30], [4, 4, 2, 30]),
-        ([4, 4, 2, 31], [30, 31], [1, 1], [4, 4, 2, 30]),
-        ([2, 2047], [1023, 2047], [1, 1023], [2, 1023]),
-        ([2, 2047], [1023, 2047], [1, 1], [2, 1023]),
-        ([32, 64], [1024, 64], [1, 1024], [32, 1024]),
-        ([32, 64], [1024, 64], [1, 1], [32, 1024]),
-        ([3, 32, 1023], [2047, 1023], [1, 2047], [3, 32, 2047]),
-        ([3, 32, 1023], [2047, 1023], [1, 1], [3, 32, 2047]),
-        ([2, 4, 4, 1024], [2047, 1024], [1, 2047], [2, 4, 4, 2047]),
-        ([2, 4, 4, 1024], [2047, 1024], [1, 1], [2, 4, 4, 2047]),
-        ([2, 1, 2, 3, 2, 2, 96, 95], [511, 95], [1, 1], [2, 1, 2, 3, 2, 2, 96, 511]),
-        ([2, 1, 2, 3, 2, 2, 96, 95], [511, 95], [1, 511], [2, 1, 2, 3, 2, 2, 96, 511]),
-    ),
-)
-@pytest.mark.parametrize("has_bias", [False, True])
-@pytest.mark.parametrize("has_output", [False, True])
-def test_moreh_linear(shapes, has_bias, has_output, device):
+def moreh_linear(shapes, has_bias, has_output, device):
     torch.manual_seed(3072)
     input_shape, weight_shape, bias_shape, output_shape = shapes
     tt_input, tt_weight, _, _, _, _, torch_input, torch_weight, _ = get_tensors(
@@ -83,7 +61,50 @@ def test_moreh_linear(shapes, has_bias, has_output, device):
     passing, output_pcc = comp_allclose_and_pcc(torch_output, ttcpu_output, pcc=0.999, rtol=rtol, atol=atol)
     logger.debug(f"Passing = {passing}")
     logger.debug(f"Output PCC = {output_pcc}")
+    return passing
 
+
+@pytest.mark.parametrize(
+    "shapes",
+    (
+        # input, weight, bias(1d or scalar), output
+        ([31, 31], [30, 31], [1, 30], [31, 30]),
+        ([31, 31], [30, 31], [1, 1], [31, 30]),
+        ([4, 4, 2, 31], [30, 31], [1, 30], [4, 4, 2, 30]),
+        ([4, 4, 2, 31], [30, 31], [1, 1], [4, 4, 2, 30]),
+        ([2, 2047], [1023, 2047], [1, 1023], [2, 1023]),
+        ([2, 2047], [1023, 2047], [1, 1], [2, 1023]),
+        ([32, 64], [1024, 64], [1, 1024], [32, 1024]),
+        ([32, 64], [1024, 64], [1, 1], [32, 1024]),
+        ([3, 32, 1023], [2047, 1023], [1, 2047], [3, 32, 2047]),
+        ([3, 32, 1023], [2047, 1023], [1, 1], [3, 32, 2047]),
+        ([2, 4, 4, 1024], [2047, 1024], [1, 2047], [2, 4, 4, 2047]),
+        ([2, 4, 4, 1024], [2047, 1024], [1, 1], [2, 4, 4, 2047]),
+        ([2, 1, 2, 3, 2, 2, 96, 95], [511, 95], [1, 1], [2, 1, 2, 3, 2, 2, 96, 511]),
+        ([2, 1, 2, 3, 2, 2, 96, 95], [511, 95], [1, 511], [2, 1, 2, 3, 2, 2, 96, 511]),
+    ),
+)
+@pytest.mark.parametrize("has_bias", [False, True])
+def test_moreh_linear(shapes, has_bias, device):
+    torch.manual_seed(3072)
+    passing = moreh_linear(shapes, has_bias, True, device)
+    assert passing
+
+
+@pytest.mark.parametrize(
+    "shapes",
+    (
+        # input, weight, bias(1d or scalar), output
+        ([31, 31], [30, 31], [1, 30], [31, 30]),
+        ([31, 31], [30, 31], [1, 1], [31, 30]),
+        ([2, 1, 2, 3, 2, 2, 96, 95], [511, 95], [1, 1], [2, 1, 2, 3, 2, 2, 96, 511]),
+        ([2, 1, 2, 3, 2, 2, 96, 95], [511, 95], [1, 511], [2, 1, 2, 3, 2, 2, 96, 511]),
+    ),
+)
+@pytest.mark.parametrize("has_bias", [False, True])
+def test_moreh_linear_wo_output(shapes, has_bias, device):
+    torch.manual_seed(3072)
+    passing = moreh_linear(shapes, has_bias, False, device)
     assert passing
 
 
