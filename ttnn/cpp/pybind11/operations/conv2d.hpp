@@ -55,8 +55,8 @@ void py_module(py::module& module) {
         py::arg("bias_tensor") = std::nullopt,
         py::arg("conv_config") = std::nullopt);
 
-    py::class_<ConvConfig>(module, "ConvConfig")
-        .def(
+    auto py_conv_config = py::class_<ConvConfig>(module, "ConvConfig");
+    py_conv_config.def(
             py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, bool, bool, bool, CoreRangeSet, bool, Layout>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::HiFi4,
@@ -77,6 +77,7 @@ void py_module(py::module& module) {
             py::arg("transpose_shards") = true,
             py::arg("output_layout") = Layout::TILE
         );
+        py_conv_config.def_readwrite("core_grid", &ConvConfig::core_grid);
 }
 
 }  // namespace conv2d
