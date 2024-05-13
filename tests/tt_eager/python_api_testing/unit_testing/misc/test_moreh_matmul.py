@@ -244,62 +244,28 @@ def test_moreh_matmul_backward(params, requires_grad, device):
         assert tt_other_grad is None
 
 
-@pytest.mark.parametrize(
-    "params",
-    (
-        # input, other, output shape, transpose input, other
-        ([3, 1, 2, 1, 4, 1, 319, 95], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], False, False),
-        ([2, 319, 95], [2, 1, 3, 4, 1, 95, 470], [2, 1, 3, 4, 2, 319, 470], False, False),
-        ([3, 1, 2, 1, 4, 1, 95, 319], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], True, False),
-        ([2, 319, 95], [2, 1, 3, 4, 1, 470, 95], [2, 1, 3, 4, 2, 319, 470], False, True),
-        ([2, 3, 1, 2, 3, 2, 64, 64], [2, 1, 4, 2, 1, 2, 64, 64], [2, 3, 4, 2, 3, 2, 64, 64], False, False),
-        ([1024, 640], [640, 1024], [1024, 1024], False, False),
-        # ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], False, False),
-        # ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], False, True),
-        # ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], True, False),
-        # ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], True, True),
-        # ([1, 1, 29, 31], [1, 1, 31, 30], [1, 1, 29, 30], False, False),
-        # ([1, 1, 29, 31], [1, 1, 30, 31], [1, 1, 29, 30], False, True),
-        # ([1, 1, 29, 31], [1, 1, 29, 30], [1, 1, 31, 30], True, False),
-        # ([1, 1, 29, 31], [1, 1, 30, 29], [1, 1, 31, 30], True, True),
-        # ([1, 3, 511, 313], [1, 1, 765, 313], [1, 3, 511, 765], False, True),
-        # ([1, 1, 511, 313], [1, 3, 765, 313], [1, 3, 511, 765], False, True),
-        # ([1, 3, 511, 313], [3, 1, 765, 313], [3, 3, 511, 765], False, True),
-        # ([3, 3, 511, 313], [3, 3, 765, 313], [3, 3, 511, 765], False, True),
-        # ([1, 1, 319, 309], [1, 1, 319, 748], [1, 1, 309, 748], True, False),
-        # ([1, 3, 313, 511], [1, 1, 313, 765], [1, 3, 511, 765], True, False),
-        # ([1, 1, 313, 511], [1, 3, 313, 765], [1, 3, 511, 765], True, False),
-        # ([1, 3, 313, 511], [3, 1, 313, 765], [3, 3, 511, 765], True, False),
-        # ([3, 3, 313, 511], [3, 3, 313, 765], [3, 3, 511, 765], True, False),
-        # ([3, 3, 313, 511], [3, 3, 765, 313], [3, 3, 511, 765], True, True),
-    ),
-)
-@pytest.mark.parametrize("has_output", [True, False])
-def test_primary_moreh_matmul(params, has_output, device):
+def moreh_matmul(params, has_output, device):
     torch.manual_seed(3072)
     input_shape, other_shape, output_shape, transpose_input, transpose_other = params
     tt_input, tt_other, tt_output, _, _, _, torch_input, torch_other, _ = get_tensors(
         input_shape, other_shape, output_shape, False, False, False, device
     )
+    if not has_output:
+        tt_output = None
 
     torch_input = torch_input.transpose(-1, -2) if transpose_input else torch_input
     torch_other = torch_other.transpose(-1, -2) if transpose_other else torch_other
 
     # tt matmul
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_output_cpu = (
-        ttl.operations.primary.moreh_matmul(
-            tt_input,
-            tt_other,
-            transpose_input=transpose_input,
-            transpose_other=transpose_other,
-            output=tt_output if has_output else None,
-        )
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(output_shape)
-        .to_torch()
+    tt_output = ttl.operations.primary.moreh_matmul(
+        tt_input,
+        tt_other,
+        transpose_input=transpose_input,
+        transpose_other=transpose_other,
+        output=tt_output,
     )
+    tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
 
     # torch matmul
     torch_out = torch.matmul(torch_input, torch_other)
@@ -310,4 +276,79 @@ def test_primary_moreh_matmul(params, has_output, device):
     logger.debug(f"Out passing={passing}")
     logger.debug(f"Output pcc={output_pcc}")
 
+    return passing
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        # input, other, output shape, transpose input, other
+        ([32, 32], [32, 32], [32, 32], False, False),  # single-core
+        ([1024, 128], [128, 1024], [1024, 1024], False, False),  # multi-core
+        ([128, 1024], [128, 1024], [1024, 1024], True, False),  # input transpose
+        ([1024, 128], [1024, 128], [1024, 1024], False, True),  # other transpose
+        ([128, 1024], [1024, 128], [1024, 1024], True, True),  # input, other transpose
+        ([1020, 128], [128, 1024], [1020, 1024], False, False),  # input mask
+        ([1024, 128], [128, 1020], [1024, 1020], False, False),  # other mask
+        ([1020, 310], [310, 1020], [1020, 1020], False, False),  # input, other mask
+        ([128, 1020], [128, 1024], [1020, 1024], True, False),  # input mask, transpose
+        ([1024, 128], [1020, 128], [1024, 1020], False, True),  # other mask, transpose
+        ([310, 1020], [1020, 310], [1020, 1020], True, True),  # input, other mask, transpose
+        ([3, 1, 2, 1, 4, 1, 319, 95], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], False, False),  # batched matmul
+        ([2, 319, 95], [2, 1, 3, 4, 1, 95, 470], [2, 1, 3, 4, 2, 319, 470], False, False),  # batched matmul
+        ([3, 1, 2, 1, 4, 1, 95, 319], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], True, False),  # batched matmul
+        ([2, 319, 95], [2, 1, 3, 4, 1, 470, 95], [2, 1, 3, 4, 2, 319, 470], False, True),  # batched matmul
+        (
+            [2, 3, 1, 2, 3, 2, 64, 64],
+            [2, 1, 4, 2, 1, 2, 64, 64],
+            [2, 3, 4, 2, 3, 2, 64, 64],
+            False,
+            False,
+        ),  # batched matmul
+    ),
+)
+def test_moreh_matmul(params, device):
+    passing = moreh_matmul(params, True, device)
     assert passing
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        # input, other, output shape, transpose input, other
+        ([32, 32], [32, 32], [32, 32], False, False),  # single-core
+        ([3, 1, 2, 1, 4, 1, 95, 319], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], True, False),  # batched matmul
+        ([2, 319, 95], [2, 1, 3, 4, 1, 470, 95], [2, 1, 3, 4, 2, 319, 470], False, True),  # batched matmul
+        (
+            [2, 3, 1, 2, 3, 2, 64, 64],
+            [2, 1, 4, 2, 1, 2, 64, 64],
+            [2, 3, 4, 2, 3, 2, 64, 64],
+            False,
+            False,
+        ),  # batched matmul
+    ),
+)
+def test_moreh_matmul_wo_output(params, device):
+    passing = moreh_matmul(params, False, device)
+    assert passing
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        # input, weight, bias(1d or scalar), output
+        ([32, 32], [32, 32], [32, 32], False, False),  # single-core
+        (
+            [2, 3, 1, 2, 3, 2, 64, 64],
+            [2, 1, 4, 2, 1, 2, 64, 64],
+            [2, 3, 4, 2, 3, 2, 64, 64],
+            False,
+            False,
+        ),  # batched matmul
+    ),
+)
+def test_moreh_matmul_enable_cache(params, device, use_program_cache):
+    torch.manual_seed(3072)
+    for i in range(2):
+        passing = moreh_matmul(params, True, device)
+        assert passing
