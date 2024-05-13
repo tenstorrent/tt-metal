@@ -189,8 +189,14 @@ Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> sc
 }
 
 Tensor scale_causal_mask_hw_dims_softmax_in_place(Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const SoftmaxProgramConfig& program_config, std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-    operation::run(Softmax{.scale=scale, .inplace=true, .output_mem_config=input_tensor.memory_config(), .program_config=program_config, .is_causal_mask=true, .compute_kernel_config=kernel_config_val, .is_scale_causal_mask_hw_dims_softmax=true}, {input_tensor}, {mask});
+    std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    operation::launch_op(
+        [scale, mask, program_config, compute_kernel_config](const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            auto& input_tensor = input_tensors.at(0);
+            auto& mask = optional_input_tensors.at(0);
+            auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+            return operation::run(Softmax{.scale=scale, .inplace=true, .output_mem_config=input_tensor.memory_config(), .program_config=program_config, .is_causal_mask=true, .compute_kernel_config=kernel_config_val, .is_scale_causal_mask_hw_dims_softmax=true}, {input_tensor}, {mask});
+        }, {input_tensor}, dummy_output_tensors, {mask});
     return input_tensor;
 }
 
