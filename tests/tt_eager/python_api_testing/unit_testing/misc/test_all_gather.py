@@ -157,7 +157,6 @@ def run_all_gather_on_t3000_impl_tight_loop(
 
 
 # Enumerate the post-commit cases explicitly
-@pytest.mark.skip("#7705: Hanging on various configs")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
@@ -219,7 +218,6 @@ def test_all_gather_on_t3000_post_commit_looping(
 
 
 # Enumerate the post-commit cases explicitly
-@pytest.mark.skip("#7705: Hanging on various configs")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
@@ -305,7 +303,6 @@ def test_all_gather_on_t3000_post_commit(
 
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.skip("#7705: Hanging on various configs")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -399,7 +396,6 @@ def test_line_all_gather_on_t3000_post_commit(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.skip("#7705: Hanging on various configs")
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [

@@ -485,19 +485,25 @@ void eth_clear_sender_channel_ack(uint32_t channel) {
  *
  * Return value: None
  *
- * | Argument                    | Description                                             | Type     | Valid Range | Required |
- * |-----------------------------|---------------------------------------------------------|----------|-------------|----------|
- * | channel                     | Which transaction channel to ack                        | uint32_t | 0..7        | True     |
+ * | Argument                      | Description                                             | Type     | Valid Range | Required |
+ * |-------------------------------|---------------------------------------------------------|----------|-------------|----------|
+ * | channel                       | Which transaction channel to ack                        | uint32_t | 0..7        | True     |
+ * | eth_transaction_ack_word_addr | Address of 16B memory (also 16B aligned) segment with   | uint32_t | L1 address  | True     |
+ * |                               | to send the eth_channel_sync_t to sender for first level| uint32_t | L1 address  | True     |
+ * |                               | ack. Must *not* alias erisc_info->channels[channel]     | uint32_t | L1 address  | True     |
  */
 FORCE_INLINE
-void eth_receiver_channel_ack(uint32_t channel) {
+void eth_receiver_channel_ack(uint32_t channel, uint32_t eth_transaction_ack_word_addr) {
     // assert(channel < 4);
     erisc_info->channels[channel].receiver_ack = 1;
+    ASSERT(reinterpret_cast<volatile uint32_t*>(eth_transaction_ack_word_addr)[0] == 1);
+    reinterpret_cast<volatile uint32_t*>(eth_transaction_ack_word_addr)[1] = 1;
+    // Make sure we don't alias the erisc_info eth_channel_sync_t
+    ASSERT(eth_transaction_ack_word_addr != ((uint32_t)(&(erisc_info->channels[channel].receiver_ack))) >> 4);
     internal_::eth_send_packet(
         0,
+        eth_transaction_ack_word_addr >> 4,
         ((uint32_t)(&(erisc_info->channels[channel].receiver_ack))) >> 4,
-        ((uint32_t)(&(erisc_info->channels[channel].receiver_ack))) >> 4,
-
         1);
 }
 

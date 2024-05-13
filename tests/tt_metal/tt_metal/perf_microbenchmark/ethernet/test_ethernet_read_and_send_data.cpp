@@ -86,6 +86,7 @@ bool RunWriteBWTest(
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
 
+    const size_t eth_channel_sync_ack_addr,
     const size_t src_eth_l1_byte_address,
     const size_t dst_eth_l1_byte_address,
 
@@ -228,6 +229,7 @@ bool RunWriteBWTest(
         eth_receiver_kernel,
         eth_receiver_core,
         {
+            uint32_t(eth_channel_sync_ack_addr),
             uint32_t(dst_eth_l1_byte_address),
             uint32_t(src_eth_l1_byte_address),
             dram_output_buffer_base_addr,
@@ -317,8 +319,9 @@ int main(int argc, char** argv) {
     const auto& device_0 = test_fixture.devices_.at(0);
     const auto& device_1 = test_fixture.devices_.at(1);
     const size_t precomputed_source_addresses_buffer_address = (size_t)nullptr;
-    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
-    const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
+    const size_t eth_channel_sync_ack_addr = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    const size_t src_eth_l1_byte_address = eth_channel_sync_ack_addr + 16;
+    const size_t dst_eth_l1_byte_address = eth_channel_sync_ack_addr + 16;
 
     auto const& active_eth_cores = device_0->get_active_ethernet_cores(true);
     assert (active_eth_cores.size() > 0);
@@ -342,6 +345,7 @@ int main(int argc, char** argv) {
             device_1,
             eth_sender_core,
             eth_receiver_core,
+            eth_channel_sync_ack_addr,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
             precomputed_source_addresses_buffer_address,

@@ -44,7 +44,7 @@ class AllGatherConfig {
         semaphore_size(32),
         ring_size(ring_size),
 
-        erisc_handshake_address(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE),
+        erisc_handshake_address(round_up(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, 16)),
         topology(topology),
         enable_bidirectional(/*false*/topology == all_gather_op::Topology::Ring && dim != 0 && dim != 1),
 
@@ -53,6 +53,9 @@ class AllGatherConfig {
 
         mode(choose_all_gather_mode(input_tensor, output_tensor, dim))
     {
+        TT_ASSERT(erisc_handshake_address >= eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
+        TT_ASSERT(erisc_handshake_address < eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16);
+        TT_ASSERT((erisc_handshake_address & (16-1)) == 0);
         if (input_tensor.get_layout() == Layout::TILE && dim != 3) {
             // See issue #6448
             int outer_dims_size = 1;
@@ -83,7 +86,7 @@ class AllGatherConfig {
         }
 
         this->num_workers_per_link = this->num_eth_buffers;
-        this->eth_sems_l1_base_byte_address = this->erisc_handshake_address + 16;
+        this->eth_sems_l1_base_byte_address = this->erisc_handshake_address + 16 * 3;//16;
         this->semaphore_offset = this->semaphore_size * this->num_eth_buffers * num_duplicate_directions; // TODO: Remove this once dedicated semaphore space for user kernels are added
         this->eth_buffers_l1_base_byte_address = this->eth_sems_l1_base_byte_address + this->semaphore_offset;
 

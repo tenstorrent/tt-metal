@@ -23,7 +23,9 @@ FORCE_INLINE void roundtrip_ping(
     uint32_t page_size,
     uint32_t eth_noc_x,
     uint32_t eth_noc_y,
-    bool is_ring_start) {
+    uint32_t eth_channel_sync_ack_addr,
+    bool is_ring_start
+    ) {
 
     if (is_ring_start) {
         if constexpr (measure) {
@@ -36,7 +38,7 @@ FORCE_INLINE void roundtrip_ping(
 
                 noc_async_write(buffer_addr, send_buffer_noc_addr, page_size);
                 noc_semaphore_inc(send_sem_noc_addr, 1);
-                eth_receiver_channel_ack(i);
+                eth_receiver_channel_ack(i, eth_channel_sync_ack_addr);
             }
 
             eth_noc_async_write_barrier();
@@ -60,7 +62,7 @@ FORCE_INLINE void roundtrip_ping(
 
                 noc_async_write(buffer_addr, send_buffer_noc_addr, page_size);
                 noc_semaphore_inc(send_sem_noc_addr, 1);
-                eth_receiver_channel_ack(i);
+                eth_receiver_channel_ack(i, eth_channel_sync_ack_addr);
             }
 
             eth_noc_async_write_barrier();
@@ -136,6 +138,12 @@ void kernel_main() {
     }
 
     eth_setup_handshake(handshake_addr, false);
+    // We reuse the handshake address to send back acks to the sender core.
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_addr)[0] = 1;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_addr)[1] = 1;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_addr)[2] = 0;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_addr)[3] = 0;
+    uint32_t eth_channel_sync_ack_addr = handshake_addr;
     // Delete me when migrating to FD2 - for now we require a worker core to act as intermediary between local chip eriscs
     // because CreateSemaphore doesn't reliably worker on ethernet cores prior to FD2
     *start_semaphore = 0;
@@ -147,11 +155,11 @@ void kernel_main() {
     eth_noc_semaphore_wait(start_semaphore, 1);
 
     // Clear the ring
-    roundtrip_ping<false>(channels_addrs, channels_sem_addrs, max_concurrent_samples, 16, eth_noc_x, eth_noc_y, is_ring_start);
+    roundtrip_ping<false>(channels_addrs, channels_sem_addrs, max_concurrent_samples, 16, eth_noc_x, eth_noc_y, eth_channel_sync_ack_addr, is_ring_start);
 
     {
         for (uint32_t i = 0; i < num_samples; i++) {
-            roundtrip_ping<true>(channels_addrs, channels_sem_addrs, max_concurrent_samples, transfer_size, eth_noc_x, eth_noc_y, is_ring_start);
+            roundtrip_ping<true>(channels_addrs, channels_sem_addrs, max_concurrent_samples, transfer_size, eth_noc_x, eth_noc_y, eth_channel_sync_ack_addr, is_ring_start);
         }
     }
 
