@@ -19,7 +19,7 @@ TENSOR_DEPS = $(addprefix $(OBJDIR)/, $(TENSOR_SRCS:.cpp=.d))
 # Each module has a top level target as the entrypoint which must match the subdir name
 tt_eager/tensor: $(TENSOR_LIB)
 
-$(TENSOR_LIB): $(COMMON_LIB) $(TT_METAL_LIB) $(TENSOR_OBJS)
+$(TENSOR_LIB): $(COMMON_LIB) $(TT_METAL_LIB) $(TENSOR_OBJS) $(QUEUE_LIB)
 	@mkdir -p $(LIBDIR)
 	ar rcs -o $@ $(TENSOR_OBJS)
 
