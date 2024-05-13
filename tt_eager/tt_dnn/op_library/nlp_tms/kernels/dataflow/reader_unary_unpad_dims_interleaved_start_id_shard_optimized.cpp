@@ -16,6 +16,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t * num_padded_tiles = num_unpadded_tiles + num_dims;
     volatile tt_l1_ptr uint32_t * id_per_dim = num_padded_tiles + num_dims;
 
+    uint32_t num_unpadded_tiles_head_dim = num_unpadded_tiles[0];
+    uint32_t num_unpadded_tiles_seqlen_dim = num_unpadded_tiles[1];
+    uint32_t num_padded_tiles_seqlen_dim = num_padded_tiles[1];
+
     constexpr uint32_t cb_id_in0 = 0;
 
     const uint32_t tile_size = get_tile_size(cb_id_in0);
@@ -32,22 +36,22 @@ void kernel_main() {
     uint32_t src_tile_id = start_id;
     cb_reserve_back(cb_id_in0, num_tiles);
     uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
-    for(uint32_t i = 0; i < num_tiles; i++) {
+    uint32_t num_iterations = num_tiles / num_unpadded_tiles_head_dim;
+    uint32_t seqlen_dim_id = 0;
+    for(uint32_t i = 0; i < num_iterations; i++) {
         // Copy Input
-        noc_async_read_tile(src_tile_id, s0, src_buffer_l1_addr);
-        src_buffer_l1_addr += tile_size;
-
-        src_tile_id++;
-        for(uint32_t j = 0; j < num_dims; j++) {
-            id_per_dim[j]++;
-            if (id_per_dim[j] == num_unpadded_tiles[j]) {
-                id_per_dim[j] = 0;
-                src_tile_id += num_padded_tiles[j];
-            } else {
-                break;
-            }
+        for (uint32_t j = 0; j < num_unpadded_tiles_head_dim; j++) {
+            noc_async_read_tile(src_tile_id, s0, src_buffer_l1_addr);
+            src_buffer_l1_addr += tile_size;
+            src_tile_id++;
+        }
+        seqlen_dim_id++;
+        if (seqlen_dim_id == num_unpadded_tiles_seqlen_dim) {
+            seqlen_dim_id = 0;
+            src_tile_id += num_padded_tiles_seqlen_dim;
         }
     }
+
     noc_async_read_barrier();
     cb_push_back(cb_id_in0, num_tiles);
 }
