@@ -72,7 +72,7 @@ void py_module(py::module& module) {
             py::arg("reshard_if_not_optimal") = false,
             py::arg("override_sharding_config") = false,
             py::arg("height_sharding") = true,
-            py::arg("core_grid") = CoreRangeSet({{}}),
+            py::arg("core_grid") = CoreRangeSet({CoreRange({})}),
             py::arg("transpose_shards") = true,
             py::arg("output_layout") = Layout::TILE,
         )
