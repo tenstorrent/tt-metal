@@ -122,7 +122,7 @@ ParallelConfig determine_parallel_config(
     uint32_t output_height,
     uint32_t output_width,
     uint32_t output_channels,
-    const Device& device,
+    Device& device,
     ShardOrientation block_shard_orientation,
     bool is_out_tiled=true
 ) {
@@ -320,7 +320,7 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(cons
     };
 }
 
-std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_required(const Device& device, const ttnn::Tensor& input_tensor_, const ConvConfig& conv_config, uint32_t batch_size, uint32_t height, uint32_t width, uint32_t in_channels, uint32_t out_channels) {
+std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_required(Device& device, const ttnn::Tensor& input_tensor_, const ConvConfig& conv_config, uint32_t batch_size, uint32_t height, uint32_t width, uint32_t in_channels, uint32_t out_channels) {
     ttnn::Tensor input_tensor = input_tensor_; // tensor to return
     const auto& input_memory_config = input_tensor_.memory_config();
     bool needs_shard_or_reshard = false;
@@ -388,13 +388,15 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_requi
         if(!input_is_on_device) {
             uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
             //TT_ASSERT(input_tensor.get_legacy_shape() == input_tensor.get_shape());
-            uint32_t input_tensor_height_snapped_to_tile = round_up(input_tensor.get_shape()[2], input_num_cores_nhw * 32);
-            TT_ASSERT(input_tensor_height_snapped_to_tile >= input_tensor.get_shape()[2]);
+            uint32_t tensor_height = input_tensor.get_shape()[2];
+            uint32_t input_tensor_height_snapped_to_tile = round_up(tensor_height, input_num_cores_nhw * 32);
+            TT_ASSERT(input_tensor_height_snapped_to_tile >= tensor_height);
+            uint32_t tensor_width = input_tensor.get_shape()[3];
             uint32_t input_tensor_width_snapped_to_channels_alignment = round_up(
-                input_tensor.get_shape()[3], conv_config.input_channels_alignment
-            )
-            TT_ASSERT(input_tensor_width_snapped_to_channels_alignment >= input_tensor.get_shape()[3]);
-            if (input_tensor_height_snapped_to_tile != input_tensor.get_shape()[2] || input_tensor_width_snapped_to_channels_alignment != input_tensor.get_shape()[3]) {
+                tensor_width, conv_config.input_channels_alignment
+            );
+            TT_ASSERT(input_tensor_width_snapped_to_channels_alignment >= tensor_width);
+            if (input_tensor_height_snapped_to_tile != tensor_height || input_tensor_width_snapped_to_channels_alignment != tensor_height) {
                 input_tensor = tt::tt_metal::pad_on_host(
                     input_tensor,
                     {input_tensor.get_shape()[0], input_tensor.get_shape()[1], input_tensor_height_snapped_to_tile, input_tensor_width_snapped_to_channels_alignment},
@@ -430,7 +432,7 @@ void validate_weight_and_bias_tensors(const ttnn::Tensor& weight_tensor, std::op
     }
 }
 
-std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor, uint32_t input_channels_alignment, DataType weights_bias_dtype, uint32_t weight_block_h_ntiles, uint32_t weight_block_w_ntiles, const ParallelConfig& parallel_config, const Device& device) {
+std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor, uint32_t input_channels_alignment, DataType weights_bias_dtype, uint32_t weight_block_h_ntiles, uint32_t weight_block_w_ntiles, const ParallelConfig& parallel_config, Device& device) {
     validate_weight_and_bias_tensors(weight_tensor, bias_tensor);
     ttnn::Tensor weight_tensor_; // tensor to return
     ttnn::Tensor bias_tensor_;
@@ -508,7 +510,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    ttnn::Device device,
+    ttnn::Device& device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -519,8 +521,8 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
     std::array<uint32_t, 2> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
-    const std::optional<const ConvConfig>& conv_config_ = std::nullopt) {
+    std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
+    std::optional<const ConvConfig> conv_config_ = std::nullopt) {
     ttnn::validate_input_tensor("ttnn.conv2d", input_tensor, input_schemas[0]);
     ttnn::validate_input_tensor("ttnn.conv2d", weight_tensor, input_schemas[1]);
     if(bias_tensor.has_value()) {
@@ -581,10 +583,12 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
         // run conv as matmul
+        // TODO add support for running downsample here for stride 2
         auto matmul_output = ttnn::operations::matmul::linear(input_tensor_post_tm, weight_tensor_on_device, bias_tensor_on_device, input_tensor_post_tm.memory_config(), conv_config.dtype, conv_config.activation, compute_kernel_config);
         if (conv_config.deallocate_activation) {
             input_tensor_post_tm.deallocate();
         }
+        return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
 }
 
@@ -592,3 +596,13 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
 }  // namespace conv2d
 }  // namespace operations
 }  // namespace ttnn
+
+
+
+template <> struct fmt::formatter<ttnn::operations::conv2d::ConvConfig> : formatter<string_view> {
+    // constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const ttnn::operations::conv2d::ConvConfig& t, fmt::format_context& ctx) {
+        std::string str = fmt::format("ConvConfig(math_fidelity={}, dtype={}, weights_dtype={}, math_approx_mode_enabled={}, fp32_dest_acc_enabled={}, packer_l1_accum_enabled={}, activation={}, input_channels_alignment={}, deallocate_activation={}, reallocate_halo_output={}, act_block_h_override={}, reshard_if_not_optimal={}, override_sharding_config={}, height_sharding={}, core_grid={}, transpose_shards={}, output_layout={})", t.math_fidelity, t.dtype, t.weights_dtype, t.math_approx_mode_enabled, t.fp32_dest_acc_enabled, t.packer_l1_accum_enabled, t.activation, t.input_channels_alignment, t.deallocate_activation, t.reallocate_halo_output, t.act_block_h_override, t.reshard_if_not_optimal, t.override_sharding_config, t.height_sharding, t.core_grid.str(), t.transpose_shards, t.output_layout);
+        return format_to(ctx.out(), "{}", str);
+    }
+};

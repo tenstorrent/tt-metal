@@ -21,7 +21,7 @@ void py_module(py::module& module) {
         "conv2d",
         [](const ttnn::Tensor& input_tensor,
             const ttnn::Tensor& weight_tensor,
-            ttnn::Device device,
+            ttnn::Device& device,
             uint32_t in_channels,
             uint32_t out_channels,
             uint32_t batch_size,
@@ -32,8 +32,8 @@ void py_module(py::module& module) {
             std::array<uint32_t, 2> padding,
             std::array<uint32_t, 2> dilation,
             uint32_t groups,
-            const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
-            const std::optional<const ConvConfig>& conv_config_ = std::nullopt) -> std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> {
+            std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
+            std::optional<const ConvConfig> conv_config_ = std::nullopt) -> std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> {
             return ttnn::operations::conv2d::conv2d(
                 input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation,
                     groups, bias_tensor, conv_config_);
@@ -57,13 +57,14 @@ void py_module(py::module& module) {
 
     py::class_<ConvConfig>(module, "ConvConfig")
         .def(
-            py::init<DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, bool, bool, bool, CoreRangeSet, bool, Layout>(),
+            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, bool, bool, bool, CoreRangeSet, bool, Layout>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::HiFi4,
             py::arg("dtype") = DataType::BFLOAT16,
             py::arg("weights_dtype") = DataType::BFLOAT16,
             py::arg("math_approx_mode_enabled") = true,
-            py::arg("fp32_dest_acc_enabled") = true,
+            py::arg("fp32_dest_acc_enabled") = false,
+            py::arg("packer_l1_accum_enabled") = false,
             py::arg("activation") = "",
             py::arg("input_channels_alignment") = 32,
             py::arg("deallocate_activation") = false,
@@ -74,8 +75,8 @@ void py_module(py::module& module) {
             py::arg("height_sharding") = true,
             py::arg("core_grid") = CoreRangeSet({CoreRange({})}),
             py::arg("transpose_shards") = true,
-            py::arg("output_layout") = Layout::TILE,
-        )
+            py::arg("output_layout") = Layout::TILE
+        );
 }
 
 }  // namespace conv2d
