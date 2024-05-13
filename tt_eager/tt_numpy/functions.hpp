@@ -348,19 +348,21 @@ static Tensor index_all(
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
-
+    std::fill(owned_buffer.begin(), owned_buffer.end(), -std::numeric_limits<float>::infinity());
+    auto& up_shape = shape.without_padding();
     auto index = 0;
     auto value = 0;
-    auto rank = shape.rank();
+    auto rank = up_shape.rank();
     auto penultimate = rank - 2;
     auto ultimate = rank - 1;
-    for (uint32_t b = 0; b < shape[rank - 4]; b++) {
-        for (uint32_t c = 0; c < shape[rank - 3]; c++) {
-            for (uint32_t y = 0; y < shape[penultimate]; y++) {
-                for (uint32_t x = 0; x < shape[ultimate]; x++) {
+    for (uint32_t b = 0; b < up_shape[rank - 4]; b++) {
+        for (uint32_t c = 0; c < up_shape[rank - 3]; c++) {
+            for (uint32_t y = 0; y < up_shape[penultimate]; y++) {
+                for (uint32_t x = 0; x < up_shape[ultimate]; x++) {
                     owned_buffer[index++] = T(static_cast<float>(value));
                     value = value + 1;
                 }  // dim W
+                index = index + (shape[ultimate] -  up_shape[ultimate]);
             }      // dim H
         }          // dim C
     }              // dim N
