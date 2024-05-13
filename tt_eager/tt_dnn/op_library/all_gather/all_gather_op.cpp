@@ -16,6 +16,20 @@ namespace tt {
 
 namespace tt_metal {
 
+AllGatherMode choose_all_gather_mode(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim) {
+    bool is_sharded = input_tensor.is_sharded();
+
+    if (is_sharded) {
+        if (input_tensor.buffer()->shard_spec().tensor2d_shape[0] > 1) {
+            return AllGatherMode::FULL_WORKER_GRID_SHARDED;
+        } else {
+            return AllGatherMode::SINGLE_TILE_HIGH_WIDTH_SHARDED;
+        }
+    } else {
+        return AllGatherMode::RING_INTERLEAVED;
+    }
+}
+
 void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensors.size() == 1);
     const auto& input_tensor = input_tensors[0];
@@ -42,7 +56,6 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
-
 
     // Sharding Config checks
     bool input_sharded = input_tensor.is_sharded();
@@ -73,7 +86,18 @@ std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &
 }
 
 operation::ProgramWithCallbacks AllGather::create_program(const std::vector<Tensor> & input_tensors, std::vector<Tensor> &output_tensors) const {
-    return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id, this->topology);
+    AllGatherMode all_gather_mode = tt::tt_metal::choose_all_gather_mode(input_tensors.at(0), output_tensors.at(0), dim);
+    switch (all_gather_mode) {
+        case AllGatherMode::RING_INTERLEAVED:
+        case AllGatherMode::SINGLE_TILE_HIGH_WIDTH_SHARDED:
+            return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id, this->topology);
+        break;
+        case AllGatherMode::FULL_WORKER_GRID_SHARDED:
+            TT_THROW("Unsupported AllGatherMode");
+        break;
+        default:
+            TT_THROW("Unsupported AllGatherMode");
+    };
 }
 
 tt::stl::reflection::Attributes AllGather::attributes() const {
