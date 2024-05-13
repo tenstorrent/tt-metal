@@ -52,19 +52,6 @@ namespace tt::tt_metal {
             }
 
         /**
-         * Unique hash val for the sliding window configuration.
-         */
-        std::size_t get_hash() const {
-            return std::hash<std::string>{}(std::to_string(batch_size_)
-                                            + "_" + std::to_string(std::get<0>(input_hw_)) + "_" + std::to_string(std::get<1>(input_hw_))
-                                            + "_" + std::to_string(std::get<0>(window_hw_)) + "_" + std::to_string(std::get<1>(window_hw_))
-                                            + "_" + std::to_string(std::get<0>(stride_hw_)) + "_" + std::to_string(std::get<1>(stride_hw_))
-                                            + "_" + std::to_string(std::get<0>(pad_hw_)) + "_" + std::to_string(std::get<1>(pad_hw_))
-                                            + "_" + std::to_string(std::get<0>(dilation_hw_)) + "_" + std::to_string(std::get<1>(dilation_hw_))
-                                            + "_" + std::to_string(num_cores_nhw_) + "_" + core_range_set_.str());
-        }
-
-        /**
          * Return the input shape (excluding depth)
          */
         Shape get_input_shape() const {
