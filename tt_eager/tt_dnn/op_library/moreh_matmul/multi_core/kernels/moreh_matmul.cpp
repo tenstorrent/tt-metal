@@ -85,6 +85,10 @@ FORCE_INLINE void mask_tile_to_cb(uint32_t& mm_src, bool& need_mask, bool need_m
     bool need_mask_last_line = false;
     bool need_mask_last_out = false;
 
+    if (!(need_mask_w || need_mask_h)) {
+        return;
+    }
+
     if (is_input) {
         need_mask_last_line = last_line && ((transpose) ? (need_mask_w) : (need_mask_h));
         need_mask_last_out = last_out && ((transpose) ? (need_mask_h) : (need_mask_w));
@@ -304,8 +308,10 @@ void MAIN {
     uint32_t other_mask_w = get_compile_time_arg_val(9);
     #ifdef FUSE_BIAS
     bool is_scalar_bias = (get_compile_time_arg_val(10) == 1);
+    bool need_bias_add = true;
     #else
     bool is_scalar_bias = false;
+    bool need_bias_add = false;
     #endif
     bool need_input_mask_h = (input_mask_h != 32);
     bool need_input_mask_w = (input_mask_w != 32);
@@ -322,7 +328,7 @@ void MAIN {
         output_stride[i] = arg_fetcher.get_next_arg_val<uint32_t>();
     }
 
-    if (need_transpose || need_mask) {
+    if (need_transpose || need_mask || need_bias_add) {
         matmul_with_transpose_and_mask(output_tile_start_idx, num_output_tiles, Kt, transpose_input, transpose_other,
             need_input_mask_h, need_input_mask_w, output_stride, Mt, Nt, need_other_mask_h, need_other_mask_w, is_scalar_bias);
     }

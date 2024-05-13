@@ -103,14 +103,15 @@ void kernel_main() {
     #endif
 
     // mask
-    bool need_input_mask_h = (input_mask_h != 0);
-    bool need_input_mask_w = (input_mask_w != 0);
+    bool need_input_mask_h = (input_mask_h != 32);
+    bool need_input_mask_w = (input_mask_w != 32);
+
     if (need_input_mask_h || need_input_mask_w) {
         generate_mask_tiles(cb_id_in2, input_mask_h, input_mask_w);
     }
 
-    bool need_other_mask_h = (other_mask_h != 0);
-    bool need_other_mask_w = (other_mask_w != 0);
+    bool need_other_mask_h = (other_mask_h != 32);
+    bool need_other_mask_w = (other_mask_w != 32);
     if (need_other_mask_h || need_other_mask_w) {
         generate_mask_tiles(cb_id_in3, other_mask_h, other_mask_w);
     }
