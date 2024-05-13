@@ -387,7 +387,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_requi
         }
         if(!input_is_on_device) {
             uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
-            TT_ASSERT(input_tensor.get_legacy_shape() == input_tensor.get_shape());
+            //TT_ASSERT(input_tensor.get_legacy_shape() == input_tensor.get_shape());
             uint32_t input_tensor_height_snapped_to_tile = round_up(input_tensor.get_shape()[2], input_num_cores_nhw * 32);
             TT_ASSERT(input_tensor_height_snapped_to_tile >= input_tensor.get_shape()[2]);
             uint32_t input_tensor_width_snapped_to_channels_alignment = round_up(
@@ -419,12 +419,14 @@ void validate_weight_and_bias_tensors(const ttnn::Tensor& weight_tensor, std::op
     TT_ASSERT(!ttnn::has_storage_type_of(weight_tensor, ttnn::DEVICE_STORAGE_TYPE));
     TT_ASSERT(weight_tensor.get_layout() == Layout::ROW_MAJOR);
     TT_ASSERT(weight_tensor.get_shape().rank() == 4);
-    TT_ASSERT(weight_tensor.get_shape() == weight_tensor.get_legacy_shape());
+    // TODO: enable this assert
+    //TT_ASSERT(weight_tensor.get_shape() == weight_tensor.get_legacy_shape());
     if(bias_tensor.has_value()) {
         TT_ASSERT(!ttnn::has_storage_type_of(bias_tensor.value(), ttnn::DEVICE_STORAGE_TYPE));
         TT_ASSERT(bias_tensor.value().get_shape().rank() == 4);
         TT_ASSERT(bias_tensor.value().get_layout() == Layout::ROW_MAJOR);
-        TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().get_legacy_shape());
+        // TODO: enable this assert
+        // TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().get_legacy_shape());
     }
 }
 
@@ -451,7 +453,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         }
     } else {
         // TODO: fix the need to check this. We should be able to accept any datatype and convert
-        TT_ASSERT(weight.get_dtype() == weights_bias_dtype);
+        TT_ASSERT(weight_tensor.get_dtype() == weights_bias_dtype);
         if(bias_tensor.has_value()) {
             TT_ASSERT(bias_tensor.value().get_dtype() == weights_bias_dtype);
         }

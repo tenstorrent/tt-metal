@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sliding_window_op_infra/halo_op.hpp"
+#include "tt_dnn/op_library/sliding_window_op_infra/halo_op.hpp"
 
 namespace ttnn::operations::halo {
 
