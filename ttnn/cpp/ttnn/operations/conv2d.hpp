@@ -85,11 +85,11 @@ struct ConvConfig {
 
 static inline const std::array<ttnn::TensorSchema, 3> input_schemas{
     ttnn::TensorSchema{
-        4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT}, true, true, false},
+        4, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::float32}, {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT}, true, true, false},
     ttnn::TensorSchema{
-        4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT}, true, true, false},
+        4, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::float32}, {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT}, true, true, false},
    ttnn::TensorSchema{
-        4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT}, true, true, false}};
+        4, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::float32}, {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT}, true, true, false}};
 
 uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor) {
     uint32_t divisor = start_divisor;
@@ -322,37 +322,43 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(cons
 
 std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_required(Device& device, const ttnn::Tensor& input_tensor_, const ConvConfig& conv_config, uint32_t batch_size, uint32_t height, uint32_t width, uint32_t in_channels, uint32_t out_channels) {
     ttnn::Tensor input_tensor = input_tensor_; // tensor to return
-    const auto& input_memory_config = input_tensor_.memory_config();
+    bool input_tensor_on_device = ttnn::has_storage_type_of(input_tensor_, ttnn::DEVICE_STORAGE_TYPE);
     bool needs_shard_or_reshard = false;
     if(conv_config.override_sharding_config && conv_config.reshard_if_not_optimal) {
         TT_ASSERT(false, "Incorrect config provided: reshard_if_not_optimal and override_sharding_config cannot both be set.");
     }
     ParallelConfig input_tensor_parallel_config;
-    if (!input_memory_config.is_sharded()) {
+    if (!input_tensor_on_device) {
         needs_shard_or_reshard = true;
-    } else {
-        const auto input_shard_scheme = input_memory_config.memory_layout;
-        const auto input_shard_orientation = input_memory_config.shard_spec.value().orientation;
-        const auto input_shard_grid = input_memory_config.shard_spec.value().grid;
-        ParallelConfig pconfig = {.grid = input_shard_grid, .shard_scheme = input_shard_scheme, .shard_orientation = input_shard_orientation};
-        input_tensor_parallel_config = pconfig;
-        if(input_shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED && input_shard_orientation != ShardOrientation::ROW_MAJOR) {
+    }
+    else {
+        const auto& input_memory_config = input_tensor_.memory_config();
+        if (!input_memory_config.is_sharded()) {
             needs_shard_or_reshard = true;
-        }
-        if(input_shard_scheme != TensorMemoryLayout::HEIGHT_SHARDED && input_shard_scheme != TensorMemoryLayout::BLOCK_SHARDED) {
-            needs_shard_or_reshard = true;
-        }
-        if(conv_config.override_sharding_config) {
-            if(conv_config.core_grid != input_shard_grid) {
+        } else {
+            const auto input_shard_scheme = input_memory_config.memory_layout;
+            const auto input_shard_orientation = input_memory_config.shard_spec.value().orientation;
+            const auto input_shard_grid = input_memory_config.shard_spec.value().grid;
+            ParallelConfig pconfig = {.grid = input_shard_grid, .shard_scheme = input_shard_scheme, .shard_orientation = input_shard_orientation};
+            input_tensor_parallel_config = pconfig;
+            if(input_shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED && input_shard_orientation != ShardOrientation::ROW_MAJOR) {
                 needs_shard_or_reshard = true;
             }
-            bool input_tensor_height_sharded = input_shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED;
-            if(conv_config.height_sharding != input_tensor_height_sharded) {
+            if(input_shard_scheme != TensorMemoryLayout::HEIGHT_SHARDED && input_shard_scheme != TensorMemoryLayout::BLOCK_SHARDED) {
                 needs_shard_or_reshard = true;
             }
-            bool input_transpose_shards = input_shard_orientation == ShardOrientation::COL_MAJOR;
-            if (!conv_config.height_sharding && conv_config.transpose_shards != input_transpose_shards) {
-                needs_shard_or_reshard = true;
+            if(conv_config.override_sharding_config) {
+                if(conv_config.core_grid != input_shard_grid) {
+                    needs_shard_or_reshard = true;
+                }
+                bool input_tensor_height_sharded = input_shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED;
+                if(conv_config.height_sharding != input_tensor_height_sharded) {
+                    needs_shard_or_reshard = true;
+                }
+                bool input_transpose_shards = input_shard_orientation == ShardOrientation::COL_MAJOR;
+                if (!conv_config.height_sharding && conv_config.transpose_shards != input_transpose_shards) {
+                    needs_shard_or_reshard = true;
+                }
             }
         }
     }
@@ -471,14 +477,14 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     // for conv op, pad the weights to block shape
     if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         weight_tensor_ = convert_conv_weight_tensor_to_special_padding_tiled_layout(
-            weight_tensor,
+            weight_tensor_,
             weight_block_h_ntiles,
             weight_block_w_ntiles,
             weights_bias_dtype
         );
     } else {
         weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout(
-            weight_tensor,
+            weight_tensor_,
             weight_block_h_ntiles,
             weight_block_w_ntiles,
             weights_bias_dtype
@@ -501,9 +507,10 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             {0, 0, 0, 0},
             0
         );
-        bias_tensor_ = ttnn::operations::core::to_layout(bias_tensor_, Layout::TILE, weights_bias_dtype, nullopt);
         bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, const_cast<Device*>(&device), nullopt);
+        bias_tensor_ = ttnn::operations::core::to_layout(bias_tensor_, Layout::TILE, weights_bias_dtype, nullopt);
     }
+    cout << "Done preparing weights" << endl;
 
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
 }
@@ -529,7 +536,6 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
         ttnn::validate_input_tensor("ttnn.conv2d", bias_tensor.value(), input_schemas[2]);
     }
     ConvConfig conv_config = conv_config_.value_or(ConvConfig());
-    const auto& input_memory_config = input_tensor.memory_config();
     uint32_t output_height = ((input_height - kernel_size[0] + 2 * padding[0]) / stride[0]) + 1;
     uint32_t output_width = ((input_width - kernel_size[1] + 2 * padding[1]) / stride[1]) + 1;
     auto [input_tensor_post_tm, parallel_config, tensor_manipulated] = shard_or_reshard_tensor_if_required(device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels);
