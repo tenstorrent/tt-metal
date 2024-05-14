@@ -330,7 +330,7 @@ def get_atol_rtol_pcc(golden, calculated):
     )
 
 
-def check_kv_cache(pt_cache_all, tt_cache_all, generation_start_pos, generation_length, is_prefill, pcc):
+def check_kv_cache(pt_cache_all, tt_cache_all, generation_start_pos, generation_length, seq_len, is_prefill, pcc):
     test_passed = True
     for cache_pt, cache_tt in zip(pt_cache_all, tt_cache_all):
         cache_length_to_check = generation_start_pos + generation_length

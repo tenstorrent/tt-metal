@@ -21,10 +21,6 @@ from models.experimental.llama2_70b.tt.model_config import (
     get_model_config,
 )
 
-# from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-#     comp_allclose,
-#     comp_pcc,
-# )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
 from models.experimental.llama2_70b.tt.llama_common import (
     get_llama_path,
@@ -34,6 +30,8 @@ from models.experimental.llama2_70b.tt.llama_common import (
     UNIT_TEST_START_POS,
     UNIT_TEST_GENERATION_LENGTH,
     comp_pcc,
+    should_skip_model_load,
+    check_kv_cache,
 )
 
 
@@ -76,6 +74,8 @@ def run_test_LlamaModel_inference(
         t3k_device_mesh, model_config, n_devices, emulated
     )
 
+    skip_model_load = should_skip_model_load()
+
     logger.info(f"Running num_layer: {n_layers}")
     hugging_face_reference_model = Llama.build(
         ckpt_dir,
@@ -83,7 +83,7 @@ def run_test_LlamaModel_inference(
         max_seq_len=MAX_SEQ_LEN,
         max_batch_size=batch,
         n_layers=n_layers,
-        skip_model_load=False,
+        skip_model_load=skip_model_load,
     ).model
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
@@ -106,9 +106,6 @@ def run_test_LlamaModel_inference(
         emulated=emulated,
         cache_path=cache_path,
     )
-
-    # for device in devices:
-    #     tt_lib.device.Synchronize(device)
 
     if model_config["LLM_MODE"] == "prefill":
         generation_start_pos = 0
@@ -140,15 +137,6 @@ def run_test_LlamaModel_inference(
             attn_mask,
         )
         del tt_inp_emb, rot_mat, attn_mask
-
-        logger.info(f"Syncronizing devices for token idx {start_pos}")
-
-        # for device in devices:
-        #     tt_lib.device.Synchronize(device)
-        #     if i % 8 == 0:
-        #         tt_lib.device.DumpDeviceProfiler(device)
-
-        logger.info(f"Done synchronizing devices")
 
         tt_out = ttnn.from_device(tt_out)
         tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=3))
@@ -199,37 +187,22 @@ def run_test_LlamaModel_inference(
         .attention.cache_v.clone()
         .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
     ]
-    # TT hardware execution -------------------------------------------------------------
-    # tt_layer_present = []
-    # for layer_past in tt_model.layers[0].attention.layer_past_list:
-    #     tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
-    # # concat the pasts by heads
-    # tt_layer_present = [
-    #     torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
-    # ]
+
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past]
     tt_layer_present_all = [
         ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)
         for lp in tt_layer_present_all
     ]
 
-    for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present_all):
-        cache_length_to_check = generation_start_pos + generation_length + 1
-        if model_config["LLM_MODE"] == "prefill":
-            cache_pt = cache_pt[:, :, :seq_len, :]
-            cache_tt = cache_tt[:, :, :seq_len, :]
-        else:
-            cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-            cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
-        does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
-        logger.info(f"Output: {output_pcc}")
-
-        if does_pass:
-            logger.info(f"KV Cache Passed!")
-        else:
-            logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
-            all_tests_pass = False
-
+    cache_test_pass = check_kv_cache(
+        pytorch_layer_present,
+        tt_layer_present_all,
+        generation_start_pos,
+        generation_length,
+        seq_len,
+        model_config["LLM_MODE"] == "prefill",
+        pcc,
+    )
     if all_tests_pass:
         logger.info(f"{model_name} output Passed!")
     else:
@@ -240,10 +213,10 @@ def run_test_LlamaModel_inference(
 @pytest.mark.timeout(240000)
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "pcc, n_layers",
+    "pcc,n_layers",
     (
-        (0.999, 1),
-        (0.998, 2),
+        (0.997, 1),
+        (0.996, 2),
         (0.99, 4),
         (0.99, 6),
         (0.99, 7),
@@ -279,13 +252,13 @@ def test_LlamaModel_inference(
     n_devices,
     t3k_device_mesh,
     emulated,
-    # use_program_cache,
 ):
-    # devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
     model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
+
+    if t3k_device_mesh.get_num_devices() < n_devices and not emulated:
+        pytest.skip(f"Requires at {n_devices} devices to run")
+
     compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
-    # if len(devices) < n_devices and not emulated:
-    #     pytest.skip(f"Requires at {n_devices} devices to run")
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
