@@ -52,7 +52,7 @@ inline Tensor maxpool2d(const Tensor& input_tensor, uint32_t batch_size, uint32_
     uint32_t neg_inf_pad_val = 0xf7ff;  // TODO: double check
 
     auto haloed_tensor = ttnn::operations::halo::halo_op(input_tensor, sliding_window_config, neg_inf_pad_val, false, parallel_config.shard_orientation == ShardOrientation::COL_MAJOR, 0, memory_config);
-    return tt_metal::maxpool2d_new(haloed_tensor, sliding_window_config, channels, memory_config);
+    return tt::tt_metal::maxpool2d_new(haloed_tensor, sliding_window_config, channels, memory_config);
 }
 
 }  // namespace maxpool
