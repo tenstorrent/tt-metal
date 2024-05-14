@@ -6,7 +6,7 @@ on:
       - main/galaxy
   schedule:
     - cron: '0 0 * * *' # Runs every day at 12am UTC
-    
+
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
