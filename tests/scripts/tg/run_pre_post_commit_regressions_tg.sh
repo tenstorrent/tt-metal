@@ -13,5 +13,4 @@ if [[ -z "$ARCH_NAME" ]]; then
   exit 1
 fi
 
-# Write tests here!
-echo "Fill me!"
+TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="CommandQueueSingleCardFixture.*"
