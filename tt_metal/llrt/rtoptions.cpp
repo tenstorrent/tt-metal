@@ -16,6 +16,11 @@ namespace tt {
 
 namespace llrt {
 
+const char *RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
+    "DPRINT",
+    "DEBUG_DELAY"
+};
+
 // Note: global initialization order is non-deterministic
 // This is ok so long as this gets initialized before decisions are based on
 // env state
@@ -29,7 +34,10 @@ RunTimeOptions::RunTimeOptions() {
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
 
     ParseWatcherEnv();
-    ParseDPrintEnv();
+
+    for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
+        ParseFeatureEnv((RunTimeDebugFeatures)i);
+    }
 
     // Test mode has no env var, default is disabled
     test_mode_enabled = false;
@@ -41,7 +49,7 @@ RunTimeOptions::RunTimeOptions() {
         profiler_enabled = true;
     }
 #endif
-    TT_FATAL(!(get_dprint_enabled() && get_profiler_enabled()), "Cannot enable both debug printing and profiling");
+    TT_FATAL(!(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()), "Cannot enable both debug printing and profiling");
 
     null_kernels = (std::getenv("TT_METAL_NULL_KERNELS") != nullptr);
 
@@ -104,36 +112,44 @@ void RunTimeOptions::ParseWatcherEnv() {
             watcher_disabled_features.insert(feature);
         }
     }
+
+    const char *watcher_debug_delay_str = getenv("TT_METAL_WATCHER_DEBUG_DELAY");
+    if (watcher_debug_delay_str != nullptr) {
+        sscanf(watcher_debug_delay_str, "%u", &watcher_debug_delay);
+    }
 }
 
-void RunTimeOptions::ParseDPrintEnv() {
-    ParseDPrintCoreRange("TT_METAL_DPRINT_CORES", CoreType::WORKER);
-    ParseDPrintCoreRange("TT_METAL_DPRINT_ETH_CORES", CoreType::ETH);
-    ParseDPrintChipIds("TT_METAL_DPRINT_CHIPS");
-    ParseDPrintRiscvMask("TT_METAL_DPRINT_RISCVS");
-    ParseDPrintFileName("TT_METAL_DPRINT_FILE");
+void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
+    std::string feature_env_prefix("TT_METAL_");
+    feature_env_prefix += RunTimeDebugFeatureNames[feature];
 
-    // Set dprint enabled if the user asked for any dprint cores
-    dprint_enabled = false;
-    for (auto &core_type_and_all_flag : dprint_all_cores)
+    ParseFeatureCoreRange(feature, feature_env_prefix + "_CORES", CoreType::WORKER);
+    ParseFeatureCoreRange(feature, feature_env_prefix + "_ETH_CORES", CoreType::ETH);
+    ParseFeatureChipIds(feature, feature_env_prefix + "_CHIPS");
+    ParseFeatureRiscvMask(feature, feature_env_prefix + "_RISCVS");
+    ParseFeatureFileName(feature, feature_env_prefix + "_FILE");
+
+    // Set feature enabled if the user asked for any dprint cores
+    feature_targets[feature].enabled = false;
+    for (auto &core_type_and_all_flag : feature_targets[feature].all_cores)
         if (core_type_and_all_flag.second)
-            dprint_enabled = true;
-    for (auto &core_type_and_cores : dprint_cores)
+            feature_targets[feature].enabled = true;
+    for (auto &core_type_and_cores : feature_targets[feature].cores)
         if (core_type_and_cores.second.size() > 0)
-            dprint_enabled = true;
+            feature_targets[feature].enabled = true;
 
     const char *print_noc_xfers = std::getenv("TT_METAL_DPRINT_NOC_TRANSFER_DATA");
     if (print_noc_xfers != nullptr)
         dprint_noc_transfer_data = true;
 };
 
-void RunTimeOptions::ParseDPrintCoreRange(const char* env_var, CoreType core_type) {
-    char *str = std::getenv(env_var);
+void RunTimeOptions::ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string &env_var, CoreType core_type) {
+    char *str = std::getenv(env_var.c_str());
     vector<CoreCoord> cores;
 
     // Check if "all" is specified, rather than a range of cores.
     if (str != nullptr && strcmp(str, "all") == 0) {
-        dprint_all_cores[core_type] = true;
+        feature_targets[feature].all_cores[core_type] = true;
         return;
     }
     if (str != nullptr) {
@@ -179,12 +195,12 @@ void RunTimeOptions::ParseDPrintCoreRange(const char* env_var, CoreType core_typ
     }
 
     // Set the core range
-    dprint_cores[core_type] = cores;
+    feature_targets[feature].cores[core_type] = cores;
 }
 
-void RunTimeOptions::ParseDPrintChipIds(const char* env_var) {
+void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string &env_var) {
     vector<int> chips;
-    char *env_var_str = std::getenv(env_var);
+    char *env_var_str = std::getenv(env_var.c_str());
 
     // If the environment variable is not empty, parse it.
     while (env_var_str != nullptr) {
@@ -200,13 +216,13 @@ void RunTimeOptions::ParseDPrintChipIds(const char* env_var) {
     // Default is no chips are specified is chip 0.
     if (chips.size() == 0)
         chips.push_back(0);
-    dprint_chip_ids = chips;
+    feature_targets[feature].chip_ids = chips;
 }
 
-void RunTimeOptions::ParseDPrintRiscvMask(const char* env_var) {
+void RunTimeOptions::ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string &env_var) {
     // Default is all RISCVs enabled for printing.
     uint32_t riscv_mask = DPRINT_RISCV_BR | DPRINT_RISCV_TR0 | DPRINT_RISCV_TR1 | DPRINT_RISCV_TR2 | DPRINT_RISCV_NC;
-    char *env_var_str = std::getenv(env_var);
+    char *env_var_str = std::getenv(env_var.c_str());
     if (env_var_str != nullptr) {
         if (strcmp(env_var_str, "BR") == 0) {
             riscv_mask = DPRINT_RISCV_BR;
@@ -222,13 +238,25 @@ void RunTimeOptions::ParseDPrintRiscvMask(const char* env_var) {
             TT_THROW("Invalid TT_DEBUG_PRINT_RISCV");
         }
     }
-    dprint_riscv_mask = riscv_mask;
+    feature_targets[feature].riscv_mask = riscv_mask;
 }
 
-void RunTimeOptions::ParseDPrintFileName(const char* env_var) {
-    char *env_var_str = std::getenv(env_var);
-    dprint_file_name = (env_var_str != nullptr)? std::string(env_var_str) : "";
+void RunTimeOptions::ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string &env_var) {
+    char *env_var_str = std::getenv(env_var.c_str());
+    feature_targets[feature].file_name = (env_var_str != nullptr)? std::string(env_var_str) : "";
 }
+
+void RunTimeOptions::ParseFeatureTransactionMask(RunTimeDebugFeatures feature, const std::string &env_var) {
+    char *env_var_str = std::getenv(env_var.c_str());
+    const char *transaction_type_names[TransactionNumTypes] = { "READ", "WRITE", "ATOMIC" };
+
+    for (int i = 0; i < TransactionNumTypes; i++) {
+        if (strstr(env_var_str, transaction_type_names[i]) != nullptr) {
+            feature_targets[feature].transaction_mask |= (1 << i);
+        }
+    }
+}
+
 
 } // namespace llrt
 

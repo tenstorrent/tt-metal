@@ -40,6 +40,7 @@ extern uint8_t noc_index;
 #include "noc_addr_ranges_gen.h"
 #include "noc_parameters.h"
 #include "noc_overlay_parameters.h"
+#include "dev_msgs.h"
 
 
 // A couple defines for specifying read/write and multi/unicast
@@ -219,25 +220,32 @@ void debug_sanitize_noc_and_worker_addr(
     DEBUG_SANITIZE_NOC_READ_TRANSACTION( \
         ((uint64_t) NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID) << 32) | ((uint64_t) NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO) << 32), \
         NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO), \
-        NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));
+        NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE)); \
+        debug_sanitize_insert_debug_delay((uint8_t) TransactionRead);
+
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc_id) \
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION( \
         ((uint64_t) NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID) << 32) | ((uint64_t) NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_LO)), \
         NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_LO), \
-        NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
-
+        NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE)); \
+    debug_sanitize_insert_debug_delay((uint8_t) TransactionWrite);
 #define DEBUG_SANITIZE_NOC_ADDR(a, l) \
     debug_sanitize_noc_addr(a, 0, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ); LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_TRANSACTION(noc_a, worker_a, l, multicast, dir) \
     debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, multicast, dir); LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_a, worker_a, l) \
-    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ); LOG_LEN(l)
+    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ); LOG_LEN(l); \
+    debug_sanitize_insert_debug_delay((uint8_t) TransactionRead);
 #define DEBUG_SANITIZE_NOC_MULTI_READ_TRANSACTION(noc_a, worker_a, l) \
-    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_READ); LOG_LEN(l)
+    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_READ); LOG_LEN(l); \
+    debug_sanitize_insert_debug_delay((uint8_t) TransactionRead);
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_a, worker_a, l) \
-    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_WRITE); LOG_LEN(l)
+    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_WRITE); LOG_LEN(l); \
+    debug_sanitize_insert_debug_delay((uint8_t) TransactionWrite)
 #define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_a, worker_a, l) \
-    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_WRITE); LOG_LEN(l)
+    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_WRITE); LOG_LEN(l); \
+    debug_sanitize_insert_debug_delay((uint8_t) TransactionWrite);
+
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a) \
     DEBUG_SANITIZE_NOC_READ_TRANSACTION( \
         ((uint64_t) NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID) << 32) | noc_a_lower, \
@@ -253,6 +261,21 @@ void debug_sanitize_noc_and_worker_addr(
         worker_a, \
         NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
 
+// Delay for debugging purposes
+inline void debug_sanitize_insert_debug_delay(uint8_t transaction_type) {
+#if defined(WATCHER_DEBUG_DELAY)
+    debug_sanitize_noc_addr_msg_t tt_l1_ptr *v = *GET_MAILBOX_ADDRESS_DEV(sanitize_noc);
+
+    bool in_riscv_mask = v[0].debug_delay_riscv_mask & (1 << debug_get_which_riscv());
+    bool in_transaction_type_mask = v[0].debug_delay_transaction_type_mask & (1 << transaction_type);
+
+    if (in_riscv_mask && in_transaction_type_mask) {
+        // WATCHER_DEBUG_DELAY is a compile time constant passed with -D
+        for (volatile uint32_t i = 0; i < WATCHER_DEBUG_DELAY; i++) ;
+        for (;;); // TODO: remove this
+    }
+#endif // WATCHER_DEBUG_DELAY
+
 #else // !WATCHER_ENABLED
 
 #define DEBUG_SANITIZE_NOC_ADDR(a, l) LOG_LEN(l)
@@ -265,5 +288,7 @@ void debug_sanitize_noc_and_worker_addr(
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a) LOG_WRITE_LEN_FROM_STATE()
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc_id)
+
+#endif // WATCHER_ENABLED
 
 #endif // WATCHER_ENABLED && not TRISC

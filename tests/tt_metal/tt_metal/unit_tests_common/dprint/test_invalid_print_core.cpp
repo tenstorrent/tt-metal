@@ -17,8 +17,8 @@ TEST(DPrintErrorChecking, TestPrintInvalidCore) {
     // device setup, but not the print server should simply ignore the invalid cores.
     std::map<CoreType, std::vector<CoreCoord>> dprint_cores;
     dprint_cores[CoreType::WORKER] = {{0, 0}, {1, 1}, {100, 100}};
-    tt::llrt::OptionsG.set_dprint_cores(dprint_cores); // Only (100, 100) is invalid.
-    tt::llrt::OptionsG.set_dprint_enabled(true);
+    tt::llrt::OptionsG.set_feature_cores(tt::llrt::RunTimeDebugFeatureDprint, dprint_cores);
+    tt::llrt::OptionsG.set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, true);
 
     const int device_id = 0;
     Device* device = nullptr;
@@ -27,6 +27,6 @@ TEST(DPrintErrorChecking, TestPrintInvalidCore) {
     // We expect that even though illegal worker cores were requested, device setup did not hang.
     // So just make sure that device setup worked and then close the device.
     EXPECT_TRUE(device != nullptr);
-    tt::llrt::OptionsG.set_dprint_enabled(false);
+    tt::llrt::OptionsG.set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, false);
     tt::tt_metal::CloseDevice(device);
 }

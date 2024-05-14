@@ -85,6 +85,7 @@ struct debug_status_msg_t {
 };
 
 // TODO: Clean up this struct with #6738
+// This structure is populated by the device and read by the host
 struct debug_sanitize_noc_addr_msg_t {
     volatile uint64_t noc_addr;
     volatile uint32_t l1_addr;
@@ -92,6 +93,13 @@ struct debug_sanitize_noc_addr_msg_t {
     volatile uint16_t which;
     volatile uint16_t invalid;
     volatile uint16_t multicast;
+    volatile uint16_t pad;
+};
+
+// Host -> device. Populated with the information on where we want to insert delays.
+struct debug_insert_delays_msg_t {
+    volatile uint8_t debug_delay_riscv_mask;            // Which Risc cores will delay. (1 << debug_sanitize_which_riscv)
+    volatile uint8_t debug_delay_transaction_type_mask; // Which transaction types will be delayed. (1 << debug_transaction_type)
     volatile uint16_t pad;
 };
 
@@ -127,6 +135,13 @@ typedef enum debug_sanitize_which_riscv {
     DebugNumUniqueRiscs
 } riscv_id_t;
 
+typedef enum debug_transaction_type {
+    TransactionRead  = 0,
+    TransactionWrite = 1,
+    TransactionAtomic = 2,
+    TransactionNumTypes
+} debug_transaction_type_t;
+
 struct debug_pause_msg_t {
     volatile uint8_t flags[DebugNumUniqueRiscs];
     volatile uint8_t pad[8 - DebugNumUniqueRiscs];
@@ -148,6 +163,7 @@ struct mailboxes_t {
     struct debug_sanitize_noc_addr_msg_t sanitize_noc[NUM_NOCS];
     struct debug_assert_msg_t assert_status;
     struct debug_pause_msg_t pause_status;
+    struct debug_insert_delays_msg_t debug_insert_delays;
 };
 
 #ifndef TENSIX_FIRMWARE

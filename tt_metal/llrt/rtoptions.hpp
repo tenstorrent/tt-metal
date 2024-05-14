@@ -20,6 +20,32 @@ namespace tt {
 
 namespace llrt {
 
+// Enumerates the debug features that can be enabled at runtime. Used features that
+// allow for more fine-grained control over which cores, chips, etc. the feature is enabled for.
+enum RunTimeDebugFeatures {
+    RunTimeDebugFeatureDprint,
+    RunTimeDebugFeatureDebugDelay,
+    // NOTE: Update RunTimeDebugFeatureNames if adding new features
+    RunTimeDebugFeatureCount
+};
+
+extern const char *RunTimeDebugFeatureNames[RunTimeDebugFeatureCount];
+
+// TargetSelection is used to store the targets for a given debug feature. I.e. which chips, cores, harts etc
+// to enable a debug feature for.
+struct TargetSelection {
+    std::map<CoreType, std::vector<CoreCoord>> cores;
+    std::map<CoreType, bool> all_cores;
+    std::map<CoreType, std::unordered_set<CoreCoord>> disabled_cores;
+    bool enabled;
+    std::vector<int> chip_ids;
+    bool all_chips = false;
+    uint32_t riscv_mask = 0;
+    std::string file_name; // File name to write output to.
+    bool dprint_noc_transfer_data = false;
+    uint32_t transaction_mask = 0;
+};
+
 class RunTimeOptions {
     std::string root_dir;
 
@@ -31,16 +57,9 @@ class RunTimeOptions {
     bool watcher_append = false;
     bool watcher_auto_unpause = false;
     bool watcher_noinline = false;
-
-    std::map<CoreType, std::vector<CoreCoord>> dprint_cores;
-    std::map<CoreType, bool> dprint_all_cores;
-    std::map<CoreType, std::unordered_set<CoreCoord>> dprint_disabled_cores;
-    bool dprint_enabled;
-    std::vector<int> dprint_chip_ids;
-    bool dprint_all_chips = false;
-    uint32_t dprint_riscv_mask = 0;
-    std::string dprint_file_name;
     bool dprint_noc_transfer_data = false;
+
+    TargetSelection feature_targets[RunTimeDebugFeatureCount];
 
     bool test_mode_enabled = false;
 
@@ -51,6 +70,7 @@ class RunTimeOptions {
     bool clear_l1 = false;
 
     bool riscv_debug_info_enabled = false;
+    uint32_t watcher_debug_delay = 0;
 
    public:
     RunTimeOptions();
@@ -82,54 +102,38 @@ class RunTimeOptions {
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
-    inline bool get_dprint_enabled() { return dprint_enabled; }
-    inline void set_dprint_enabled(bool enable) { dprint_enabled = enable; }
+    inline bool get_feature_enabled(RunTimeDebugFeatures feature) { return feature_targets[feature].enabled; }
+    inline void set_feature_enabled(RunTimeDebugFeatures feature, bool enabled) { feature_targets[feature].enabled = enabled; }
     // Note: dprint cores are logical
-    inline std::map<CoreType, std::vector<CoreCoord>>& get_dprint_cores() {
-        return dprint_cores;
-    }
-    inline void set_dprint_cores(std::map<CoreType, std::vector<CoreCoord>> cores) {
-        dprint_cores = cores;
-    }
-    inline std::map<CoreType, std::unordered_set<CoreCoord>>& get_dprint_disabled_cores() {
-        return dprint_disabled_cores;
-    }
-    inline void set_dprint_disabled_cores(std::map<CoreType, std::unordered_set<CoreCoord>> disabled_cores) {
-        dprint_disabled_cores = disabled_cores;
-    }
+    inline std::map<CoreType, std::vector<CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) { return feature_targets[feature].cores; }
+    inline void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<CoreCoord>> cores) { feature_targets[feature].cores = cores; }
+    inline std::map<CoreType, std::unordered_set<CoreCoord>>& get_feature_disabled_cores(RunTimeDebugFeatures feature) { return feature_targets[feature].disabled_cores; }
+    inline void set_feature_disabled_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::unordered_set<CoreCoord>> disabled_cores) { feature_targets[feature].disabled_cores = disabled_cores; }
     // An alternative to setting cores by range, a flag to enable all.
-    inline void set_dprint_all_cores(CoreType core_type, bool all_cores) {
-        dprint_all_cores[core_type] = all_cores;
-    }
-    inline bool get_dprint_all_cores(CoreType core_type) { return dprint_all_cores[core_type]; }
+    inline void set_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type, bool all_cores) { feature_targets[feature].all_cores[core_type] = all_cores; }
+    inline bool get_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type) { return feature_targets[feature].all_cores[core_type]; }
     // Note: core range is inclusive
-    inline void set_dprint_core_range(CoreCoord start, CoreCoord end, CoreType core_type) {
-        dprint_cores[core_type] = std::vector<CoreCoord>();
+    inline void set_feature_core_range(RunTimeDebugFeatures feature, CoreCoord start, CoreCoord end, CoreType core_type) {
+        feature_targets[feature].cores[core_type] = std::vector<CoreCoord>();
         for (uint32_t x = start.x; x <= end.x; x++) {
             for (uint32_t y = start.y; y <= end.y; y++) {
-                dprint_cores[core_type].push_back({x, y});
+                feature_targets[feature].cores[core_type].push_back({x, y});
             }
         }
     }
-    inline std::vector<int>& get_dprint_chip_ids() { return dprint_chip_ids; }
-    inline void set_dprint_chip_ids(std::vector<int> chip_ids) {
-        dprint_chip_ids = chip_ids;
-    }
+    inline std::vector<int>& get_feature_chip_ids(RunTimeDebugFeatures feature) { return feature_targets[feature].chip_ids; }
+    inline void set_feature_chip_ids(RunTimeDebugFeatures feature, std::vector<int> chip_ids) { feature_targets[feature].chip_ids = chip_ids; }
     // An alternative to setting cores by range, a flag to enable all.
-    inline void set_dprint_all_chips(bool all_chips) {
-        dprint_all_chips = all_chips;
-    }
-    inline bool get_dprint_all_chips() { return dprint_all_chips; }
-    inline uint32_t get_dprint_riscv_mask() { return dprint_riscv_mask; }
-    inline void set_dprint_riscv_mask(uint32_t riscv_mask) {
-        dprint_riscv_mask = riscv_mask;
-    }
-    inline std::string get_dprint_file_name() { return dprint_file_name; }
-    inline void set_dprint_file_name(std::string file_name) {
-        dprint_file_name = file_name;
-    }
-    inline bool get_dprint_noc_transfers() { return dprint_noc_transfer_data; }
-    inline void set_dprint_noc_transfers(bool val) { dprint_noc_transfer_data = val; }
+    inline void set_feature_all_chips(RunTimeDebugFeatures feature, bool all_chips) { feature_targets[feature].all_chips = all_chips; }
+    inline bool get_feature_all_chips(RunTimeDebugFeatures feature) { return feature_targets[feature].all_chips; }
+    inline uint32_t get_feature_riscv_mask(RunTimeDebugFeatures feature) { return feature_targets[feature].riscv_mask; }
+    inline void set_feature_riscv_mask(RunTimeDebugFeatures feature, uint32_t riscv_mask) { feature_targets[feature].riscv_mask = riscv_mask; }
+    inline std::string get_feature_file_name(RunTimeDebugFeatures feature) { return feature_targets[feature].file_name; }
+    inline void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) { feature_targets[feature].file_name = file_name; }
+    inline bool get_feature_noc_transfers(RunTimeDebugFeatures feature) { return feature_noc_transfer_data[feature]; }
+    inline void set_feature_noc_transfers(RunTimeDebugFeatures feature, bool val) { feature_noc_transfer_data[feature] = val; }
+    inline uint32_t get_feature_transaction_mask(RunTimeDebugFeatures feature) { return feature_targets[feature].transaction_mask; }
+    inline void set_feature_transaction_mask(RunTimeDebugFeatures feature, uint32_t transaction_mask) { feature_targets[feature].transaction_mask = transaction_mask; }
 
     // Used for both watcher and dprint servers, this dev option (no corresponding env var) sets
     // whether to catch exceptions (test mode = true) coming from debug servers or to throw them
@@ -151,13 +155,16 @@ class RunTimeOptions {
     inline bool get_riscv_debug_info_enabled() { return riscv_debug_info_enabled; }
     inline void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_enabled = enable; }
 
+    inline uint32_t get_watcher_debug_delay() { return watcher_debug_delay; }
+
 private:
-    // Helper functions to parse DPrint-specific environment vaiables.
-    void ParseDPrintEnv();
-    void ParseDPrintCoreRange(const char* env_var, CoreType core_type);
-    void ParseDPrintChipIds(const char* env_var);
-    void ParseDPrintRiscvMask(const char* env_var);
-    void ParseDPrintFileName(const char* env_var);
+    // Helper functions to parse feature-specific environment vaiables.
+    void ParseFeatureEnv(RunTimeDebugFeatures feature);
+    void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string &env_var, CoreType core_type);
+    void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string &env_var);
+    void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string &env_var);
+    void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string &env_var);
+    void ParseFeatureTransactionMask(RunTimeDebugFeatures feature, const std::string &env_var);
 
     // Helper function to parse watcher-specific environment variables.
     void ParseWatcherEnv();

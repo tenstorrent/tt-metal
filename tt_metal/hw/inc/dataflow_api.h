@@ -24,6 +24,7 @@
 #include "risc_attribs.h"
 #include "third_party/umd/device/tt_silicon_driver_common.hpp"
 #include "debug/assert.h"
+#include "dev_msgs.h"
 
 extern uint8_t noc_index;
 
