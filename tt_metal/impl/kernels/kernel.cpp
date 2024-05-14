@@ -114,13 +114,13 @@ uint8_t ComputeKernel::expected_num_binaries() const {
     return 3;
 }
 
-std::vector<ll_api::memory> const &Kernel::binaries(chip_id_t device_id) const {
+std::vector<ll_api::memory> const &Kernel::binaries(uint32_t build_key) const {
     int expected_num_binaries = this->expected_num_binaries();
-    if (this->binaries_.find(device_id) != this->binaries_.end() and this->binaries_.at(device_id).size() != expected_num_binaries) {
+    if (this->binaries_.find(build_key) != this->binaries_.end() and this->binaries_.at(build_key).size() != expected_num_binaries) {
         TT_THROW("Expected " + std::to_string(expected_num_binaries) + " binaries but have "
-                    + std::to_string(this->binaries_.at(device_id).size()) + " for kernel " + this->name());
+                    + std::to_string(this->binaries_.at(build_key).size()) + " for kernel " + this->name());
     }
-    return this->binaries_.at(device_id);
+    return this->binaries_.at(build_key);
 }
 
 std::string DataMovementKernel::config_hash() const {
@@ -314,11 +314,11 @@ void Kernel::set_common_runtime_args_offset(){
     this->defines_["COMMON_RT_ARGS_OFFSET"] = std::to_string(offset);
 }
 
-void Kernel::set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&binaries) {
-    if (this->binaries_.find(device_id) != this->binaries_.end()) {
-        TT_ASSERT(this->binaries_.at(device_id) == binaries);
+void Kernel::set_binaries(uint32_t build_key, std::vector<ll_api::memory> &&binaries) {
+    if (this->binaries_.find(build_key) != this->binaries_.end()) {
+        TT_ASSERT(this->binaries_.at(build_key) == binaries);
     } else {
-        this->binaries_[device_id] = std::move(binaries);
+        this->binaries_[build_key] = std::move(binaries);
     }
 }
 
@@ -335,7 +335,7 @@ void DataMovementKernel::read_binaries(Device *device) {
     log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", riscv_id, this->binary_size16_ * 16);
 
     binaries.push_back(binary_mem);
-    this->set_binaries(device->id(), std::move(binaries));
+    this->set_binaries(device->build_key(), std::move(binaries));
 }
 
 void EthernetKernel::read_binaries(Device *device) {
@@ -346,7 +346,7 @@ void EthernetKernel::read_binaries(Device *device) {
     const JitBuildState& build_state = device->build_kernel_state(JitBuildProcessorType::ETHERNET, erisc_id);
     ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_));
     binaries.push_back(binary_mem);
-    this->set_binaries(device->id(), std::move(binaries));
+    this->set_binaries(device->build_key(), std::move(binaries));
 }
 
 void ComputeKernel::read_binaries(Device *device) {
@@ -359,7 +359,7 @@ void ComputeKernel::read_binaries(Device *device) {
         log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", trisc_id + 2, this->binary_size16_ * 16);
         binaries.push_back(binary_mem);
     }
-    this->set_binaries(device->id(), std::move(binaries));
+    this->set_binaries(device->build_key(), std::move(binaries));
 }
 
 RISCV DataMovementKernel::processor() const {
@@ -383,7 +383,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     }
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    ll_api::memory binary_mem = this->binaries(device_id).at(0);
+    ll_api::memory binary_mem = this->binaries(device->build_key()).at(0);
 
     int riscv_id;
     switch (this->config_.processor) {
@@ -407,7 +407,7 @@ bool EthernetKernel::configure(Device *device, const CoreCoord &logical_core) co
     bool pass = true;
     auto device_id = device->id();
     auto ethernet_core = device->ethernet_core_from_logical_core(logical_core);
-    ll_api::memory binary_mem = this->binaries(device_id).at(0);
+    ll_api::memory binary_mem = this->binaries(device->build_key()).at(0);
     int riscv_id = this->config_.eth_mode == Eth::IDLE ? 6 : 5;
     pass &= tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, ethernet_core, riscv_id);
     return pass;
@@ -420,7 +420,7 @@ bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core) con
     }
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    std::vector<ll_api::memory> binaries = this->binaries(device_id);
+    std::vector<ll_api::memory> binaries = this->binaries(device->build_key());
 
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         pass &= tt::llrt::test_load_write_read_trisc_binary(

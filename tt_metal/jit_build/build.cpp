@@ -39,7 +39,7 @@ JitBuildEnv::JitBuildEnv()
 {
 }
 
-void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
+void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch)
 {
     // Paths
     this->root_ = llrt::OptionsG.get_root_dir();
@@ -48,8 +48,8 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
     this->arch_name_ = get_string_lowercase(arch);
     this->aliased_arch_name_ = get_string_aliased_arch_lowercase(arch);
 
-    this->out_firmware_root_ = this->out_root_ + to_string(device_id) + "/firmware/";
-    this->out_kernel_root_ = this->out_root_ + to_string(device_id) + "/kernels/";
+    this->out_firmware_root_ = this->out_root_ + to_string(build_key) + "/firmware/";
+    this->out_kernel_root_ = this->out_root_ + to_string(build_key) + "/kernels/";
 
     // Tools
     this->gpp_ = this->root_ + "tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";

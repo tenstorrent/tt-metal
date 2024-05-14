@@ -55,6 +55,7 @@ class Cluster {
 
     const metal_SocDescriptor &get_soc_desc(chip_id_t chip) const;
     uint32_t get_harvested_rows(chip_id_t chip) const;
+    uint32_t get_harvesting_mask(chip_id_t chip) const { return this->get_driver(chip).get_harvesting_masks_for_soc_descriptors().at(chip); }
 
     //! device driver and misc apis
     void verify_eth_fw() const;
