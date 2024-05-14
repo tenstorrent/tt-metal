@@ -16,15 +16,13 @@ namespace primary {
 
 using namespace tt_metal;
 
-/*
- * GENERAL matmul_backward
- */
-[[maybe_unused]] std::vector<std::variant<Tensor, char *>> moreh_matmul_backward(
+std::vector<std::optional<Tensor>> moreh_matmul_backward(
     const Tensor &output_grad,
     const Tensor &input,
     const Tensor &other,
-    std::optional<std::reference_wrapper<const Tensor>> input_grad = std::nullopt,
-    std::optional<std::reference_wrapper<const Tensor>> other_grad = std::nullopt,
+    const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+    std::optional<const Tensor> input_grad = std::nullopt,
+    std::optional<const Tensor> other_grad = std::nullopt,
     const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary

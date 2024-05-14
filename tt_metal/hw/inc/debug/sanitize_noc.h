@@ -14,11 +14,12 @@
 //
 #pragma once
 
+#if (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)) && \
+    (defined(WATCHER_ENABLED)) && \
+    (!defined(WATCHER_DISABLE_NOC_SANITIZE))
+
 #include "watcher_common.h"
-
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
-
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE)
+#include "generated_bank_to_noc_coord_mapping.h"
 
 extern uint8_t noc_index;
 
@@ -227,6 +228,4 @@ void debug_sanitize_noc_and_worker_addr(
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_a, worker_a, l)
 #define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_a, worker_a, l)
 
-#endif // WATCHER_ENABLED
-
-#endif // TENSIX_FIRMWARE
+#endif // WATCHER_ENABLED && not TRISC

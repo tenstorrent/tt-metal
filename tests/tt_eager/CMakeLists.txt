@@ -3,7 +3,8 @@ add_library(test_eager_common_libs INTERFACE)
 target_link_libraries(test_eager_common_libs INTERFACE tt_eager test_common_libs)
 
 set(TT_EAGER_TESTS_OPS
-    # ccl/test_all_gather_utils           # <- not called in run_tt_eager.py
+    ops/ccl/test_all_gather_utils
+    ops/ccl/test_all_gather_sharded_indexing_helpers
     ops/test_average_pool
     ops/test_eltwise_binary_op
     ops/test_eltwise_unary_op

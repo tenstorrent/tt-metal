@@ -2,295 +2,169 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Implemented based on reader_bmm_8bank_output_tiles_partitioned.cpp
-#include <stdint.h>
+#include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
-#include "dataflow_api.h"
+static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 
-void mask_tile(uint32_t l1_addr, uint32_t mask_w = 32, uint32_t mask_h = 32) {
-    union {
-        float f;
-        uint32_t u;
-    } zero;
-    zero.f = 0.0f;
-    auto ptr = reinterpret_cast<uint16_t *>(l1_addr);
-    for (uint32_t h = 0; h < 16; h++) {
-        // sub tile 0
-        {
-            uint32_t mask_w_0 = (mask_w >= 16) ? 16 : mask_w;
-            uint32_t mask_h_0 = (mask_h >= 16) ? 16 : mask_h;
-            uint32_t w = (h >= mask_h_0) ? 0 : mask_w_0;
-            for (; w < 16; w++) {
-                ptr[h * 16 + w] = uint16_t(zero.u >> 16);
-            }
-        }
-        // sub tile 1
-        {
-            uint32_t mask_w_1 = (mask_w < 16) ? 0 : mask_w - 16;
-            uint32_t mask_h_0 = (mask_h >= 16) ? 16 : mask_h;
-            uint32_t w = (h >= mask_h_0) ? 0 : mask_w_1;
-            for (; w < 16; w++) {
-                ptr[h * 16 + w + 256] = uint16_t(zero.u >> 16);
-            }
-        }
-        // sub tile 2
-        {
-            uint32_t mask_w_0 = (mask_w >= 16) ? 16 : mask_w;
-            uint32_t mask_h_1 = (mask_h < 16) ? 0 : mask_h - 16;
-            uint32_t w = (h >= mask_h_1) ? 0 : mask_w_0;
-            for (; w < 16; w++) {
-                ptr[h * 16 + w + 512] = uint16_t(zero.u >> 16);
-            }
-        }
-        // sub tile 3
-        {
-            uint32_t mask_w_1 = (mask_w < 16) ? 0 : mask_w - 16;
-            uint32_t mask_h_1 = (mask_h < 16) ? 0 : mask_h - 16;
-            uint32_t w = (h >= mask_h_1) ? 0 : mask_w_1;
-            for (; w < 16; w++) {
-                ptr[h * 16 + w + 768] = uint16_t(zero.u >> 16);
-            }
-        }
+inline uint32_t get_tidx(uint32_t* output_idxes, uint32_t* stride, uint32_t* not_bcast, bool transpose, bool use_h_dim) {
+    uint32_t tidx = 0;
+    // batch dim
+    for (int32_t i = MAX_NUM_DIMENSIONS - 1; i >= 2; --i) {
+        tidx += not_bcast[i] * stride[i] * output_idxes[i];
     }
+
+    // last 2-dim
+    int32_t i = transpose ? (use_h_dim ? 0 : 1) : (use_h_dim ? 1 : 0);
+    tidx += not_bcast[i] * stride[i] * output_idxes[use_h_dim ? 1 : 0];
+    return tidx;
 }
 
-inline bool is_in0_last_row(uint32_t itileA, uint32_t Mt, uint32_t Kt, uint32_t MtKt, uint32_t a_transpose) {
-    bool in0_last_row = false;
-    if (a_transpose) {
-        if ((itileA % MtKt) == (Mt - 1)) {
-            in0_last_row = true;
-        }
-    } else {
-        if ((itileA % MtKt) / Kt == (Mt - 1)) {
-            in0_last_row = true;
-        }
+inline void unravel_output_tidx(uint32_t output_tidx, uint32_t* output_idxes,  uint32_t* output_stride) {
+    for (int32_t i = MAX_NUM_DIMENSIONS - 1; i >= 0;--i) {
+        uint32_t dim = output_tidx / output_stride[i];
+        output_idxes[i] = dim;
+        output_tidx -= (output_idxes[i] * output_stride[i]);
     }
-    return in0_last_row;
-}
-
-inline bool is_in1_last_col(uint32_t itileB, uint32_t Nt, uint32_t Kt, uint32_t KtNt, uint32_t b_transpose) {
-    bool in1_last_col = false;
-    if (b_transpose) {
-        if ((itileB % KtNt) / Kt == (Nt - 1)) {
-            in1_last_col = true;
-        }
-    } else {
-        if ((itileB % KtNt) == (Nt - 1)) {
-            in1_last_col = true;
-        }
-    }
-    return in1_last_col;
-}
-
-inline void mask_in0_tile(
-    uint32_t l1_write_addr_in0,
-    uint32_t in0_last_row,
-    uint32_t kt,
-    uint32_t Kt,
-    uint32_t in0_mask_h,
-    uint32_t in0_mask_w,
-    uint32_t a_transpose) {
-    if (in0_last_row) {
-        if (kt != Kt - 1) {
-            if (a_transpose) {
-                if (in0_mask_w != 32)
-                    mask_tile(l1_write_addr_in0, in0_mask_w, 32);
-            } else {
-                if (in0_mask_h != 32)
-                    mask_tile(l1_write_addr_in0, 32, in0_mask_h);
-            }
-        } else {
-            if (in0_mask_h != 32 || in0_mask_w != 32)
-                mask_tile(l1_write_addr_in0, in0_mask_w, in0_mask_h);
-        }
-    } else if (kt == Kt - 1) {
-        if (a_transpose) {
-            if (in0_mask_h != 32)
-                mask_tile(l1_write_addr_in0, 32, in0_mask_h);
-        } else {
-            if (in0_mask_w != 32)
-                mask_tile(l1_write_addr_in0, in0_mask_w);
-        }
-    }
-}
-
-inline void mask_in1_tile(
-    uint32_t l1_write_addr_in1,
-    uint32_t in1_last_col,
-    uint32_t kt,
-    uint32_t Kt,
-    uint32_t in1_mask_h,
-    uint32_t in1_mask_w,
-    uint32_t b_transpose) {
-    if (in1_last_col) {
-        if (kt != Kt - 1) {
-            if (b_transpose) {
-                if (in1_mask_h != 32)
-                    mask_tile(l1_write_addr_in1, 32, in1_mask_h);
-
-            } else {
-                if (in1_mask_w != 32)
-                    mask_tile(l1_write_addr_in1, in1_mask_w, 32);
-            }
-        } else {
-            if (in1_mask_w != 32 || in1_mask_h != 32)
-                mask_tile(l1_write_addr_in1, in1_mask_w, in1_mask_h);
-        }
-    }
-    // last row
-    else if (kt == Kt - 1) {
-        if (b_transpose) {
-            if (in1_mask_w != 32)
-                mask_tile(l1_write_addr_in1, in1_mask_w, 32);
-
-        } else {
-            if (in1_mask_h != 32)
-                mask_tile(l1_write_addr_in1, 32, in1_mask_h);
-        }
-    }
-}
-
-inline uint32_t get_tile_a(
-    uint32_t output_tile_id,
-    uint32_t Mt,
-    uint32_t Nt,
-    uint32_t Kt,
-    uint32_t MtKt,
-    uint32_t MtNt,
-    uint32_t a_transpose,
-    uint32_t a_bcast_B,
-    uint32_t a_start_tile_id) {
-    uint32_t itileA = output_tile_id / MtNt * MtKt;
-    if (a_transpose) {
-        itileA += (output_tile_id % MtNt) / Nt;
-    } else {
-        itileA += (output_tile_id % MtNt) / Nt * Kt;
-    }
-
-    if (a_bcast_B) {
-        if (a_transpose) {
-            itileA %= Mt;
-        } else {
-            itileA %= MtKt;
-        }
-    }
-    itileA += a_start_tile_id;
-    return itileA;
-}
-
-inline uint32_t get_tile_b(
-    uint32_t output_tile_id,
-    uint32_t Mt,
-    uint32_t Nt,
-    uint32_t Kt,
-    uint32_t KtNt,
-    uint32_t MtNt,
-    uint32_t b_transpose,
-    uint32_t b_bcast_B,
-    uint32_t b_start_tile_id) {
-    uint32_t itileB = output_tile_id / MtNt * KtNt;
-    if (b_transpose) {
-        itileB += (output_tile_id % Nt) * Kt;
-    } else {
-        itileB += (output_tile_id % Nt);
-    }
-
-    if (b_bcast_B) {
-        if (b_transpose) {
-            itileB %= KtNt;
-        } else {
-            itileB %= Nt;
-        }
-    }
-    itileB += b_start_tile_id;
-    return itileB;
 }
 
 void kernel_main() {
-    // same arg indices as in reader_binary_diff_lenghts for compat
-    uint32_t src0_addr = get_arg_val<uint32_t>(0);
-    uint32_t src1_addr = get_arg_val<uint32_t>(1);
-    uint32_t Mt = get_arg_val<uint32_t>(2);
-    uint32_t Kt = get_arg_val<uint32_t>(3);
-    uint32_t Nt = get_arg_val<uint32_t>(4);
-    uint32_t MtKt = get_arg_val<uint32_t>(5);
-    uint32_t KtNt = get_arg_val<uint32_t>(6);
-    uint32_t a_bcast_B = get_arg_val<uint32_t>(7);
-    uint32_t b_bcast_B = get_arg_val<uint32_t>(8);
-    uint32_t output_tile_start_id = get_arg_val<uint32_t>(9);
-    uint32_t num_output_tiles = get_arg_val<uint32_t>(10);
-    uint32_t MtNt = get_arg_val<uint32_t>(11);
-    uint32_t a_transpose = get_arg_val<uint32_t>(12);
-    uint32_t b_transpose = get_arg_val<uint32_t>(13);
-    uint32_t a_start_tile_id = get_arg_val<uint32_t>(14);
-    uint32_t b_start_tile_id = get_arg_val<uint32_t>(15);
-    uint32_t in0_mask_h = get_arg_val<uint32_t>(16);
-    uint32_t in0_mask_w = get_arg_val<uint32_t>(17);
-    uint32_t in1_mask_h = get_arg_val<uint32_t>(18);
-    uint32_t in1_mask_w = get_arg_val<uint32_t>(19);
+    // compile-time args
+    constexpr bool input_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr bool other_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr uint32_t Kt = get_compile_time_arg_val(2);
+    bool transpose_input = (get_compile_time_arg_val(3) == 1);
+    bool transpose_other = (get_compile_time_arg_val(4) == 1);
+    uint32_t input_mask_h = get_compile_time_arg_val(5);
+    uint32_t input_mask_w = get_compile_time_arg_val(6);
+    uint32_t other_mask_h = get_compile_time_arg_val(7);
+    uint32_t other_mask_w = get_compile_time_arg_val(8);
+    #ifdef FUSE_BIAS
+    constexpr bool bias_is_dram = (get_compile_time_arg_val(9) == 1);
+    bool is_scalar_bias = (get_compile_time_arg_val(10) == 1);
+    bool scalar_bias_loaded = false;
+    #endif
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
+    // runtime args
+    ArgFetcher arg_fetcher;
+    uint32_t input_addr = arg_fetcher.get_next_arg_val<uint32_t>();
+    uint32_t other_addr = arg_fetcher.get_next_arg_val<uint32_t>();
+    uint32_t output_tile_start_idx = arg_fetcher.get_next_arg_val<uint32_t>();
+    uint32_t num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
+
+    uint32_t input_stride[MAX_NUM_DIMENSIONS];
+    uint32_t other_stride[MAX_NUM_DIMENSIONS];
+    uint32_t output_stride[MAX_NUM_DIMENSIONS];
+    uint32_t input_not_bcast[MAX_NUM_DIMENSIONS];
+    uint32_t other_not_bcast[MAX_NUM_DIMENSIONS];
+
+    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS;++i) {
+        input_stride[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+    }
+    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS;++i) {
+        other_stride[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+    }
+    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS;++i) {
+        output_stride[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+    }
+    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS;++i) {
+        input_not_bcast[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+    }
+    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS;++i) {
+        other_not_bcast[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+    }
+
+    #ifdef FUSE_BIAS
+        uint32_t bias_addr = arg_fetcher.get_next_arg_val<uint32_t>();
+    #endif
+
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
-
+    constexpr uint32_t cb_id_in2 = 2;
+    constexpr uint32_t cb_id_in3 = 3;
+    constexpr uint32_t cb_id_in4 = 4;
     constexpr uint32_t onetile = 1;
+
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
     const DataFormat in0_data_format = get_dataformat(cb_id_in0);
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
     const DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
-    const InterleavedAddrGenFast<src0_is_dram> s0 = {
-        .bank_base_address = src0_addr, .page_size = in0_tile_bytes, .data_format = in0_data_format};
+    const InterleavedAddrGenFast<input_is_dram> s0 = {
+        .bank_base_address = input_addr, .page_size = in0_tile_bytes, .data_format = in0_data_format};
 
-    const InterleavedAddrGenFast<src1_is_dram> s1 = {
-        .bank_base_address = src1_addr, .page_size = in1_tile_bytes, .data_format = in1_data_format};
+    const InterleavedAddrGenFast<other_is_dram> s1 = {
+        .bank_base_address = other_addr, .page_size = in1_tile_bytes, .data_format = in1_data_format};
 
-    uint32_t output_tile_id = output_tile_start_id;
+    #ifdef FUSE_BIAS
+    const uint32_t in4_tile_bytes = get_tile_size(cb_id_in4);
+    const DataFormat in4_data_format = get_dataformat(cb_id_in4);
+    const InterleavedAddrGenFast<bias_is_dram> s_bias = {
+        .bank_base_address = bias_addr, .page_size = in4_tile_bytes, .data_format = in4_data_format};
+    #endif
+
+    // mask
+    bool need_input_mask_h = (input_mask_h != 32);
+    bool need_input_mask_w = (input_mask_w != 32);
+
+    if (need_input_mask_h || need_input_mask_w) {
+        generate_mask_tiles(cb_id_in2, input_mask_h, input_mask_w);
+    }
+
+    bool need_other_mask_h = (other_mask_h != 32);
+    bool need_other_mask_w = (other_mask_w != 32);
+    if (need_other_mask_h || need_other_mask_w) {
+        generate_mask_tiles(cb_id_in3, other_mask_h, other_mask_w);
+    }
+
+    uint32_t output_tidx = output_tile_start_idx;
+    uint32_t input_step_count = (transpose_input) ? (input_stride[1]) : (input_stride[0]);
+    uint32_t other_step_count = (transpose_other) ? (other_stride[0]) : (other_stride[1]);
+
     for (uint32_t n = 0; n < num_output_tiles; n++) {
-        // get tile index of a an b
-        uint32_t itileA = get_tile_a(output_tile_id, Mt, Nt, Kt, MtKt, MtNt, a_transpose, a_bcast_B, a_start_tile_id);
-        uint32_t itileB = get_tile_b(output_tile_id, Mt, Nt, Kt, KtNt, MtNt, b_transpose, b_bcast_B, b_start_tile_id);
-
-        // get last row or last col for mask
-        bool in0_last_row = is_in0_last_row(itileA, Mt, Kt, MtKt, a_transpose);
-        bool in1_last_col = is_in1_last_col(itileB, Nt, Kt, KtNt, b_transpose);
+        uint32_t output_idxes[MAX_NUM_DIMENSIONS];
+        unravel_output_tidx(output_tidx, output_idxes, output_stride);
+        uint32_t input_tidx = get_tidx(output_idxes, input_stride, input_not_bcast, transpose_input, true);
+        uint32_t other_tidx = get_tidx(output_idxes, other_stride, other_not_bcast, transpose_other, false);
 
         for (uint32_t kt = 0; kt < Kt; kt++) {
-            {  // Read A's tile at (mt, kt)
-                cb_reserve_back(cb_id_in0, onetile);
-                uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                noc_async_read_tile(itileA, s0, l1_write_addr_in0);
+            // read input, other tile
+            cb_reserve_back(cb_id_in0, onetile);
+            cb_reserve_back(cb_id_in1, onetile);
+
+            uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+            noc_async_read_tile(input_tidx, s0, l1_write_addr_in0);
+
+            uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
+            noc_async_read_tile(other_tidx, s1, l1_write_addr_in1);
+            noc_async_read_barrier();
+
+            cb_push_back(cb_id_in0, onetile);
+            cb_push_back(cb_id_in1, onetile);
+
+            input_tidx += input_step_count;
+            other_tidx += other_step_count;
+        }
+        #ifdef FUSE_BIAS
+            if (!is_scalar_bias) {
+                uint32_t bias_tidx = output_idxes[0];
+                cb_reserve_back(cb_id_in4, onetile);
+                uint32_t l1_write_addr_in4 = get_write_ptr(cb_id_in4);
+                noc_async_read_tile(bias_tidx, s_bias, l1_write_addr_in4);
                 noc_async_read_barrier();
-
-                // mask in in0 tile
-                mask_in0_tile(l1_write_addr_in0, in0_last_row, kt, Kt, in0_mask_h, in0_mask_w, a_transpose);
-                cb_push_back(cb_id_in0, onetile);
-            }
-
-            {  // Read B's tile at (kt, nt)
-                cb_reserve_back(cb_id_in1, onetile);
-                uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                noc_async_read_tile(itileB, s1, l1_write_addr_in1);
-                noc_async_read_barrier();
-
-                // mask in in1 tile
-                mask_in1_tile(l1_write_addr_in1, in1_last_col, kt, Kt, in1_mask_h, in1_mask_w, b_transpose);
-                cb_push_back(cb_id_in1, onetile);
-            }
-
-            if (a_transpose) {
-                itileA += Mt;
+                cb_push_back(cb_id_in4, onetile);
             } else {
-                itileA += 1;
+                if (!scalar_bias_loaded) {
+                    cb_reserve_back(cb_id_in4, onetile);
+                    uint32_t l1_write_addr_in4 = get_write_ptr(cb_id_in4);
+                    noc_async_read_tile(0, s_bias, l1_write_addr_in4);
+                    noc_async_read_barrier();
+                    cb_push_back(cb_id_in4, onetile);
+                    scalar_bias_loaded = true;
+                }
             }
+        #endif
 
-            if (b_transpose) {
-                itileB += 1;
-            } else {
-                itileB += Nt;  // B is KN, so to get k++ we stride by Nt
-            }
-        }  // Kt loop
-        output_tile_id++;
+
+        output_tidx++;
     }
 }

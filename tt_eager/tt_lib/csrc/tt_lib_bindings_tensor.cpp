@@ -14,7 +14,6 @@
 #include "tt_dnn/op_library/pool/max_pool.hpp"
 #include "tt_dnn/op_library/fully_connected/fully_connected_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
-#include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
@@ -490,21 +489,6 @@ void TensorModule(py::module &m_tensor) {
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
         | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-    )doc");
-
-
-
-    // moreh_linear
-    m_tensor.def("moreh_matmul", &moreh_matmul,
-        py::arg("input_a").noconvert(), py::arg("input_b").noconvert(),  py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-        "Performs a moreh_linear operation.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input_a", "First input tensor", "Tensor", "", "Yes"
-            "input_b", "Second input tensor", "Tensor", "", "Yes"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
     )doc");
 
     // groupnorm

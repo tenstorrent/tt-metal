@@ -6,7 +6,7 @@ if [ -z "$PYTHON_ENV_DIR" ]; then
 fi
 
 if [ -z "$CONFIG" ]; then
-    echo "Build type defaulted to RelWithDebInfo (assert)"
+    echo "Build type defaulted to Release"
 else
     VALID_CONFIGS="RelWithDebInfo Debug Release ci"
     if [[ $VALID_CONFIGS =~ (^|[[:space:]])"$CONFIG"($|[[:space:]]) ]]; then
@@ -18,8 +18,8 @@ else
 fi
 
 echo "Building tt-metal"
-cmake -B build
-cmake --build build -- -j`nproc`
+cmake -B build -G Ninja
+cmake --build build
 cmake --build build --target metal-install
 
 echo "Creating virtual env in: $PYTHON_ENV_DIR"

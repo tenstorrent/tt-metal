@@ -329,9 +329,9 @@ class SystemMemoryManager {
         }
         this->channel_offset = MAX_HUGEPAGE_SIZE * channel;
 
+        CoreType core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(device_id);
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             tt_cxy_pair prefetcher_core = dispatch_core_manager::get(num_hw_cqs).prefetcher_core(device_id, channel, cq_id);
-            CoreType core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(device_id);
             tt_cxy_pair prefetcher_physical_core = tt_cxy_pair(prefetcher_core.chip, tt::get_physical_core_coordinate(prefetcher_core, core_type));
             this->prefetcher_cores[cq_id] = prefetcher_physical_core;
 
@@ -341,6 +341,10 @@ class SystemMemoryManager {
             this->completion_byte_addrs[cq_id] = completion_tlb_offset + CQ_COMPLETION_READ_PTR % completion_tlb_size;
 
             this->cq_interfaces.push_back(SystemMemoryCQInterface(channel, cq_id, this->cq_size));
+            // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue must be as large as the max amount of space the prefetch queue can specify
+            // Plus 1 to handle wrapping
+            // Plus 1 to allow us to start writing to issue queue before we reserve space in the prefetch queue
+            TT_FATAL(dispatch_constants::get(core_type).max_prefetch_command_size() * (dispatch_constants::get(core_type).prefetch_q_entries() + 2) <= this->get_issue_queue_size(cq_id));
             this->cq_to_event.push_back(0);
             this->cq_to_last_completed_event.push_back(0);
             this->prefetch_q_dev_ptrs[cq_id] = dispatch_constants::PREFETCH_Q_BASE;

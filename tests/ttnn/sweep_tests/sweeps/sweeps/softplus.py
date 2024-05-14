@@ -55,7 +55,7 @@ def run(
         torch_input_tensor, dtype=input_dtype, device=device, memory_config=input_memory_config, layout=layout
     )
 
-    output_tensor = ttnn.softplus(input_tensor, beta, threshold, memory_config=output_memory_config)
+    output_tensor = ttnn.softplus(input_tensor, beta=beta, threshold=threshold, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
     return check_with_pcc(torch_output_tensor, output_tensor, 0.99)

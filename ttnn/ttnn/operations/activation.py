@@ -378,7 +378,6 @@ TTL_ACTIVATION_FUNCTIONS_WITH_FLOAT_PARAM = [
 TTL_ACTIVATION_FUNCTIONS_WITH_TWO_FLOAT_PARAM = [
     ("clip", ttl.tensor.clip, "clip", "min", "max"),
     ("threshold", ttl.tensor.threshold, "threshold", "value", "threshold"),
-    ("softplus", ttl.tensor.softplus, "softplus", "beta", "threshold"),
 ]
 
 TTL_ACTIVATION_FUNCTIONS_GLU = [

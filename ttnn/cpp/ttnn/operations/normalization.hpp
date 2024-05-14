@@ -24,15 +24,6 @@ struct Softmax {
         return std::make_tuple(input_tensor);
     }
 
-
-    template <typename... Args>
-    static auto map_launch_op_args_to_execute(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        Args&&... args) {
-            return std::make_tuple(input_tensors.at(0), std::forward<Args>(args)...);
-    }
-
     static ttnn::Tensor execute(
         const ttnn::Tensor& input_tensor,
         const int dim_arg,
@@ -111,16 +102,6 @@ struct LayerNorm : tt::operations::primary::LayerNorm {
         return std::make_tuple(input_tensor, weight, bias, residual_input_tensor);
     }
 
-
-    template <typename... Args>
-    static auto map_launch_op_args_to_execute(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        float epsilon = 1e-12,
-        Args&&... args) {
-            return std::make_tuple(input_tensors.at(0),epsilon,optional_input_tensors.at(0), optional_input_tensors.at(1), optional_input_tensors.at(2), std::forward<Args>(args)...);
-    }
-
     static inline ttnn::Tensor execute(
         const ttnn::Tensor& input_tensor,
         float epsilon = 1e-12,
@@ -168,15 +149,6 @@ struct RMSNorm : tt::operations::primary::LayerNorm {
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor& input_tensor, const Tensor& weight, Args&&... args) {
         return std::make_tuple(input_tensor, weight);
-    }
-
-
-    template <typename... Args>
-    static auto map_launch_op_args_to_execute(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        Args&&... args) {
-            return std::make_tuple(input_tensors.at(0), input_tensors.at(1), std::forward<Args>(args)...);
     }
 
     static inline ttnn::Tensor execute(

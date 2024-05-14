@@ -283,3 +283,28 @@ def test_multi_device_explicit_dealloc(pcie_device_mesh):
 
     for device in pcie_device_mesh.get_device_ids():
         pcie_device_mesh.get_device(device).enable_async(False)
+
+
+@pytest.mark.parametrize("scalar", [3])
+@pytest.mark.parametrize("size", [64])
+@pytest.mark.parametrize("pcie_device_mesh", [2], indirect=True)
+def test_add_1D_tensor_and_scalar(pcie_device_mesh, scalar, size):
+    torch.manual_seed(0)
+
+    for device in pcie_device_mesh.get_device_ids():
+        pcie_device_mesh.get_device(device).enable_async(True)
+
+    torch_input_tensor = torch.rand((size,), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor + scalar
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=pcie_device_mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(pcie_device_mesh),
+    )
+    output_tensor = input_tensor + scalar
+    output_tensors = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ListMeshToTensor(pcie_device_mesh))
+    for output_tensor in output_tensors:
+        assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+        assert output_tensor.shape == (1, size)

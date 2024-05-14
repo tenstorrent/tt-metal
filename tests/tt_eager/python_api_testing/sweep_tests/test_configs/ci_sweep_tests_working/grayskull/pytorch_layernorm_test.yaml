@@ -6,7 +6,7 @@ test-list:
         end-shape: [12, 24, 512, 512]
         interval: [1, 1, 32, 32]
         num-shapes: 3
-        num-samples: 64
+        num-samples: 128
         args-sampling-strategy: "all"
         method: layernorm
       datagen:
