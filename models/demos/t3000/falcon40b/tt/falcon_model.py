@@ -226,15 +226,23 @@ class TtFalconModelShared:
                 attn_mask_shard_shape[-1] = num_max_tokens
                 attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
 
+            # Push attention mask to device in row major order and then tilize on device (faster than tilizing on CPU)
             tt_attention_mask = [
                 torch2tt_tensor(
                     attention_mask_bool_padded[i],
                     self.devices[i],
+                    tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
                     tt_memory_config=attention_mask_memconfig,
-                    tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                    tt_dtype=self.model_config["BFLOAT16_DTYPE"],  # subsequent tilize op expects bfloat16 inputs
                 )
                 for i in range(len(self.devices))
             ]
+            for i in range(self.num_devices):
+                tt_attention_mask[i] = tt_lib.tensor.tilize(
+                    tt_attention_mask[i],
+                    output_mem_config=attention_mask_memconfig,
+                    output_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                )
 
         else:
             raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
