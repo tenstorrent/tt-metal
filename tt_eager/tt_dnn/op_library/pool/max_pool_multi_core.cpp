@@ -1003,7 +1003,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
 
 operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_new(const Tensor &input,
                                                                                 Tensor& output,
-                                                                                SlidingWindowConfig sliding_window_config,
+                                                                                const SlidingWindowConfig& sliding_window_config,
                                                                                 const MemoryConfig& out_mem_config) {
     Program program = CreateProgram();
 

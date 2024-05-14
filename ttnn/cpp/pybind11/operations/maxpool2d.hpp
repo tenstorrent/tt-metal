@@ -24,10 +24,10 @@ void py_module(py::module& module) {
             uint32_t input_height,
             uint32_t input_width,
             uint32_t channels,
-            array_t kernel_size,
-            array_t stride,
-            array_t padding,
-            array_t dilation,
+            array2_t kernel_size,
+            array2_t stride,
+            array2_t padding,
+            array2_t dilation,
             Device& device) -> Tensor {
             return maxpool2d(input_tensor, batch_size, input_height, input_width, channels, kernel_size, stride, padding, dilation, device);
         },
@@ -36,6 +36,7 @@ void py_module(py::module& module) {
         py::arg("batch_size"),
         py::arg("input_height"),
         py::arg("input_width"),
+        py::arg("channels"),
         py::arg("kernel_size"),
         py::arg("stride"),
         py::arg("padding"),
