@@ -92,19 +92,32 @@ class TtLlamaAttention_optimized:
             )
         )
         layer_past = [cache_k, cache_v]
+        # self.layer_past = [
+        #     ttnn.from_torch(
+        #         lp,
+        #         device=self.device_mesh,
+        #         mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=0),
+        #         layout=ttnn.TILE_LAYOUT,
+        #         dtype=ttnn.bfloat8_b,
+        #     )
+        #     for lp in layer_past
+        # ]
+
+        # # add to the list
+        # self.layer_past = [ttnn.to_device(lp, self.device_mesh) for lp in self.layer_past]
+
         self.layer_past = [
-            ttnn.from_torch(
+            ttnn.as_tensor(
                 lp,
                 device=self.device_mesh,
                 mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=0),
                 layout=ttnn.TILE_LAYOUT,
+                memory_config=self.model_config["DRAM_MEMCFG"],
                 dtype=ttnn.bfloat8_b,
+                cache_file_name=self.cache_path / f"empty_attn_cache{cache_k.shape}",
             )
             for lp in layer_past
         ]
-
-        # add to the list
-        self.layer_past = [ttnn.to_device(lp, self.device_mesh) for lp in self.layer_past]
 
     def load_weights(self):
         assert not hasattr(self, "qkv_list"), "qkv_list is already an attribute of this object"
