@@ -8,6 +8,8 @@ import pytest
 import os
 import pathlib
 import glob
+from tests.ttnn.python_api_testing.sweep_tests.op_map import op_map
+
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_test import (
     generate_test_sweep_parameters,
     run_sweep_test,
@@ -33,7 +35,7 @@ def create_test_function(file_name):
 
     @pytest.mark.parametrize("sweep_test", sweep_tests, ids=str)
     def test_sweep(sweep_test, device):
-        test_pass = run_sweep_test(sweep_test.parameters, device)
+        test_pass = run_sweep_test(sweep_test.parameters, op_map, device)
         assert test_pass
 
     splitted = file_name.split("/")
