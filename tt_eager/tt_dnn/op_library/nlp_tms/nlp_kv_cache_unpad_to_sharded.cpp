@@ -25,83 +25,30 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
                                                                                 uint32_t num_tiles_per_core
                                                                                 ){
     auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.get_legacy_shape();
-    auto output_shape = output_tensor.get_legacy_shape();
-
-    std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
-    std::vector<uint32_t> num_unpadded_tiles_per_dim(num_dims);
-    std::vector<uint32_t> num_padded_tiles_per_dim(num_dims);
-    std::vector<uint32_t> id_per_dim(num_dims);
-
-    std::vector<uint32_t> accumulated_total_per_dim(num_dims);
-
-    uint32_t num_unpadded_Xt = output_shape[-1] / TILE_WIDTH; // 4
-    uint32_t num_total_Xt = input_shape[-1] / TILE_WIDTH; // 4
-    uint32_t num_padded_Xt = num_total_Xt - num_unpadded_Xt; // 0
-    uint32_t num_unpadded_Yt = output_shape[-2] / TILE_HEIGHT; // 1
-    uint32_t num_total_Yt = input_shape[-2] / TILE_HEIGHT; // 68
-    uint32_t num_padded_Yt = (num_total_Yt - num_unpadded_Yt) * num_total_Xt; // (68-1)*4 = 268
-
-    num_unpadded_tiles_per_dim[0] = num_unpadded_Xt;
-    num_unpadded_tiles_per_dim[1] = num_unpadded_Yt;
-    num_padded_tiles_per_dim[0] = num_padded_Xt;
-    num_padded_tiles_per_dim[1] = num_padded_Yt;
-    accumulated_total_per_dim[0] = num_total_Xt;
-    accumulated_total_per_dim[1] = num_total_Yt * num_total_Xt; // 68 * 4 = 272
-
-    for(int32_t i = 2; i < num_dims; i++) {
-        uint32_t num_unpadded_dim = output_shape[-(i + 1)];
-        uint32_t num_total_dim = input_shape[-(i + 1)];
-        uint32_t num_padded_dim = (num_total_dim - num_unpadded_dim) * accumulated_total_per_dim[i - 1];
-        num_unpadded_tiles_per_dim[i] = num_unpadded_dim;
-        num_padded_tiles_per_dim[i] = num_padded_dim;
-        accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
-    }
-
-    // log_info("[xuncai] get_unpad_runtime_args_tile_sharded");
-    // log_info("[xuncai] input_shape: {}", input_shape);
-    // log_info("[xuncai] output_shape: {}", output_shape);
-    // log_info("[xuncai] num_unpadded_tiles_per_dim: {}", num_unpadded_tiles_per_dim);
-    // log_info("[xuncai] num_padded_tiles_per_dim: {}", num_padded_tiles_per_dim);
-    // log_info("[xuncai] accumulated_total_per_dim: {}", accumulated_total_per_dim);
 
     vector<uint32_t> common_reader_kernel_args = {
         input_buffer->address(),
         0
     };
 
-    // log_info("[xuncai] common_reader_kernel_args: {}", common_reader_kernel_args);
-
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > ret_val (num_cores_total);
 
-    uint32_t start_offset = get_tiled_start_offset(input_tensor, output_tensor_start);
-
-    // log_info("[xuncai] start_offset: {}", start_offset);
+    uint32_t start_id = get_tiled_start_offset(input_tensor, output_tensor_start);
+    const uint32_t num_tiles_shifted_per_core = input_shape[-2] * input_shape[-1] / TILE_HW;
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++){
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
 
-        id_per_dim[0] = num_tiles_written % num_unpadded_tiles_per_dim[0];
-        uint32_t unpadded_written = num_tiles_written / num_unpadded_tiles_per_dim[0];
-        uint32_t start_id = id_per_dim[0] + start_offset;
-
-        for(uint32_t j = 1; j < num_dims; j++) {
-            id_per_dim[j] = unpadded_written % num_unpadded_tiles_per_dim[j];
-            unpadded_written = unpadded_written / num_unpadded_tiles_per_dim[j];
-            start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
-        }
-
-        // reader kernel args
+        // reader and writer kernel args
         vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         reader_kernel_args[1] = start_id;
-
         vector<uint32_t> writer_kernel_args = {
             num_tiles_per_core,
         };
-
-        num_tiles_written+=num_tiles_per_core;
         ret_val[i] = {reader_kernel_args, writer_kernel_args};
+
+        start_id += num_tiles_shifted_per_core;
     }
 
     return ret_val;
@@ -126,11 +73,6 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_unpad_to_sharded(const T
     uint32_t num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
     uint32_t num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
     auto num_tiles_per_core = num_units_per_shard_height * num_units_per_shard_width;
-    // log_info("[xuncai] num_cores_x: {}", num_cores_x);
-    // log_info("[xuncai] num_cores_total: {}", num_cores_total);
-    // log_info("[xuncai] all_cores: {}", all_cores);
-    // log_info("[xuncai] num_tiles_per_core: {}", num_tiles_per_core);
-
 
     tt_metal::Buffer *src0_buffer = a.buffer();
 
@@ -214,12 +156,9 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_unpad_to_sharded(const T
         const std::vector<std::optional<const Tensor>> & ,
         const std::vector<Tensor>& output_tensors
     ) {
-
-        // log_info("[xuncai] override_runtime_args_callback");
         auto src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
 
-        // log_info("[xuncai] core info new");
         auto shard_spec = dst_tensor.shard_spec().value();
         auto all_cores = shard_spec.grid;
         auto num_cores_total = all_cores.num_cores();
