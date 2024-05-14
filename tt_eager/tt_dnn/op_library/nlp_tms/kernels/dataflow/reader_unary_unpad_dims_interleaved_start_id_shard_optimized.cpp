@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,9 +11,6 @@ constexpr uint32_t get_barrier_read_threshold() {
 }
 
 void kernel_main() {
-
-    // DeviceZoneScopedN("TEST-UNPAD-SHARDED");
-
     const uint32_t src_addr                             = get_arg_val<uint32_t>(0);
     const uint32_t start_id                             = get_arg_val<uint32_t>(1);
 
@@ -43,7 +40,6 @@ void kernel_main() {
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_size, 32>();
 
-    // method 1
     uint32_t num_iterations = num_tiles / num_unpadded_tiles_head_dim;
     uint32_t barrier_count = 0;
     for(uint32_t i = 0; i < num_iterations; i++) {

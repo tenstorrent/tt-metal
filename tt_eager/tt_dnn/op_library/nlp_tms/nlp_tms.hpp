@@ -139,8 +139,6 @@ struct NlpKVCacheUnpadToSharded {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
-    // const operation::Hash compute_program_hash(
-    //     const std::vector<Tensor> &input_tensors) const;
 };
 
 inline std::vector<Tensor> nlp_create_qkv_heads_falcon7b(const Tensor& input_tensor_a, const MemoryConfig& mem_config) {
@@ -234,7 +232,7 @@ inline Tensor nlp_kv_cache_unpad_to_sharded(const Tensor &input_tensor_a, const 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
 
     operation::launch_op(
-        [seq_len_start, seq_len_end] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
+        [seq_len_start, seq_len_end] (std::vector<Tensor> input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor_a = input_tensors.at(0);
             auto input_tensor_shape = input_tensor_a.get_legacy_shape();
             auto dim0 = input_tensor_shape[0];
