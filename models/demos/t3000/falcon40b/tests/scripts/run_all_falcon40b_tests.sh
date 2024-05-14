@@ -15,6 +15,9 @@ fi
 cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
 
+# prefill required 8x8 core grids
+export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+
 # Run all component tests
 pytest models/demos/t3000/falcon40b/tests/test_falcon_mlp.py -k test_FalconMLP_inference
 pytest models/demos/t3000/falcon40b/tests/test_falcon_attention.py -k test_FalconAttention_inference
