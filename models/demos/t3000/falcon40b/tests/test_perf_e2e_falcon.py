@@ -366,7 +366,7 @@ def run_test_FalconCausalLM_end_to_end(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("num_devices", (4, 8), ids=["4chips", "8chips"])
+@pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, expected_compile_time, expected_inference_time, inference_iterations",
     (

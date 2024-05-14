@@ -144,6 +144,16 @@ def comp_pcc(golden, calculated, pcc=0.99):
     return passing, output_str
 
 
+def comp_and_get_pcc(golden, calculated, pcc=0.99):
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
+    _, _, cal_pcc, output_str = get_atol_rtol_pcc(golden, calculated)
+    passing = cal_pcc >= pcc
+    if not passing:
+        output_str += f", PCC check failed (target: {pcc})"
+    return passing, output_str, cal_pcc
+
+
 def comp_pcc_list(golden, calculated, pcc=0.99):
     total_str = ""
     min_pcc = 1
