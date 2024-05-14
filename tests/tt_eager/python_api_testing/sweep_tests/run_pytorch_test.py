@@ -16,6 +16,7 @@ from loguru import logger
 from functools import partial
 import tt_lib
 from itertools import permutations, product
+from tracy import signpost
 
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
@@ -25,8 +26,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.common import (
     run_test_and_save_results,
     shapes_and_datagen,
 )
-
-from tests.tt_eager.python_api_testing.sweep_tests.op_map import op_map
 
 DTYPES_TT_DICT = {
     "BFLOAT16": tt_lib.tensor.DataType.BFLOAT16,
@@ -101,8 +100,6 @@ def generate_test_sweep_parameters(input_test_config, env=""):
 
     for i in range(len(pytorch_test_list)):
         for test_name, test_config in pytorch_test_list[i].items():
-            assert test_name in op_map
-
             # Get env variables from yaml (yaml overrides CLI)
             yaml_env_dict = test_config.get("env", {})
 
@@ -225,7 +222,7 @@ def generate_test_sweep_parameters(input_test_config, env=""):
     return generated_test_sweep_parameters, test_config["output-file"]
 
 
-def run_sweep_test(parameters, device, results_csv_writer=None):
+def run_sweep_test(parameters, op_map, device, results_csv_writer=None):
     data_seed = parameters["data_seed"]
     input_shapes = parameters["input_shapes"]
     test_name = parameters["test_name"]
@@ -248,7 +245,7 @@ def run_sweep_test(parameters, device, results_csv_writer=None):
         data_seed,
         parameters["env_dict"],
         parameters["generated_test_args"],
-        op_map[test_name]["tt_lib_op"],
+        op_map[test_name]["tt_op"],
         op_map[test_name]["pytorch_op"],
         input_shapes,
         parameters["datagen_funcs"],
@@ -266,7 +263,7 @@ def run_sweep_test(parameters, device, results_csv_writer=None):
     return test_pass
 
 
-def run_sweep_tests(test_sweep_parameters, output_folder, output_file, run_tests_for_ci, device):
+def run_sweep_tests(test_sweep_parameters, output_folder, output_file, run_tests_for_ci, op_map, device):
     # Create output folder
     output_folder = Path(output_folder)
 
@@ -299,10 +296,12 @@ def run_sweep_tests(test_sweep_parameters, output_folder, output_file, run_tests
 
             test_profiling_key = f"test_sweep_separator - {run_id}"
             logger.info(f"Starting profiling test {test_profiling_key}")
+            signpost(header=test_profiling_key)
 
-            test_pass = run_sweep_test(parameters, device, results_csv_writer)
+            test_pass = run_sweep_test(parameters, op_map, device, results_csv_writer)
 
             tt_lib.device.Synchronize(device)
+            signpost(header=f"{test_profiling_key} - end")
             logger.info(f"Stopped profiling test {test_profiling_key}")
             run_id += 1
 
