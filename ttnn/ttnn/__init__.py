@@ -334,6 +334,7 @@ from ttnn.operations.unary import (
     logical_not,
     logit,
     signbit,
+    softplus,
 )
 
 from ttnn.operations.binary import (
@@ -403,7 +404,6 @@ from ttnn.operations.activation import (
     softshrink,
     softsign,
     swish,
-    softplus,
     tanhshrink,
     threshold,
     glu,

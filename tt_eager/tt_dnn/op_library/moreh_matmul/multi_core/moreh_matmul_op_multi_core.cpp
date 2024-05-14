@@ -5,7 +5,9 @@
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "tt_eager/tt_numpy/functions.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -17,100 +19,186 @@ namespace operations {
 
 namespace primary {
 
-std::tuple<bool, bool> get_bcast_batch(const Shape &input0_shape, const Shape &input1_shape) {
-    return {(input0_shape[1] < input1_shape[1]), (input0_shape[1] > input1_shape[1])};
+namespace {
+
+void get_tensor_stride(std::vector<uint32_t>& stride,
+    std::vector<uint32_t>& dim) {
+    stride[0] = 1;
+    for (auto i = 1; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+        stride[i] = stride[i - 1] * dim[i - 1];
+    }
+
+    for (auto i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+        log_debug(LogOp, "stride[{}] = {}", i, stride[i]);
+    }
+}
+
+void get_not_bcast(
+    std::vector<uint32_t>& input_not_bcast,
+    std::vector<uint32_t>& input_dim,
+    std::vector<uint32_t>& other_not_bcast,
+    std::vector<uint32_t>& other_dim) {
+
+    // first 2-dims are M,K and K,N
+    // TODO: refaactoring
+    for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+        if (input_dim[i] == other_dim[i]) {
+            input_not_bcast[i] = 1;
+            other_not_bcast[i] = 1;
+        } else {
+            if (input_dim[i] == 1) {
+                input_not_bcast[i] = 0;
+                other_not_bcast[i] = 1;
+            } else {
+                input_not_bcast[i] = 1;
+                other_not_bcast[i] = 0;
+            }
+        }
+    }
+
+    for (auto i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+        log_debug(LogOp, "not bcast [{}] input {} other {}", i, input_not_bcast[i], other_not_bcast[i]);
+    }
+}
+
 }
 
 operation::ProgramWithCallbacks moreh_matmul_multi_core(
-    const Tensor &a,
-    const Tensor &b,
+    const Tensor &input,
+    const Tensor &other,
     const Tensor &output,
-    bool transpose_a,
-    bool transpose_b,
-    uint32_t a_start_tile_id,
-    uint32_t b_start_tile_id,
-    uint32_t output_start_tile_id) {
+    const std::optional<const Tensor>& bias,
+    bool transpose_input,
+    bool transpose_other) {
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Device Setup
+    ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program{};
-    const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
-
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
-    uint32_t single_tile_size = detail::TileSize(cb_data_format);
-
-    tt_metal::Buffer *src0_buffer = a.buffer();
-    tt_metal::Buffer *src1_buffer = b.buffer();
-
-    tt_metal::Device *device = a.device();
-    Shape cshape = output.get_legacy_shape();
-
-    tt_metal::Buffer *dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
-    uint32_t M = (transpose_a) ? (ashape[3]) : (ashape[2]);
-    uint32_t N = (transpose_b) ? (bshape[2]) : (bshape[3]);
-    uint32_t K = (transpose_a) ? (ashape[2]) : (ashape[3]);
-    uint32_t Mt = M / TILE_HEIGHT;
-    uint32_t Kt = K / TILE_WIDTH;
-    uint32_t Nt = N / TILE_WIDTH;
-    uint32_t KtNt = Kt * Nt;
-    uint32_t MtKt = Mt * Kt;
-    uint32_t MtNt = Mt * Nt;
-
-    uint32_t B1 = cshape[0];
-    uint32_t B2 = cshape[1];
-    uint32_t a_B1 = ashape[0];
-    uint32_t a_B2 = ashape[1];
-    uint32_t b_B1 = bshape[0];
-    uint32_t b_B2 = bshape[1];
-    uint32_t a_B2MtKt = a_B2 * MtKt;
-    uint32_t b_B2KtNt = b_B2 * KtNt;
-    uint32_t B2MtNt = B2 * MtNt;
-
-    const auto &a_shape_wo_padding = a.get_legacy_shape().without_padding();
-    const auto &b_shape_wo_padding = b.get_legacy_shape().without_padding();
-
-    uint32_t a_pad_h = a_shape_wo_padding[2] % TILE_HEIGHT;
-    uint32_t a_pad_w = a_shape_wo_padding[3] % TILE_WIDTH;
-    uint32_t a_mask_h = (a_pad_h == 0) ? (TILE_HEIGHT) : (a_pad_h);
-    uint32_t a_mask_w = (a_pad_w == 0) ? (TILE_WIDTH) : (a_pad_w);
-
-    uint32_t b_pad_h = b_shape_wo_padding[2] % TILE_HEIGHT;
-    uint32_t b_pad_w = b_shape_wo_padding[3] % TILE_WIDTH;
-    uint32_t b_mask_h = (b_pad_h == 0) ? (TILE_HEIGHT) : (b_pad_h);
-    uint32_t b_mask_w = (b_pad_w == 0) ? (TILE_WIDTH) : (b_pad_w);
-
-    auto [a_bcast_batch, b_bcast_batch] = get_bcast_batch(ashape, bshape);
-    log_debug(LogTest, "B1 {} B2 {} Mt {} Nt {} Kt {}", B1, B2, Mt, Nt, Kt);
-    log_debug(LogTest, "a_bcast_batch {} b_bcast_batch {}", a_bcast_batch, b_bcast_batch);
-    log_debug(LogTest, "transpose_a {} transpose_b {}", transpose_a, transpose_b);
+    tt_metal::Device *device {input.device()};
 
     ////////////////////////////////////////////////////////////////////////////
-    //                         Core Setup
+    //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    // 1 x B2 x Mt x Nt
-    auto num_output_tiles_total = cshape[1] * cshape[2] * cshape[3] / TILE_HW;
-    auto
+    tt::DataFormat cb_data_format {datatype_to_dataformat_converter(output.get_dtype())};
+    const auto single_tile_size {detail::TileSize(cb_data_format)};
+    const auto num_output_tiles {output.volume() / TILE_HW};
+
+    // input tensor
+    const auto &input_shape = input.get_legacy_shape();
+    const auto &input_shape_wo_padding = input_shape.without_padding();
+    const auto input_rank = input_shape.rank();
+    log_debug(LogOp, "input dim");
+    std::vector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    get_tensor_dim(input_dim, input_shape);
+
+    log_debug(LogOp, "input stride");
+    std::vector<uint32_t> input_stride(tt::tt_metal::MAX_NUM_DIMENSIONS);
+    get_tensor_stride(input_stride, input_dim);
+
+    // other tensor
+    const auto &other_shape = other.get_legacy_shape();
+    const auto &other_shape_wo_padding = other_shape.without_padding();
+    const auto other_rank = other_shape.rank();
+    log_debug(LogOp, "other dim");
+    std::vector<uint32_t> other_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    get_tensor_dim(other_dim, other_shape);
+
+    log_debug(LogOp, "other stride");
+    std::vector<uint32_t> other_stride(tt::tt_metal::MAX_NUM_DIMENSIONS);
+    get_tensor_stride(other_stride, other_dim);
+
+    log_debug(LogOp, "not bcast");
+    std::vector<uint32_t> input_not_bcast(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    std::vector<uint32_t> other_not_bcast(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    get_not_bcast(input_not_bcast, input_dim, other_not_bcast, other_dim);
+
+    // output tensor
+    const auto &output_shape = output.get_legacy_shape();
+    const auto &output_shape_wo_padding = output_shape.without_padding();
+    const auto output_rank = output_shape.rank();
+    log_debug(LogOp, "output dim");
+    std::vector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    get_tensor_dim(output_dim, output_shape);
+
+    log_debug(LogOp, "output stride");
+    std::vector<uint32_t> output_stride(tt::tt_metal::MAX_NUM_DIMENSIONS);
+    get_tensor_stride(output_stride, output_dim);
+
+    // matrix shape
+    uint32_t Kt = (transpose_input) ? (input_shape[-2] / TILE_HEIGHT) : (input_shape[-1] / TILE_WIDTH);
+    uint32_t Mt = (transpose_input) ? (input_shape[-1] / TILE_WIDTH) : (input_shape[-2] / TILE_HEIGHT);
+    uint32_t Nt = (transpose_other) ? (other_shape[-2] / TILE_HEIGHT) : (other_shape[-1] / TILE_WIDTH);
+    log_debug(LogOp, "{}:{} Mt {} Nt {} Kt {}", __func__, __LINE__, Mt, Nt, Kt);
+
+    // bias tensor
+    bool is_scalar_bias = false;
+    if (bias.has_value()) {
+        const auto& bias_tensor = bias.value();
+        const auto& bias_shape_wo_padding = bias_tensor.get_legacy_shape().without_padding();
+        is_scalar_bias = (bias_shape_wo_padding[-1] == 1) ? (true) : (false);
+        log_debug(LogOp, "{}:{} bias tensor. is_scalar_bias {}", __func__, __LINE__, is_scalar_bias);
+    }
+
+    // mask
+    uint32_t input_mask_h = input_shape_wo_padding[-2] % TILE_HEIGHT;
+    uint32_t input_mask_w = input_shape_wo_padding[-1] % TILE_WIDTH;
+    uint32_t other_mask_h = other_shape_wo_padding[-2] % TILE_HEIGHT;
+    uint32_t other_mask_w = other_shape_wo_padding[-1] % TILE_WIDTH;
+
+    bool need_input_mask_h = (input_mask_h) ? (true) : (false);
+    bool need_input_mask_w = (input_mask_w) ? (true) : (false);
+
+    bool need_other_mask_h = (other_mask_h) ? (true) : (false);
+    bool need_other_mask_w = (other_mask_w) ? (true) : (false);
+
+    if (input_mask_h == 0) {
+        input_mask_h = TILE_HEIGHT;
+    }
+    if (input_mask_w == 0) {
+        input_mask_w = TILE_WIDTH;
+    }
+    if (other_mask_h == 0) {
+        other_mask_h = TILE_HEIGHT;
+    }
+    if (other_mask_w == 0) {
+        other_mask_w = TILE_WIDTH;
+    }
+
+    log_debug(LogOp, "{}:{} {} {} mask_h {} mask_w {}", __func__, __LINE__,
+        need_input_mask_h, need_input_mask_w,
+        input_mask_h, input_mask_w);
+    log_debug(LogOp, "{}:{} {} {} mask_h {} mask_w {}", __func__, __LINE__,
+        need_other_mask_h, need_other_mask_w,
+        other_mask_h, other_mask_w);
+    ////////////////////////////////////////////////////////////////////////////
+    //                         Core Grid Configuration For Workload
+    ////////////////////////////////////////////////////////////////////////////
+    CoreGridDesc core_grid(device);
+    const auto num_cores_y {core_grid.y_};
+    CoreCoord core_grid_coord = {core_grid.x_, num_cores_y};
+    const auto
         [num_cores,
          all_cores,
          core_group_1,
          core_group_2,
          num_output_tiles_per_core_group_1,
-         num_output_tiles_per_core_group_2] =
-            tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
+         num_output_tiles_per_core_group_2] = tt_metal::split_work_to_cores(core_grid_coord, num_output_tiles);
 
-    log_debug("num_cores {}", num_cores);
-
+    log_debug(LogOp, "{}:{} num_output_tiles: {}", __func__, __LINE__, num_output_tiles);
+    log_debug(LogOp, "{}:{} num_output_tiles_per_core_group1: {}, 2: {} ", __func__, __LINE__, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2);
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    const uint32_t in0_t = 2;
-    const uint32_t in1_t = 2;
-    const uint32_t im0_t = 1;
-    const uint32_t im1_t = 1;
-    const uint32_t im2_t = 1;
-    const uint32_t out0_t = 2;
+    const uint32_t in0_t {2};   // input
+    const uint32_t in1_t {2};   // other
+    const uint32_t in2_t {3};   // mask for input
+    const uint32_t in3_t {3};   // mask for other
+    const uint32_t in4_t {2};   // bias
+    const uint32_t im0_t {1};   // temp
+    const uint32_t im1_t {2};   // transpose for input
+    const uint32_t im2_t {2};   // transpose for other
+    const uint32_t out0_t {2};  // output
 
     CreateCircularBuffer(
         program,
@@ -119,6 +207,9 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
         {
             {CB::c_in0, in0_t},
             {CB::c_in1, in1_t},
+            {CB::c_in2, in2_t},
+            {CB::c_in3, in3_t},
+            {CB::c_in4, in4_t},
             {CB::c_intermed0, im0_t},
             {CB::c_intermed1, im1_t},
             {CB::c_intermed2, im2_t},
@@ -128,91 +219,152 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(is_dram(src0_buffer)), static_cast<uint32_t>(is_dram(src1_buffer))};
+    std::map<string, string> reader_defines;
+    std::vector<uint32_t> reader_compile_time_args = {
+        static_cast<uint32_t>(is_dram(input)), static_cast<uint32_t>(is_dram(other)), Kt,
+        static_cast<uint32_t>(transpose_input),
+        static_cast<uint32_t>(transpose_other),
+        input_mask_h,
+        input_mask_w,
+        other_mask_h,
+        other_mask_w,
+    };
 
-    const std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)CB::c_out0, (std::uint32_t)is_dram(dst_buffer)};
+    if (bias.has_value()) {
+        reader_defines["FUSE_BIAS"] = "1";
+        reader_compile_time_args.push_back(static_cast<uint32_t>(is_dram(bias)));
+        reader_compile_time_args.push_back(static_cast<uint32_t>(is_scalar_bias));
+        log_debug(LogOp, "{}:{} bias tensor. is bias dram {}", __func__, __LINE__, is_dram(bias));
+    }
+
+
+    const std::vector<uint32_t> writer_compile_time_args =
+        {static_cast<uint32_t>(is_dram(output))};
 
     const auto reader_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/kernels/reader_moreh_matmul.cpp";
     const auto writer_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/kernels/writer_moreh_matmul.cpp";
 
-    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    log_debug(LogOp, "{}:{} DMVK is_dram(input): {}, is_dram(other): {}, is_dram(output): {}", __func__, __LINE__, is_dram(input), is_dram(other), is_dram(output));
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::map<string, string> compute_defines;
+
     const auto compute_kernel_file = "tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/kernels/moreh_matmul.cpp";
-    const std::vector<uint32_t> compute_args_group_1 = {
-        1,                                  // B
-        1,                                  // Mt
-        Kt,                                 // Kt
-        num_output_tiles_per_core_group_1,  // Nt
-        uint32_t(transpose_a),
-        uint32_t(transpose_b)};
+    std::vector<uint32_t> compute_args_group_1 = {
+        num_output_tiles_per_core_group_1,  // num_output_tiles
+        Mt,
+        Nt,
+        Kt,
+        static_cast<uint32_t>(transpose_input),
+        static_cast<uint32_t>(transpose_other),
+        input_mask_h,
+        input_mask_w,
+        other_mask_h,
+        other_mask_w
+    };
+
+    if (bias.has_value()) {
+        compute_defines["FUSE_BIAS"] = "1";
+        compute_args_group_1.push_back(static_cast<uint32_t>(is_scalar_bias));
+    }
+
     const auto compute_kernel_1_id = CreateComputeKernel(
-        program, compute_kernel_file, {core_group_1, num_output_tiles_per_core_group_1, compute_args_group_1}, compute_defines);
+        program, compute_kernel_file, { core_group_1, num_output_tiles_per_core_group_1, compute_args_group_1 }, compute_defines);
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_args_group_2 = {
-            1,                                  // B
-            1,                                  // Mt
-            Kt,                                 // Kt
-            num_output_tiles_per_core_group_2,  // Nt
-            uint32_t(transpose_a),
-            uint32_t(transpose_b)};
+        std::vector<uint32_t> compute_args_group_2 = {
+        num_output_tiles_per_core_group_2,  // num_output_tiles
+        Mt,
+        Nt,
+        Kt,
+        static_cast<uint32_t>(transpose_input),
+        static_cast<uint32_t>(transpose_other),
+        input_mask_h,
+        input_mask_w,
+        other_mask_h,
+        other_mask_w
+        };
+
+        if (bias.has_value()) {
+            compute_args_group_2.push_back(static_cast<uint32_t>(is_scalar_bias));
+        }
+
         compute_kernel_2_id = CreateComputeKernel(
             program,
             compute_kernel_file,
-            {core_group_2, num_output_tiles_per_core_group_2, compute_args_group_2},
+            { core_group_2, num_output_tiles_per_core_group_2, compute_args_group_2 },
             compute_defines);
     }
+    log_debug(LogOp, "{}:{} Compute ", __func__, __LINE__, static_cast<uint32_t>(transpose_input), static_cast<uint32_t>(transpose_other));
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
         uint32_t num_output_tiles_per_core;
         if (core_group_1.core_coord_in_core_ranges(core)) {
             num_output_tiles_per_core = num_output_tiles_per_core_group_1;
+            std::vector<uint32_t> compute_rt_args;
+            compute_rt_args.push_back(num_tiles_written);
+            compute_rt_args.insert(compute_rt_args.end(), output_stride.begin(), output_stride.end());
+            tt_metal::SetRuntimeArgs(
+                program,
+                compute_kernel_1_id,
+                core,
+                compute_rt_args
+            );
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            TT_FATAL(compute_kernel_2_id.has_value());
             num_output_tiles_per_core = num_output_tiles_per_core_group_2;
+            std::vector<uint32_t> compute_rt_args;
+            compute_rt_args.push_back(num_tiles_written);
+            compute_rt_args.insert(compute_rt_args.end(), output_stride.begin(), output_stride.end());
+            tt_metal::SetRuntimeArgs(
+                program,
+                compute_kernel_2_id.value(),
+                core,
+                compute_rt_args
+            );
         } else {
             TT_THROW("Core not in specified core ranges");
+        }
+
+        std::vector<uint32_t> reader_rt_args;
+        reader_rt_args.push_back(input.buffer()->address());
+        reader_rt_args.push_back(other.buffer()->address());
+        reader_rt_args.push_back(num_tiles_written);
+        reader_rt_args.push_back(num_output_tiles_per_core);
+
+        // TODO: move some to compile args
+        reader_rt_args.insert(reader_rt_args.end(), input_stride.begin(), input_stride.end());
+        reader_rt_args.insert(reader_rt_args.end(), other_stride.begin(), other_stride.end());
+        reader_rt_args.insert(reader_rt_args.end(), output_stride.begin(), output_stride.end());
+        reader_rt_args.insert(reader_rt_args.end(), input_not_bcast.begin(), input_not_bcast.end());
+        reader_rt_args.insert(reader_rt_args.end(), other_not_bcast.begin(), other_not_bcast.end());
+
+        if (bias.has_value()) {
+            reader_rt_args.push_back(bias.value().buffer()->address());
         }
 
         tt_metal::SetRuntimeArgs(
             program,
             reader_kernel_id,
             core,
-            {src0_buffer->address(),
-             src1_buffer->address(),
-             Mt,
-             Kt,
-             Nt,
-             MtKt,
-             KtNt,
-             uint32_t(a_bcast_batch),
-             uint32_t(b_bcast_batch),
-             num_tiles_written,
-             num_output_tiles_per_core,
-             MtNt,
-             uint32_t(transpose_a),
-             uint32_t(transpose_b),
-             a_start_tile_id,
-             b_start_tile_id,
-             a_mask_h,
-             a_mask_w,
-             b_mask_h,
-             b_mask_w});
+            reader_rt_args
+        );
+
         tt_metal::SetRuntimeArgs(
-            program, writer_kernel_id, core, {dst_buffer->address(), num_output_tiles_per_core, num_tiles_written + output_start_tile_id});
+            program, writer_kernel_id, core, {output.buffer()->address(),
+            num_tiles_written,
+            num_output_tiles_per_core});
         num_tiles_written += num_output_tiles_per_core;
     }
 

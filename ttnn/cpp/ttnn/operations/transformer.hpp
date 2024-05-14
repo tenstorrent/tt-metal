@@ -228,15 +228,6 @@ struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
         return std::make_tuple(input_tensor);
     }
 
-
-    template <typename... Args>
-    static auto map_launch_op_args_to_execute(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        Args&&... args) {
-            return std::make_tuple(input_tensors.at(0), std::forward<Args>(args)...);
-    }
-
     static inline ttnn::Tensor execute(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
         return operation::run(
             ConcatenateHeads{memory_config.value_or(input_tensor.memory_config())}, {input_tensor}).at(0);
@@ -259,16 +250,6 @@ struct AttentionSoftmax : public tt::operations::primary::Softmax {
         const std::optional<const ttnn::Tensor>& attention_mask = std::nullopt,
         Args&&... args) {
         return std::make_tuple(input_tensor, attention_mask);
-    }
-
-
-    template <typename... Args>
-    static auto map_launch_op_args_to_execute(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        const std::optional<int>& head_size = std::nullopt,
-        Args&&... args) {
-            return std::make_tuple(input_tensors.at(0), head_size, optional_input_tensors.at(0) , std::forward<Args>(args)...);
     }
 
     static ttnn::Tensor execute(

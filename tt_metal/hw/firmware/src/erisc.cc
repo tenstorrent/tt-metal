@@ -42,14 +42,6 @@ uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t atomic_ret_val __attribute__ ((section ("l1_data"))) __attribute__((used));
 
-void __attribute__((section("code_l1"))) risc_init() {
-    for (uint32_t n = 0; n < NUM_NOCS; n++) {
-        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(n, 0, NOC_NODE_ID);
-        my_x[n] = noc_id_reg & NOC_NODE_ID_MASK;
-        my_y[n] = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-    }
-}
-
 void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
     DEBUG_STATUS("I");
     rtos_context_switch_ptr = (void (*)())RtosTable[0];

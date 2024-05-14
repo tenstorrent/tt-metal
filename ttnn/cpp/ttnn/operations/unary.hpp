@@ -6,6 +6,8 @@
 
 #include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_eager/tt_dnn/op_library/run_operation.hpp"
+#include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
+#include "ttnn/operations/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/validation.hpp"
 
@@ -57,15 +59,6 @@ struct Unary : public EltwiseUnary {
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
-    };
-
-
-    template <typename... Args>
-    static auto map_launch_op_args_to_execute(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        Args&&... args) {
-            return std::make_tuple(input_tensors.at(0), std::forward<Args>(args)...);
     }
 
     static Tensor execute(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
@@ -80,15 +73,6 @@ struct Exp : public EltwiseUnary {
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
-    };
-
-
-    template <typename... Args>
-    static auto map_launch_op_args_to_execute(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        Args&&... args) {
-            return std::make_tuple(input_tensors.at(0), std::forward<Args>(args)...);
     }
 
     static Tensor execute(
@@ -102,10 +86,33 @@ struct Exp : public EltwiseUnary {
             memory_config);
     }
 };
+
+struct Softplus : public EltwiseUnary {
+    static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
+
+    template <typename... Args>
+    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
+        return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
+    }
+
+    static Tensor execute(const Tensor& input, const float beta, const float threshold, const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
+        auto original_input_shape = input.get_shape();
+        auto input_4D = ttnn::unsqueeze_to_4D(input);
+
+        auto memory_config = memory_config_arg.value_or(input_4D.memory_config());
+        auto result = tt::tt_metal::softplus(input_4D, beta, threshold, memory_config);
+
+        result = ttnn::reshape(result, original_input_shape);
+
+        return result;
+    }
+};
 }  // namespace unary
 }  // namespace operations
 
 constexpr auto exp = ttnn::register_operation<ttnn::operations::unary::Exp>("ttnn::exp");
+
+constexpr auto softplus = ttnn::register_operation<ttnn::operations::unary::Softplus>("ttnn::softplus");
 
 constexpr auto silu =
     ttnn::register_operation<ttnn::operations::unary::Unary<ttnn::operations::unary::UnaryOpType::SILU>>("ttnn::silu");

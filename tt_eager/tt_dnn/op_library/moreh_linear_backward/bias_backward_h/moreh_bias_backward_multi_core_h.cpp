@@ -23,19 +23,18 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
 
     Buffer *src_buffer = output_grad.buffer();
     Buffer *dst_buffer = bias_grad.buffer();
-    uint32_t num_tiles = output_grad.volume() / TILE_HW;
     const auto &output_grad_shape_wo_padding = output_grad.get_legacy_shape().without_padding();
-    const bool do_mask_h = (output_grad_shape_wo_padding[2] % TILE_HEIGHT) != 0;
-    const uint32_t mask_h = do_mask_h ? output_grad_shape_wo_padding[2] % TILE_HEIGHT : TILE_HEIGHT;
-    const bool do_mask_w = (output_grad_shape_wo_padding[3] % TILE_WIDTH) != 0;
-    const uint32_t mask_w = do_mask_w ? output_grad_shape_wo_padding[3] % TILE_WIDTH : TILE_WIDTH;
+    const bool do_mask_h = (output_grad_shape_wo_padding[-2] % TILE_HEIGHT) != 0;
+    const uint32_t mask_h = do_mask_h ? output_grad_shape_wo_padding[-2] % TILE_HEIGHT : TILE_HEIGHT;
+    const bool do_mask_w = (output_grad_shape_wo_padding[-1] % TILE_WIDTH) != 0;
+    const uint32_t mask_w = do_mask_w ? output_grad_shape_wo_padding[-1] % TILE_WIDTH : TILE_WIDTH;
 
     const auto &output_grad_shape = output_grad.get_legacy_shape();
-    uint32_t B1 = output_grad_shape[0];
-    uint32_t B2 = output_grad_shape[1];
-    uint32_t Ht = output_grad_shape[2] / TILE_HEIGHT;
-    uint32_t Wt = output_grad_shape[3] / TILE_WIDTH;
-    uint32_t B1B2Ht = B1 * B2 * Ht;
+    uint32_t batch_num = output_grad.volume() / output_grad_shape[-2] / output_grad_shape[-1];
+    uint32_t Ht = output_grad_shape[-2] / TILE_HEIGHT;
+    uint32_t Wt = output_grad_shape[-1] / TILE_WIDTH;
+    uint32_t num_tiles = batch_num * Ht;
+    log_debug(LogOp, "{}:{} batch_num {} Ht {} Wt {} num_tiles {}", __func__, __LINE__, batch_num, Ht, Wt, num_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -136,7 +135,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
             reader_kernel_id,
             core,
             {src_buffer->address(),
-             B1B2Ht,
+             num_tiles,
              Wt,
              num_cols_per_core,
              tile_offset,
@@ -152,8 +151,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
                 program,
                 compute_kernel_1_id,
                 core,
-                {B1,
-                 B2,
+                {batch_num,
                  Ht,
                  num_cols_per_core,  // Wt_per_core
                  static_cast<uint32_t>(do_mask_h),
@@ -164,8 +162,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
                 program,
                 compute_kernel_2_id.value(),
                 core,
-                {B1,
-                 B2,
+                {batch_num,
                  Ht,
                  num_cols_per_core,  // Wt_per_core
                  static_cast<uint32_t>(do_mask_h),

@@ -21,7 +21,7 @@ def get_tensors(input_shape, other_shape, output_shape, require_input_grad, requ
     other = torch.randint(-2, 3, other_shape, dtype=cpu_dtype)
     output = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
 
-    tt_input = ttl.tensor.Tensor(input, npu_dtype).pad_to_tile(1).to(npu_layout).to(device)
+    tt_input = ttl.tensor.Tensor(input, npu_dtype).pad_to_tile(float(1)).to(npu_layout).to(device)
     tt_other = ttl.tensor.Tensor(other, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
     tt_output = ttl.tensor.Tensor(output, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
 
@@ -33,7 +33,7 @@ def get_tensors(input_shape, other_shape, output_shape, require_input_grad, requ
     if require_input_grad or require_other_grad:
         output_grad = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
         # tt_output_grad = ttl.tensor.Tensor(output_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-        tt_output_grad = ttl.tensor.Tensor(output_grad, npu_dtype).pad_to_tile(0).to(npu_layout).to(device)
+        tt_output_grad = ttl.tensor.Tensor(output_grad, npu_dtype).pad_to_tile(float(-1)).to(npu_layout).to(device)
         torch_output_grad = output_grad[0][0][0][0] if is_1d else output_grad
 
         if require_input_grad:
@@ -84,7 +84,13 @@ def test_moreh_matmul_1d(input_shape, device):
 
     # tt matmul
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_out = ttl.tensor.moreh_matmul(tt_input, tt_other).cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
+    tt_out = (
+        ttl.operations.primary.moreh_matmul(tt_input, tt_other)
+        .cpu()
+        .to(cpu_layout)
+        .unpad_from_tile(output_shape)
+        .to_torch()
+    )
 
     # torch matmul
     torch_input = torch.reshape(torch_input, (torch_input.shape[-1],))
@@ -141,7 +147,9 @@ def test_moreh_matmul_1d_backward(input_shape, requires_grad, device):
     torch_out.backward(torch_output_grad)
 
     # tt matmul backward
-    ttl.operations.primary.moreh_matmul_backward(tt_output_grad, tt_input, tt_other, tt_input_grad, tt_other_grad)
+    ttl.operations.primary.moreh_matmul_backward(
+        tt_output_grad, tt_input, tt_other, (require_input_grad, require_other_grad), tt_input_grad, tt_other_grad
+    )
 
     # test for equivalance
     rtol = atol = 0.1
@@ -171,13 +179,12 @@ def test_moreh_matmul_1d_backward(input_shape, requires_grad, device):
     "params",
     (
         # input, other, output shape
-        ([1, 1, 511, 255], [1, 1, 255, 765], [1, 1, 511, 765]),
+        ([3, 128, 96], [3, 4, 1, 96, 256], [3, 4, 3, 128, 256]),
+        ([3, 3, 313, 511], [3, 3, 511, 765], [3, 3, 313, 765]),
+        ([3, 1, 2, 1, 4, 1, 319, 95], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470]),
+        ([3, 2, 1, 470, 95], [2, 1, 3, 1, 2, 2, 95, 319], [2, 1, 3, 3, 2, 2, 470, 319]),
     ),
 )
-@pytest.mark.parametrize("input_b1", (1, 2))
-@pytest.mark.parametrize("input_b2", (1, 3))
-@pytest.mark.parametrize("other_b1", (1, 2))
-@pytest.mark.parametrize("other_b2", (1, 3))
 @pytest.mark.parametrize(
     "requires_grad",
     (
@@ -186,16 +193,9 @@ def test_moreh_matmul_1d_backward(input_shape, requires_grad, device):
         (True, True),
     ),
 )
-def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2, requires_grad, device):
+def test_moreh_matmul_backward(params, requires_grad, device):
     torch.manual_seed(3072)
     input_shape, other_shape, output_shape = params
-    input_shape[0] = input_b1
-    input_shape[1] = input_b2
-    other_shape[0] = other_b1
-    other_shape[1] = other_b2
-    output_shape[0] = max(input_b1, other_b1)
-    output_shape[1] = max(input_b2, other_b2)
-
     require_input_grad, require_other_grad = requires_grad
 
     # get tensors
@@ -218,116 +218,54 @@ def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2, r
     torch_out.backward(torch_output_grad)
 
     # tt matmul backward
-    ttl.operations.primary.moreh_matmul_backward(tt_output_grad, tt_input, tt_other, tt_input_grad, tt_other_grad)
+    tt_input_grad, tt_other_grad = ttl.operations.primary.moreh_matmul_backward(
+        tt_output_grad, tt_input, tt_other, (require_input_grad, require_other_grad), tt_input_grad, tt_other_grad
+    )
+
     # test for equivalance
     rtol = atol = 0.1
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
     if require_input_grad:
         ttcpu_input_grad = tt_input_grad.cpu().to(cpu_layout).unpad_from_tile(input_shape).to_torch()
-
-        # TODO(dongjin.na): Check this case.
-        if input_b1 == 1 and input_b2 == 1 and other_b1 == 2 and other_b2 == 3 and input_shape[2] == 511:
-            atol = 1
-
         passing, output_pcc = comp_allclose_and_pcc(torch_input.grad, ttcpu_input_grad, pcc=0.999, rtol=rtol, atol=atol)
         logger.debug(f"input_grad passing={passing}")
         logger.debug(f"input_grad pcc={output_pcc}")
         assert passing
+    else:
+        assert tt_input_grad is None
 
     if require_other_grad:
         ttcpu_other_grad = tt_other_grad.cpu().to(cpu_layout).unpad_from_tile(other_shape).to_torch()
-
         passing, output_pcc = comp_allclose_and_pcc(torch_other.grad, ttcpu_other_grad, pcc=0.999, rtol=rtol, atol=atol)
         logger.debug(f"other_grad passing={passing}")
         logger.debug(f"other_grad pcc={output_pcc}")
         assert passing
+    else:
+        assert tt_other_grad is None
 
 
-@pytest.mark.parametrize(
-    "params",
-    (
-        # input, other, output shape
-        ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32]),
-        ([1, 3, 511, 313], [3, 1, 313, 765], [3, 3, 511, 765]),
-        ([3, 1, 511, 313], [1, 3, 313, 765], [3, 3, 511, 765]),
-        ([3, 3, 511, 313], [3, 3, 313, 765], [3, 3, 511, 765]),
-    ),
-)
-def test_moreh_matmul(params, device):
-    torch.manual_seed(3072)
-    input_shape, other_shape, output_shape = params
-    tt_input, tt_other, _, _, _, _, torch_input, torch_other, _ = get_tensors(
-        input_shape, other_shape, output_shape, False, False, False, device
-    )
-
-    # tt matmul
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_output = (
-        ttl.tensor.moreh_matmul(tt_input, tt_other).cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
-    )
-
-    # torch matmul
-    torch_out = torch.matmul(torch_input, torch_other)
-
-    # test for equivalance
-    rtol = atol = 0.1
-    passing, output_pcc = comp_allclose_and_pcc(torch_out, tt_output, pcc=0.999, rtol=rtol, atol=atol)
-    logger.debug(f"Out passing={passing}")
-    logger.debug(f"Output pcc={output_pcc}")
-
-    assert passing
-
-
-@pytest.mark.parametrize(
-    "params",
-    (
-        # input, other, output shape, transpose input, other
-        ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], False, False),
-        ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], False, True),
-        ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], True, False),
-        ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], True, True),
-        ([1, 1, 29, 31], [1, 1, 31, 30], [1, 1, 29, 30], False, False),
-        ([1, 1, 29, 31], [1, 1, 30, 31], [1, 1, 29, 30], False, True),
-        ([1, 1, 29, 31], [1, 1, 29, 30], [1, 1, 31, 30], True, False),
-        ([1, 1, 29, 31], [1, 1, 30, 29], [1, 1, 31, 30], True, True),
-        ([1, 3, 511, 313], [1, 1, 765, 313], [1, 3, 511, 765], False, True),
-        ([1, 1, 511, 313], [1, 3, 765, 313], [1, 3, 511, 765], False, True),
-        ([1, 3, 511, 313], [3, 1, 765, 313], [3, 3, 511, 765], False, True),
-        ([3, 3, 511, 313], [3, 3, 765, 313], [3, 3, 511, 765], False, True),
-        ([1, 1, 319, 309], [1, 1, 319, 748], [1, 1, 309, 748], True, False),
-        ([1, 3, 313, 511], [1, 1, 313, 765], [1, 3, 511, 765], True, False),
-        ([1, 1, 313, 511], [1, 3, 313, 765], [1, 3, 511, 765], True, False),
-        ([1, 3, 313, 511], [3, 1, 313, 765], [3, 3, 511, 765], True, False),
-        ([3, 3, 313, 511], [3, 3, 313, 765], [3, 3, 511, 765], True, False),
-        ([3, 3, 313, 511], [3, 3, 765, 313], [3, 3, 511, 765], True, True),
-    ),
-)
-@pytest.mark.parametrize("has_output", [True, False])
-def test_primary_moreh_matmul(params, has_output, device):
+def moreh_matmul(params, has_output, device):
     torch.manual_seed(3072)
     input_shape, other_shape, output_shape, transpose_input, transpose_other = params
     tt_input, tt_other, tt_output, _, _, _, torch_input, torch_other, _ = get_tensors(
         input_shape, other_shape, output_shape, False, False, False, device
     )
+    if not has_output:
+        tt_output = None
 
-    torch_input = torch_input.transpose(3, 2) if transpose_input else torch_input
-    torch_other = torch_other.transpose(3, 2) if transpose_other else torch_other
+    torch_input = torch_input.transpose(-1, -2) if transpose_input else torch_input
+    torch_other = torch_other.transpose(-1, -2) if transpose_other else torch_other
 
     # tt matmul
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_output_cpu = (
-        ttl.operations.primary.moreh_matmul(
-            tt_input,
-            tt_other,
-            output_tensor=tt_output if has_output else None,
-            transpose_input_a=transpose_input,
-            transpose_input_b=transpose_other,
-        )
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(output_shape)
-        .to_torch()
+    tt_output = ttl.operations.primary.moreh_matmul(
+        tt_input,
+        tt_other,
+        transpose_input=transpose_input,
+        transpose_other=transpose_other,
+        output=tt_output,
     )
+    tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
 
     # torch matmul
     torch_out = torch.matmul(torch_input, torch_other)
@@ -338,4 +276,79 @@ def test_primary_moreh_matmul(params, has_output, device):
     logger.debug(f"Out passing={passing}")
     logger.debug(f"Output pcc={output_pcc}")
 
+    return passing
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        # input, other, output shape, transpose input, other
+        ([32, 32], [32, 32], [32, 32], False, False),  # single-core
+        ([1024, 128], [128, 1024], [1024, 1024], False, False),  # multi-core
+        ([128, 1024], [128, 1024], [1024, 1024], True, False),  # input transpose
+        ([1024, 128], [1024, 128], [1024, 1024], False, True),  # other transpose
+        ([128, 1024], [1024, 128], [1024, 1024], True, True),  # input, other transpose
+        ([1020, 128], [128, 1024], [1020, 1024], False, False),  # input mask
+        ([1024, 128], [128, 1020], [1024, 1020], False, False),  # other mask
+        ([1020, 310], [310, 1020], [1020, 1020], False, False),  # input, other mask
+        ([128, 1020], [128, 1024], [1020, 1024], True, False),  # input mask, transpose
+        ([1024, 128], [1020, 128], [1024, 1020], False, True),  # other mask, transpose
+        ([310, 1020], [1020, 310], [1020, 1020], True, True),  # input, other mask, transpose
+        ([3, 1, 2, 1, 4, 1, 319, 95], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], False, False),  # batched matmul
+        ([2, 319, 95], [2, 1, 3, 4, 1, 95, 470], [2, 1, 3, 4, 2, 319, 470], False, False),  # batched matmul
+        ([3, 1, 2, 1, 4, 1, 95, 319], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], True, False),  # batched matmul
+        ([2, 319, 95], [2, 1, 3, 4, 1, 470, 95], [2, 1, 3, 4, 2, 319, 470], False, True),  # batched matmul
+        (
+            [2, 3, 1, 2, 3, 2, 64, 64],
+            [2, 1, 4, 2, 1, 2, 64, 64],
+            [2, 3, 4, 2, 3, 2, 64, 64],
+            False,
+            False,
+        ),  # batched matmul
+    ),
+)
+def test_moreh_matmul(params, device):
+    passing = moreh_matmul(params, True, device)
     assert passing
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        # input, other, output shape, transpose input, other
+        ([32, 32], [32, 32], [32, 32], False, False),  # single-core
+        ([3, 1, 2, 1, 4, 1, 95, 319], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], True, False),  # batched matmul
+        ([2, 319, 95], [2, 1, 3, 4, 1, 470, 95], [2, 1, 3, 4, 2, 319, 470], False, True),  # batched matmul
+        (
+            [2, 3, 1, 2, 3, 2, 64, 64],
+            [2, 1, 4, 2, 1, 2, 64, 64],
+            [2, 3, 4, 2, 3, 2, 64, 64],
+            False,
+            False,
+        ),  # batched matmul
+    ),
+)
+def test_moreh_matmul_wo_output(params, device):
+    passing = moreh_matmul(params, False, device)
+    assert passing
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        # input, weight, bias(1d or scalar), output
+        ([32, 32], [32, 32], [32, 32], False, False),  # single-core
+        (
+            [2, 3, 1, 2, 3, 2, 64, 64],
+            [2, 1, 4, 2, 1, 2, 64, 64],
+            [2, 3, 4, 2, 3, 2, 64, 64],
+            False,
+            False,
+        ),  # batched matmul
+    ),
+)
+def test_moreh_matmul_enable_cache(params, device, use_program_cache):
+    torch.manual_seed(3072)
+    for i in range(2):
+        passing = moreh_matmul(params, True, device)
+        assert passing
