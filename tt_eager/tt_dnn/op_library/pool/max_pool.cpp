@@ -122,7 +122,7 @@ operation::ProgramWithCallbacks MaxPool::create_program(const std::vector<Tensor
         const auto& reader_indices = inputs.at(1);
         TT_FATAL(use_multicore_, "UTWHv2 only works with multicore option.");
         TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded for UTWHv2");
-        return {max_pool_2d_multi_core_sharded_with_halo_v2_new(
+        return {max_pool_2d_multi_core_sharded_with_halo_v2(
                                     input, reader_indices,
                                     output,
                                     in_n_, in_h_, in_w_,
@@ -380,9 +380,18 @@ operation::OpPerformanceModel MaxPoolNew::create_op_performance_model(const std:
 }
 
 Tensor maxpool2d_new(const Tensor &input,
-                        const SlidingWindowConfig& sliding_window_config,
-                        uint32_t in_c,
-                        const MemoryConfig& out_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+                        uint32_t in_n, uint32_t in_h, uint32_t in_w,
+                        uint32_t kernel_size_h, uint32_t kernel_size_w,
+                        uint32_t stride_h, uint32_t stride_w,
+                        uint32_t pad_h, uint32_t pad_w,
+                        uint32_t dilation_h, uint32_t dilation_w,
+                        const MemoryConfig& out_mem_config) {
+    SlidingWindowConfig sliding_window_config(
+        in_n, in_h, in_w,
+        kernel_size_h, kernel_size_w,
+        stride_h, stride_w,
+        pad_h, pad_w,
+        dilation_h, dilation_w);
     return operation::run_without_autoformat(MaxPoolNew{sliding_window_config,
                                                         out_mem_config},
                                              {input}).at(0);
