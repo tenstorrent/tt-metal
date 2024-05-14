@@ -1162,25 +1162,24 @@ EnqueueTerminateCommand::EnqueueTerminateCommand(
     command_queue_id(command_queue_id), device(device), manager(manager) {}
 
 void EnqueueTerminateCommand::process() {
-    uint32_t cmd_sequence_sizeB =
-        CQ_PREFETCH_CMD_BARE_MIN_SIZE + // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
-        CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_TERMINATE
+    // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
+    // CQ_PREFETCH_CMD_TERMINATE
+    uint32_t cmd_sequence_sizeB = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 
+    // dispatch and prefetch terminate commands each needs to be a separate fetch queue entry
     void *cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
-
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-    command_sequence.add_dispatch_terminate();
-    command_sequence.add_prefetch_terminate();
-
+    HugepageDeviceCommand dispatch_command_sequence(cmd_region, cmd_sequence_sizeB);
+    dispatch_command_sequence.add_dispatch_terminate();
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
+    this->manager.fetch_queue_reserve_back(this->command_queue_id);
+    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 
-    // Command sequence has dispatch and prefetch terminate commands but each needs to be a separate fetch queue entry
-    TT_ASSERT(cmd_sequence_sizeB % CQ_PREFETCH_CMD_BARE_MIN_SIZE == 0);
-    uint32_t num_terminate_cmds = cmd_sequence_sizeB / CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-    for (int terminate_cmd_idx = 0; terminate_cmd_idx < num_terminate_cmds; terminate_cmd_idx++) {
-        this->manager.fetch_queue_reserve_back(this->command_queue_id);
-        this->manager.fetch_queue_write(CQ_PREFETCH_CMD_BARE_MIN_SIZE, this->command_queue_id);
-    }
+    cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
+    HugepageDeviceCommand prefetch_command_sequence(cmd_region, cmd_sequence_sizeB);
+    prefetch_command_sequence.add_prefetch_terminate();
+    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
+    this->manager.fetch_queue_reserve_back(this->command_queue_id);
+    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
 
 

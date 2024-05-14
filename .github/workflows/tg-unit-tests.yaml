@@ -1,9 +1,11 @@
 name: "[TG] TG unit tests"
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - main/galaxy
   schedule:
-    - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
+    - cron: '0 0 * * *' # Runs every day at 12am UTC
 
 jobs:
   build-artifact:

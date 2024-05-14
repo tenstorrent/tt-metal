@@ -987,7 +987,7 @@ def eltwise_softplus(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.softplus(t0, beta, threshold, memory_config=memory_config_to_ttnn(output_mem_config))
+    t1 = ttnn.softplus(t0, beta=beta, threshold=threshold, memory_config=memory_config_to_ttnn(output_mem_config))
     return ttnn_tensor_to_torch(t1)
 
 

@@ -332,8 +332,7 @@ def run_test_FalconDecoder_inference(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.parametrize("enable_program_cache", (True, False), ids=["enable_program_cache", "disable_program_cache"])
-@pytest.mark.parametrize("num_devices", (4, 8), ids=["4chips", "8chips"])
+@pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
@@ -381,19 +380,15 @@ def test_FalconDecoder_inference(
     cache_pcc,
     token_pcc,
     model_config_str,
-    enable_program_cache,
     model_location_generator,
     get_tt_cache_path,
     all_devices,
-    # use_program_cache, # TODO: remove workaround when low PCC issue 7159 is fixed
+    use_program_cache,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
         pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
     if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED"]:
         pytest.skip("Decode is only supported for SHARDED memory config!")
-
-    if llm_mode == "decode" and num_devices == 4:
-        pytest.skip("#7842: Possible hangs in t3k")
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
@@ -405,10 +400,6 @@ def test_FalconDecoder_inference(
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )
-
-    if enable_program_cache:
-        for device in devices:
-            device.enable_program_cache()
 
     run_test_FalconDecoder_inference(
         devices,
@@ -425,7 +416,3 @@ def test_FalconDecoder_inference(
         tt_cache_path,
         model_location_generator,
     )
-
-    if enable_program_cache:
-        for device in devices:
-            device.disable_and_clear_program_cache()

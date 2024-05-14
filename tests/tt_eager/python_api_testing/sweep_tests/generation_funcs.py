@@ -577,6 +577,7 @@ def gen_layernorm_args(
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
+    do_sanitize_args=False,
 ):
     return gen_dtype_layout_device_layernorm(
         input_shapes,
@@ -593,6 +594,7 @@ def gen_add_layernorm_args(
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
+    do_sanitize_args=False,
 ):
     return gen_dtype_layout_device_layernorm(
         input_shapes,
@@ -1670,6 +1672,7 @@ def gen_rmsnorm_args(
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
+    do_sanitize_args=False,
 ):
     return gen_dtype_layout_device_layernorm(
         input_shapes,

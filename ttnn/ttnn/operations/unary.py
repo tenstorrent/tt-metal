@@ -208,6 +208,7 @@ def register_eltwise_unary_cpp_function(unary_function):
         ttnn_function_to_golden_function = {
             ttnn._ttnn.operations.unary.exp: torch.exp,
             ttnn._ttnn.operations.unary.silu: torch.nn.functional.silu,
+            ttnn._ttnn.operations.unary.softplus: torch.nn.functional.softplus,
         }
         torch_function = ttnn_function_to_golden_function[unary_function]
         return torch_function(input_tensor)
@@ -219,6 +220,7 @@ def register_eltwise_unary_cpp_function(unary_function):
 TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn._ttnn.operations.unary.exp,
     ttnn._ttnn.operations.unary.silu,
+    ttnn._ttnn.operations.unary.softplus,
 ]
 for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_eltwise_unary_cpp_function(unary_function)

@@ -91,15 +91,6 @@ struct Binary {
         return std::make_tuple(input_tensor_a, input_tensor_b);
     }
 
-
-    template <typename... Args>
-    static auto map_launch_op_args_to_execute(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        Args&&... args) {
-            return std::make_tuple(input_tensors.at(0), input_tensors.at(1), std::forward<Args>(args)...);
-    }
-
     static Tensor execute(
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
@@ -139,16 +130,6 @@ struct Binary {
         return std::make_tuple(input_tensor_a, input_tensor_b);
     }
 
-
-    template <typename... Args>
-    static auto map_launch_op_args_to_execute(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        const float scalar,
-        Args&&... args) {
-            return std::make_tuple(input_tensors.at(0), scalar, std::forward<Args>(args)...);
-    }
-
     // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
     // Currently, this is exactly how tt::tt_metal::add_unary works
     static Tensor execute(
@@ -165,7 +146,7 @@ struct Binary {
             ttnn::Shape(std::array<std::uint32_t, 2>{1, 1}, std::array<std::uint32_t, 2>{TILE_HEIGHT, TILE_WIDTH}),
             DataType::BFLOAT16,
             Layout::TILE);
-        Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.get_workers());
+        Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.device());
         // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
         return Binary::execute(
             input_tensor_a, scalar_tensor_device, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, activations);

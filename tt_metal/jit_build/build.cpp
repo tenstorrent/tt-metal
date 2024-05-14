@@ -69,6 +69,11 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
         break;
     }
     common_flags += "-std=c++17 -flto -ffast-math ";
+
+    if (tt::llrt::OptionsG.get_riscv_debug_info_enabled()) {
+        common_flags += "-g ";
+    }
+
     this->cflags_ = common_flags;
     this->cflags_ +=
         "-fno-use-cxa-atexit -fno-exceptions "
@@ -188,7 +193,6 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bo
     this->defines_ = env_.defines_;
 
     // TODO(pgk): build these once at init into built/libs!
-    this->srcs_.push_back("tt_metal/hw/firmware/src/risc_common.cc");
     this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
 
     this->lflags_ = env_.lflags_ + "-Os ";
@@ -379,7 +383,6 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
         this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
 
         // TODO(pgk): build these once at init into built/libs!
-        this->srcs_.push_back("tt_metal/hw/firmware/src/risc_common.cc");
         this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
         this->srcs_.push_back("tt_metal/hw/firmware/src/" + env_.aliased_arch_name_ + "/noc.c");
         if (this->is_fw_) {
