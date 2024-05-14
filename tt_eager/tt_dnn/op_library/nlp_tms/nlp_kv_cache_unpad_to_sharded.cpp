@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -64,7 +64,6 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_unpad_to_sharded(const T
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    // log_info("[xuncai] core info new");
     auto shard_spec = output.shard_spec().value();
     auto all_cores = shard_spec.grid;
     auto num_cores_total = all_cores.num_cores();

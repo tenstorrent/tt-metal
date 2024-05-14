@@ -505,25 +505,6 @@ tt::stl::reflection::Attributes NlpKVCacheUnpadToSharded::attributes() const {
         {"output_tensor_end", this->output_tensor_end},
     };
 }
-// const operation::Hash NlpKVCacheUnpadToSharded::compute_program_hash (
-//     const std::vector<Tensor> &input_tensors) const {
-//     auto input_tensor = input_tensors.at(0);
-//     auto input_mem_config = input_tensor.memory_config();
-//     auto dtype = input_tensor.get_dtype();
-//     auto num_dims = input_tensor.get_legacy_shape().rank();
-
-//     std::string rm_width = "TILE";
-
-//     auto str = operation::hash_operation<NlpKVCacheUnpadToSharded>(
-//         num_dims,
-//         input_tensor.get_layout(),
-//         input_mem_config.memory_layout,
-//         input_mem_config.buffer_type,
-//         dtype,
-//         rm_width
-//     );
-//     return str;
-// }
 
 void CreateQKVHeads::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
