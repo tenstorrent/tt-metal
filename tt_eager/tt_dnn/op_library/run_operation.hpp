@@ -407,8 +407,8 @@ void launch_with_autoformat(
 );
 
 std::vector<Device*> get_workers_for_op_output(
-    const std::vector<Tensor>&& inputs,
-    const std::vector<std::optional<const Tensor>>&& optional_inputs = {},
+    const std::vector<Tensor>& inputs,
+    const std::vector<std::optional<const Tensor>>& optional_inputs = {},
     bool enable_autoformat_device = true);
 
 namespace detail{
