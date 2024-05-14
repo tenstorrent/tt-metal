@@ -17,6 +17,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("on_device", [True, False])
 def test_getitem(device, batch_sizes, height, width, input_layout, on_device):
+    if not on_device:
+        pytest.skip("Tensor.__getitem__ only supports Tensors stored on Device")
+
     torch_input_tensor = torch.rand((*batch_sizes, height, width), dtype=torch.bfloat16)
 
     if batch_sizes:
@@ -52,6 +55,9 @@ def test_getitem(device, batch_sizes, height, width, input_layout, on_device):
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("on_device", [True, False])
 def test_getitem_2d(device, height, width, input_layout, on_device):
+    if not on_device:
+        pytest.skip("Tensor.__getitem__ only supports Tensors stored on Device")
+
     torch_input_tensor = torch.rand((height, width), dtype=torch.bfloat16)
 
     torch_output_tensor = torch_input_tensor[:32]
@@ -77,6 +83,7 @@ def test_getitem_2d(device, height, width, input_layout, on_device):
 
 
 def test_getitem_scalar_output():
+    pytest.skip("Tensor.__getitem__ only supports Tensors stored on Device")
     torch_input_tensor = torch.rand((16, 32), dtype=torch.bfloat16)
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
