@@ -538,12 +538,21 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
 - Merge commits are not allowed in our main branch. We enforce a linear
   history.
 
+- You can use either of the following methods to merge your branch on the
+  GitHub UI:
+  - Squash and merge
+  - Rebase and merge
+
+  If you use squashing, when GitHub asks you to enter a new commit message,
+  ensure that your commit message follows our required format as outlined above
+  in this section. Failure to do so is a violation of our standards.
+
 ### Code reviews
 
 - A PR must be opened for any code change with the following criteria:
   - Be approved, by a maintaining team member and any codeowners whose modules
     are relevant for the PR.
-  - Pass any required post-commit pipelines rebased on the latest main. These
+  - Pass any required post-commit pipelines, updated to the latest main. These
     pipelines will generally, but not always, be defined in
     `.github/workflows/all-post-commit-workflows.yaml`.
   - Pass any acceptance criteria mandated in the original issue.
