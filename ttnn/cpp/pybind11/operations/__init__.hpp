@@ -40,6 +40,9 @@ void py_module(py::module& module) {
 
     auto m_data_movement = module.def_submodule("data_movement", "data_movement operations");
     data_movement::py_module(m_data_movement);
+    
+    auto m_conv2d = module.def_submodule("conv2d", "conv2d operation");
+    conv2d::py_module(m_conv2d);
 
     auto m_transformer = module.def_submodule("transformer", "transformer operations");
     transformer::py_module(m_transformer);

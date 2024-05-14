@@ -484,18 +484,19 @@ def conv2d(
             weights_dtype=conv_config.weights_dtype,
             math_approx_mode_enabled=conv_config.math_approx_mode,
             fp32_dest_acc_enabled=conv_config.fp32_dest_acc_en,
-            activation=conv_config.fp32_dest_acc_en,
+            activation=conv_config.activation if conv_config.activation is not None else "",
             input_channels_alignment=conv_config.input_channels_alignment,
             deallocate_activation=conv_config.deallocate_activation,
             reallocate_halo_output=conv_config.reallocate_halo_output,
-            act_block_h_override=conv_config.act_block_h,
+            act_block_h_override=conv_config.act_block_h if conv_config.act_block_h is not None else 0,
             reshard_if_not_optimal=reshard_if_not_optimal,
             override_sharding_config=False,  # TODO: pass in config
             height_sharding=conv_config.height_sharding,
-            core_grid=conv_config.core_grid,
             transpose_shards=True,  # TODO: pass in config
-            output_layout=True,  # TODO: pass in config
+            output_layout=ttnn.TILE_LAYOUT,  # TODO: pass in config
         )
+        if conv_config.core_grid:
+            conv_config_.core_grid = conv_config.core_grid
         return ttnn._ttnn.operations.conv2d.conv2d(
             input_tensor,
             weight_tensor,
