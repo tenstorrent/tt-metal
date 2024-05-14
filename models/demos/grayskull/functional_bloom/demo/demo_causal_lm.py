@@ -22,13 +22,16 @@ from models.demos.grayskull.functional_bloom.tt import ttnn_functional_bloom, tt
 from models.demos.grayskull.functional_bloom.dataset_utils import get_data
 
 
-def generate_next_token(model, config, input_ids, parameters, num_heads, logits_processor, max_length, **kwargs):
+def generate_next_token(
+    model, config, input_ids, parameters, num_heads, logits_processor, device, max_length, **kwargs
+):
     num_tokens = input_ids.shape[-1]
     padded_input_ids, alibi, causal_mask = model.preprocess_inputs(
         input_ids=input_ids,
         num_heads=num_heads,
         max_length=max_length,
         attention_mask=None,
+        device=device,
         **kwargs,
     )
     logits = model.bloom_for_causal_lm(
@@ -49,6 +52,7 @@ def generate(
     logits_processor,
     num_heads,
     num_tokens_to_decode,
+    device,
     max_length=384,
     **kwargs,
 ):
@@ -61,6 +65,7 @@ def generate(
             parameters,
             num_heads,
             logits_processor,
+            device,
             max_length,
             **kwargs,
         )
@@ -92,6 +97,7 @@ def run_bloom_causal_LM_inference(
     input_path,
     model_location_generator,
     device,
+    num_tokens_to_decode=10,
 ):
     torch.manual_seed(1234)
     config = BloomConfig.from_pretrained(model_version)
@@ -130,7 +136,7 @@ def run_bloom_causal_LM_inference(
         tokenizer=tokenizer,
         logits_processor=logits_processor,
         num_heads=num_heads,
-        num_tokens_to_decode=10,
+        num_tokens_to_decode=num_tokens_to_decode,
         device=device,
     )
 
@@ -151,7 +157,7 @@ def run_bloom_causal_LM_inference(
         "post_processing": profiler.get("post_processing_output_to_string"),
     }
 
-    return measurements
+    return measurements, generated_text
 
 
 def run_bloom_causal_LM_inference_hellaswag(
@@ -160,7 +166,8 @@ def run_bloom_causal_LM_inference_hellaswag(
     batch_size,
     model_location_generator,
     device,
-    loop_count,
+    loop_count=5,
+    num_tokens_to_decode=10,
 ):
     torch.manual_seed(1234)
     config = BloomConfig.from_pretrained(model_version)
@@ -194,7 +201,7 @@ def run_bloom_causal_LM_inference_hellaswag(
             tokenizer=tokenizer,
             logits_processor=logits_processor,
             num_heads=num_heads,
-            num_tokens_to_decode=10,
+            num_tokens_to_decode=num_tokens_to_decode,
             device=device,
         )
 
@@ -212,6 +219,8 @@ def run_bloom_causal_LM_inference_hellaswag(
     logger.info("Accuracy")
     logger.info(accuracy)
 
+    return accuracy
+
 
 @pytest.mark.parametrize(
     "functional_model",
@@ -223,6 +232,8 @@ def test_demo(
     model_location_generator,
     device,
     use_program_cache,
+    batch_size=8,
+    num_tokens_to_decode=10,
 ):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
@@ -230,10 +241,11 @@ def test_demo(
     return run_bloom_causal_LM_inference(
         model_version="bigscience/bloom-560m",
         functional_model=functional_model,
-        batch_size=8,
+        batch_size=batch_size,
         input_path=input_path,
         model_location_generator=model_location_generator,
         device=device,
+        num_tokens_to_decode=num_tokens_to_decode,
     )
 
 
@@ -245,15 +257,24 @@ def test_demo(
     "loop_count",
     ((4),),
 )
-def test_demo_hellaswag(model_location_generator, functional_model, device, use_program_cache, loop_count):
+def test_demo_hellaswag(
+    model_location_generator,
+    functional_model,
+    device,
+    use_program_cache,
+    loop_count,
+    batch_size=8,
+    num_tokens_to_decode=10,
+):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
     return run_bloom_causal_LM_inference_hellaswag(
         model_version="bigscience/bloom-560m",
         functional_model=functional_model,
-        batch_size=8,
+        batch_size=batch_size,
         model_location_generator=model_location_generator,
         device=device,
         loop_count=loop_count,
+        num_tokens_to_decode=num_tokens_to_decode,
     )
