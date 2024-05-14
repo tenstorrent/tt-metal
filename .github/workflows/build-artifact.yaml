@@ -21,6 +21,9 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Update submodules
+        run: |
+          git submodule update --init --recursive
       - uses: ./.github/actions/install-python-deps
       - name: Build tt-metal and libs
         run: |
