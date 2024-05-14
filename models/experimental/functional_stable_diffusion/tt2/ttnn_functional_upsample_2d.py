@@ -83,12 +83,14 @@ class upsample2d:
         )
         self.output_height = self.conv.output_height
         self.output_width = self.conv.output_width
+        print(f"Upsample Input = {input_height}x{input_width} Output = {self.output_height}x{self.output_width}")
 
     def __call__(self, input, in_channels, out_channels):
         if input.layout == ttnn.TILE_LAYOUT:
             input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
         # # slice out batch
         input = ttnn.reshape(input, (2, self.input_height, self.input_width, input.shape[3]))
+        print(f"Upsample Input = {input.shape}")
         tt_out = upsample_nearest2d(input, self.scale_factor)
         del input
         tt_out = ttnn.reshape(tt_out, (1, 1, tt_out.shape[0] * tt_out.shape[1] * tt_out.shape[2], tt_out.shape[3]))
@@ -104,5 +106,5 @@ class upsample2d:
         #     self.conv.input_width,
         #     self.conv.out_channels,
         # )
-
+        print(f"Upsample Output = {tt_out.shape}")
         return tt_out

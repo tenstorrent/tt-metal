@@ -18,6 +18,10 @@ SlidingWindowOpParamsWithParallelConfig = namedtuple(
 )
 
 
+def get_output_dim(input, window, stride=1, pad=0, dilation=1):
+    return (input + (2 * pad) - dilation * (window - 1) - 1) // stride + 1
+
+
 def get_hash_from_sliding_window_op_params(sliding_window_op_params: SlidingWindowOpParamsWithParallelConfig):
     return f"{sliding_window_op_params.stride_h}_{sliding_window_op_params.stride_w}_{sliding_window_op_params.pad_h}_{sliding_window_op_params.pad_w}_{sliding_window_op_params.window_h}_{sliding_window_op_params.window_w}_{sliding_window_op_params.batch_size}_{sliding_window_op_params.input_h}_{sliding_window_op_params.input_w}_{sliding_window_op_params.num_cores_w}_{sliding_window_op_params.num_cores_h}_{sliding_window_op_params.num_cores_nhw}_{sliding_window_op_params.act_reshard_num_cores_nhw}"
 

@@ -5,9 +5,14 @@
 import torch
 import ttnn
 from typing import Optional, Dict
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upsample_2d import upsample2d
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_resnetblock2d import resnetBlock2D
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_transformer_2d import transformer_2d_model
+
+
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upsample_2d_new_conv import upsample2d
+
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_transformer_2d_new_conv import (
+    transformer_2d_model,
+)
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import dealloc_input
 
 
@@ -133,7 +138,6 @@ class cross_attention_upblock2d:
                 hidden_states = dealloc_input(
                     ttnn.clone, hidden_states, memory_config=ttnn.get_memory_config(hidden_states), dtype=ttnn.bfloat8_b
                 )
-            print(f"Concat shapes = {hidden_states.shape} + {on_dev_res_hidden_states.shape}")
             hidden_states = dealloc_input(ttnn.concat, [hidden_states, on_dev_res_hidden_states], dim=3)
             ttnn.deallocate(on_dev_res_hidden_states)
             hidden_states = resnet(
