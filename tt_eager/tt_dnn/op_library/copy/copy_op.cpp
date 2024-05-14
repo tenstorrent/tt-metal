@@ -82,7 +82,14 @@ tt::stl::reflection::Attributes Copy::attributes() const {
 }
 
 Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor) {
-    operation::run(Copy{dst_tensor.memory_config(), dst_tensor.get_dtype()}, {src_tensor, dst_tensor});
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({src_tensor}))};
+    operation::launch_op(
+    [] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+        const auto& src_tensor = input_tensors.at(0);
+        const auto& dst_tensor = input_tensors.at(1);
+        operation::run(Copy{dst_tensor.memory_config(), dst_tensor.get_dtype()}, {src_tensor, dst_tensor});
+        return {dst_tensor};
+    }, {src_tensor, dst_tensor}, output_tensors);
     return dst_tensor;
 }
 
@@ -97,7 +104,13 @@ Tensor clone(const Tensor& input, const MemoryConfig& output_mem_config, std::op
 }
 
 Tensor typecast(const Tensor& input_tensor, const DataType& dtype, const MemoryConfig& output_mem_config ) {
-    return operation::run(Copy{output_mem_config, dtype}, {input_tensor}).at(0);
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    operation::launch_op(
+    [dtype, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+        const auto& input_tensor = input_tensors.at(0);
+        return operation::run(Copy{output_mem_config, dtype}, {input_tensor});
+    }, {input_tensor}, output_tensors);
+    return output_tensors.at(0);
 }
 
 //unary assign
