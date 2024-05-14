@@ -62,14 +62,12 @@ endif()
 
 # If in production build for python packaging, need to use objs built by umd_device
 if(NOT BUILD_SHARED_LIBS)
-    if($ENV{ARCH_NAME} STREQUAL "wormhole_b0")
-        set(UMD_OBJS ${CMAKE_BINARY_DIR}/obj/umd/device/wormhole/impl_device.o)
-    else()
-        set(UMD_OBJS ${CMAKE_BINARY_DIR}/obj/umd/device/$ENV{ARCH_NAME}/impl_device.o)
-    endif()
     set(UMD_OBJS
         ${UMD_OBJS}
+        ${CMAKE_BINARY_DIR}/obj/umd/device/architecture_implementation.o
+        ${CMAKE_BINARY_DIR}/obj/umd/device/blackhole_implementation.o
         ${CMAKE_BINARY_DIR}/obj/umd/device/cpuset_lib.o
+        ${CMAKE_BINARY_DIR}/obj/umd/device/grayskull_implementation.o
         ${CMAKE_BINARY_DIR}/obj/umd/device/tt_cluster_descriptor.o
         ${CMAKE_BINARY_DIR}/obj/umd/device/tt_device.o
         ${CMAKE_BINARY_DIR}/obj/umd/device/tt_emulation_stub.o
@@ -77,7 +75,8 @@ if(NOT BUILD_SHARED_LIBS)
         ${CMAKE_BINARY_DIR}/obj/umd/device/tt_silicon_driver.o
         ${CMAKE_BINARY_DIR}/obj/umd/device/tt_soc_descriptor.o
         ${CMAKE_BINARY_DIR}/obj/umd/device/tt_versim_stub.o
-        ${CMAKE_BINARY_DIR}/obj/umd/device/util.o
+        ${CMAKE_BINARY_DIR}/obj/umd/device/tlb.o
+        ${CMAKE_BINARY_DIR}/obj/umd/device/wormhole_implementation.o
     )
     set(UMD_STATIC_LIB ${CMAKE_BINARY_DIR}/lib/libdevice.a)
 

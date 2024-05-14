@@ -108,7 +108,13 @@ std::filesystem::path get_cluster_desc_yaml() {
 
     // Generates the cluster descriptor in the CWD
 
-    const fs::path eth_fpath = tt_metal_dir / "third_party/umd/device/bin/silicon/wormhole/create-ethernet-map";
+#if defined(__x86_64__) || defined(__i386__)
+    const fs::path eth_fpath = tt_metal_dir / "third_party/umd/device/bin/silicon/x86/create-ethernet-map";
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    const fs::path eth_fpath = tt_metal_dir / "third_party/umd/device/bin/silicon/aarch64/create-ethernet-map";
+#else
+#error "Unsupported host architecture"
+#endif
     std::string cmd = eth_fpath.string() + " " + cluster_desc_path.string();
     int val = system(cmd.c_str());
     if(val != 0) throw std::runtime_error("Cluster Generation with create-ethernet-map Failed!");

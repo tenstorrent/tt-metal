@@ -15,7 +15,7 @@
 	url = https://github.com/tenstorrent-metal/tracy.git
 [submodule "tt_metal/third_party/umd"]
 	path = tt_metal/third_party/umd
-	url = https://github.com/tenstorrent-metal/umd.git
+	url = https://github.com/tenstorrent/tt-umd.git
 [submodule "tt_metal/third_party/tt_llk_grayskull"]
 	path = tt_metal/third_party/tt_llk_grayskull
 	url = https://github.com/tenstorrent/tt-llk-gs.git

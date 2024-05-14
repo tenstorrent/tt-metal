@@ -11,7 +11,6 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "impl/debug/watcher_server.hpp"
-#include "tt_metal/third_party/umd/device/util.hpp"
 #include "common/env_lib.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "common/utils.hpp"
