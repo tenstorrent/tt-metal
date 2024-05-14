@@ -142,7 +142,7 @@ def run_summarization_inference(input_path, device, batch_size, sequence_length,
     logger.info(f"inference_time: {measurements['inference_time']} s")
     logger.info(f"post_processing : {measurements['post_processing']} s")
 
-    return measurements
+    return measurements, decoded_tt_output
 
 
 def run_summarization_dataset_inference(device, batch_size, sequence_length, max_tokens, model_name):
