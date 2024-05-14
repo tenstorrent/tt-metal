@@ -68,11 +68,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
 
     vector<uint32_t> common_reader_kernel_args = {
         input_buffer->address(),
-        num_dims,
-        0, 0
+        0
     };
-    common_reader_kernel_args.insert(common_reader_kernel_args.end(), num_unpadded_tiles_per_dim.begin(), num_unpadded_tiles_per_dim.end());
-    common_reader_kernel_args.insert(common_reader_kernel_args.end(), num_padded_tiles_per_dim.begin(), num_padded_tiles_per_dim.end());
 
     // log_info("[xuncai] common_reader_kernel_args: {}", common_reader_kernel_args);
 
@@ -97,10 +94,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
 
         // reader kernel args
         vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
-        uint32_t addr_offset = 2; //input buffer addr, num_dims
-        reader_kernel_args[addr_offset++] = start_id;
-        reader_kernel_args[addr_offset] = num_tiles_per_core;
-        reader_kernel_args.insert(reader_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
+        reader_kernel_args[1] = start_id;
 
         vector<uint32_t> writer_kernel_args = {
             num_tiles_per_core,
@@ -116,6 +110,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
 operation::ProgramWithCallbacks multi_core_nlp_kv_cache_unpad_to_sharded(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end) {
 
     const Shape output_shape = output.get_legacy_shape();
+    const Shape input_shape = a.get_legacy_shape();
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -152,6 +147,11 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_unpad_to_sharded(const T
         .set_globally_allocated_address(*output.buffer());
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
+    // Shared reader and writer config setup
+    uint32_t num_unpadded_tiles_head_dim = output_shape[-1] / TILE_WIDTH;
+    uint32_t num_unpadded_tiles_seqlen_dim = output_shape[-2] / TILE_HEIGHT;
+    uint32_t num_padded_tiles_seqlen_dim = (input_shape[-2] / TILE_HEIGHT - num_unpadded_tiles_seqlen_dim) * (input_shape[-1] / TILE_WIDTH);
+
     // Reader compile-time args
     // Data is 32 byte aligned
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -159,7 +159,11 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_unpad_to_sharded(const T
     // Reader
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
-        (std::uint32_t) src0_is_dram
+        (std::uint32_t) src0_is_dram,
+        (std::uint32_t) num_tiles_per_core,
+        (std::uint32_t) num_unpadded_tiles_head_dim,
+        (std::uint32_t) num_unpadded_tiles_seqlen_dim,
+        (std::uint32_t) num_padded_tiles_seqlen_dim
     };
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -167,6 +171,7 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_unpad_to_sharded(const T
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
+    // Writer compile-time args
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t) src0_cb_index};
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
@@ -179,6 +184,8 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_unpad_to_sharded(const T
     for (uint32_t i = 0; i < num_cores_total; i++){
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
 
+        // Reader
+        // Reader runtime args
         tt_metal::SetRuntimeArgs(
             program,
             unary_reader_kernel_id,
@@ -186,10 +193,8 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_unpad_to_sharded(const T
             all_runtime_args[i].first
         );
 
-        // log_info("---------------------------------");
-        // log_info("[xuncai] core: {}", core);
-        // log_info("[xuncai] reader runtime args: {}", all_runtime_args[i].first);
-
+        // Writer
+        // Writer runtime args
         tt_metal::SetRuntimeArgs(
             program,
             unary_writer_kernel_id,
