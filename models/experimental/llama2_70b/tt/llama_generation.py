@@ -137,10 +137,13 @@ class TtLlamaModelForGeneration:
             del rot_mat
             del attn_mask
 
-            for device in self.devices:
-                ttl.device.Synchronize(device)
+            # for device in self.devices:
+            #     ttl.device.Synchronize(device)
 
-            logits = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_logits], -1)
+            logits = ttnn.to_torch(
+                tt_logits, device=self.device_mesh, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=3)
+            )
+            logits = logits.squeeze(1)
             logits = logits[..., : self.params.vocab_size].float()  # [batch, 1, vocab_size]
             del tt_logits
 

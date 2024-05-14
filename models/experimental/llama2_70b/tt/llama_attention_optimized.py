@@ -107,14 +107,17 @@ class TtLlamaAttention_optimized:
         # self.layer_past = [ttnn.to_device(lp, self.device_mesh) for lp in self.layer_past]
 
         self.layer_past = [
-            ttnn.as_tensor(
-                lp,
-                device=self.device_mesh,
-                mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=0),
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=self.model_config["DRAM_MEMCFG"],
-                dtype=ttnn.bfloat8_b,
-                cache_file_name=self.cache_path / f"empty_attn_cache{cache_k.shape}",
+            ttnn.to_device(
+                ttnn.as_tensor(
+                    lp,
+                    device=self.device_mesh,
+                    mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=0),
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=self.model_config["DRAM_MEMCFG"],
+                    dtype=ttnn.bfloat16,
+                    cache_file_name=self.cache_path / f"empty_attn_cache{cache_k.shape}",
+                ),
+                self.device_mesh,
             )
             for lp in layer_past
         ]
@@ -657,20 +660,31 @@ class TtLlamaAttention_optimized:
 
         # this is the output we write to. Initiate as empty tensors
         attn_output_cat = ttnn.as_tensor(
-            torch.zeros([self.n_local_heads, 1, seq_len, self.head_dim]),
+            torch.zeros([1, self.n_local_heads, seq_len, self.head_dim]),
             device=self.device_mesh,
             memory_config=self.model_config["DRAM_MEMCFG"],
-            dtype=tt_lib.tensor.DataType.BFLOAT16,
+            dtype=ttnn.bfloat16,
             mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            layout=ttnn.TILE_LAYOUT,
         )
 
         # FILL K CACHE
         keys = self.layer_past[0]
-        tt_lib.tensor.fill_cache(keys, tt_lib.tensor.typecast(key_layer, self.model_config["BFP8_DTYPE"]), user_id)
+        # Fill cache expects batch in dim0
+        keys_reshaped = ttnn.reshape(keys, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
+        # tt_lib.tensor.fill_cache(keys, tt_lib.tensor.typecast(key_layer, self.model_config["BFP8_DTYPE"]), user_id)
+        tt_lib.tensor.fill_cache(
+            keys_reshaped, key_layer, user_id
+        )  # TODO: Set back to bfp8_b when typecast supports MD tensors
 
         # FILL V CACHE
         values = self.layer_past[1]
-        tt_lib.tensor.fill_cache(values, tt_lib.tensor.typecast(value_layer, self.model_config["BFP8_DTYPE"]), user_id)
+        # Fill cache expects batch in dim0
+        values_reshaped = ttnn.reshape(values, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
+        # tt_lib.tensor.fill_cache(values, tt_lib.tensor.typecast(value_layer, self.model_config["BFP8_DTYPE"]), user_id)
+        tt_lib.tensor.fill_cache(
+            values_reshaped, value_layer, user_id
+        )  # TODO: Set back to bfp8_b when typecast supports MD tensors
 
         # PRE-SOFTMAX MM
 
@@ -702,7 +716,7 @@ class TtLlamaAttention_optimized:
                 tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
                 tt_lib.tensor.ShardOrientation.ROW_MAJOR,
             )
-
+            # print('qk matmul')
             attn_weights = tt_lib.operations.primary.matmul(
                 q_slices,
                 key_layer_transposed,
@@ -727,6 +741,7 @@ class TtLlamaAttention_optimized:
             attn_mask_slices.deallocate(True)
 
             # POST-SOFTMAX MM
+            # print('v matmul')
             attn_output = tt_lib.operations.primary.matmul(
                 attn_weights,
                 value_layer,
@@ -749,10 +764,10 @@ class TtLlamaAttention_optimized:
             attn_output.deallocate(True)
 
         # deallocate keys and values
-        for i in range(len(query_layer)):
-            query_layer.deallocate(True)
-            key_layer_transposed[i].deallocate(True)
-            value_layer.deallocate(True)
+
+        query_layer.deallocate(True)
+        key_layer_transposed.deallocate(True)
+        value_layer.deallocate(True)
 
         return attn_output_cat
 
@@ -773,6 +788,7 @@ class TtLlamaAttention_optimized:
         seq_tiles = attn_output.shape[2] // 32
         cores_y = 8 if seq_tiles % 8 == 0 else 4
         dense_out_prog_cfg = self.model_config["SELFOUT_MM_PROGCFG_LAMBDA"](seq_tiles, cores_y)
+        # print('wo matmul')
         attn_output = tt_lib.operations.primary.matmul(
             attn_output,
             self.wo,
