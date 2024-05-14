@@ -45,11 +45,6 @@ struct ToMemoryConfig {
         return std::make_tuple(tensor_arg);
     };
 
-    template <typename... Args>
-    static Tensor create_async_output_tensors(const ttnn::Tensor& tensor_arg, Args&&... args) {
-        return {{Tensor(operation::get_workers_for_op_output({tensor_arg}))}};
-    }
-
     // TODO: Move to cpp once we merge with tt_eager
     static Tensor execute(
         const ttnn::Tensor tensor,

@@ -19,11 +19,6 @@ struct has_validate_api_arguments : std::false_type {};
 template <typename T>
 struct has_validate_api_arguments<T, std::void_t<decltype(T::validate_api_arguments)>> : std::true_type {};
 
-template <typename T, typename = void>
-struct has_create_async_output_tensors : std::false_type {};
-template <typename T>
-struct has_create_async_output_tensors<T, std::void_t<decltype(T::create_async_output_tensors)>> : std::true_type {};
-
 template <class T, class... args_t>
 using execute_return_t = decltype(T::execute(std::declval<args_t>()...));
 
@@ -40,6 +35,20 @@ constexpr bool has_execute_async() {
     return std::experimental::is_detected_v<execute_async_return_t, T, args_t&&...>;
 }
 
+template <typename Tuple, typename T>
+constexpr bool is_homogenous_tuple() {
+    return []<std::size_t... Ns>(std::index_sequence<Ns...>) {
+        return (std::is_same_v<T, std::tuple_element_t<Ns, Tuple>> && ...);
+    }(std::make_index_sequence<std::tuple_size_v<Tuple>>{});
+}
+
+template <typename Tuple, typename T>
+constexpr Tuple make_tuple_from_vector(const std::vector<T>& vector) {
+    return ([&vector]<std::size_t... Ns>(std::index_sequence<Ns...>) {
+        return std::forward_as_tuple(vector.at(Ns)...);
+    }(std::make_index_sequence<std::tuple_size_v<Tuple>>{}));
+}
+
 template <typename Include, typename... args_t>
 auto extract_args_to_vector(args_t&&... args) {
     std::vector<Include> result;
@@ -53,15 +62,25 @@ auto extract_args_to_vector(args_t&&... args) {
     return result;
 }
 
-template <typename concrete_operation_t, typename... args_t>
-inline Tensors create_async_output_tensors(
-    const Tensors&& inputs, const OptionalConstTensors&& optional_inputs, args_t&&... args) {
-    if constexpr (has_create_async_output_tensors<concrete_operation_t>::value) {
-        return concrete_operation_t::create_async_output_tensors(std::forward<args_t>(args)...);
+template <typename concrete_operation_t, typename execute_return_t>
+inline Tensors create_async_output_tensors(const Tensors& inputs, const OptionalConstTensors& optional_inputs) {
+    bool enable_autoformat_device = false;
+
+    if constexpr (std::is_same_v<std::decay_t<execute_return_t>, Tensor>) {
+        return {Tensor(operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device))};
+    } else if constexpr (detail::is_homogenous_tuple<execute_return_t, Tensor>()) {
+        Tensors output_tensors;
+        output_tensors.reserve(std::tuple_size_v<execute_return_t>);
+        for (auto index = 0; index < std::tuple_size_v<execute_return_t>; index++) {
+            output_tensors.emplace_back(
+                Tensor(operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device)));
+        }
+        return output_tensors;
     } else {
-        bool enable_autoformat_device = false;
-        return {Tensor(operation::get_workers_for_op_output(
-            std::move(inputs), std::move(optional_inputs), enable_autoformat_device))};
+        static_assert(
+            tt::stl::concepts::always_false_v<concrete_operation_t>,
+            "Operation is expecting the execute method to return either a single Tensor or a vector of "
+            "Tensor(s).");
     }
 }
 
@@ -70,18 +89,21 @@ constexpr auto validate(const char* cpp_fully_qualified_name, args_t&&... args) 
     if (ttnn::CONFIG.enable_fast_runtime_mode) {
         return;
     }
+
     auto tensors_to_validate = concrete_operation_t::input_tensors_to_validate(std::forward<args_t>(args)...);
     static_assert(
         std::tuple_size_v<decltype(tensors_to_validate)> ==
             std::tuple_size_v<decltype(concrete_operation_t::input_tensor_schemas())>,
         "Number of tensors to validate must match the number of input tensors schemas");
-    [cpp_fully_qualified_name, &tensors_to_validate]<auto... Ns>(std::index_sequence<Ns...>) {
-        (ttnn::validate_input_tensor(
-             cpp_fully_qualified_name,
-             std::get<Ns>(tensors_to_validate),
-             concrete_operation_t::input_tensor_schemas().at(Ns)),
-         ...);
-    }(std::make_index_sequence<std::tuple_size_v<decltype(tensors_to_validate)>>{});
+    if constexpr (std::tuple_size_v<decltype(tensors_to_validate)> > 0) {
+        [cpp_fully_qualified_name, &tensors_to_validate]<auto... Ns>(std::index_sequence<Ns...>) {
+            (ttnn::validate_input_tensor(
+                 cpp_fully_qualified_name,
+                 std::get<Ns>(tensors_to_validate),
+                 concrete_operation_t::input_tensor_schemas().at(Ns)),
+             ...);
+        }(std::make_index_sequence<std::tuple_size_v<decltype(tensors_to_validate)>>{});
+    }
 
     if constexpr (has_validate_api_arguments<concrete_operation_t>::value) {
         concrete_operation_t::validate_api_arguments(std::forward<args_t>(args)...);
@@ -107,11 +129,18 @@ auto map_launch_op_args_to_execute_args(
 }
 
 template <typename concrete_operation_t, typename T>
-constexpr auto map_execute_return_to_launch_op_return(const T&& value) -> Tensors {
-    if constexpr (std::is_same_v<std::decay_t<decltype(value)>, Tensors>) {
-        return value;
-    } else if constexpr (std::is_same_v<std::decay_t<decltype(value)>, Tensor>) {
+constexpr Tensors map_execute_return_to_launch_op_return(T&& value) {
+    if constexpr (std::is_same_v<std::decay_t<decltype(value)>, Tensor>) {
         return {value};
+    } else if constexpr (is_homogenous_tuple<T, Tensor>()) {
+        Tensors output_tensors;
+        output_tensors.reserve(std::tuple_size_v<T>);
+        std::apply(
+            [&output_tensors](auto&&... args) {
+                (output_tensors.emplace_back(std::forward<decltype(args)>(args)), ...);
+            },
+            value);
+        return output_tensors;
     } else {
         static_assert(
             tt::stl::concepts::always_false_v<concrete_operation_t>,
@@ -156,13 +185,13 @@ struct operation_t {
             "Operation must either implement execute or execute_async.");
 
         if constexpr (detail::has_execute<concrete_operation_t, args_t&&...>()) {
-            using return_type_of_execute = detail::execute_return_t<concrete_operation_t, args_t&&...>;
+            using execute_return_t = detail::execute_return_t<concrete_operation_t, args_t&&...>;
             const Tensors input_tensors = detail::extract_args_to_vector<ttnn::Tensor>(std::forward<args_t>(args)...);
             const OptionalConstTensors optional_input_tensors =
                 detail::extract_args_to_vector<std::optional<const ttnn::Tensor>>(std::forward<args_t>(args)...);
 
-            auto output_tensors = detail::create_async_output_tensors<concrete_operation_t>(
-                std::move(input_tensors), std::move(optional_input_tensors), std::forward<args_t>(args)...);
+            auto output_tensors = detail::create_async_output_tensors<concrete_operation_t, execute_return_t>(
+                input_tensors, optional_input_tensors);
 
             // TODO: add support for optional_output_tensors
             // auto optional_output_tensors = extract_args_to_vector(std::forward<args_t>(args)...,
@@ -174,8 +203,6 @@ struct operation_t {
                     const Tensors& input_tensors,
                     const OptionalConstTensors& optional_input_tensors,
                     const OptionalTensors&) mutable -> Tensors {
-                    tt::log_debug(
-                        tt::LogOp, "Launching C++ ttnn operation in async mode: {}", cpp_fully_qualified_name);
                     auto execute_args = detail::map_launch_op_args_to_execute_args(
                         input_tensors, optional_input_tensors, std::forward<args_t>(args)...);
                     return std::apply(
@@ -195,10 +222,10 @@ struct operation_t {
 
             tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", this->cpp_fully_qualified_name);
 
-            if constexpr (std::is_same_v<std::decay_t<return_type_of_execute>, Tensors>) {
-                return output_tensors;
-            } else if constexpr (std::is_same_v<std::decay_t<return_type_of_execute>, Tensor>) {
+            if constexpr (std::is_same_v<std::decay_t<execute_return_t>, Tensor>) {
                 return output_tensors.at(0);
+            } else if constexpr (detail::is_homogenous_tuple<execute_return_t, Tensor>()) {
+                return detail::make_tuple_from_vector<execute_return_t>(output_tensors);
             } else {
                 static_assert(
                     tt::stl::concepts::always_false_v<concrete_operation_t>,
@@ -208,7 +235,6 @@ struct operation_t {
 
         } else {
             detail::validate<concrete_operation_t>(cpp_fully_qualified_name, std::forward<decltype(args)>(args)...);
-            tt::log_debug(tt::LogOp, "Launching C++ ttnn operation in async: {}", cpp_fully_qualified_name);
             auto output = concrete_operation_t::execute_async(std::forward<decltype(args)>(args)...);
             tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", this->cpp_fully_qualified_name);
             return output;
@@ -245,6 +271,27 @@ struct operation_t {
 
 template <typename concrete_operation_t>
 constexpr auto register_operation(const char* name) {
+    return operation_t<__COUNTER__, concrete_operation_t>{name};
+}
+
+template <auto function>
+struct operation_without_validation_t {
+    static inline const auto input_tensor_schemas() { return std::make_tuple(); }
+
+    template <typename... args_t>
+    static auto input_tensors_to_validate(args_t&&... args) {
+        return std::make_tuple();
+    };
+
+    template <typename... args_t>
+    static auto execute(args_t&&... args) {
+        return function(std::forward<args_t>(args)...);
+    }
+};
+
+template <auto function>
+constexpr auto register_operation(const char* name) {
+    using concrete_operation_t = operation_without_validation_t<function>;
     return operation_t<__COUNTER__, concrete_operation_t>{name};
 }
 

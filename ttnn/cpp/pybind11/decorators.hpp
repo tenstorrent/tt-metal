@@ -25,7 +25,7 @@ struct is_specialization_of<Template, Template<Args...>> : std::true_type {};
 
 template <typename T, typename Return, typename... Args>
 constexpr auto resolve_call_method(Return (*launch)(Args...)) {
-    return [](const T& self, Args... args) { return self(std::forward<Args>(args)...); };
+    return [](const T& self, Args&&... args) { return self(std::forward<Args>(args)...); };
 }
 
 template <typename... py_args_t>
@@ -70,17 +70,21 @@ std::string append_input_tensor_schemas_to_doc(
             tuple);
     };
 
-    updated_doc << doc << "\n\n";
-    auto tensor_index = 0;
-    for (const auto& schema : concrete_operation_t::input_tensor_schemas()) {
-        updated_doc << "    .. list-table:: Input Tensor " << tensor_index << "\n\n";
-        write_row(ttnn::TensorSchema::attribute_names());
-        write_row(schema.attribute_values());
-        tensor_index++;
+    if constexpr (std::tuple_size_v<decltype(concrete_operation_t::input_tensor_schemas())> > 0) {
+        updated_doc << doc << "\n\n";
+        auto tensor_index = 0;
+        for (const auto& schema : concrete_operation_t::input_tensor_schemas()) {
+            updated_doc << "    .. list-table:: Input Tensor " << tensor_index << "\n\n";
+            write_row(ttnn::TensorSchema::attribute_names());
+            write_row(schema.attribute_values());
+            tensor_index++;
+            updated_doc << "\n";
+        }
         updated_doc << "\n";
+        return updated_doc.str();
+    } else {
+        return doc;
     }
-    updated_doc << "\n";
-    return updated_doc.str();
 }
 
 template <auto id, typename concrete_operation_t, typename... overload_t>
@@ -114,13 +118,13 @@ auto bind_registered_operation(
         [&py_operation](auto&& overload) {
             if constexpr (is_specialization_of<pybind_arguments_t, std::decay_t<decltype(overload)>>::value) {
                 std::apply(
-                    [&py_operation](auto... args) {
+                    [&py_operation](auto&&... args) {
                         py_operation.def("__call__", resolve_call_method<registered_operation_t>(&concrete_operation_t::execute), args...);
                     },
                     overload.value);
             } else {
                 std::apply(
-                    [&py_operation, &overload](auto... args) {
+                    [&py_operation, &overload](auto&&... args) {
                         py_operation.def("__call__", overload.function, args...);
                     },
                     overload.args.value);
