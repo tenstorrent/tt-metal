@@ -360,17 +360,11 @@ def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int
 
     dtype = input_tensor.dtype
     rank = len(input_tensor.shape)
-    if dtype == ttnn.bfloat16 and rank == 4 and dim != 2 and dim != 3:
+    if dtype == ttnn.bfloat16 and rank == 4 and dim < 2:
         output_tensor = ttl.tensor.repeat_interleave(input_tensor, repeats, dim=dim)
         *batch, _, _ = output_tensor.shape
         *_, h, w = input_tensor.shape
         *_, padded_h, padded_w = input_tensor.shape.with_tile_padding()
-        if dim == 2:
-            *_, h, _ = output_tensor.shape
-            *_, padded_h, _ = output_tensor.shape.with_tile_padding()
-        elif dim == 3:
-            *_, _, w = output_tensor.shape
-            *_, _, padded_w = output_tensor.shape.with_tile_padding()
         output_tensor = ttnn.reshape(output_tensor, shape=ttnn.Shape(batch + [h, w], batch + [padded_h, padded_w]))
         return output_tensor
     else:
