@@ -114,9 +114,8 @@ operation::ProgramWithCallbacks moreh_arange_(
             CoreCoord core = {icore / core_h, icore % core_h};
 
             {
-                auto runtime_args = GetRuntimeArgs(program, kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, kernel_id, core);
                 runtime_args[0] = src_dram_buffer->address();
-                SetRuntimeArgs(program, kernel_id, core, runtime_args);
             }
         }
     };

@@ -230,19 +230,17 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
                 CoreCoord core = {icore / core_h, icore % core_h};
 
                 {
-                    auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                     runtime_args[0] = src_buffer->address();
                     runtime_args[1] = index_info[0].address;
                     runtime_args[2] = index_info[1].address;
                     runtime_args[3] = index_info[2].address;
                     runtime_args[4] = index_info[3].address;
-                    SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
                 }
 
                 {
-                    auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                     runtime_args[0] = dst_buffer->address();
-                    SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
                 }
             }
         };

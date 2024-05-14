@@ -278,23 +278,21 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
                 runtime_args[0] = output_grad_buffer->address();
                 runtime_args[1] = input_buffer->address();
                 runtime_args[2] = mean_buffer->address();
                 runtime_args[3] = rstd_buffer->address();
-                SetRuntimeArgs(program, reader_kernels_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
                 if (gamma_grad_buffer != nullptr) {
                     runtime_args[0] = gamma_grad_buffer->address();
                 }
                 if (beta_grad_buffer != nullptr) {
                     runtime_args[1] = beta_grad_buffer->address();
                 }
-                SetRuntimeArgs(program, writer_kernels_id, core, runtime_args);
             }
         }
     };

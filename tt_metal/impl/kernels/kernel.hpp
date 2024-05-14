@@ -23,6 +23,37 @@ namespace tt_metal {
 
 using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
 
+struct RuntimeArgsData {
+    uint32_t * rt_args_data;
+    size_t rt_args_size;
+
+    inline uint32_t & operator[](size_t index) {
+        TT_ASSERT(index < rt_args_size, "Index specified is larger than runtime args size");
+        return this->rt_args_data[index];
+    }
+    inline const uint32_t& operator[](size_t index) const {
+        TT_ASSERT(index < rt_args_size, "Index specified is larger than runtime args size");
+        return this->rt_args_data[index];
+    }
+    inline uint32_t & at(size_t index) {
+        TT_FATAL(index < rt_args_size, "Index specified is larger than runtime args size");
+        return this->rt_args_data[index];
+    }
+    inline const uint32_t& at(size_t index) const {
+        TT_FATAL(index < rt_args_size, "Index specified is larger than runtime args size");
+        return this->rt_args_data[index];
+    }
+    inline uint32_t * data() noexcept {
+        return rt_args_data;
+    }
+    inline const uint32_t * data() const noexcept {
+        return rt_args_data;
+    }
+    inline size_t size() const noexcept{
+        return rt_args_size;
+    }
+};
+
 class Kernel : public JitBuildSettings {
    public:
     Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compile_args, const std::map<std::string, std::string>&defines);
@@ -50,8 +81,11 @@ class Kernel : public JitBuildSettings {
     void update_runtime_arg( const CoreCoord &logical_core, size_t idx, uint32_t value);
 
     std::vector<uint32_t> & runtime_args(const CoreCoord &logical_core);
+    RuntimeArgsData& runtime_args_data(const CoreCoord &logical_core);
     std::vector< std::vector< std::vector<uint32_t>> > & runtime_args();
+    std::vector< std::vector< RuntimeArgsData > > & runtime_args_data();
     std::vector<uint32_t> & common_runtime_args();
+    RuntimeArgsData& common_runtime_args_data();
 
     std::map<std::string, std::string> defines() const { return defines_; }
 
@@ -96,7 +130,9 @@ class Kernel : public JitBuildSettings {
     uint16_t binary_size16_;
     std::vector<uint32_t> compile_time_args_;
     std::vector< std::vector< std::vector<uint32_t>> > core_to_runtime_args_;
+    std::vector< std::vector< RuntimeArgsData> > core_to_runtime_args_data_;
     std::vector<uint32_t> common_runtime_args_;
+    RuntimeArgsData common_runtime_args_data_;
     std::set<CoreCoord> core_with_runtime_args_;
     std::size_t max_runtime_args_per_core_;             // For validation
     CoreCoord core_with_max_runtime_args_;              // For validation

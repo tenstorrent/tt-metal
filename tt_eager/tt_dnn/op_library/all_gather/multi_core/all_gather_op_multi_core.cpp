@@ -1157,42 +1157,42 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
     ) {
-        bool is_sharded = input_tensors.at(0).is_sharded();
-        const auto& input = input_tensors.at(0);
-        const auto& output = output_tensors.at(0);
+        bool is_sharded = input_tensors[0].is_sharded();
+        const auto& input = input_tensors[0];
+        const auto& output = output_tensors[0];
         for (uint32_t i = 0; i < total_worker_core_pairs_used; ++i) {
             if (is_sharded) {
                 auto &worker_reader_sender_runtime_args = GetRuntimeArgs(program, worker_reader_sender_kernels.at(i), all_worker_sender_cores.at(i));
-                worker_reader_sender_runtime_args.at(7) = input.buffer()->address();
+                worker_reader_sender_runtime_args[7] = input.buffer()->address();
                 uint32_t num_dest_cores = worker_reader_sender_runtime_args.at(12);
-                worker_reader_sender_runtime_args.at(12 + num_dest_cores + 4) = output.buffer()->address();
+                worker_reader_sender_runtime_args[12 + num_dest_cores + 4] = output.buffer()->address();
                 log_trace(tt::LogOp, "override worker_reader_sender_runtime_args:");
                 for (uint32_t j = 0; j < worker_reader_sender_runtime_args.size(); ++j) {
                     log_trace(tt::LogOp, "\tworker_reader_sender_runtime_args[{}]: {}", j, worker_reader_sender_runtime_args.at(j));
                 }
 
                 auto &worker_writer_sender_runtime_args = GetRuntimeArgs(program, worker_writer_sender_kernels.at(i), all_worker_sender_cores.at(i));
-                worker_writer_sender_runtime_args.at(12) = output.buffer()->address();
+                worker_writer_sender_runtime_args[12] = output.buffer()->address();
                 log_trace(tt::LogOp, "override worker_writer_sender_runtime_args:");
                 for (uint32_t j = 0; j < worker_writer_sender_runtime_args.size(); ++j) {
                     log_trace(tt::LogOp, "\tworker_writer_sender_runtime_args[{}]: {}", j, worker_reader_sender_runtime_args.at(j));
                 }
 
                 auto &worker_writer_receiver_runtime_args = GetRuntimeArgs(program, worker_writer_receiver_kernels.at(i), all_worker_receiver_cores.at(i));
-                worker_writer_receiver_runtime_args.at(10) = output.buffer()->address();
+                worker_writer_receiver_runtime_args[10] = output.buffer()->address();
                 log_trace(tt::LogOp, "override worker_writer_receiver_runtime_args:");
                 for (uint32_t j = 0; j < worker_writer_receiver_runtime_args.size(); ++j) {
                     log_trace(tt::LogOp, "\tworker_writer_receiver_runtime_args[{}]: {}", j, worker_reader_sender_runtime_args.at(j));
                 }
             } else {
                 auto &worker_reader_sender_runtime_args = GetRuntimeArgs(program, worker_reader_sender_kernels.at(i), all_worker_sender_cores.at(i));
-                worker_reader_sender_runtime_args.at(0) = input.buffer()->address();
-                worker_reader_sender_runtime_args.at(1) = output.buffer()->address();
+                worker_reader_sender_runtime_args[0] = input.buffer()->address();
+                worker_reader_sender_runtime_args[1] = output.buffer()->address();
                 auto &worker_writer_sender_runtime_args = GetRuntimeArgs(program, worker_writer_sender_kernels.at(i), all_worker_sender_cores.at(i));
-                worker_writer_sender_runtime_args.at(0) = output.buffer()->address();
+                worker_writer_sender_runtime_args[0] = output.buffer()->address();
 
                 auto &worker_writer_receiver_runtime_args = GetRuntimeArgs(program, worker_writer_receiver_kernels.at(i), all_worker_receiver_cores.at(i));
-                worker_writer_receiver_runtime_args.at(0) = output.buffer()->address();
+                worker_writer_receiver_runtime_args[0] = output.buffer()->address();
             }
         }
     };

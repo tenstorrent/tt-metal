@@ -268,9 +268,9 @@ inline __attribute__((always_inline)) void set_unpad_runtime_args_tile(
     uint32_t num_padded_Yt = (num_total_Yt - num_unpadded_Yt) * num_total_Xt;
 
     const auto set_common_reader_args = [&](
-        std::vector<uint32_t> & reader_common_args,
-        uint32_t * num_unpadded_tiles_per_dim,
-        uint32_t * num_padded_tiles_per_dim) __attribute__((always_inline)) {
+        uint32_t* reader_common_args,
+        uint32_t* num_unpadded_tiles_per_dim,
+        uint32_t* num_padded_tiles_per_dim) __attribute__((always_inline)) {
         reader_common_args[0] = input_buffer->address();
         num_unpadded_tiles_per_dim[0] = num_unpadded_Xt;
         num_unpadded_tiles_per_dim[1] = num_unpadded_Yt;
@@ -289,7 +289,7 @@ inline __attribute__((always_inline)) void set_unpad_runtime_args_tile(
     };
 
     const auto set_reader_rt_args = [&](
-        std::vector<uint32_t> & reader_rt_args,
+        uint32_t* reader_rt_args,
         const uint32_t* num_unpadded_tiles_per_dim,
         const uint32_t* num_padded_tiles_per_dim,
         const uint32_t& num_tiles_per_core,
@@ -311,14 +311,14 @@ inline __attribute__((always_inline)) void set_unpad_runtime_args_tile(
         std::vector<uint32_t> reader_common_args(1 + num_dims * 2);
         uint32_t* num_unpadded_tiles_per_dim = reader_common_args.data() + 1;
         uint32_t* num_padded_tiles_per_dim = num_unpadded_tiles_per_dim + num_dims;
-        set_common_reader_args(reader_common_args, num_unpadded_tiles_per_dim, num_padded_tiles_per_dim);
+        set_common_reader_args(reader_common_args.data(), num_unpadded_tiles_per_dim, num_padded_tiles_per_dim);
         SetCommonRuntimeArgs(program, unary_reader_kernel_id, reader_common_args);
     }
     auto& reader_common_args = GetCommonRuntimeArgs(program, unary_reader_kernel_id);
     uint32_t* num_unpadded_tiles_per_dim = reader_common_args.data() + 1;
     uint32_t* num_padded_tiles_per_dim = num_unpadded_tiles_per_dim + num_dims;
     if constexpr (!initialize_args) {
-        set_common_reader_args(reader_common_args, num_unpadded_tiles_per_dim, num_padded_tiles_per_dim);
+        set_common_reader_args(reader_common_args.data(), num_unpadded_tiles_per_dim, num_padded_tiles_per_dim);
     }
 
     uint32_t start_offset = get_tiled_start_offset(input_tensor, output_tensor_start);
@@ -352,7 +352,7 @@ inline __attribute__((always_inline)) void set_unpad_runtime_args_tile(
         if constexpr (initialize_args) {
             std::vector<uint32_t> reader_kernel_args(2 + num_dims);
             set_reader_rt_args(
-                reader_kernel_args,
+                reader_kernel_args.data(),
                 num_unpadded_tiles_per_dim,
                 num_padded_tiles_per_dim,
                 num_tiles_per_core,
@@ -362,7 +362,7 @@ inline __attribute__((always_inline)) void set_unpad_runtime_args_tile(
         } else {
             auto& reader_kernel_args = reader_kernel_args_by_core[core.x][core.y];
             set_reader_rt_args(
-                reader_kernel_args,
+                reader_kernel_args.data(),
                 num_unpadded_tiles_per_dim,
                 num_padded_tiles_per_dim,
                 num_tiles_per_core,

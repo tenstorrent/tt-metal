@@ -41,6 +41,7 @@ Kernel::Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &cor
         }
     }
     this->core_to_runtime_args_ = { max_x+1, std::vector< std::vector<uint32_t > > (max_y+1, std::vector<uint32_t>() ) };
+    this->core_to_runtime_args_data_ = { max_x+1, std::vector< RuntimeArgsData > (max_y+1, RuntimeArgsData{} ) };
 }
 
 std::string Kernel::name() const {
@@ -157,12 +158,26 @@ std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord &logical_core) {
     return this->core_to_runtime_args_[logical_core.x][logical_core.y];
 }
 
+RuntimeArgsData &Kernel::runtime_args_data(const CoreCoord &logical_core) {
+    // TODO (abhullar): Should this check only be enabled in debug mode?
+    TT_FATAL( logical_core.x < this->core_to_runtime_args_.size() && logical_core.y < this->core_to_runtime_args_[logical_core.x].size(), "Cannot get runtime args for kernel {} that is not placed on core {}", this->name(), logical_core.str());
+    return this->core_to_runtime_args_data_[logical_core.x][logical_core.y];
+}
+
 std::vector< std::vector< std::vector<uint32_t>> > & Kernel::runtime_args() {
     return this->core_to_runtime_args_;
 }
 
+std::vector< std::vector<RuntimeArgsData> > & Kernel::runtime_args_data() {
+    return this->core_to_runtime_args_data_;
+}
+
 std::vector<uint32_t>& Kernel::common_runtime_args() {
     return this->common_runtime_args_;
+}
+
+RuntimeArgsData & Kernel::common_runtime_args_data() {
+    return this->common_runtime_args_data_;
 }
 
 std::pair<uint64_t, uint64_t> DataMovementKernel::get_runtime_args_range() const {
@@ -227,9 +242,16 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<u
 
     this->validate_runtime_args_size(runtime_args.size(), this->common_runtime_args_.size(), logical_core);
     auto &set_rt_args = this->core_to_runtime_args_[logical_core.x][logical_core.y];
+    // TODO: Only allow setting once
     TT_FATAL(set_rt_args.empty() or set_rt_args.size() == runtime_args.size(), "Illegal Runtime Args: Number of runtime args cannot be modified!");
-    set_rt_args = runtime_args;
-    this->core_with_runtime_args_.insert( logical_core );
+    if (set_rt_args.empty()) {
+        set_rt_args = runtime_args;
+        this->core_to_runtime_args_data_[logical_core.x][logical_core.y] = RuntimeArgsData{set_rt_args.data(), set_rt_args.size()};
+        this->core_with_runtime_args_.insert( logical_core );
+    } else {
+        std::memcpy(this->core_to_runtime_args_data_[logical_core.x][logical_core.y].rt_args_data, runtime_args.data(), runtime_args.size() * sizeof(uint32_t));
+    }
+
 }
 
 void Kernel::set_common_runtime_args(const std::vector<uint32_t> &common_runtime_args) {
@@ -242,6 +264,7 @@ void Kernel::set_common_runtime_args(const std::vector<uint32_t> &common_runtime
     auto &set_rt_args = this->common_runtime_args_;
     TT_FATAL(set_rt_args.empty() or set_rt_args.size() == common_runtime_args.size(), "Illegal Common Runtime Args: Number of common runtime args cannot be modified!");
     set_rt_args = common_runtime_args;
+    this->common_runtime_args_data_ = RuntimeArgsData{set_rt_args.data(), set_rt_args.size()};
 }
 
 void DataMovementKernel::set_build_options(JitBuildOptions& build_options) const {

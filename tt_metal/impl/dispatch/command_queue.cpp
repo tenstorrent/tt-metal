@@ -312,6 +312,7 @@ void generate_dispatch_write_packed(
     const std::vector<PackedSubCmd>& sub_cmds,
     const std::vector<std::pair<const void*, uint32_t>>& rt_data_and_sizes,
     const uint32_t& max_runtime_args_len,
+    std::vector<std::reference_wrapper<RuntimeArgsData>>& rt_args_data,
     const uint32_t max_prefetch_command_size,
     const uint32_t id) {
     static_assert(
@@ -352,8 +353,8 @@ void generate_dispatch_write_packed(
         uint32_t num_packed_cmds = std::min(num_packed_cmds_in_seq, max_packed_cmds);
         uint32_t rt_payload_sizeB = get_runtime_payload_sizeB(num_packed_cmds, max_runtime_args_len, unicast);
         uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + rt_payload_sizeB, PCIE_ALIGNMENT);
-        HostMemDeviceCommand command_sequence(cmd_sequence_sizeB);
-        command_sequence.add_dispatch_write_packed<PackedSubCmd>(
+        runtime_args_command_sequences.emplace_back(cmd_sequence_sizeB);
+        runtime_args_command_sequences.back().add_dispatch_write_packed<PackedSubCmd>(
             num_packed_cmds,
             l1_arg_base_addr,
             max_runtime_args_len * sizeof(uint32_t),
@@ -361,12 +362,12 @@ void generate_dispatch_write_packed(
             sub_cmds,
             rt_data_and_sizes,
             offset_idx);
-        runtime_args_command_sequences.emplace_back(command_sequence);
         uint32_t data_offset = (uint32_t)get_runtime_args_data_offset(num_packed_cmds, max_runtime_args_len, unicast);
         const uint32_t data_inc = align(max_runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT);
         for (uint32_t i = offset_idx; i < offset_idx + num_packed_cmds; ++i) {
             cmd_mapping[(uint64_t)id << 32 | sub_cmds[i].noc_xy_addr] = {
                 runtime_args_command_sequences.size() - 1, data_offset};
+            rt_args_data[i].get().rt_args_data = (uint32_t *)((char *)runtime_args_command_sequences.back().data() + data_offset);
             data_offset += data_inc;
         }
         num_packed_cmds_in_seq -= num_packed_cmds;
@@ -419,6 +420,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
         uint32_t num_dsts = unique_processor_to_l1_arg_base_addr.size();
         std::vector<std::vector<CQDispatchWritePackedUnicastSubCmd>> unique_sub_cmds(num_dsts);
         std::vector<std::vector<std::pair<const void*, uint32_t>>> unique_rt_data_and_sizes(num_dsts);
+        std::vector<std::vector<std::reference_wrapper<RuntimeArgsData>>> unique_rt_args_data(num_dsts);
         std::vector<uint32_t> unique_max_runtime_args_len(num_dsts, 0);
 
         std::vector<std::variant<
@@ -426,6 +428,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
             std::vector<CQDispatchWritePackedUnicastSubCmd>>>
             common_sub_cmds(program.num_kernels());
         std::vector<std::vector<std::pair<const void*, uint32_t>>> common_rt_data_and_sizes(program.num_kernels());
+        std::vector<std::vector<std::reference_wrapper<RuntimeArgsData>>> common_rt_args_data(program.num_kernels());
         std::vector<uint32_t> common_max_runtime_args_len(program.num_kernels(), 0);
         std::vector<uint32_t> common_processor_to_l1_arg_base_addr(program.num_kernels());
 
@@ -445,12 +448,14 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                 unique_processors.insert(processor_idx);
                 unique_sub_cmds[processor_idx].reserve(kernel->cores_with_runtime_args().size());
                 unique_rt_data_and_sizes[processor_idx].reserve(kernel->cores_with_runtime_args().size());
+                unique_rt_args_data[processor_idx].reserve(kernel->cores_with_runtime_args().size());
                 for (const auto& core_coord : kernel->cores_with_runtime_args()) {
                     // can make a vector of unicast encodings here
                     CoreCoord physical_core =
                         device->physical_core_from_logical_core(core_coord, kernel->get_kernel_core_type());
                     uint32_t unicast_noc_encoding = get_noc_unicast_encoding(physical_core);
                     const auto& runtime_args_data = kernel->runtime_args(core_coord);
+                    unique_rt_args_data[processor_idx].emplace_back(kernel->runtime_args_data(core_coord));
                     // 2, 17, could be differnet len here
 
                     unique_sub_cmds[processor_idx].emplace_back(
@@ -475,6 +480,8 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                     auto& unicast_sub_cmd =
                         std::get<std::vector<CQDispatchWritePackedUnicastSubCmd>>(common_sub_cmds[kernel_id]);
                     unicast_sub_cmd.reserve(kernel->logical_cores().size());
+                    common_rt_data_and_sizes[kernel_id].reserve(kernel->logical_cores().size());
+                    common_rt_args_data[kernel_id].reserve(kernel->logical_cores().size());
                     for (auto& core_coord : kernel->logical_cores()) {
                         // can make a vector of unicast encodings here
                         CoreCoord physical_core = device->ethernet_core_from_logical_core(core_coord);
@@ -483,6 +490,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                             CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = unicast_noc_encoding});
                         common_rt_data_and_sizes[kernel_id].emplace_back(
                             common_rt_args.data(), common_rt_args.size() * sizeof(uint32_t));
+                        common_rt_args_data[kernel_id].emplace_back(kernel->common_runtime_args_data());
                     }
                 } else {
                     vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
@@ -493,11 +501,13 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                     auto& multicast_sub_cmd =
                         std::get<std::vector<CQDispatchWritePackedMulticastSubCmd>>(common_sub_cmds[kernel_id]);
                     multicast_sub_cmd.reserve(dst_noc_multicast_info.size());
+                    common_rt_data_and_sizes[kernel_id].reserve(dst_noc_multicast_info.size());
                     for (const auto& mcast_dests : dst_noc_multicast_info) {
                         multicast_sub_cmd.emplace_back(CQDispatchWritePackedMulticastSubCmd{
                             .noc_xy_addr = mcast_dests.first, .num_mcast_dests = mcast_dests.second});
                         common_rt_data_and_sizes[kernel_id].emplace_back(
                             common_rt_args.data(), common_rt_args.size() * sizeof(uint32_t));
+                        common_rt_args_data[kernel_id].emplace_back(kernel->common_runtime_args_data());
                     }
                 }
                 common_max_runtime_args_len[kernel_id] =
@@ -521,6 +531,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                 unique_sub_cmds[processor_idx],
                 unique_rt_data_and_sizes[processor_idx],
                 unique_max_runtime_args_len[processor_idx],
+                unique_rt_args_data[processor_idx],
                 max_prefetch_command_size,
                 processor_idx);
         }
@@ -534,6 +545,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                         sub_cmds,
                         common_rt_data_and_sizes[kernel_id],
                         common_max_runtime_args_len[kernel_id],
+                        common_rt_args_data[kernel_id],
                         max_prefetch_command_size,
                         kernel_id);
                 },
@@ -542,22 +554,6 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
     } else {
         for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
             auto kernel = detail::GetKernel(program, kernel_id);
-
-            if (!kernel->cores_with_runtime_args().empty()) {
-                uint32_t processor_idx =
-                    static_cast<typename std::underlying_type<tt::RISCV>::type>(kernel->processor());
-                for (const auto& core_coord : kernel->cores_with_runtime_args()) {
-                    uint32_t noc_xy_encoding = get_noc_unicast_encoding(
-                        this->device->physical_core_from_logical_core(core_coord, kernel->get_kernel_core_type()));
-                    const auto& data_loc =
-                        program.command_indices
-                            .processor_to_cmd_mapping[(uint64_t)processor_idx << 32 | noc_xy_encoding];
-                    const auto& runtime_args_data = kernel->runtime_args(core_coord);
-                    this->runtime_args_command_sequences[program.id][data_loc.first].update_cmd_sequence(
-                        data_loc.second, runtime_args_data.data(), runtime_args_data.size() * sizeof(uint32_t));
-                }
-            }
-
             const auto& common_rt_args = kernel->common_runtime_args();
             if (common_rt_args.size() > 0) {
                 if (kernel->get_kernel_core_type() == CoreType::ETH) {
