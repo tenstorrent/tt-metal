@@ -380,18 +380,9 @@ operation::OpPerformanceModel MaxPoolNew::create_op_performance_model(const std:
 }
 
 Tensor maxpool2d_new(const Tensor &input,
-                        uint32_t in_n, uint32_t in_h, uint32_t in_w,
-                        uint32_t kernel_size_h, uint32_t kernel_size_w,
-                        uint32_t stride_h, uint32_t stride_w,
-                        uint32_t pad_h, uint32_t pad_w,
-                        uint32_t dilation_h, uint32_t dilation_w,
+                        const SlidingWindowConfig& sliding_window_config,
+                        uint32_t in_c,
                         const MemoryConfig& out_mem_config) {
-    SlidingWindowConfig sliding_window_config(
-        in_n, in_h, in_w,
-        kernel_size_h, kernel_size_w,
-        stride_h, stride_w,
-        pad_h, pad_w,
-        dilation_h, dilation_w);
     return operation::run_without_autoformat(MaxPoolNew{sliding_window_config,
                                                         out_mem_config},
                                              {input}).at(0);
