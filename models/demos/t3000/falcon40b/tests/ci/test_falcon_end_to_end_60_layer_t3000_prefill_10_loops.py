@@ -1,0 +1,150 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+
+from models.demos.t3000.falcon40b.tests.test_falcon_end_to_end import run_test_FalconCausalLM_end_to_end
+from models.demos.t3000.falcon40b.tt.model_config import (
+    get_model_config,
+)
+from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    disable_compilation_reports,
+    skip_for_grayskull,
+    get_devices_for_t3000,
+)
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_loops",
+    (10,),
+    ids=[
+        "loops_10",
+    ],
+)
+@pytest.mark.parametrize(
+    "seq_len",
+    (
+        32,
+        128,
+        2048,
+    ),
+    ids=[
+        "seq32",
+        "seq128",
+        "seq2048",
+    ],
+)
+@pytest.mark.parametrize(
+    "num_layers",
+    (60,),
+    ids=["layers_60"],
+)
+@pytest.mark.parametrize(
+    "model_version",
+    ("tiiuae/falcon-40b-instruct",),
+    ids=["falcon_40b"],
+)
+@pytest.mark.parametrize(
+    "data_type, memcfg",
+    (
+        (
+            "BFLOAT8_B",
+            "DRAM",
+        ),
+        (
+            "BFLOAT16",
+            "DRAM",
+        ),
+    ),
+)
+def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
+    model_version,
+    seq_len,
+    num_layers,
+    data_type,
+    memcfg,
+    num_loops,
+    model_location_generator,
+    get_tt_cache_path,
+    all_devices,
+    use_program_cache,
+):
+    num_devices = 8
+    llm_mode = "prefill"
+    batch = 1
+    kv_cache_len = 0
+    out_pcc = 0.99
+    k_cache_pcc = 0.99
+    v_cache_pcc = 0.97
+    token_pcc = 0.99
+
+    input_shape = [batch, seq_len]
+    model_config_str = f"{data_type}-{memcfg}"
+    model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
+    devices = get_devices_for_t3000(all_devices, num_devices)
+    compute_grid_size = devices[0].compute_with_storage_grid_size()
+    if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
+        pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
+
+    tt_cache_path = get_tt_cache_path(
+        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
+    )
+
+    assert llm_mode == "prefill" and num_layers == 60, "PCC tresholds only valid for prefill and 60 layers."
+
+    if data_type == "BFLOAT8_B":
+        if seq_len == 32:
+            out_pcc = 0.91
+            k_cache_pcc = 0.97
+            v_cache_pcc = 0.94
+            token_pcc = 0.99
+        elif seq_len == 128:
+            out_pcc = 0.91
+            k_cache_pcc = 0.98
+            v_cache_pcc = 0.94
+            token_pcc = 0.99
+        elif seq_len == 2048:
+            out_pcc = 0.92
+            k_cache_pcc = 0.96
+            v_cache_pcc = 0.92
+            token_pcc = 0.99
+    elif data_type == "BFLOAT16":
+        if seq_len == 32:
+            out_pcc = 0.98
+            k_cache_pcc = 0.99
+            v_cache_pcc = 0.98
+            token_pcc = 0.99
+        elif seq_len == 128:
+            out_pcc = 0.99
+            k_cache_pcc = 0.98
+            v_cache_pcc = 0.93
+            token_pcc = 0.99
+        elif seq_len == 2048:
+            out_pcc = 0.99
+            k_cache_pcc = 0.98
+            v_cache_pcc = 0.97
+            token_pcc = 0.99
+
+    disable_persistent_kernel_cache()
+    disable_compilation_reports()
+
+    run_test_FalconCausalLM_end_to_end(
+        devices,
+        model_version,
+        llm_mode,
+        batch,
+        seq_len,
+        kv_cache_len,
+        num_layers,
+        out_pcc,
+        k_cache_pcc,
+        v_cache_pcc,
+        token_pcc,
+        model_config,
+        num_loops,
+        tt_cache_path,
+        model_location_generator,
+    )

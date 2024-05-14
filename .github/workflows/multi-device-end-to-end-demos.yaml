@@ -40,7 +40,7 @@ jobs:
       - name: Build tt-metal CPP tests
         run: cmake --build build --target tests -- -j`nproc`
       - name: Run pre/post regression tests
-        timeout-minutes: 60
+        timeout-minutes: 180
         run: |
           source build/python_env/bin/activate
           export PYTHONPATH=$TT_METAL_HOME
