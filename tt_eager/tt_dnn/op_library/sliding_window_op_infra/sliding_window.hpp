@@ -83,7 +83,7 @@ namespace tt::tt_metal {
         Shape get_output_shape() const {
             uint32_t output_h = (std::get<0>(input_hw_) + 2 * std::get<0>(pad_hw_) - std::get<0>(dilation_hw_) * std::get<0>(window_hw_)) / std::get<0>(stride_hw_) + 1;
             uint32_t output_w = (std::get<1>(input_hw_) + 2 * std::get<1>(pad_hw_) - std::get<1>(dilation_hw_) * std::get<1>(window_hw_)) / std::get<1>(stride_hw_) + 1;
-            return Shape({batch_size_, output_h, output_w});
+            return Shape({batch_size_, output_h, output_w, 0});
         }
 
         /**

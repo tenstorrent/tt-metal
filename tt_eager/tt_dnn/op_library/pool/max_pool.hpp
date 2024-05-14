@@ -6,6 +6,7 @@
 
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
+#include "tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 
 inline uint32_t ceil_multiple_of(uint32_t n, uint32_t m) {
     return (uint32_t) ceil((float) n / m) * m;
@@ -104,6 +105,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
                                                                 const MemoryConfig& out_mem_config,
                                                                 uint32_t nblocks);
 } // namespace deprecated
+
 operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(const Tensor &input,
                                                                 const Tensor& reader_indices,
                                                                 Tensor& output,
@@ -136,6 +138,38 @@ Tensor max_pool2d_v2(const Tensor &input, const Tensor &reader_indices,
 namespace max_pool_helpers {
 uint32_t get_num_cores(const Device* device, uint32_t out_nhw, uint32_t nbatch);
 }
+
+// new maxpool uop -- called from the macro-op
+struct MaxPoolNew {
+    SlidingWindowConfig sliding_window_config_;
+    MemoryConfig out_mem_config_;
+
+    void validate(const std::vector<Tensor> &input_tensors) const;
+    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    operation::OpPerformanceModel create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<Tensor> &output_tensors) const;
+
+    static constexpr auto attribute_names = std::make_tuple(
+        "sliding_window_config",
+        "out_mem_config");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->sliding_window_config_),
+            std::cref(this->out_mem_config_));
+    }
+};
+
+operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_new(
+                                                                const Tensor &input,
+                                                                Tensor& output,
+                                                                const SlidingWindowConfig& sliding_window_config,
+                                                                const MemoryConfig& out_mem_config);
+
+Tensor maxpool2d_new(const Tensor &input,
+                        const SlidingWindowConfig& sliding_window_config,
+                        uint32_t in_c,
+                        const MemoryConfig& out_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt_metal
 }  // namespace tt
