@@ -24,7 +24,7 @@ jobs:
       - uses: ./.github/actions/install-python-deps
       - name: Build tt-metal and libs
         run: |
-          cmake -B build -G Ninja
+          cmake -B build
           cmake --build build --target tests -- -j`nproc`
           cmake --build build --target metal-install
       - name: 'Tar files'
