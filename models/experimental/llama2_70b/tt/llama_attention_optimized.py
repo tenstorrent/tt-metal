@@ -258,6 +258,8 @@ class TtLlamaAttention_optimized:
                 self.device_mesh,
             )
 
+            attn_masks = ttnn.to_device(attn_masks, self.device_mesh)
+
             repeat_shape = (self.n_local_heads, 1, 1, 1)
             attn_masks = tt_lib.tensor.repeat(
                 attn_masks, repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
@@ -585,7 +587,7 @@ class TtLlamaAttention_optimized:
         rot_mats,
     ):
         assert xs.shape[1] == 1, "batch must be 1"
-        assert xs.shape[2] % 128 == 0 and xs[0].shape[2] > 0, "Seqlen must be divisible by 128"
+        assert xs.shape[2] % 128 == 0 and xs.shape[2] > 0, "Seqlen must be divisible by 128"
 
         # Fused QKV
         fused_query_key_value = tt_lib.operations.primary.matmul(
