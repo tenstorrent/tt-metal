@@ -834,8 +834,8 @@ void validate_workers_and_storage(const std::vector<Tensor>& inputs, const std::
 }
 
 std::vector<Device*> get_workers_for_op_output(
-    const std::vector<Tensor>&& inputs,
-    const std::vector<std::optional<const Tensor>>&& optional_inputs,
+    const std::vector<Tensor>& inputs,
+    const std::vector<std::optional<const Tensor>>& optional_inputs,
     bool enable_autoformat_device) {
     std::vector<Device*> workers_for_op = {};
     // Infer output workers from inputs. For multi-device tensors the number
