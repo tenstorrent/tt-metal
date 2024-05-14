@@ -2,11 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import random
 import torch
 import ttnn
 import tt_lib
-from models.helper_funcs import Linear as tt_Linear
 
 from ttnn.model_preprocessing import preprocess_model, preprocess_model_parameters
 import transformers
@@ -2661,7 +2659,7 @@ def eltwise_max(
     return ttnn_tensor_to_torch(t2)
 
 
-def ttnn_min(
+def eltwise_min(
     x,
     *args,
     dim,
