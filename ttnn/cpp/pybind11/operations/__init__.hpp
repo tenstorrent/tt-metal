@@ -46,7 +46,7 @@ void py_module(py::module& module) {
     conv2d::py_module(m_conv2d);
 
     auto m_maxpool2d = module.def_submodule("maxpool2d", "maxpool 2d operation");
-    transformer::py_module(m_maxpool2d);
+    maxpool::py_module(m_maxpool2d);
 
     auto m_transformer = module.def_submodule("transformer", "transformer operations");
     transformer::py_module(m_transformer);
