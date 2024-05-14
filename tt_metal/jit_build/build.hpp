@@ -39,7 +39,7 @@ class JitBuildEnv {
 
   public:
     JitBuildEnv();
-    void init(uint32_t device_id, tt::ARCH arch);
+    void init(uint32_t build_key, tt::ARCH arch);
 
     tt::ARCH get_arch() const { return arch_; }
     const string& get_root_path() const { return root_; }
@@ -165,11 +165,11 @@ void jit_build(const JitBuildState& build, const JitBuildSettings *settings, con
 void jit_build_set(const JitBuildStateSet& builds, const JitBuildSettings *settings, const string& kernel_in_path);
 void jit_build_subset(const JitBuildStateSubset& builds, const JitBuildSettings *settings, const string& kernel_in_path);
 
-inline const string jit_build_get_kernel_compile_outpath(int device_id) {
+inline const string jit_build_get_kernel_compile_outpath(int build_key) {
     // TODO(pgk), get rid of this
     // The test infra needs the output dir.  Could put this in the device, but we plan
     // to remove the device dependence in the future, so putting this here for now
-    return llrt::OptionsG.get_root_dir() + "/built/" + std::to_string(device_id) + "/kernels/";
+    return llrt::OptionsG.get_root_dir() + "/built/" + std::to_string(build_key) + "/kernels/";
 }
 
 inline void launch_build_step(const std::function<void()> build_func, std::vector<std::shared_future<void>>& events) {

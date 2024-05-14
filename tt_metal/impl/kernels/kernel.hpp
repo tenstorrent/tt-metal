@@ -41,7 +41,7 @@ class Kernel : public JitBuildSettings {
 
     bool is_on_logical_core(const CoreCoord &logical_core) const;
 
-    std::vector<ll_api::memory> const &binaries(chip_id_t device_id) const;
+    std::vector<ll_api::memory> const &binaries(uint32_t build_key) const;
 
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
 
@@ -66,7 +66,7 @@ class Kernel : public JitBuildSettings {
     virtual void generate_binaries(Device *device, JitBuildOptions& build_options) const = 0;
     inline uint16_t get_binary_size16() const { return binary_size16_; }
     void set_binary_path ( const std::string & binary_path) { binary_path_ = binary_path; }
-    void set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&binaries);
+    void set_binaries(uint32_t build_key, std::vector<ll_api::memory> &&binaries);
     uint32_t get_common_runtime_args_offset();
     void set_common_runtime_args_offset();
     virtual void read_binaries(Device *device) = 0;

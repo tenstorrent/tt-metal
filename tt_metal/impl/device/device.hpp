@@ -91,6 +91,8 @@ class Device {
 
     chip_id_t id() const { return id_; }
 
+    uint32_t build_key() const { return build_key_; }
+
     uint8_t num_hw_cqs() const { return num_hw_cqs_; }
 
     bool is_initialized() const { return this->initialized_; }
@@ -241,6 +243,7 @@ class Device {
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
     static ActiveDevices active_devices_;
     chip_id_t id_;
+    uint32_t build_key_;
     std::unique_ptr<Allocator> allocator_ = nullptr;
     bool initialized_ = false;
 

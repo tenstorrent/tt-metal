@@ -43,7 +43,7 @@ namespace{
     #endif
 
     size_t KernelCompileHash(
-        const std::shared_ptr<Kernel> kernel, JitBuildOptions &build_options, const chip_id_t &device_id) {
+        const std::shared_ptr<Kernel> kernel, JitBuildOptions &build_options, uint32_t build_key) {
         // Account for device id in hash because generated headers are dependent on harvesting config, which can differ per device
         // This can be removed with https://github.com/tenstorrent/tt-metal/issues/3381
 
@@ -51,12 +51,11 @@ namespace{
         // be compiled into the kernel.
         string compile_hash_str = fmt::format(
             "{}_{}_{}_{}_{}",
-            device_id,
+            build_key,
             std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
             kernel->compute_hash(),
             tt::llrt::OptionsG.get_watcher_enabled(),
-            tt::llrt::OptionsG.get_dprint_enabled()
-        );
+            tt::llrt::OptionsG.get_dprint_enabled());
         size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 
     #ifdef GENERATE_HASH_LOG
@@ -65,7 +64,7 @@ namespace{
         {
             unique_lock<mutex> lock;
             f << kernel->name() << " :: "
-            << device_id << "::"
+            << build_key << "::"
             << std::hash<tt_hlk_desc>{}(build_options.hlk_desc) << " :: "
             << kernel->compute_hash() << " :: "
             << compile_hash_str << " "
@@ -74,7 +73,6 @@ namespace{
     #endif
         return compile_hash;
     }
-
 }
 namespace detail{
     void EnablePersistentKernelCache()
@@ -651,7 +649,7 @@ void Program::populate_dispatch_data(Device* device) {
             }
 
             uint32_t sub_kernel_index = 0;
-            const auto& binaries = kernel->binaries(device->id());
+            const auto& binaries = kernel->binaries(device->build_key());
 
             for (size_t j = 0; j < binaries.size(); j++) {
                 const ll_api::memory& kernel_bin = binaries[j];
@@ -714,7 +712,7 @@ void Program::populate_dispatch_data(Device* device) {
             }
 
             uint32_t sub_kernel_index = 0;
-            const auto& binaries = kernel->binaries(device->id());
+            const auto& binaries = kernel->binaries(device->build_key());
             for (size_t j = 0; j < binaries.size(); j++) {
                 const ll_api::memory& kernel_bin = binaries[j];
                 uint32_t k = 0;
@@ -791,7 +789,7 @@ void Program::compile( Device * device )
                 kernel->set_build_options(build_options);
                 this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
 
-                auto kernel_hash = KernelCompileHash(kernel, build_options, device->id());
+                auto kernel_hash = KernelCompileHash(kernel, build_options, device->build_key());
                 std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
                 kernel->set_full_name(kernel_path_suffix);
                 build_options.set_name(kernel_path_suffix);
@@ -801,8 +799,11 @@ void Program::compile( Device * device )
                     if (not detail::HashLookup::inst().exists(kernel_hash))
                         detail::HashLookup::inst().add(kernel_hash);
                 } else if (detail::HashLookup::inst().add(kernel_hash)) {
-                    cache_hit = false;
                     GenerateBinaries(device, build_options, kernel);
+                    cache_hit = false;
+                    detail::HashLookup::inst().add_generated_bin(kernel_hash);
+                }
+                while (not detail::HashLookup::inst().is_bin_generated(kernel_hash)) {
                 }
                 if (detail::CompilationReporter::enabled()) {
                     detail::CompilationReporter::inst().add_kernel_compile_stats(*this, kernel, cache_hit, kernel_hash);
