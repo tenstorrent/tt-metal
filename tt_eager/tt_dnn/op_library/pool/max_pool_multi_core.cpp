@@ -10,6 +10,7 @@
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/sharding_utilities.hpp"
 #include "tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
+#include "tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tensor/tensor_utils.hpp"
 #include "tensor/owned_buffer_functions.hpp"
@@ -625,18 +626,17 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
 }
 
 // this version uses distribution along height = N * H * W
-operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(const Tensor &input, const Tensor &reader_indices,
-                                                                        Tensor& output,
-                                                                        uint32_t in_n, uint32_t in_h, uint32_t in_w,
-                                                                        uint32_t out_h, uint32_t out_w,
-                                                                        uint32_t kernel_size_h, uint32_t kernel_size_w,
-                                                                        uint32_t stride_h, uint32_t stride_w,
-                                                                        uint32_t pad_h, uint32_t pad_w,
-                                                                        uint32_t dilation_h, uint32_t dilation_w,
-                                                                        const MemoryConfig& out_mem_config,
-                                                                        uint32_t nblocks) {
-    Program program = CreateProgram();
-
+operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl(Program& program,
+                                                                                    const Tensor &input, const Tensor &reader_indices,
+                                                                                    Tensor& output,
+                                                                                    uint32_t in_n, uint32_t in_h, uint32_t in_w,
+                                                                                    uint32_t out_h, uint32_t out_w,
+                                                                                    uint32_t kernel_size_h, uint32_t kernel_size_w,
+                                                                                    uint32_t stride_h, uint32_t stride_w,
+                                                                                    uint32_t pad_h, uint32_t pad_w,
+                                                                                    uint32_t dilation_h, uint32_t dilation_w,
+                                                                                    const MemoryConfig& out_mem_config,
+                                                                                    uint32_t nblocks) {
     // This should allocate a DRAM buffer on the device
     Device *device = input.device();
     Buffer *src_dram_buffer = input.buffer();
@@ -985,6 +985,60 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
         }
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
+}
+
+operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(const Tensor &input, const Tensor &reader_indices,
+                                                                        Tensor& output,
+                                                                        uint32_t in_n, uint32_t in_h, uint32_t in_w,
+                                                                        uint32_t out_h, uint32_t out_w,
+                                                                        uint32_t kernel_size_h, uint32_t kernel_size_w,
+                                                                        uint32_t stride_h, uint32_t stride_w,
+                                                                        uint32_t pad_h, uint32_t pad_w,
+                                                                        uint32_t dilation_h, uint32_t dilation_w,
+                                                                        const MemoryConfig& out_mem_config,
+                                                                        uint32_t nblocks) {
+    Program program = CreateProgram();
+    return max_pool_2d_multi_core_sharded_with_halo_v2_impl(program, input, reader_indices, output, in_n, in_h, in_w, out_h, out_w, kernel_size_h, kernel_size_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, out_mem_config, nblocks);
+}
+
+operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_new(const Tensor &input,
+                                                                                Tensor& output,
+                                                                                SlidingWindowConfig sliding_window_config,
+                                                                                const MemoryConfig& out_mem_config) {
+    Program program = CreateProgram();
+
+    ParallelConfig parallel_config = ParallelConfig{
+        .grid = input.shard_spec().value().grid,
+        .shard_scheme = input.memory_config().memory_layout,
+        .shard_orientation = input.shard_spec().value().orientation,
+    };
+
+    auto output_shape = sliding_window_config.get_output_shape();
+    uint32_t out_h = output_shape[1];
+    uint32_t out_w = output_shape[2];
+
+    auto pad_metadata = sliding_window::generate_pad_metadata(sliding_window_config);
+    auto op_trace_metadata = sliding_window::generate_op_trace_metadata(sliding_window_config);
+    auto shard_boundaries = sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
+    auto top_left_indices = sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, false, false);
+    auto reader_indices = sliding_window::construct_on_host_config_tensor(top_left_indices, sliding_window_config, parallel_config);
+    auto reader_indices_on_device = sliding_window::move_config_tensor_to_device(reader_indices, parallel_config, input.device());
+
+    detail::AddConfigTensor(program, reader_indices_on_device);
+
+    auto in_n = sliding_window_config.batch_size_;
+    auto in_h = sliding_window_config.input_hw_.first;
+    auto in_w = sliding_window_config.input_hw_.second;
+    auto kernel_size_h = sliding_window_config.window_hw_.first;
+    auto kernel_size_w = sliding_window_config.window_hw_.second;
+    auto stride_h = sliding_window_config.stride_hw_.first;
+    auto stride_w = sliding_window_config.stride_hw_.second;
+    auto pad_h = sliding_window_config.pad_hw_.first;
+    auto pad_w = sliding_window_config.pad_hw_.second;
+    auto dilation_h = sliding_window_config.dilation_hw_.first;
+    auto dilation_w = sliding_window_config.dilation_hw_.second;
+
+    return max_pool_2d_multi_core_sharded_with_halo_v2_impl(program, input, reader_indices_on_device, output, in_n, in_h, in_w, out_h, out_w, kernel_size_h, kernel_size_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, out_mem_config, 1);
 }
 
 } // namespace tt_metal
