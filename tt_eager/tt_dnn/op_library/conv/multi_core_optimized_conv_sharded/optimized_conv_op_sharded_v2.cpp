@@ -1350,9 +1350,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
     // For 2d convs, each core in a column or row share the same specs
     CoreCoord grid_size = parallel_config.grid.bounding_box().grid_size();
     if(parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
-            uint32_t num_shards_nhw = conv_sharded_input_top_left_indices.size();
-            TT_ASSERT(sliding_window_config.num_cores_nhw_ == num_shards_nhw);
-            uint32_t num_shards_channels = 0;
+        uint32_t num_shards_nhw = conv_sharded_input_top_left_indices.size();
+        TT_ASSERT(sliding_window_config.num_cores_nhw_ == num_shards_nhw);
+        uint32_t num_shards_channels = 0;
         if(parallel_config.shard_orientation == ShardOrientation::COL_MAJOR) {
             num_shards_channels = grid_size.y;
         } else {
