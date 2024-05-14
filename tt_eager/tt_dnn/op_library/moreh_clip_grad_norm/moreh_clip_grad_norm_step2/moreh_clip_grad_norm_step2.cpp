@@ -133,23 +133,20 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step2_impl(
         const auto output_address = input_tensors.at(1).buffer()->address();
 
         {
-            auto runtime_args = GetRuntimeArgs(program, reader_kernels_id, single_core);
+            auto &runtime_args = GetRuntimeArgs(program, reader_kernels_id, single_core);
             runtime_args[0] = input_address;
             runtime_args[3] = *reinterpret_cast<uint32_t*>(&decimal);
-            SetRuntimeArgs(program, reader_kernels_id, single_core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, writer_kernels_id, single_core);
+            auto &runtime_args = GetRuntimeArgs(program, writer_kernels_id, single_core);
             runtime_args[0] = output_address;
-            SetRuntimeArgs(program, writer_kernels_id, single_core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, compute_kernels_id, single_core);
+            auto &runtime_args = GetRuntimeArgs(program, compute_kernels_id, single_core);
             runtime_args[1] = p;
             runtime_args[2] = static_cast<uint32_t>(p_is_negative);
-            SetRuntimeArgs(program, compute_kernels_id, single_core, runtime_args);
         }
     };
 

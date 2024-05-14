@@ -179,29 +179,26 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
 
             CoreCoord core = {0, 0};
             {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = (std::uint32_t)has_input_grad;
                 runtime_args[1] = (std::uint32_t)has_input_grad;
                 runtime_args[2] = src0_buffer->address();
                 runtime_args[3] = src1_buffer->address();
                 runtime_args[4] = src2_buffer->address();
-                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, compute_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, compute_kernel_id, core);
                 runtime_args[0] = (std::uint32_t)has_input_grad;
                 runtime_args[1] = (std::uint32_t)has_input_grad;
-                SetRuntimeArgs(program, compute_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = (std::uint32_t)has_input_grad;
                 runtime_args[1] = (std::uint32_t)has_input_grad;
                 runtime_args[2] = dst0_address;
                 runtime_args[3] = dst1_address;
-                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
             }
         };
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};

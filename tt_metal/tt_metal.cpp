@@ -950,14 +950,14 @@ void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const 
 }
 
 
-std::vector<uint32_t> & GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core) {
+RuntimeArgsData  & GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core) {
     TT_FATAL( not CommandQueue::async_mode_set(), "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
-    return detail::GetKernel(program, kernel_id)->runtime_args(logical_core);
+    return detail::GetKernel(program, kernel_id)->runtime_args_data(logical_core);
 }
 
-std::vector< std::vector< std::vector<uint32_t>> > & GetRuntimeArgs(const Program &program, KernelHandle kernel_id) {
+std::vector< std::vector< RuntimeArgsData> >& GetRuntimeArgs(const Program &program, KernelHandle kernel_id) {
     TT_FATAL( not CommandQueue::async_mode_set(), "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
-    return detail::GetKernel(program, kernel_id)->runtime_args();
+    return detail::GetKernel(program, kernel_id)->runtime_args_data();
 }
 
 std::vector<uint32_t> & GetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id) {

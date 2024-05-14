@@ -386,7 +386,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
                 runtime_args[0] = input_buffer->address();
                 if (gamma_buffer != nullptr) {
                     runtime_args[6] = gamma_buffer->address();
@@ -394,11 +394,10 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
                 if (beta_buffer != nullptr) {
                     runtime_args[7] = beta_buffer->address();
                 }
-                SetRuntimeArgs(program, reader_kernels_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
                 runtime_args[0] = ouput_buffer->address();
                 if (mean_buffer != nullptr) {
                     runtime_args[1] = mean_buffer->address();
@@ -406,7 +405,6 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
                 if (rstd_buffer != nullptr) {
                     runtime_args[2] = rstd_buffer->address();
                 }
-                SetRuntimeArgs(program, writer_kernels_id, core, runtime_args);
             }
         }
     };

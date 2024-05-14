@@ -118,24 +118,21 @@ operation::ProgramWithCallbacks moreh_dot_single_core(const Tensor &a, const Ten
         uint32_t num_tiles = input_tensors.at(0).volume() / TILE_HW;
 
         {
-            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer_a->address();
             runtime_args[1] = src_buffer_b->address();
             runtime_args[2] = num_tiles;
-            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, compute_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, compute_kernel_id, core);
             runtime_args[0] = num_tiles;
-            SetRuntimeArgs(program, compute_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
             runtime_args[1] = 1;
-            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};

@@ -219,7 +219,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_ids, core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_ids, core);
                 runtime_args[0] = param_out_address;
 
                 if (has_momentum_buffer) {

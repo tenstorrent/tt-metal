@@ -196,23 +196,20 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
                 runtime_args[0] = input_tensors.at(i).buffer()->address();
                 runtime_args[3] = *reinterpret_cast<uint32_t*>(&decimal);
-                SetRuntimeArgs(program, reader_kernels_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
                 runtime_args[0] = output_address;
-                SetRuntimeArgs(program, writer_kernels_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, compute_kernels_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, compute_kernels_id, core);
                 runtime_args[1] = p;
                 runtime_args[2] = static_cast<uint32_t>(p_is_negative);
-                SetRuntimeArgs(program, compute_kernels_id, core, runtime_args);
             }
         }
     };
