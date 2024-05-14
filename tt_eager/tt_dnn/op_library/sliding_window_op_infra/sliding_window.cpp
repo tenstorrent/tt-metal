@@ -156,9 +156,9 @@ namespace tt::tt_metal::sliding_window {
         std::vector<std::vector<uint32_pair_t>> pad_config;
         std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>> local_config;
         std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>> remote_config;
-        pad_config.reserve(num_core_nhw);
-        local_config.reserve(num_core_nhw);
-        remote_config.reserve(num_core_nhw);
+        pad_config.resize(num_core_nhw);
+        local_config.resize(num_core_nhw);
+        remote_config.resize(num_core_nhw);
 
         for (auto [src_dst, data] : per_core_gather_data) {
             auto [src_core_id, dst_core_id] = src_dst;
@@ -194,7 +194,7 @@ namespace tt::tt_metal::sliding_window {
                 max_len = std::max(max_len, 2 * data.size());   // each data is 2 * data.size()
             }
             std::vector<std::vector<uint16_t>> flattened_config;
-            flattened_config.reserve(config.size());
+            flattened_config.resize(config.size());
             for (auto& data : config) {
                 std::vector<uint16_t> flat_data(max_len, 0);
                 uint32_t idx = 0;
@@ -215,7 +215,7 @@ namespace tt::tt_metal::sliding_window {
             }
             max_len += 3;   // key tuple
             std::vector<std::vector<uint16_t>> flattened_config;
-            flattened_config.reserve(config.size());
+            flattened_config.resize(config.size());
             for (auto& [key, data]: config) {
                 auto [nocx, nocy, len] = key;
                 std::vector<uint16_t> flat_data(max_len, 0);
@@ -245,7 +245,7 @@ namespace tt::tt_metal::sliding_window {
                 max_len = std::max(max_len, curr_len);   // each key is 3, data is 3 * data.size()
             }
             std::vector<std::vector<uint16_t>> flattened_config;
-            flattened_config.reserve(config.size());
+            flattened_config.resize(config.size());
             for (auto& core_config : config) {
                 std::vector<uint16_t> flat_data(max_len, 0);
                 uint32_t idx = 0;
