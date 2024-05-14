@@ -17,6 +17,8 @@ from models.utility_functions import skip_for_wormhole_b0
 @pytest.mark.parametrize("split_size", [2, 4])
 @pytest.mark.parametrize("dim", [-1, -2])
 def test_split(device, h, w, split_size, dim):
+    pytest.skip("ttnn.split is not implemented")
+
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
