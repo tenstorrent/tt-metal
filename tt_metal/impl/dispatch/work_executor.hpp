@@ -8,6 +8,7 @@
 #include <functional>
 #include <pthread.h>
 #include <sched.h>
+#include <sys/resource.h>
 #include <thread>
 #include <unistd.h>
 
@@ -28,6 +29,30 @@ enum class WorkerState {
     IDLE = 2,
 };
 
+inline void set_device_thread_affinity(std::thread& thread_, int managed_device_id) {
+    // Bind a device worker/reader thread to a CPU core, determined using round-robin.
+    static int num_online_cores = sysconf(_SC_NPROCESSORS_ONLN);
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(managed_device_id % num_online_cores, &cpuset);
+    int rc = pthread_setaffinity_np(thread_.native_handle(), sizeof(cpu_set_t), &cpuset);
+    if (rc) {
+        log_warning(tt::LogMetal, "Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: {}", rc);
+    }
+}
+
+inline void set_process_priority(int requested_priority) {
+    // Get priority for calling process
+    int process_priority = getpriority(PRIO_PROCESS, 0);
+    log_debug(tt::LogMetal, "Initial Process Priority: {}", process_priority);
+    if (process_priority == requested_priority) return;
+    // Set priority for calling process to user specified value
+    int rc = setpriority(PRIO_PROCESS, 0, requested_priority);
+    if (rc) {
+        log_warning(tt::LogMetal, "Unable to set process priority to {}, error code: {}", requested_priority, rc);
+    }
+}
+
 class WorkExecutor {
     // In asynchronous mode, each device has a worker thread that processes all host <--> cluster commands for this device.
     // Commands are pushed to the worker queue and picked up + executed asyncrhonously.
@@ -37,6 +62,7 @@ class WorkExecutor {
     LockFreeQueue<std::function<void()>> worker_queue;
 
     WorkExecutor(int device_id) : managed_device_id(device_id) {
+        set_process_priority(0);
         if (this->worker_queue_mode == WorkExecutorMode::ASYNCHRONOUS) {
             this->start_worker();
         }
@@ -73,24 +99,40 @@ class WorkExecutor {
 
     inline void push_work(const std::function<void()>& work_executor, bool blocking = false) {
         ZoneScopedN("PushWork");
-        if (this->worker_queue_mode == WorkExecutorMode::ASYNCHRONOUS) {
-            if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.parent_thread_id.load()) {
-                // Push function executor to worker queue
-                this->worker_queue.push(work_executor);
-                {
-                    std::lock_guard lock(this->cv_mutex);
-                    cv.notify_one();
-                }
-                if (blocking) {
-                    this->synchronize();
-                }
-            } else {
-                TT_ASSERT(std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.worker_thread_id.load(), "Only main thread or worker thread can push to device worker queue.");
-                work_executor();
+        if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.parent_thread_id.load()) {
+            // Parent thread id is non-zero (using async mode) and parent is calling push_work.
+            // Push function executor to worker queue
+            this->worker_queue.push(work_executor);
+            {
+                std::lock_guard lock(this->cv_mutex);
+                cv.notify_one();
+            }
+            if (blocking) {
+                this->synchronize();
             }
         } else {
-            // Synchronous execution: Run function right away.
+            // Either push work is called from worker itself or async mode is not being used.
             work_executor();
+        }
+    }
+
+    inline void push_work(std::shared_ptr<std::function<void()>> work_executor, bool blocking = false) {
+        // Latest push API, passing ptrs around for work container. Usually faster, since no data-copies.
+        ZoneScopedN("PushWork");
+        if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.parent_thread_id.load()) {
+            // Parent thread id is non-zero (using async mode) and parent is calling push_work.
+            // Push function executor to worker queue
+            this->worker_queue.push(work_executor);
+            {
+                std::lock_guard lock(this->cv_mutex);
+                cv.notify_one();
+            }
+            if (blocking) {
+                this->synchronize();
+            }
+        } else {
+            // Either push work is called from worker itself or async mode is not being used.
+            (*work_executor)();
         }
     }
 
@@ -138,14 +180,7 @@ class WorkExecutor {
         this->worker_thread = std::thread(&WorkExecutor::run_worker, this);
         this->worker_queue.worker_thread_id = std::hash<std::thread::id>{}(this->worker_thread.get_id());
         // Bind a worker tied to a device to a specific CPU core in round robin fashion. Thread affinity == Better Perf.
-        static int num_online_cores = sysconf(_SC_NPROCESSORS_ONLN);
-        cpu_set_t cpuset;
-        CPU_ZERO(&cpuset);
-        CPU_SET(managed_device_id % num_online_cores, &cpuset);
-        int rc = pthread_setaffinity_np(worker_thread.native_handle(), sizeof(cpu_set_t), &cpuset);
-        if (rc) {
-            log_warning(tt::LogMetal, "Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: {}", rc);
-        }
+        set_device_thread_affinity(this->worker_thread, this->managed_device_id);
     }
 
     inline void stop_worker() {

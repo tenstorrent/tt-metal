@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -494,6 +495,9 @@ class HWCommandQueue {
 
     Device* device;
 
+    std::condition_variable reader_thread_cv;
+    std::mutex reader_thread_cv_mutex;
+
     CoreType get_dispatch_core_type();
 
     void copy_into_user_space(const detail::ReadBufferDescriptor &read_buffer_descriptor, chip_id_t mmio_device_id, uint16_t channel);
@@ -512,6 +516,8 @@ class HWCommandQueue {
     void enqueue_trace(const uint32_t trace_id, bool blocking);
     void finish();
     void terminate();
+    void increment_num_entries_in_completion_q();
+    void set_exit_condition();
     friend void EnqueueTraceImpl(CommandQueue& cq, uint32_t trace_id, bool blocking);
     friend void EnqueueProgramImpl(CommandQueue& cq, std::variant < std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking);
     friend void EnqueueReadBufferImpl(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void* dst, bool blocking);

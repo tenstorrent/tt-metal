@@ -114,18 +114,16 @@ void Tensor::deallocate(bool force) {
                             uint32_t ref_count_to_use = (this->workers.at(0)->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS or not this->tensor_attributes->main_thread_tensor) ? this->tensor_attributes.use_count() : this->tensor_attributes->main_thread_ref_count;
                             if ((force or ref_count_to_use == 1) and not this->tensor_attributes->deallocated) {
                                 this->tensor_attributes->deallocated = true;
-                                // Record ref count before sending to worker
-                                uint32_t device_tensor_ref_count = this->tensor_attributes->record_main_thread_ref_count();
-                                this->workers.at(0)->push_work([force, *this] () mutable {
+                                this->workers.at(0)->push_work(std::make_shared<std::function<void()>>([force, attr = this->tensor_attributes] () mutable {
                                     // Cross worker synchronization: If the tensor being deallocated is shared across workers (ex: all_gather op),
                                     // wait until all workers are done with this tensor before deallocating.
-                                    bool num_threads_sharing_tensor = this->tensor_attributes->num_sibling_workers_sharing_tensor;
+                                    bool num_threads_sharing_tensor = attr->num_sibling_workers_sharing_tensor;
                                     if (num_threads_sharing_tensor) {
                                         while (num_threads_sharing_tensor) {
-                                           num_threads_sharing_tensor = this->tensor_attributes->num_sibling_workers_sharing_tensor;;
+                                           num_threads_sharing_tensor = attr->num_sibling_workers_sharing_tensor;;
                                         }
                                     }
-                                    std::visit([force, this] (auto&& s) {
+                                    std::visit([force, attr] (auto&& s) {
                                         using type = std::decay_t<decltype(s)>;
                                         if constexpr (std::is_same_v<type, DeviceStorage>) {
                                             if (force or s.buffer.use_count() == 1) {
@@ -138,13 +136,11 @@ void Tensor::deallocate(bool force) {
                                         } else if  constexpr(std::is_same_v<type, OwnedStorage>) {
                                             // Manage Dynamic Storage (due to autoformat in async mode): Main thread sees this tensor as a device tensor, since worker has not updated
                                             // storage time. When the worker executes the dealloc request, the storage type has been appropriately updated to Owned.
-                                            TT_ASSERT(this->tensor_attributes->dynamic_storage, "Tensor storage type changed during runtime (device -> host), but dynamic storage was not marked.");
+                                            TT_ASSERT(attr->dynamic_storage, "Tensor storage type changed during runtime (device -> host), but dynamic storage was not marked.");
                                             std::visit([] (auto&& buffer) { buffer.reset(); }, s.buffer);
                                         }
-                                    }, this->tensor_attributes->storage);
-                                });
-                                // Update ref count after sending to worker
-                                this->tensor_attributes->update_main_thread_ref_count(this->workers.at(0), device_tensor_ref_count);
+                                    }, attr->storage);
+                                }));
                             }
                         } else {
                             TT_FATAL(this->deallocate_through_destructor, "Device tensors created in the main thread cannot be explictly deallocated in worker threads.");
@@ -155,32 +151,26 @@ void Tensor::deallocate(bool force) {
                         }
                     } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                         if (this->workers.at(0)->in_main_thread() or not this->tensor_attributes->main_thread_tensor) {
-                            if (not this->tensor_attributes->main_thread_tensor) {
-                                TT_ASSERT(not this->tensor_attributes->main_thread_ref_count, "main_thread_ref_count for tensors created inside a worker thread must be 0");
-                            }
                             // If owned by the main thread, deallocate this tensor only from the main thread. If owned by worker thread, allow deallocation in worker and use shared_ptr ref count, since this is a thread_local tensor
                             uint32_t ref_count_to_use = (this->workers.at(0)->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS or not this->tensor_attributes->main_thread_tensor) ? this->tensor_attributes.use_count() : this->tensor_attributes->main_thread_ref_count;
                             if ((force or ref_count_to_use == 1) and not this->tensor_attributes->deallocated) {
                                 this->tensor_attributes->deallocated = true;
-                                // Record ref count before sending to workers
-                                uint32_t device_tensor_ref_count = this->tensor_attributes->record_main_thread_ref_count();
+                                auto dealloc_lambda = std::make_shared<std::function<void(Device*)>>([force, attr = this->tensor_attributes] (Device* worker) mutable {
+                                    ZoneScopedN("ShardDeallocate");
+                                    auto& s = std::get<MultiDeviceStorage>(attr->storage);
+                                    if (s.buffers.find(worker->id()) != s.buffers.end()) {
+                                        if ((force or s.buffers.at(worker->id()).use_count() == 1)) {
+                                            DeallocateBuffer(*(s.buffers.at(worker->id())));
+                                        }
+                                        s.buffers.at(worker->id()).reset();
+                                    }
+                                });
+
                                 for (auto worker : this->workers) {
-                                    worker->push_work([force, *this, worker] () mutable {
-                                        std::visit([force, worker] (auto&& s) {
-                                            using type = std::decay_t<decltype(s)>;
-                                            if constexpr (std::is_same_v<type, MultiDeviceStorage>) {
-                                                if (s.buffers.find(worker->id()) != s.buffers.end()) {
-                                                    if (force or s.buffers.at(worker->id()).use_count() == 1) {
-                                                        DeallocateBuffer(*(s.buffers.at(worker->id())));
-                                                    }
-                                                    s.buffers.at(worker->id()).reset();
-                                                }
-                                            }
-                                        }, this->tensor_attributes->storage);
-                                    });
+                                    worker->push_work(std::make_shared<std::function<void()>>([worker, dealloc_lambda] () mutable {
+                                        (*dealloc_lambda)(worker);
+                                    }));
                                 }
-                                // Update ref count after sending to workers
-                                this->tensor_attributes->update_main_thread_ref_count(this->workers.at(0), device_tensor_ref_count);
                             }
                         } else {
                             TT_FATAL(this->deallocate_through_destructor, "Device tensors created in the main thread cannot be explictly deallocated in worker threads.");
