@@ -166,6 +166,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
     )
     BFLOAT16_DTYPE = ttl.tensor.DataType.BFLOAT16
     BFP8_DTYPE = ttl.tensor.DataType.BFLOAT8_B
+    BFP4_DTYPE = ttl.tensor.DataType.BFLOAT4_B
 
     # Set default dtype and mem_config based on model_config_str
     if model_config_str in ACCEPTABLE_DECODE_MODEL_CONFIG_STRS:
@@ -197,6 +198,9 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         ),
+        "BFP4_DTYPE": BFP4_DTYPE,
+        "BFP8_DTYPE": BFP8_DTYPE,
+        "BFLOAT16_DTYPE": BFLOAT16_DTYPE,
         "DRAM_MEMCFG": DRAM_MEMCFG,
         "L1_MEMCFG": L1_MEMCFG,
     }
@@ -691,6 +695,8 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         "DRAM_MEMCFG": DRAM_MEMCFG,
         "L1_MEMCFG": L1_MEMCFG,
         "BFP4_DTYPE": BFP4_DTYPE,
+        "BFP8_DTYPE": BFP8_DTYPE,
+        "BFLOAT16_DTYPE": BFLOAT16_DTYPE,
         "HEIGHT_SHARDED_MEMCFG": HEIGHT_SHARDED_MEMCFG,
     }
     model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
