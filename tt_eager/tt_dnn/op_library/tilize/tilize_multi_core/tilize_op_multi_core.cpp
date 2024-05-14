@@ -6,6 +6,7 @@
 
 #include "tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "tt_dnn/op_library/math.hpp"
+#include "tt_dnn/op_library/work_split_tilize.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -20,118 +21,6 @@ namespace tt {
 
 namespace tt_metal {
 
-
-inline std::tuple<int32_t, int32_t, int32_t, int32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t>
-    split_blocks_across_cores(CoreCoord grid_size, uint32_t nblocks) {
-
-    int32_t ncores_x = grid_size.x;
-    int32_t ncores_y = grid_size.y;
-    int32_t ncores = ncores_x * ncores_y;
-    uint32_t nblocks_per_core = nblocks;
-    uint32_t nblocks_per_core_cliff = 0;
-    int32_t ncores_x_cliff = 0;
-    std::set<CoreRange> all_cores;
-    std::set<CoreRange> core_range, core_range_cliff;
-    if (nblocks <= ncores) {
-        nblocks_per_core = 1;
-        ncores = nblocks;
-        ncores_y = ceil((float) ncores / ncores_x);
-        ncores_x_cliff = ncores - (ncores_x * (ncores_y - 1));
-        if (ncores_x_cliff == ncores_x) {
-            // no cliff, all is perfectly divisible
-            ncores_x_cliff = 0;
-            core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)));
-            all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)));
-        } else if (ncores_x_cliff == 1) {
-            // just one cliff core in the last row
-            nblocks_per_core_cliff = 1;
-            if (ncores_y > 1) {
-                core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
-                all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
-            }
-            core_range_cliff.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
-            all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
-        } else if (ncores_x_cliff > 1) {
-            // both normal and cliff cores in the last row
-            nblocks_per_core_cliff = 1;
-            if (ncores_y > 1) {
-                core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
-                all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
-            }
-            core_range.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 2, ncores_y - 1)));
-            core_range_cliff.insert(CoreRange(CoreCoord(ncores_x_cliff - 1, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
-            all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
-        } else {
-            TT_ASSERT(false, "Something went really wrong in splitting blocks across cores {} {}!!", ncores_x, ncores_x_cliff);
-        }
-    } else {
-        nblocks_per_core = ceil((float) nblocks / ncores);
-        ncores = ceil((float) nblocks / nblocks_per_core);
-        nblocks_per_core_cliff = nblocks - nblocks_per_core * (ncores - 1);
-        ncores_y = ceil((float) ncores / ncores_x);
-        ncores_x_cliff = ncores - ncores_x * (ncores_y - 1);
-        if (nblocks_per_core_cliff == nblocks_per_core) {
-            // no special cliff at block level for per core
-            if (ncores_x_cliff == ncores_x) {
-                // no x_cliff row => all cores are equal
-                ncores_x_cliff = 0;
-                core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)));
-                all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)));
-            } else if (ncores_x_cliff == 1) {
-                // just 1 core as cliff in the last core row
-                if (ncores_y > 1) {
-                    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
-                    all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
-                }
-                core_range_cliff.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
-                all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
-            } else if (ncores_x_cliff < ncores_x) {
-                // last core row has last core as cliff, rest are normal
-                if (ncores_y > 1) {
-                    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
-                    all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
-                }
-                core_range.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 2, ncores_y - 1)));
-                core_range_cliff.insert(CoreRange(CoreCoord(ncores_x_cliff - 1, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
-                all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
-            } else {
-                TT_ASSERT("Something went really wrong in calculating the core ranges {} {}", ncores_x, ncores_x_cliff);
-            }
-        } else if (nblocks_per_core_cliff < nblocks_per_core) {
-            // last core has unequal blocks
-            if (ncores_x_cliff == ncores_x) {
-                // ncores x is same throughout
-                if (ncores_y > 1) {
-                    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
-                }
-                core_range.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 2, ncores_y - 1)));
-                core_range_cliff.insert(CoreRange(CoreCoord(ncores_x_cliff - 1, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
-                all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 1)));
-            } else if (ncores_x_cliff == 1) {
-                // last core row only has 1 core, as cliff
-                if (ncores_y > 1) {
-                    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
-                    all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
-                }
-                core_range_cliff.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
-                all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(0, ncores_y - 1)));
-            } else if (ncores_x_cliff < ncores_x) {
-                if (ncores_y > 1) {
-                    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
-                    all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_x - 1, ncores_y - 2)));
-                }
-                core_range.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 2, ncores_y - 1)));
-                core_range_cliff.insert(CoreRange(CoreCoord(ncores_x_cliff - 1, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
-                all_cores.insert(CoreRange(CoreCoord(0, ncores_y - 1), CoreCoord(ncores_x_cliff - 1, ncores_y - 1)));
-            } else {
-                TT_ASSERT(false, "Something went very wrong in calculating core ranges (case 2)");
-            }
-        } else {
-            TT_ASSERT(false, "Somehting went really wrong in splitting blocks across cores (case else)");
-        }
-    }
-    return std::make_tuple(ncores, ncores_x, ncores_x_cliff, ncores_y, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff);
-}
 
 operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -155,13 +44,10 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
 
     Device *device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
-    auto [ncores, ncores_x, ncores_x_cliff, ncores_y, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] = split_blocks_across_cores(grid_size, nblocks);
+    auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] = split_blocks_for_tilize(grid_size, nblocks);
 
     {
         log_debug(LogOp, "ncores: {}", ncores);
-        log_debug(LogOp, "ncores_x: {}", ncores_x);
-        log_debug(LogOp, "ncores_x_cliff: {}", ncores_x_cliff);
-        log_debug(LogOp, "ncores_y: {}", ncores_y);
         log_debug(LogOp, "nblocks_per_core: {}", nblocks_per_core);
         log_debug(LogOp, "nblocks_per_core_cliff: {}", nblocks_per_core_cliff);
     }
@@ -255,6 +141,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
     }
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
+    uint32_t ncores_x = grid_size.x;
     for (uint32_t i = 0; i < ncores_full; ++ i) {
         CoreCoord core = {i % ncores_x, i / ncores_x};
 
