@@ -543,8 +543,9 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
   - Squash and merge
   - Rebase and merge
 
-  If you use squashing, ensure that your commit message follows our required
-  format. Failure to do so is a violation of our standards.
+  If you use squashing, when GitHub asks you to enter a new commit message,
+  ensure that your commit message follows our required format as outlined above
+  in this section. Failure to do so is a violation of our standards.
 
 ### Code reviews
 
