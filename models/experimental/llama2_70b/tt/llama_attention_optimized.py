@@ -527,20 +527,22 @@ class TtLlamaAttention_optimized:
             num_heads=self.n_local_heads,
         )  # seqlen, 1, batch, hidden_size
 
-        attn_output = tt_lib.tensor.sharded_to_interleaved(
-            attn_output, output_mem_config=self.model_config["L1_MEMCFG"]
-        )
+        # attn_output = tt_lib.tensor.sharded_to_interleaved(
+        #     attn_output, output_mem_config=self.model_config["L1_MEMCFG"]
+        # )
 
         attn_output = ttnn.all_gather(
             attn_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["L1_MEMCFG"],
+            # memory_config=self.model_config["L1_MEMCFG"],
+            memory_config=self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"],
         )
 
-        attn_output = tt_lib.tensor.interleaved_to_sharded(
-            attn_output, sharded_mem_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"]
-        )
+        # attn_output = tt_lib.tensor.interleaved_to_sharded(
+        #     attn_output, sharded_mem_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"]
+        # )
+        attn_output = tt_lib.tensor.reshard(attn_output, self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"])
 
         attn_output = tt_lib.operations.primary.matmul_1d(
             attn_output,
