@@ -17,4 +17,6 @@ Runtime Arguments
 
 .. doxygenfunction:: SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args)
 
+.. doxygenfunction:: SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const RuntimeArgsData &runtime_args)
+
 .. doxygenfunction:: GetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id)
