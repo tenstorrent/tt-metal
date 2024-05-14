@@ -17,7 +17,7 @@ jobs:
     environment: dev
     runs-on: build
     steps:
-      - uses: actions/checkout@v4
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
