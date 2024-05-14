@@ -106,14 +106,13 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(const Tensor &input
         uint32_t alignment_base = 32/input.element_size();
         uint32_t aligned_elements = div_up(input.get_legacy_shape()[-1] , alignment_base) * alignment_base;
         uint32_t actual_elements = input.get_legacy_shape()[-1];
-        auto runtime_args = tt_metal::GetRuntimeArgs(program, kernel_id, core);
+        auto& runtime_args = tt_metal::GetRuntimeArgs(program, kernel_id, core);
         runtime_args[0] = input.buffer()->address();
         runtime_args[1] = output_0.buffer()->address();
         runtime_args[2] = output_1.buffer()->address();
         runtime_args[3] = aligned_elements;
         runtime_args[4] = actual_elements;
         runtime_args[5] = input.element_size();
-        tt_metal::SetRuntimeArgs(program, kernel_id, core, runtime_args);
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
 }

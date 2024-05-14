@@ -334,7 +334,7 @@ void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const 
 /**
  * Get the runtime args for a kernel.
  *
- * Return value: std::vector<uint32_t> &
+ * Return value: uint32_t *
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
@@ -342,19 +342,19 @@ void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const 
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
  * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate | Yes      |
  */
-std::vector<uint32_t>& GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core);
+RuntimeArgsData & GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core);
 
 /**
  * Get the runtime args for a kernel.
  *
- * Return value: std::vector< std::vector< std::vector<uint32_t>> > &
+ * Return value: std::vector< std::vector< RuntimeArgsData > > &
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
  */
-std::vector< std::vector< std::vector<uint32_t>> > & GetRuntimeArgs(const Program &program, KernelHandle kernel_id);
+std::vector< std::vector< RuntimeArgsData > > & GetRuntimeArgs(const Program &program, KernelHandle kernel_id);
 
 /**
  * Get the common runtime args for a kernel.
@@ -366,7 +366,7 @@ std::vector< std::vector< std::vector<uint32_t>> > & GetRuntimeArgs(const Progra
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
  */
-std::vector<uint32_t>& GetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id);
+std::vector<uint32_t> & GetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id);
 
 /**
  * Update specific entries of the runtime args vector for a kernel using the command queue. This API must be used when Asynchronous Command Queue Mode is enabled.

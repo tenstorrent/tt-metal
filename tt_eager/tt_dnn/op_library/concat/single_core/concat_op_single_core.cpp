@@ -179,7 +179,7 @@ operation::ProgramWithCallbacks concat_single_core(
 
         {
             auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            std::copy(src_addrs.begin(), src_addrs.end(), runtime_args.begin() + 3);
+            std::copy(src_addrs.begin(), src_addrs.end(), runtime_args.data() + 3);
         }
 
         {
