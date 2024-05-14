@@ -337,7 +337,7 @@ class TtLlamaDecoder_optimized:
         ### xs (residual stream) is fractured on all chips
         # Put xs back on DRAM and do allgather
 
-        xs_replicated = tt_lib.tensor.sharded_to_interleaved(xs, output_mem_config=self.model_config["L1_MEMCFG"])
+        # xs_replicated = tt_lib.tensor.sharded_to_interleaved(xs, output_mem_config=self.model_config["L1_MEMCFG"])
 
         ### Duplicate inputs for layernorm
         # if self.emulated:
@@ -350,16 +350,16 @@ class TtLlamaDecoder_optimized:
         #         output_mem_config=self.model_config["L1_MEMCFG"],
         #     )
         xs_replicated = ttnn.all_gather(
-            xs_replicated,
+            xs,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["L1_MEMCFG"],
+            memory_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"],
         )
 
         # RMSNorm must execute on sharded input
-        xs_replicated = tt_lib.tensor.interleaved_to_sharded(
-            xs_replicated, sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
-        )
+        # xs_replicated = tt_lib.tensor.interleaved_to_sharded(
+        #     xs_replicated, sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
+        # )
 
         # In-place RMSNorm
         attn_norm_replicated = tt_lib.operations.primary.rmsnorm(
@@ -388,9 +388,9 @@ class TtLlamaDecoder_optimized:
         attn_outs.deallocate(True)
 
         # Put attn_resid back on DRAM
-        attn_resid_replicated = tt_lib.tensor.sharded_to_interleaved(
-            output, output_mem_config=self.model_config["L1_MEMCFG"]
-        )
+        # attn_resid_replicated = tt_lib.tensor.sharded_to_interleaved(
+        #     output, output_mem_config=self.model_config["L1_MEMCFG"]
+        # )
 
         # ### Duplicate attention residual on all chips
         # if self.emulated:
@@ -403,16 +403,16 @@ class TtLlamaDecoder_optimized:
         #         output_mem_config=self.model_config["L1_MEMCFG"],
         #     )
         attn_resid_replicated = ttnn.all_gather(
-            attn_resid_replicated,
+            output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["L1_MEMCFG"],
+            memory_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"],
         )
 
         # # RMSNorm must execute on sharded input
-        attn_resid_replicated = tt_lib.tensor.interleaved_to_sharded(
-            attn_resid_replicated, sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
-        )
+        # attn_resid_replicated = tt_lib.tensor.interleaved_to_sharded(
+        #     attn_resid_replicated, sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
+        # )
 
         # In-place RMSNorm
         ffn_norm_replicated = tt_lib.operations.primary.rmsnorm(
