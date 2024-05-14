@@ -215,20 +215,21 @@ class TtLlamaMLP_optimized:
         w1_out.deallocate(True)
         w3_out.deallocate(True)
 
-        hidden_states = tt_lib.tensor.sharded_to_interleaved(
-            hidden_states, output_mem_config=self.model_config["L1_MEMCFG"]
-        )
+        # hidden_states = tt_lib.tensor.sharded_to_interleaved(
+        #     hidden_states, output_mem_config=self.model_config["L1_MEMCFG"]
+        # )
 
         hidden_states = ttnn.all_gather(
             hidden_states,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["L1_MEMCFG"],
+            # memory_config=self.model_config["L1_MEMCFG"],
+            memory_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"],
         )
 
-        hidden_states = tt_lib.tensor.interleaved_to_sharded(
-            hidden_states, sharded_mem_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"]
-        )
+        # hidden_states = tt_lib.tensor.interleaved_to_sharded(
+        #     hidden_states, sharded_mem_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"]
+        # )
 
         hidden_states = tt_lib.operations.primary.matmul_1d(
             hidden_states,

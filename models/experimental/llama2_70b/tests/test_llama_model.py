@@ -279,7 +279,7 @@ def test_LlamaModel_inference(
     n_devices,
     t3k_device_mesh,
     emulated,
-    use_program_cache,
+    # use_program_cache,
 ):
     # devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
     model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
@@ -288,6 +288,10 @@ def test_LlamaModel_inference(
     #     pytest.skip(f"Requires at {n_devices} devices to run")
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
+
+    for i in t3k_device_mesh.get_device_ids():
+        device = t3k_device_mesh.get_device(i)
+        device.enable_program_cache()
 
     run_test_LlamaModel_inference(
         t3k_device_mesh,
