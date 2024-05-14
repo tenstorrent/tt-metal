@@ -94,7 +94,7 @@ FORCE_INLINE void roundtrip_ping(
             uint64_t send_sem_noc_addr = get_noc_addr(eth_noc_x, eth_noc_y, sender_sem);
             noc_async_write(buffer_addr, send_buffer_noc_addr, page_size);
             noc_semaphore_inc(send_sem_noc_addr, 1);
-            eth_receiver_channel_ack(i);
+            eth_receiver_channel_ack(i, eth_channel_sync_ack_addr);
         }
 
         eth_noc_async_write_barrier();
