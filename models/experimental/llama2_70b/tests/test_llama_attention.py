@@ -242,6 +242,7 @@ def run_test_LlamaAttention_inference(
         tt_layer_present_all,
         generation_start_pos,
         generation_length,
+        seq_len,
         model_config["LLM_MODE"] == "prefill",
         pcc,
     )
