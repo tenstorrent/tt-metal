@@ -1570,7 +1570,6 @@ Tensor create_mask(const Tensor& input_a, const MemoryConfig& output_mem_config)
 {
     auto& padded_shape = input_a.get_legacy_shape();
     auto& unpadded_shape = padded_shape.without_padding();
-
     if (padded_shape == unpadded_shape)
         return input_a;
     float t_inf = -std::numeric_limits<float>::infinity();
@@ -1579,16 +1578,15 @@ Tensor create_mask(const Tensor& input_a, const MemoryConfig& output_mem_config)
     return masked_input;
 }
 // Argmax returns the index of maximum element in the tensor
-Tensor _argmax(const Tensor& input, int64_t _dim, bool all, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
+Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_t}))};
     operation::launch_with_autoformat(
         [_dim, all, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_a = input_tensors.at(0);
-            auto& input_shape = input_a.get_legacy_shape();
+            const auto& input = input_tensors.at(0);
+            auto& input_shape = input.get_legacy_shape();
             TT_FATAL(input_shape.rank() == 4, "supported for rank-4 tensors at this time");
 
             Tensor input_a = create_mask(input, output_mem_config);
-
 
             uint32_t dim = input_shape.get_normalized_index(_dim);
             int size = input_a.volume();
@@ -1687,7 +1685,7 @@ Tensor _argmax(const Tensor& input, int64_t _dim, bool all, const MemoryConfig& 
             max_indices.deallocate();
             result = global_min(result, output_mem_config);
             return {result};
-    }, {input}, output_tensors);
+    }, {input_t}, output_tensors);
     return output_tensors.at(0);
 }
 
