@@ -73,6 +73,7 @@ Device::Device(
     id_(device_id), num_hw_cqs_(num_hw_cqs), work_executor(device_id) {
     ZoneScoped;
     TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");
+    this->build_key_ = tt::Cluster::instance().get_harvesting_mask(device_id);
     this->initialize(l1_small_size, l1_bank_remap, minimal);
 }
 
@@ -146,7 +147,7 @@ void Device::initialize_allocator(size_t l1_small_size, const std::vector<uint32
 void Device::initialize_build() {
     ZoneScoped;
 
-    this->build_env_.init(this->id(), this->arch());
+    this->build_env_.init(this->build_key(), this->arch());
 
     auto init_helper = [this] (bool is_fw) -> JitBuildStateSet {
         std::vector<std::shared_ptr<JitBuildState>> build_states;
