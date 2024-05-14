@@ -99,3 +99,4 @@ print(output)
 Get started with [simple kernels](https://tenstorrent.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
 
 HELLO
+HELLO2
