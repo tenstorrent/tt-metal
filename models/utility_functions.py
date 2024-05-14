@@ -180,6 +180,11 @@ def torch2tt_tensor(
 
 
 def tt_tensors_to_torch_tensors(tt_tensors_device):
+    # Convert tensors to interleaved, assume all devices have same memory layout
+    if tt_tensors_device[0].is_sharded():
+        for i in range(len(tt_tensors_device)):
+            tt_tensors_device[i] = tt_lib.tensor.sharded_to_interleaved(tt_tensors_device[i])
+
     # Convert tensors to RM layout, assume all devices have same layout/dtype
     if tt_tensors_device[0].layout == tt_lib.tensor.Layout.TILE:
         # Convert to bfloat16 to ensure untilize works

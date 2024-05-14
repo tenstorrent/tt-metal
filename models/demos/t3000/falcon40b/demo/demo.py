@@ -27,6 +27,7 @@ from models.utility_functions import (
     profiler,
     torch2tt_tensor,
     tt2torch_tensor,
+    tt_tensors_to_torch_tensors,
     nearest_32,
     get_devices_for_t3000,
 )
@@ -452,7 +453,7 @@ def run_falcon_demo_kv(
             del tt_prefill_inputs
             del tt_prefill_attention_mask
 
-            logits = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_logits], -1)
+            logits = torch.cat([logits_torch.squeeze(1) for logits_torch in tt_tensors_to_torch_tensors(tt_logits)], -1)
             del tt_logits
 
             user_output_ids = post_processor(logits=logits, index=num_input_tokens - 1)
@@ -509,7 +510,8 @@ def run_falcon_demo_kv(
         if tt_decode_attention_mask is not None:
             del tt_decode_attention_mask
 
-        logits = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_logits], -1)
+        logits = torch.cat([logits_torch.squeeze(1) for logits_torch in tt_tensors_to_torch_tensors(tt_logits)], -1)
+
         del tt_logits
 
         if greedy_sampling:
