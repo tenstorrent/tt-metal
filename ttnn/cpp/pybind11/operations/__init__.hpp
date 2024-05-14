@@ -34,6 +34,9 @@ void py_module(py::module& module) {
     auto m_matmul = module.def_submodule("matmul", "matmul operations");
     matmul::py_module(m_matmul);
 
+    auto m_conv2d = module.def_submodule("conv2d", "conv2d operation");
+    conv2d::py_module(m_conv2d);
+
     auto m_transformer = module.def_submodule("transformer", "transformer operations");
     transformer::py_module(m_transformer);
 
