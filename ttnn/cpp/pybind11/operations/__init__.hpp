@@ -12,6 +12,7 @@
 #include "core.hpp"
 #include "matmul.hpp"
 #include "conv2d.hpp"
+#include "maxpool2d.hpp"
 #include "transformer.hpp"
 #include "normalization.hpp"
 
@@ -36,6 +37,9 @@ void py_module(py::module& module) {
 
     auto m_conv2d = module.def_submodule("conv2d", "conv2d operation");
     conv2d::py_module(m_conv2d);
+
+    auto m_maxpool2d = module.def_submodule("maxpool2d", "maxpool 2d operation");
+    transformer::py_module(m_maxpool2d);
 
     auto m_transformer = module.def_submodule("transformer", "transformer operations");
     transformer::py_module(m_transformer);
