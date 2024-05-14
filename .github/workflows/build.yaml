@@ -38,7 +38,7 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal libraries
         run: |
-          cmake -B build
+          cmake -B build -G Ninja
           cmake --build build -- -j`nproc`
       - name: Remove unnecessary artifacts
         run: |
@@ -80,7 +80,7 @@ jobs:
       - name: Build tt-metal tests
         run: |
           rm -f build/CMakeCache.txt
-          cmake -B build
+          cmake -B build -G Ninja
           cmake --build build --target tests -- -j`nproc`
   make-build-lib:
     strategy:
