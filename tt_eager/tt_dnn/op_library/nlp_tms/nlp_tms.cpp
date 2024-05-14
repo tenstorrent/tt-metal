@@ -428,7 +428,7 @@ tt::stl::reflection::Attributes NlpConcatHeadsDecode::attributes() const {
 }
 
 // NLP KV Cache Unpad To Sharded op
-void NlpKVCacheUnpadToSharded::validate(const std::vector<Tensor> &input_tensors) const {
+void NlpKVCacheLoadSlice::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to unpad need to be allocated in buffers on device!");
@@ -460,7 +460,7 @@ void NlpKVCacheUnpadToSharded::validate(const std::vector<Tensor> &input_tensors
                 (this->output_tensor_start[-1] % TILE_WIDTH == 0),
             "Can only unpad tilized tensor with full tiles");
 }
-std::vector<Shape> NlpKVCacheUnpadToSharded::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<Shape> NlpKVCacheLoadSlice::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     std::vector<uint32_t> out_shape;
     auto rank = input_tensors[0].get_legacy_shape().rank();
     out_shape.reserve(rank);
@@ -470,7 +470,7 @@ std::vector<Shape> NlpKVCacheUnpadToSharded::compute_output_shapes(const std::ve
     Shape output_tensor_shape(out_shape);
     return {output_tensor_shape};
 }
-std::vector<Tensor> NlpKVCacheUnpadToSharded::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+std::vector<Tensor> NlpKVCacheLoadSlice::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto input_shape = input_tensor_a.get_legacy_shape();
     auto dim0 = input_shape[0];
@@ -493,13 +493,13 @@ std::vector<Tensor> NlpKVCacheUnpadToSharded::create_output_tensors(const std::v
         mem_config
         )};
 }
-operation::ProgramWithCallbacks NlpKVCacheUnpadToSharded::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks NlpKVCacheLoadSlice::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    return multi_core_nlp_kv_cache_unpad_to_sharded(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
+    return multi_core_nlp_kv_cache_load_slice(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
 }
 
-tt::stl::reflection::Attributes NlpKVCacheUnpadToSharded::attributes() const {
+tt::stl::reflection::Attributes NlpKVCacheLoadSlice::attributes() const {
     return {
         {"output_tensor_start", this->output_tensor_start},
         {"output_tensor_end", this->output_tensor_end},

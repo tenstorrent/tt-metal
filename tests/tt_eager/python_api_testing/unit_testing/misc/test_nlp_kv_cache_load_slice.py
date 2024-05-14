@@ -35,7 +35,7 @@ def unpadding_test(
         .to(device)
     )
     # breakpoint()
-    test_tensor_tt = ttl.tensor.nlp_kv_cache_unpad_to_sharded(test_tensor, seq_len_start, seq_len_end)
+    test_tensor_tt = ttl.tensor.nlp_kv_cache_load_slice(test_tensor, seq_len_start, seq_len_end)
 
     test_tensor_pt = test_tensor_tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 

@@ -69,7 +69,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Te
 operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads(const Tensor &input_tensor, std::optional<const Tensor> input_tensor_kv, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, const bool transpose_k_heads, std::vector<Tensor> &output, CoreCoord compute_with_storage_grid_size);
 operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &input_tensor_a, Tensor &output, CoreCoord compute_with_storage_grid_size);
 operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(const Tensor &input_tensor_a, Tensor &output, CoreCoord compute_with_storage_grid_size);
-operation::ProgramWithCallbacks multi_core_nlp_kv_cache_unpad_to_sharded(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end);
+operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end);
 
 struct NlpCreateHeadsFalcon7B {
     MemoryConfig output_mem_config;
@@ -128,7 +128,7 @@ struct NlpConcatHeadsDecode {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-struct NlpKVCacheUnpadToSharded {
+struct NlpKVCacheLoadSlice {
     const Shape output_tensor_start;
     const Shape output_tensor_end;
     const Shape output_shape;
@@ -227,7 +227,7 @@ inline Tensor nlp_concat_heads_decode(const Tensor &input_tensor_a, const uint32
     return output_tensors.at(0);
 }
 
-inline Tensor nlp_kv_cache_unpad_to_sharded(const Tensor &input_tensor_a, const uint32_t seq_len_start, const uint32_t seq_len_end){
+inline Tensor nlp_kv_cache_load_slice(const Tensor &input_tensor_a, const uint32_t seq_len_start, const uint32_t seq_len_end){
     // No-op (Will do a tensor copy)
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
 
@@ -259,7 +259,7 @@ inline Tensor nlp_kv_cache_unpad_to_sharded(const Tensor &input_tensor_a, const 
                 output_tensor_end[2] - output_tensor_start[2] + 1,
                 output_tensor_end[3] - output_tensor_start[3] + 1,
             };
-            return operation::run(NlpKVCacheUnpadToSharded{output_tensor_start, output_tensor_end, output_tensor_shape, input_tensor_shape}, {input_tensor_a});
+            return operation::run(NlpKVCacheLoadSlice{output_tensor_start, output_tensor_end, output_tensor_shape, input_tensor_shape}, {input_tensor_a});
         }, {input_tensor_a}, output_tensors);
     return output_tensors.at(0);
 }

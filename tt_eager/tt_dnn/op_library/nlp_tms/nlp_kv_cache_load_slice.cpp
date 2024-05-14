@@ -54,7 +54,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
     return ret_val;
 }
 
-operation::ProgramWithCallbacks multi_core_nlp_kv_cache_unpad_to_sharded(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end) {
+operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end) {
 
     const Shape output_shape = output.get_legacy_shape();
     const Shape input_shape = a.get_legacy_shape();

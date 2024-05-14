@@ -130,7 +130,7 @@ namespace tt::tt_metal::detail
             py::arg().noconvert(), py::arg("num_heads").noconvert() = std::nullopt, R"doc(
             Shuffles [S=1, B=32, 32(num_heads), head_dim] tensor into tensor with shape [S=1, 1, B=32, num_heads * head_dim]. num_heads should be specified and be less than 32; the op will assume the input padded num_heads to 32 and will unpad it. The output is default width sharded by num heads.
         )doc");
-        m_tensor.def("nlp_kv_cache_unpad_to_sharded", &nlp_kv_cache_unpad_to_sharded,
+        m_tensor.def("nlp_kv_cache_load_slice", &nlp_kv_cache_load_slice,
             py::arg("input").noconvert(), py::arg("seq_len_start"), py::arg("seq_len_end"), R"doc(
             Unpad TT INTERLEAVED, TILE layout Tensor into a height sharded tensor. Typically used to unpad the KV cache from [B,n_heads,max_seq_length,head_dim] (or [n_heads,B,max_seq_length,head_dim]) into [B,n_heads,S,head_dim] (or [n_heads,B,S,head_dim]), where S = seq_len_end-seq_len_start. seq_len_start and seq_len_end are the start and end of the sequence length to unpad, and must be multiples of 32.
             Returns an output tensor that is height sharded on B x n_heads corees (note the B and n_heads dims are interchangeable), where each shard is [S, head_dim].
