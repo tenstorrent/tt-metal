@@ -17,12 +17,12 @@ import ttnn
 
 def get_expected_times(functional_whisper):
     return {
-        ttnn_functional_whisper: (30.0, 7.0),
-        ttnn_optimized_functional_whisper: (30.0, 7.0),
+        ttnn_functional_whisper: (10, 4.16),
+        ttnn_optimized_functional_whisper: (1.2, 1.35),
     }[functional_whisper]
 
 
-@skip_for_wormhole_b0()
+@skip_for_wormhole_b0(reason_str="Not tested on single WH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["openai/whisper-base"])
