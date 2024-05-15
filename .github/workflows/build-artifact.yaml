@@ -33,7 +33,7 @@ jobs:
       - uses: ./.github/actions/install-python-deps
       - name: Build tt-metal and libs
         run: |
-          cmake -B build -G Ninja
+          cmake -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++-17
           cmake --build build --target tests -- -j`nproc`
           cmake --build build --target install -- -j`nproc`
       - name: 'Tar files'
