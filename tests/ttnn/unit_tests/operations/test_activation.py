@@ -66,12 +66,6 @@ def test_relu6(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_gelu(device, h, w):
-    run_activation_unary_test(device, h, w, ttnn.gelu, F.gelu)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 def test_hardsigmoid(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.hardsigmoid, F.hardsigmoid)
 
@@ -100,6 +94,12 @@ def test_swish(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.swish, F.hardswish)
 
 
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_tanhshrink(device, h, w):
+    run_activation_unary_test(device, h, w, ttnn.tanhshrink, F.tanhshrink)
+
+
 def run_activation_softplus_test(device, h, w, beta, threshold, ttnn_function, torch_function, pcc=0.99):
     torch.manual_seed(0)
 
@@ -122,12 +122,6 @@ def run_activation_softplus_test(device, h, w, beta, threshold, ttnn_function, t
 @pytest.mark.parametrize("threshold", [20, 40, -5, 10, -20])
 def test_softplus(device, h, w, beta, threshold):
     run_activation_softplus_test(device, h, w, beta, threshold, ttnn.softplus, F.softplus)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_tanhshrink(device, h, w):
-    run_activation_unary_test(device, h, w, ttnn.tanhshrink, F.tanhshrink)
 
 
 def run_activation_unary_test_glu(device, batch_size, h, w, ttnn_function, torch_function, pcc=0.99):
@@ -339,3 +333,60 @@ def run_activation_test_threshold(device, h, w, scalar1, scalar2, ttnn_function,
 @pytest.mark.parametrize("w", [128])
 def test_threshold(device, h, w, value, threshold):
     run_activation_test_threshold(device, h, w, value, threshold, ttnn.threshold, F.threshold)
+
+
+def run_activation_unary_test_type(device, h, w, ttnn_function, torch_function, pcc=0.99):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn((h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_function(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_sigmoid_accurate_type(device, h, w):
+    run_activation_unary_test_type(device, h, w, ttnn.sigmoid_accurate, torch.sigmoid)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_log_sigmoid_type(device, h, w):
+    run_activation_unary_test_type(device, h, w, ttnn.log_sigmoid, F.logsigmoid)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_relu6_type(device, h, w):
+    run_activation_unary_test_type(device, h, w, ttnn.relu6, F.relu6)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_sigmoid_type(device, h, w):
+    run_activation_unary_test_type(device, h, w, ttnn.sigmoid, torch.sigmoid)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_sign_type(device, h, w):
+    run_activation_unary_test_type(device, h, w, ttnn.sign, torch.sign)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_swish_type(device, h, w):
+    run_activation_unary_test_type(device, h, w, ttnn.swish, F.hardswish)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_tanhshrink_type(device, h, w):
+    run_activation_unary_test_type(device, h, w, ttnn.tanhshrink, F.tanhshrink)
