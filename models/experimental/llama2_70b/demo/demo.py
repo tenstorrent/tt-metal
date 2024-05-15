@@ -6,6 +6,7 @@ import os
 import json
 import torch
 import torch.nn.functional as F
+import tt_lib
 
 from time import time
 import pytest
@@ -57,7 +58,7 @@ def build_generator(args):
     if args.implementation == "tt":
         generator.model = TtLlamaModelForGeneration(
             reference_model=generator.model,
-            devices=args.devices,
+            device_mesh=args.device_mesh,
             n_devices=args.n_devices,
             n_layers=args.num_layers,
             batch=args.max_batch_size,
@@ -245,7 +246,7 @@ class Args:
         top_k=1,
         temperature=1.0,
         # TT args
-        devices=None,
+        device_mesh=None,
         n_devices=8,
         emulated=False,
         cache_path=None,
@@ -264,7 +265,7 @@ class Args:
         self.top_p = top_p
         self.top_k = top_k
         self.temperature = temperature
-        self.devices = devices
+        self.device_mesh = device_mesh
         self.n_devices = n_devices
         self.emulated = emulated
         self.cache_path = cache_path
@@ -323,26 +324,32 @@ def test_LlamaModel_demo(
     top_k,
     temperature,
     # TT args
-    all_devices,
+    # all_devices,
+    t3k_device_mesh,
     n_devices,
     emulated,
     decode_only,
-    use_program_cache,
 ):
     ## Get model config
-    devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
+    # devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
     model_config_default = get_model_config("BFLOAT16-DRAM", num_devices=n_devices)
 
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
-    if len(devices) < n_devices and emulated == False:
-        pytest.skip(f"Requires at {n_devices} devices to run")
+    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
+    # if len(devices) < n_devices and emulated == False:
+    # pytest.skip(f"Requires at {n_devices} devices to run")
     if (
         compute_grid_size.x < model_config_default["MAX_GRID_SIZE"][0]
         or compute_grid_size.y < model_config_default["MAX_GRID_SIZE"][1]
     ):
         pytest.skip(f"Requires grid size of at least {model_config_default['MAX_GRID_SIZE']} to run")
 
-    devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config_default, n_devices, emulated)
+    t3k_device_mesh, ckpt_dir, tokenizer_path, cache_path = get_llama_path(
+        t3k_device_mesh, model_config_default, n_devices, emulated
+    )
+
+    for i in t3k_device_mesh.get_device_ids():
+        device = t3k_device_mesh.get_device(i)
+        device.enable_program_cache()
 
     args = construct_arg(
         implementation=implementation,
@@ -356,7 +363,7 @@ def test_LlamaModel_demo(
         top_p=top_p,
         top_k=top_k,
         temperature=temperature,
-        devices=devices,
+        device_mesh=t3k_device_mesh,
         n_devices=n_devices,
         emulated=emulated,
         cache_path=cache_path,

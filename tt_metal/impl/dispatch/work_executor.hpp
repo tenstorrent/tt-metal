@@ -10,6 +10,8 @@
 #include <sched.h>
 #include <thread>
 #include <unistd.h>
+#include <iostream>
+#include <sys/resource.h>
 
 #include "common/env_lib.hpp"
 #include "lock_free_queue.hpp"
@@ -145,6 +147,16 @@ class WorkExecutor {
         int rc = pthread_setaffinity_np(worker_thread.native_handle(), sizeof(cpu_set_t), &cpuset);
         if (rc) {
             log_warning(tt::LogMetal, "Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: {}", rc);
+        }
+        int my_priority = getpriority(PRIO_PROCESS, 0);
+        log_warning(tt::LogMetal, "My priority intially: {}", my_priority);
+        rc = setpriority(PRIO_PROCESS, 0, 0);
+        if (rc) {
+            log_warning(tt::LogMetal, "Unable to set priority, error code: {}", rc);
+        }
+        else {
+            int my_new_priority = getpriority(PRIO_PROCESS, 0);
+            log_warning(tt::LogMetal, "Successfully set priority to: {}", my_new_priority);
         }
     }
 

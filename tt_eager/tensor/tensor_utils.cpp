@@ -351,17 +351,18 @@ uint32_t num_buffers_in_tensor(const Tensor& tensor) {
 }
 
 Tensor get_shard_for_device(const Tensor& tensor, Device* target_device, std::optional<int> buffer_index) {
-    if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage())) {
-        auto device_storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
-        auto shard_shape = device_storage.get_tensor_shape_for_device(target_device);
-        auto shard_buffer = device_storage.get_buffer_for_device(target_device);
+    auto& storage = tensor.get_storage();
+    if (std::holds_alternative<MultiDeviceStorage>(storage)) {
+        auto& dev_storage = std::get<MultiDeviceStorage>(storage);
+        auto shard_shape = dev_storage.get_tensor_shape_for_device(target_device);
+        auto shard_buffer = dev_storage.get_buffer_for_device(target_device);
         return Tensor{DeviceStorage{shard_buffer}, shard_shape, tensor.get_dtype(), tensor.get_layout()};
-    } else if (std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
-        auto host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
+    } else if (std::holds_alternative<MultiDeviceHostStorage>(storage)) {
+        auto& host_storage = std::get<MultiDeviceHostStorage>(storage);
         auto shard_shape = host_storage.get_tensor_shape(buffer_index.value());
         auto shard_buffer = host_storage.get_buffer(buffer_index.value());
         return Tensor{OwnedStorage{shard_buffer}, shard_shape, tensor.get_dtype(), tensor.get_layout()};
-    } else if (std::holds_alternative<DeviceStorage>(tensor.get_storage()) || std::holds_alternative<OwnedStorage>(tensor.get_storage()) || std::holds_alternative<BorrowedStorage>(tensor.get_storage())) {
+    } else if (std::holds_alternative<DeviceStorage>(storage) || std::holds_alternative<OwnedStorage>(storage) || std::holds_alternative<BorrowedStorage>(storage)) {
         return tensor;
     } else {
         TT_FATAL(false, "get_shard_for_device only supports multi-device or device tensors");
@@ -386,7 +387,10 @@ Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor) 
     // When using async mode, tensors with borrowed storage cannot be passed to workers.
     // They need to be copied to owned storage before being passed to the worker.
     ZoneScopedN("ConvertBorrowedToOwned");
-    if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and tensor.storage_type() == StorageType::BORROWED) {
+    // Tensor has workers (on device) or runtime mode is synchronous. No need to check for borrowed storage
+    if (worker->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS or tensor.get_workers().size()) return tensor;
+
+    if (tensor.storage_type() == StorageType::BORROWED) {
         ZoneScopedN("CopyBorrowedStorage");
         auto borrowed_buffer = std::get<BorrowedStorage>(tensor.get_storage()).buffer;
         Tensor owned_tensor;

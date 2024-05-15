@@ -4,8 +4,11 @@
 
 import torch
 from torch import nn
-import tt_lib
+import ttnn.experimental as tt_lib
+import tt_lib as ttl
 import ttnn
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+
 from loguru import logger
 
 import copy
@@ -18,7 +21,7 @@ from models.experimental.llama2_70b.tt.model_config import (
 
 
 class TtLlamaModelForGeneration:
-    def __init__(self, reference_model, devices, n_devices, n_layers, batch, emulated=False, cache_path=None):
+    def __init__(self, reference_model, device_mesh, n_devices, n_layers, batch, emulated=False, cache_path=None):
         ## Get state dict
         state_dict = reference_model.state_dict()
         configuration = copy.deepcopy(reference_model.params)
@@ -31,7 +34,7 @@ class TtLlamaModelForGeneration:
 
         # TT model -------------------------------------------------------------
         self.tt_model = TtLlamaModel(
-            devices,
+            device_mesh,
             state_dict,
             BASE_URL,
             n_layers,
@@ -40,13 +43,14 @@ class TtLlamaModelForGeneration:
             batch,
             emulated=emulated,
             cache_path=cache_path,
+            read_cache=True,
         )
         self.params = configuration
-        self.devices = devices
-        self.n_devices = n_devices
+        self.device_mesh = device_mesh
+        self.n_devices = device_mesh.get_num_devices()
 
-        for device in devices:
-            tt_lib.device.Synchronize(device)
+        # for device in devices:
+        #     ttl.device.Synchronize(device)
 
         del reference_model
         del state_dict
@@ -93,10 +97,14 @@ class TtLlamaModelForGeneration:
         del rot_mat
         del attn_mask
 
-        for device in self.devices:
-            tt_lib.device.Synchronize(device)
+        # for device in self.devices:
+        #     ttl.device.Synchronize(device)
+        # logits = ttnn.from_device(tt_logits)
+        logits = ttnn.to_torch(
+            tt_logits, device=self.device_mesh, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=3)
+        )
 
-        logits = torch.cat([tt2torch_tensor(tt_o) for tt_o in tt_logits], -1)
+        # logits = torch.cat([tt2torch_tensor(tt_o) for tt_o in tt_logits], -1)
         logits = logits[..., : self.params.vocab_size].float()
         logits = logits.permute(2, 1, 0, 3).squeeze().unsqueeze(1)  # [batch, 1, vocab_size]
         del tt_logits
@@ -129,10 +137,13 @@ class TtLlamaModelForGeneration:
             del rot_mat
             del attn_mask
 
-            for device in self.devices:
-                tt_lib.device.Synchronize(device)
+            # for device in self.devices:
+            #     ttl.device.Synchronize(device)
 
-            logits = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_logits], -1)
+            logits = ttnn.to_torch(
+                tt_logits, device=self.device_mesh, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=3)
+            )
+            logits = logits.squeeze(1)
             logits = logits[..., : self.params.vocab_size].float()  # [batch, 1, vocab_size]
             del tt_logits
 

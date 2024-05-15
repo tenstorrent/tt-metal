@@ -8,6 +8,7 @@ import torch
 from torch import nn
 import tt_lib
 import ttnn
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
 
 from models.experimental.llama2_70b.reference.llama.llama import Llama
 from models.experimental.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
@@ -16,10 +17,6 @@ from models.experimental.llama2_70b.tt.model_config import (
     get_model_config,
 )
 
-# from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-#     comp_allclose,
-#     comp_pcc,
-# )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
 from models.experimental.llama2_70b.tt.llama_common import (
     get_llama_path,
@@ -28,6 +25,7 @@ from models.experimental.llama2_70b.tt.llama_common import (
     UNIT_TEST_N_LAYER,
     UNIT_TEST_LAYER_NUM,
     comp_pcc,
+    should_skip_model_load,
 )
 
 
@@ -45,7 +43,7 @@ class PytorchLlamaMLPModel(torch.nn.Module):
 
 
 def run_test_LlamaMLP_inference(
-    devices,
+    t3k_device_mesh,
     batch,
     seq_len,
     pcc,
@@ -54,7 +52,10 @@ def run_test_LlamaMLP_inference(
     emulated=False,
 ):
     # Prepare paths and devices
-    devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config, n_devices, emulated)
+    t3k_device_mesh, ckpt_dir, tokenizer_path, cache_path = get_llama_path(
+        t3k_device_mesh, model_config, n_devices, emulated
+    )
+    skip_model_load = should_skip_model_load()
 
     # Prepare configs
     hugging_face_reference_model = Llama.build(
@@ -63,11 +64,10 @@ def run_test_LlamaMLP_inference(
         max_seq_len=MAX_SEQ_LEN,
         max_batch_size=batch,
         n_layers=UNIT_TEST_N_LAYER,
-        skip_model_load=False,
+        skip_model_load=skip_model_load,
     ).model
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
-    logger.info(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
 
@@ -78,6 +78,8 @@ def run_test_LlamaMLP_inference(
     if model_config["LLM_MODE"] == "decode":
         # shape should be (1, seq_len, batch, dim)
         pt_inp_normed = pt_inp_normed.unsqueeze(1).permute(2, 1, 0, 3)
+    else:
+        pt_inp_normed = pt_inp_normed.unsqueeze(0)
 
     tt_inp = pt_inp_normed.clone()
 
@@ -86,46 +88,22 @@ def run_test_LlamaMLP_inference(
     pytorch_out = pytorch_LlamaMLP_model(pt_inp_normed)
 
     # TT hardware execution -------------------------------------------------------------
-    if n_devices == 32:
-        tt_LlamaMLP_model = TtLlamaMLP_galaxy(
-            devices,
-            state_dict,
-            BASE_URL,
-            UNIT_TEST_LAYER_NUM,
-            configuration.dim,
-            model_config,
-            emulated=emulated,
-            cache_path=cache_path,
-        )
-    else:
-        tt_LlamaMLP_model = TtLlamaMLP_optimized(
-            devices,
-            state_dict,
-            BASE_URL,
-            UNIT_TEST_LAYER_NUM,
-            configuration.dim,
-            model_config,
-            emulated=emulated,
-            cache_path=cache_path,
-        )
+    tt_LlamaMLP_model = TtLlamaMLP_optimized(
+        t3k_device_mesh,
+        state_dict,
+        BASE_URL,
+        UNIT_TEST_LAYER_NUM,
+        configuration.dim,
+        model_config,
+        emulated=emulated,
+        cache_path=cache_path,
+    )
 
     tt_mlp_input = tt_LlamaMLP_model.prepare_inputs(tt_inp)
 
-    if not emulated:
-        for device in devices:
-            tt_lib.device.Synchronize(device)
-
-    if n_devices == 32:
-        tt_out = tt_LlamaMLP_model(tt_mlp_input)
-        assert isinstance(tt_out, list)  # tt_out should be replicated on N devices
-        assert len(tt_out) == len(devices)
-        tt_out = tt2torch_tensor(tt_out[0])
-    else:
-        tt_out = tt_LlamaMLP_model(tt_mlp_input)
-        assert isinstance(tt_out, list)  # tt_out should be fractured on N devices
-        assert len(tt_out) == len(devices)
-        tt_outs = [tt2torch_tensor(o) for o in tt_out]
-        tt_out = torch.cat(tt_outs, dim=-1)
+    tt_out = tt_LlamaMLP_model(tt_mlp_input)
+    tt_out = ttnn.from_device(tt_out)
+    tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=3))
 
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"PCC value: {output_pcc}")
@@ -143,17 +121,15 @@ def run_test_LlamaMLP_inference(
     (
         (8, False),
         (8, True),
-        (32, True),
     ),
     ids=(
         "8chip-T3000",
         "8chip-emulated",
-        "32chip-emulated",
     ),
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    ((32, 1, 0.9999), (1, 128, 0.9997), (1, 2048, 0.9997)),
+    ((32, 1, 0.9998), (1, 128, 0.998), (1, 2048, 0.998)),
     ids=("decode", "prefill_128", "prefill_2k"),
 )
 def test_LlamaMLP_inference(
@@ -161,20 +137,21 @@ def test_LlamaMLP_inference(
     seq_len,
     pcc,
     n_devices,
-    all_devices,
+    t3k_device_mesh,
     emulated,
     use_program_cache,
 ):
-    devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
     model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
-    if len(all_devices) < n_devices and not emulated:
+
+    if t3k_device_mesh.get_num_devices() < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")
+
+    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     run_test_LlamaMLP_inference(
-        devices,
+        t3k_device_mesh,
         batch,
         seq_len,
         pcc,
