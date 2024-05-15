@@ -107,6 +107,7 @@ class CMakeBuild(build_ext):
             **os.environ.copy(),
             "TT_METAL_HOME": Path(__file__).parent,
             "TT_METAL_ENV": "production",
+            "CXX": "clang++-17",
         }
 
     # This should only run when building the wheel. Should not be running for any dev flow
@@ -129,7 +130,7 @@ class CMakeBuild(build_ext):
         if not build_dir.exists():
             build_dir.mkdir(parents=True)
 
-        cmake_args = [f"."]
+        cmake_args = []
 
         nproc = subprocess.check_output(["nproc"]).decode().strip()
         build_args = [f"-j{nproc}"]

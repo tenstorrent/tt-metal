@@ -1,6 +1,19 @@
 cmake_minimum_required(VERSION 3.16)
 cmake_policy(VERSION 3.16)
 
+############################################
+# Project setup
+############################################
+
+### Uncomment this if you don't want to manually pass Clang-17 compiler through CLI ###
+# find_program(CLANG_17 clang++-17)
+# if(CLANG_17)
+#     message(STATUS "Found Clang-17 here: ${CLANG_17}")
+#     set(CMAKE_CXX_COMPILER "${CLANG_17}")
+# else()
+#     message(WARNING "Clang++-17 not found, recommended to build with Clang-17 > GCC for better perf")
+# endif()
+
 if(${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_BINARY_DIR})
     message(FATAL_ERROR "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!")
 endif()
@@ -11,6 +24,9 @@ project(tt-metal
         HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
         LANGUAGES CXX
 )
+
+include(${CMAKE_SOURCE_DIR}/cmake/macros.cmake)
+CHECK_COMPILERS()
 
 ############################################################################################################################
 # Find all required libraries to build
@@ -68,7 +84,7 @@ set(CMAKE_INSTALL_DATAROOTDIR "${CMAKE_BINARY_DIR}/tmp/share")
 ############################################################################################################################
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(metal_common_libs INTERFACE
-    dl z pthread atomic stdc++  # system libraries
+    dl z pthread atomic stdc++ # system libraries
     Boost::thread Boost::filesystem Boost::system Boost::regex hwloc    # hwloc has no cmake support, find_package won't find it
 )
 
@@ -79,10 +95,11 @@ add_library(linker_flags INTERFACE)
 
 add_library(compiler_warnings INTERFACE)
 target_compile_options(compiler_warnings INTERFACE -Werror -Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter)
+CHECK_COMPILER_WARNINGS()      # <- add any extra compile warning flags for building with Clang-17
 
 add_library(compiler_flags INTERFACE)
 target_link_libraries(compiler_flags INTERFACE compiler_warnings)
-target_compile_options(compiler_flags INTERFACE -MMD -mavx2 -fPIC -DFMT_HEADER_ONLY -fvisibility-inlines-hidden -fno-lto)
+target_compile_options(compiler_flags INTERFACE -mavx2 -fPIC -DFMT_HEADER_ONLY -fvisibility-inlines-hidden -fno-lto)
 
 if(TT_METAL_VERSIM_DISABLED)
     target_compile_options(compiler_flags INTERFACE -DTT_METAL_VERSIM_DISABLED)

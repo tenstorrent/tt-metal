@@ -4,8 +4,8 @@
 
 #include "tt_metal/impl/buffers/buffer.hpp"
 
-#include "tt_metal/common/assert.hpp"
 #include "llrt/llrt.hpp"
+#include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/hostdevcommon/common_values.hpp"
@@ -17,27 +17,35 @@ namespace tt {
 
 namespace tt_metal {
 
-bool is_sharded(const TensorMemoryLayout & layout){
+bool is_sharded(const TensorMemoryLayout &layout) {
     return (
-        layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-        layout == TensorMemoryLayout::WIDTH_SHARDED ||
-        layout == TensorMemoryLayout::BLOCK_SHARDED );
+        layout == TensorMemoryLayout::HEIGHT_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED ||
+        layout == TensorMemoryLayout::BLOCK_SHARDED);
 }
 
-
-void validate_buffer_size_and_page_size(uint64_t size, uint64_t page_size, const BufferType &buffer_type, const TensorMemoryLayout &buffer_layout, std::optional<ShardSpecBuffer> shard_parameters) {
+void validate_buffer_size_and_page_size(
+    uint64_t size,
+    uint64_t page_size,
+    const BufferType &buffer_type,
+    const TensorMemoryLayout &buffer_layout,
+    std::optional<ShardSpecBuffer> shard_parameters) {
     TT_FATAL(size != 0 and page_size != 0, "Buffer size and page size should be larger than 0 bytes!");
     bool valid_page_size = (size % page_size == 0);
-    TT_FATAL(valid_page_size, "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers page size should be divisible by buffer size", page_size, size);
-    TT_FATAL(page_size % sizeof(uint32_t) == 0, "Page size must be divisible by sizeof(uint32_t) because buffers hold uint32_t values");
-    if(buffer_layout == TensorMemoryLayout::SINGLE_BANK){
-        TT_ASSERT(page_size == size , "Continguous buffer must be one contiguous page");
-    }
-    else if(is_sharded(buffer_layout)){
-        TT_ASSERT(shard_parameters != std::nullopt , "Sharded buffers must have a core grid assigned");
+    TT_FATAL(
+        valid_page_size,
+        "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers page size "
+        "should be divisible by buffer size",
+        page_size,
+        size);
+    TT_FATAL(
+        page_size % sizeof(uint32_t) == 0,
+        "Page size must be divisible by sizeof(uint32_t) because buffers hold uint32_t values");
+    if (buffer_layout == TensorMemoryLayout::SINGLE_BANK) {
+        TT_ASSERT(page_size == size, "Continguous buffer must be one contiguous page");
+    } else if (is_sharded(buffer_layout)) {
+        TT_ASSERT(shard_parameters != std::nullopt, "Sharded buffers must have a core grid assigned");
     }
 }
-
 
 inline std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 2>>> core_to_host_pages(
     const uint32_t &total_pages,
@@ -105,20 +113,26 @@ inline std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uin
     return {ret_vec, ret_shard_shape};
 }
 
-
-Buffer::Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferType buffer_type,
-                const TensorMemoryLayout buffer_layout,
-                std::optional< ShardSpecBuffer> shard_parameters,
-                bool allocate)
-    : device_(device), size_(size), page_size_(page_size), buffer_type_(buffer_type), buffer_layout_(buffer_layout), shard_parameters_(shard_parameters) {
+Buffer::Buffer(
+    Device *device,
+    uint64_t size,
+    uint64_t page_size,
+    const BufferType buffer_type,
+    const TensorMemoryLayout buffer_layout,
+    std::optional<ShardSpecBuffer> shard_parameters,
+    bool allocate) :
+    device_(device),
+    size_(size),
+    page_size_(page_size),
+    buffer_type_(buffer_type),
+    buffer_layout_(buffer_layout),
+    shard_parameters_(shard_parameters) {
     TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr);
     validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
     if (allocate) {
         this->allocate();
     }
 }
-
-
 
 BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
     BufferPageMapping buffer_page_mapping;
@@ -128,7 +142,7 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
     buffer_page_mapping.all_cores_ = corerange_to_cores(buffer.shard_spec().grid(), num_cores, row_major);
     TT_ASSERT(num_cores == buffer_page_mapping.all_cores_.size());
     uint32_t core_id = 0;
-    for (const auto& core : buffer_page_mapping.all_cores_) {
+    for (const auto &core : buffer_page_mapping.all_cores_) {
         buffer_page_mapping.core_to_core_id_.insert({core, core_id});
         core_id++;
     }
@@ -180,7 +194,6 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
     return buffer_page_mapping;
 }
 
-
 Buffer::Buffer(const Buffer &other) :
     device_(other.device_),
     size_(other.size_),
@@ -204,9 +217,16 @@ Buffer &Buffer::operator=(const Buffer &other) {
     return *this;
 }
 
-Buffer::Buffer(Buffer &&other) : device_(other.device_), size_(other.size_), address_(other.address_), page_size_(other.page_size_), buffer_type_(other.buffer_type_) ,
-                                    buffer_layout_(other.buffer_layout_), shard_parameters_(other.shard_parameters_) {
-    // Set `other.device_` to be nullptr so destroying other does not deallocate reserved address space that is transferred to `this`
+Buffer::Buffer(Buffer &&other) :
+    device_(other.device_),
+    size_(other.size_),
+    address_(other.address_),
+    page_size_(other.page_size_),
+    buffer_type_(other.buffer_type_),
+    buffer_layout_(other.buffer_layout_),
+    shard_parameters_(other.shard_parameters_) {
+    // Set `other.device_` to be nullptr so destroying other does not deallocate reserved address space that is
+    // transferred to `this`
     other.device_ = nullptr;
 }
 
@@ -219,7 +239,8 @@ Buffer &Buffer::operator=(Buffer &&other) {
         this->buffer_type_ = other.buffer_type_;
         this->buffer_layout_ = other.buffer_layout_;
         this->shard_parameters_ = other.shard_parameters_;
-        // Set `other.device_` to be nullptr so destroying other does not deallocate reserved address space that is transferred to `this`
+        // Set `other.device_` to be nullptr so destroying other does not deallocate reserved address space that is
+        // transferred to `this`
         other.device_ = nullptr;
     }
     return *this;
@@ -257,15 +278,12 @@ CoreCoord Buffer::noc_coordinates(uint32_t bank_id) const {
         case BufferType::SYSTEM_MEMORY: {
             TT_THROW("Host buffer is located in system memory! Cannot retrieve NoC coordinates for it");
         } break;
-        default:
-            TT_ASSERT(false && "Unsupported buffer type!");
+        default: TT_ASSERT(false && "Unsupported buffer type!");
     }
     return CoreCoord{0, 0};
 }
 
-CoreCoord Buffer::noc_coordinates() const {
-    return this->noc_coordinates(0);
-}
+CoreCoord Buffer::noc_coordinates() const { return this->noc_coordinates(0); }
 
 uint64_t Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
     auto num_banks = this->device_->num_banks(this->buffer_type_);
@@ -301,9 +319,7 @@ void Buffer::deallocate() {
     detail::DeallocateBuffer(this);
 }
 
-Buffer::~Buffer() {
-    this->deallocate();
-}
+Buffer::~Buffer() { this->deallocate(); }
 
 tt::stl::reflection::Attributes ShardSpec::attributes() const {
     return {
@@ -314,7 +330,7 @@ tt::stl::reflection::Attributes ShardSpec::attributes() const {
     };
 }
 
-bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b) {
+bool operator==(const ShardSpec &spec_a, const ShardSpec &spec_b) {
     if (spec_a.grid != spec_b.grid) {
         return false;
     }
@@ -330,8 +346,10 @@ bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b) {
     return true;
 }
 
-bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b) {
-    return not (spec_a == spec_b);
+bool operator!=(const ShardSpec &spec_a, const ShardSpec &spec_b) { return not(spec_a == spec_b); }
+
+namespace detail {
+buffer_map_t BUFFER_MAP = {};
 }
 
 }  // namespace tt_metal

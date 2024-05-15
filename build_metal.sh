@@ -89,7 +89,7 @@ else
 fi
 
 echo "Building tt-metal"
-cmake -B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands
+cmake -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++-17 -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands
 cmake --build build --target install    # <- this is a general cmake way, can also just run `ninja install -C build`
 
 echo "Building cpp tests"

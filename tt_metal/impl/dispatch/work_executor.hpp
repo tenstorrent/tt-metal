@@ -93,6 +93,14 @@ class WorkExecutor {
         managed_device_id = other.managed_device_id;
     }
 
+    WorkExecutor& operator=(WorkExecutor &&other) {
+        if (this != &other) {
+            worker_state = std::move(other.worker_state);
+            managed_device_id = std::move(other.managed_device_id);
+        }
+        return *this;
+    }
+
     ~WorkExecutor() {
         if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS) {
             stop_worker();

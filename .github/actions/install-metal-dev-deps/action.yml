@@ -46,3 +46,9 @@ runs:
         cmake -DCMAKE_INSTALL_PREFIX=/usr -DBUILD_SHARED_LIBS=ON .
         make
         sudo make install
+    - name: Install Clang-17
+      shell: bash
+      run: |
+        wget https://apt.llvm.org/llvm.sh
+        chmod u+x llvm.sh
+        sudo ./llvm.sh 17

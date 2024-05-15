@@ -11,6 +11,8 @@ namespace tt_metal {
 
 namespace tensor_impl {
 
+TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE = TensorPrintProfile::Short;
+
 std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
     switch (dtype) {
         case DataType::BFLOAT8_B: os << "bfloat8_b"; break;

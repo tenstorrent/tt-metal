@@ -38,8 +38,8 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal libraries
         run: |
-          cmake -B build -G Ninja
-          cmake --build build -- -j`nproc`
+          cmake -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++-17
+          cmake --build build
       - name: Remove unnecessary artifacts
         run: |
           find build/ -name *.so -or -name *.a -or -name *.o | xargs strip -d
@@ -56,6 +56,7 @@ jobs:
         config: [Debug, Release, RelWithDebInfo]
         arch: [grayskull, wormhole_b0, blackhole]
         os: [ubuntu-20.04]
+      fail-fast: false
     needs: build-lib
     name: cmake build cpptest ${{ matrix.config }} ${{ matrix.arch }}
     env:
@@ -79,6 +80,6 @@ jobs:
         run: tar -xvf ttm_${{ matrix.arch }}-${{ matrix.config}}.tar
       - name: Build tt-metal tests
         run: |
-          rm -f build/CMakeCache.txt
-          cmake -B build -G Ninja
-          cmake --build build --target tests -- -j`nproc`
+          rm -f build/CMakeCache.txt && find build -name 'cmake_pch.hxx.pch' -exec touch {} \;
+          cmake -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++-17
+          cmake --build build --target tests

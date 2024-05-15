@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include "core_coord.h"
-#include "logger.hpp"
+#include "tt_metal/common/logger.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
@@ -338,7 +338,7 @@ inline bool DeviceData::validate_one_core(Device *device,
         core_string = "PCIE";
     } else {
         tt::log_fatal("Logical core: {} physical core {} core type {}", logical_core, phys_core, core_type);
-        TT_ASSERT(0, "Core type not found");
+        TT_ASSERT(false, "Core type not found");
     }
 
     // Read results from device and compare to expected for this core.
