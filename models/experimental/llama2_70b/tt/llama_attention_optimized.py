@@ -114,7 +114,7 @@ class TtLlamaAttention_optimized:
                     mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=0),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=self.model_config["DRAM_MEMCFG"],
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.bfloat8_b,
                     cache_file_name=self.cache_path / f"empty_attn_cache{cache_k.shape}",
                 ),
                 self.device_mesh,
@@ -672,19 +672,23 @@ class TtLlamaAttention_optimized:
         keys = self.layer_past[0]
         # Fill cache expects batch in dim0
         keys_reshaped = ttnn.reshape(keys, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        # tt_lib.tensor.fill_cache(keys, tt_lib.tensor.typecast(key_layer, self.model_config["BFP8_DTYPE"]), user_id)
         tt_lib.tensor.fill_cache(
-            keys_reshaped, key_layer, user_id
-        )  # TODO: Set back to bfp8_b when typecast supports MD tensors
+            keys_reshaped, tt_lib.tensor.typecast(key_layer, self.model_config["BFP8_DTYPE"]), user_id
+        )
+        # tt_lib.tensor.fill_cache(
+        #     keys_reshaped, key_layer, user_id
+        # )
 
         # FILL V CACHE
         values = self.layer_past[1]
         # Fill cache expects batch in dim0
         values_reshaped = ttnn.reshape(values, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        # tt_lib.tensor.fill_cache(values, tt_lib.tensor.typecast(value_layer, self.model_config["BFP8_DTYPE"]), user_id)
         tt_lib.tensor.fill_cache(
-            values_reshaped, value_layer, user_id
-        )  # TODO: Set back to bfp8_b when typecast supports MD tensors
+            values_reshaped, tt_lib.tensor.typecast(value_layer, self.model_config["BFP8_DTYPE"]), user_id
+        )
+        # tt_lib.tensor.fill_cache(
+        #     values_reshaped, value_layer, user_id
+        # )
 
         # PRE-SOFTMAX MM
 
