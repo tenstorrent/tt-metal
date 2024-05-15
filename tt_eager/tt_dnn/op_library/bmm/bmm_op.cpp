@@ -1179,9 +1179,9 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(const ttnn::t
     bool input_b_is_batched = batch_size_b > 1;
     TT_FATAL(batch_size_b == 1, "Second input cannot be currently batched when running matmul using 1d systolic array");
     TT_FATAL((batch_size_a * m_size) % ttnn::TILE_SIZE == 0 && k_size % ttnn::TILE_SIZE == 0 && n_size % ttnn::TILE_SIZE == 0, "The last two dimensions of the first tensor and the last dimension of the second tensor must be a multiple of tile size");
-    uint32_t batch_and_m_tiles = div_up(batch_size_a * m_size, ttnn::TILE_SIZE);
-    uint32_t k_tiles = div_up(k_size, ttnn::TILE_SIZE);
-    uint32_t n_tiles = div_up(n_size, ttnn::TILE_SIZE);
+    uint32_t batch_and_m_tiles = (batch_size_a * m_size) / ttnn::TILE_SIZE;
+    uint32_t k_tiles = k_size / ttnn::TILE_SIZE;
+    uint32_t n_tiles = n_size / ttnn::TILE_SIZE;
     uint32_t num_cores = core_coord.x * core_coord.y;
     bool is_tall = batch_size_a > n_tiles;
     bool is_wide = !is_tall;
@@ -1258,7 +1258,7 @@ MatmulProgramConfig create_matmul_program_config(const Tensor& input_tensor_a, c
 	else if (a_is_sharded) {
 	    TT_FATAL(input_tensor_a_memory_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "MatmulMultiCoreReuseProgramConfig: Cannot be width sharded");
 	    auto shard_shape = input_tensor_a_memory_config.shard_spec.value().shape;
-	    uint32_t n = b_shape[-1];
+	    uint32_t n = b_shape[-1] / ttnn::TILE_SIZE;
 	    m_tiles_per_core = shard_shape[0] / ttnn::TILE_SIZE;
 	    n_tiles_per_core = n;
 	    k_tiles_per_core = shard_shape[1] / ttnn::TILE_SIZE;
