@@ -185,12 +185,12 @@ namespace tt::tt_metal::sliding_window {
             }
         }
 
-        // NULL plug
-        for (uint32_t i = 0; i < num_core_nhw; ++ i) {
-            pad_config[i].push_back({0, 0});
-            local_config[i].second.push_back({0, 0, 0});
-            remote_config[i].push_back({{0, 0, 0}, {{0, 0, 0}}});
-        }
+        // // NULL plug
+        // for (uint32_t i = 0; i < num_core_nhw; ++ i) {
+        //     pad_config[i].push_back({0, 0});
+        //     local_config[i].second.push_back({0, 0, 0});
+        //     remote_config[i].push_back({{0, 0, 0}, {{0, 0, 0}}});
+        // }
 
         // flatten and uniformize the lengths of each config list
         auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
@@ -200,7 +200,6 @@ namespace tt::tt_metal::sliding_window {
                 max_len = std::max(max_len, 2 * data.size());   // each data is 2 * data.size()
             }
             std::vector<std::vector<uint16_t>> flattened_config;
-            // flattened_config.resize(config.size());
             for (auto& data : config) {
                 std::vector<uint16_t> flat_data(max_len, 0);
                 uint32_t idx = 0;
@@ -209,6 +208,9 @@ namespace tt::tt_metal::sliding_window {
                     flat_data[idx++] = dst_start;
                     flat_data[idx++] = length;
                 }
+                // null plug
+                flat_data.emplace_back(0);
+                flat_data.emplace_back(0);
                 flattened_config.emplace_back(flat_data);
             }
             return flattened_config;
@@ -222,7 +224,6 @@ namespace tt::tt_metal::sliding_window {
             }
             max_len += 3;   // key tuple
             std::vector<std::vector<uint16_t>> flattened_config;
-            // flattened_config.resize(config.size());
             for (auto& [key, data]: config) {
                 auto [nocx, nocy, len] = key;
                 std::vector<uint16_t> flat_data(max_len, 0);
@@ -236,6 +237,10 @@ namespace tt::tt_metal::sliding_window {
                     flat_data[idx++] = dst_start;
                     flat_data[idx++] = length;
                 }
+                // null plug
+                flat_data.emplace_back(0);
+                flat_data.emplace_back(0);
+                flat_data.emplace_back(0);
                 flattened_config.emplace_back(flat_data);
             }
             return flattened_config;
@@ -252,25 +257,26 @@ namespace tt::tt_metal::sliding_window {
                 max_len = std::max(max_len, curr_len);   // each key is 3, data is 3 * data.size()
             }
             std::vector<std::vector<uint16_t>> flattened_config;
-            // flattened_config.resize(config.size());
             for (auto& core_config : config) {
                 std::vector<uint16_t> flat_data(max_len, 0);
                 uint32_t idx = 0;
-                // for (auto core_core_config : core_config) {
-                    for (auto& key_data: core_config) {
-                        auto [nocx, nocy, len] = key_data.first;
-                        flat_data[idx++] = nocx;
-                        flat_data[idx++] = nocy;
-                        flat_data[idx++] = len;
-                        log_debug(LogOp, "nocx: {}, nocy: {}, len: {}", nocx, nocy, len);
-                        for (size_t i = 0; i < key_data.second.size(); ++i) {
-                            auto [src_start, dst_start, length] = key_data.second[i];
-                            flat_data[idx++] = src_start;
-                            flat_data[idx++] = dst_start;
-                            flat_data[idx++] = length;
-                        }
+                for (auto& key_data: core_config) {
+                    auto [nocx, nocy, len] = key_data.first;
+                    flat_data[idx++] = nocx;
+                    flat_data[idx++] = nocy;
+                    flat_data[idx++] = len;
+                    log_debug(LogOp, "nocx: {}, nocy: {}, len: {}", nocx, nocy, len);
+                    for (size_t i = 0; i < key_data.second.size(); ++i) {
+                        auto [src_start, dst_start, length] = key_data.second[i];
+                        flat_data[idx++] = src_start;
+                        flat_data[idx++] = dst_start;
+                        flat_data[idx++] = length;
                     }
-                // }
+                }
+                // null plug
+                flat_data.emplace_back(0);
+                flat_data.emplace_back(0);
+                flat_data.emplace_back(0);
                 flattened_config.emplace_back(flat_data);
             }
             return flattened_config;
@@ -279,6 +285,29 @@ namespace tt::tt_metal::sliding_window {
         auto flattened_pad_config = flatten_pad_config(pad_config);
         auto flattened_local_config = flatten_local_config(local_config);
         auto flattened_remote_config = flatten_remote_config(remote_config);
+
+        auto align_config = [](auto& config, size_t align_granularity = 1, uint16_t align_value = 0) {
+            size_t max_len = 0;
+            for (auto& core_config : config) {
+                max_len = std::max(max_len, core_config.size());
+            }
+            if (align_granularity > 1) {
+                size_t align_amount = max_len % align_granularity;
+                max_len = align_amount > 0 ? max_len + align_granularity - align_amount : max_len;
+            }
+            for (auto& core_config : config) {
+                size_t curr_len = core_config.size();
+                size_t extend_amount = max_len - core_config.size();
+                if (extend_amount > 0) {
+                    std::vector<uint16_t> extend_v(extend_amount, align_value);
+                    core_config.insert(core_config.end(), extend_v.begin(), extend_v.end());
+                }
+            }
+        };
+
+        align_config(flattened_pad_config, 2);
+        align_config(flattened_local_config, 2);
+        align_config(flattened_remote_config, 2);
 
         log_debug(LogOp, "flattened_pad_config: {}", flattened_pad_config);
         log_debug(LogOp, "flattened_local_config: {}", flattened_local_config);
@@ -300,7 +329,6 @@ namespace tt::tt_metal::sliding_window {
             TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
             std::vector<uint16_t> local_top_left_indices;
             for(size_t i = output_shard_start; i < output_shard_end; i++) {
-                // TT_ASSERT(i < local_top_left_indices.size());
                 local_top_left_indices.push_back(op_trace_metadata[i] - op_trace_metadata[output_shard_start]);
             }
             sharded_input_top_left_indices.push_back(local_top_left_indices);
@@ -339,7 +367,6 @@ namespace tt::tt_metal::sliding_window {
 
     Tensor construct_on_host_config_tensor(const std::vector<std::vector<uint16_t>>& config, const SlidingWindowConfig& sw_config, const ParallelConfig& p_config) {
         std::vector<uint16_t> config_vector = flatten(config);
-        // Shape config_shape = {1, (uint32_t) config_vector.size()};
         Shape config_shape = {(uint32_t) config.size(), (uint32_t) config[0].size()};
         if (p_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
             auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
@@ -372,8 +399,6 @@ namespace tt::tt_metal::sliding_window {
     }
 
     Tensor move_config_tensor_to_device(const Tensor& config_tensor, const ParallelConfig& p_config, Device* device) {
-        // uint32_t num_cores_nhw = p_config.grid.num_cores();
-        // TT_FATAL(config_tensor.get_shape()[-1] % num_cores_nhw == 0, "Invalid config tensor shape");
         auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t) config_tensor.get_shape()[-1]});
         ShardSpec shard_spec(p_config.grid, shard_shape, p_config.shard_orientation, false);
         MemoryConfig memory_config{p_config.shard_scheme, BufferType::L1_SMALL, shard_spec};
