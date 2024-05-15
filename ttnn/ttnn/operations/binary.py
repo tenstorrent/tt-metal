@@ -140,6 +140,12 @@ ttnn.Tensor.__mul__ = lambda self, *args, **kwargs: mul(self, *args, **kwargs)
 ttnn.Tensor.__rmul__ = lambda self, *args, **kwargs: mul(self, *args, **kwargs)
 
 
+def torch_squared_difference(x, y, *args, **kwargs):
+    import torch
+
+    return torch.square(torch.sub(x, y))
+
+
 def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
     def _golden_function(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
         import torch
@@ -154,6 +160,9 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
             "xlogy": torch.xlogy,
             "maximum": torch.maximum,
             "minimum": torch.minimum,
+            "atan2": torch.atan2,
+            "hypot": torch.hypot,
+            "squared_difference": torch_squared_difference,
         }
         torch_function = name_to_torch_function[name]
         return torch_function(input_tensor_a, input_tensor_b)
@@ -240,6 +249,9 @@ TTL_BINARY_ELTWISE_FUNCTIONS = [
     ("xlogy", ttl.tensor.xlogy, "xlogy (input_a * log( input_b ))"),
     ("maximum", ttl.tensor.max, "maximum "),
     ("minimum", ttl.tensor.min, "minimum "),
+    ("atan2", ttl.tensor.atan2, "atan2"),
+    ("hypot", ttl.tensor.hypot, "hypotenuse"),
+    ("squared_difference", ttl.tensor.squared_difference, "squared_difference (input_a - input_b)^2"),
 ]
 
 
