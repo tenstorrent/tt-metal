@@ -461,6 +461,7 @@ def test_sharded_matmul_1d_in1(
 @pytest.mark.parametrize(
     "output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B], ids=["out_BFLOAT16", "out_BFLOAT8_B"]
 )
+@pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
 def test_sharded_partial_op(
     device,
     H,
@@ -468,11 +469,13 @@ def test_sharded_partial_op(
     num_slices,
     activations_dtype,
     output_dtype,
+    async_mode,
     function_level_defaults,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    device.enable_async(async_mode)
     grid_size = (8, 8)
     in0_shape = [1, 1, H, 64]
     W = in0_shape[-1]
@@ -533,12 +536,14 @@ def test_sharded_partial_op(
 @pytest.mark.parametrize(
     "output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B], ids=["out_BFLOAT16", "out_BFLOAT8_B"]
 )
+@pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
 def test_block_sharded_partial_op(
-    device, H, W, num_cores, activations_dtype, output_dtype, function_level_defaults, use_program_cache
+    device, H, W, num_cores, activations_dtype, output_dtype, async_mode, function_level_defaults, use_program_cache
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    device.enable_async(async_mode)
     grid_size = (8, 8)
     in0_shape = [1, 1, H, W]
     W = in0_shape[-1]
@@ -689,6 +694,7 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_
 @pytest.mark.parametrize(
     "output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B], ids=["out_BFLOAT16", "out_BFLOAT8_B"]
 )
+@pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
 def test_width_sharded_partial_op(
     device,
     H,
@@ -697,11 +703,13 @@ def test_width_sharded_partial_op(
     num_slices,
     activations_dtype,
     output_dtype,
+    async_mode,
     function_level_defaults,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    device.enable_async(async_mode)
     grid_size = (8, 8)
     in0_shape = [1, 1, H, W]
 
@@ -761,6 +769,7 @@ def test_width_sharded_partial_op(
 @pytest.mark.parametrize(
     "output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B], ids=["out_BFLOAT16", "out_BFLOAT8_B"]
 )
+@pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
 def test_partial_sharded_op_binary(
     device,
     in0_sharded,
@@ -771,11 +780,13 @@ def test_partial_sharded_op_binary(
     num_slices,
     activations_dtype,
     output_dtype,
+    async_mode,
     function_level_defaults,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    device.enable_async(async_mode)
     grid_size = (8, 8)
     in0_shape = [1, 1, H, 96]
     in1_shape = in0_shape

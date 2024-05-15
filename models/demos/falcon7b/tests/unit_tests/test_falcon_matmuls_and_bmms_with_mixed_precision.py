@@ -475,18 +475,20 @@ def test_falcon7b_attnention_sliced(
 @pytest.mark.parametrize("seq_len", [128, 1024, 2048], ids=["seq_len_128", "seq_len_1024", "seq_len_2048"])
 @pytest.mark.parametrize("num_cores", [64])
 @skip_for_wormhole_b0("non-determinstic hang, see issue #5882")
+@pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
 def test_falcon7b_attention_softmax_sequence(
     device,
     seq_len,
     num_cores,
+    async_mode,
     use_program_cache,
     function_level_defaults,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    device.enable_async(async_mode)
     grid_size = (8, 8)
-
     num_heads = 64
 
     if seq_len == 1024:
