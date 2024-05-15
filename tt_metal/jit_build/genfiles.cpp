@@ -355,9 +355,6 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env,
     }
 }
 
-#define NOC_X(noc_index, noc_size_x, x) (noc_index == 0 ? (x) : (noc_size_x-1-(x)))
-#define NOC_Y(noc_index, noc_size_y, y) (noc_index == 0 ? (y) : (noc_size_y-1-(y)))
-
 std::string generate_bank_to_noc_coord_descriptor_string(
     tt_xy_pair grid_size,
     std::vector<CoreCoord>& dram_bank_map,
@@ -427,8 +424,8 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     for (unsigned int noc = 0; noc < 2; noc++) {
         ss << "    {" << "\t// noc=" << noc << endl;
         for (unsigned int bank_id = 0; bank_id < dram_bank_map.size(); bank_id++) {
-            uint16_t noc_x = NOC_X(noc, grid_size.x, dram_bank_map[bank_id].x);
-            uint16_t noc_y = NOC_Y(noc, grid_size.y, dram_bank_map[bank_id].y);
+            uint16_t noc_x = NOC_0_X(noc, grid_size.x, dram_bank_map[bank_id].x);
+            uint16_t noc_y = NOC_0_Y(noc, grid_size.y, dram_bank_map[bank_id].y);
             uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << (NOC_ADDR_LOCAL_BITS - 32);
             ss << "        " << xy << "," << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
         }
@@ -482,8 +479,8 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     for (unsigned int noc = 0; noc < 2; noc++) {
         ss << "    {" << "\t// noc=" << noc << endl;
         for (unsigned int bank_id = 0; bank_id < l1_bank_map.size(); bank_id++) {
-            uint16_t noc_x = NOC_X(noc, grid_size.x, l1_bank_map[bank_id].x);
-            uint16_t noc_y = NOC_Y(noc, grid_size.y, l1_bank_map[bank_id].y);
+            uint16_t noc_x = NOC_0_X(noc, grid_size.x, l1_bank_map[bank_id].x);
+            uint16_t noc_y = NOC_0_Y(noc, grid_size.y, l1_bank_map[bank_id].y);
             uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << (NOC_ADDR_LOCAL_BITS - 32);
             ss << "        " << xy << "," << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
         }
