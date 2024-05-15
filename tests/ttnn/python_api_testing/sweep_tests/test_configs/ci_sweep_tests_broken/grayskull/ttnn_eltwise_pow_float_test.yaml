@@ -18,7 +18,7 @@ test-list:
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_ttnn_power_fp_args
+      args-gen: gen_power_fp_2_args
       sanitize-args: False
       args:
         data-layout: ["TILE"]
