@@ -179,6 +179,7 @@ namespace tt::tt_metal::sliding_window {
                     remote_config[dst_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
                 } else {
                     CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
+                    log_debug(LogOp, "src_core_id: {}, dst_core_id: {}, noc_xy: ({}, {})", src_core_id, dst_core_id, noc_xy.x, noc_xy.y);
                     remote_config[src_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
                 }
             }
@@ -255,19 +256,21 @@ namespace tt::tt_metal::sliding_window {
             for (auto& core_config : config) {
                 std::vector<uint16_t> flat_data(max_len, 0);
                 uint32_t idx = 0;
-                for (auto& [key, data]: core_config) {
-                    auto [nocx, nocy, len] = key;
-                    flat_data[0] = nocx;
-                    flat_data[1] = nocy;
-                    flat_data[2] = len;
-                    idx += 3;
-                    for (size_t i = 0; i < data.size(); ++i) {
-                        auto [src_start, dst_start, length] = data[i];
-                        flat_data[idx++] = src_start;
-                        flat_data[idx++] = dst_start;
-                        flat_data[idx++] = length;
+                // for (auto core_core_config : core_config) {
+                    for (auto& key_data: core_config) {
+                        auto [nocx, nocy, len] = key_data.first;
+                        flat_data[idx++] = nocx;
+                        flat_data[idx++] = nocy;
+                        flat_data[idx++] = len;
+                        log_debug(LogOp, "nocx: {}, nocy: {}, len: {}", nocx, nocy, len);
+                        for (size_t i = 0; i < key_data.second.size(); ++i) {
+                            auto [src_start, dst_start, length] = key_data.second[i];
+                            flat_data[idx++] = src_start;
+                            flat_data[idx++] = dst_start;
+                            flat_data[idx++] = length;
+                        }
                     }
-                }
+                // }
                 flattened_config.emplace_back(flat_data);
             }
             return flattened_config;
@@ -276,6 +279,10 @@ namespace tt::tt_metal::sliding_window {
         auto flattened_pad_config = flatten_pad_config(pad_config);
         auto flattened_local_config = flatten_local_config(local_config);
         auto flattened_remote_config = flatten_remote_config(remote_config);
+
+        log_debug(LogOp, "flattened_pad_config: {}", flattened_pad_config);
+        log_debug(LogOp, "flattened_local_config: {}", flattened_local_config);
+        log_debug(LogOp, "flattened_remote_config: {}", flattened_remote_config);
 
         return std::make_tuple(flattened_pad_config,
                                 flattened_local_config,
