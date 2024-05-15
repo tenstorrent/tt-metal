@@ -680,6 +680,11 @@ def div(x, y, *args, accurate_mode, **kwargs):
     return result
 
 
+def floor_div(x, y, *args, **kwargs):
+    result = torch.floor_divide(x, y)
+    return result
+
+
 def div_no_nan(x, y, *args, **kwargs):
     result = torch.where(y == 0, 0, x / y)
     return result

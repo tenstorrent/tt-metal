@@ -854,6 +854,23 @@ Tensor div(
     return operation::decorate_as_composite(__func__, _div)(input_a, input_b, accurate_mode, output_mem_config);
 }
 
+Tensor _floor_div(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config) {
+    Tensor temp = div(input_a, input_b, true);
+    //floor(nan, inf, -inf) = nan, inf, -inf
+    return where(logical_or(eq_unary(temp,std::nanf("")),
+                        logical_or( eq_unary(temp,std::numeric_limits<float>::infinity()),  eq_unary(temp, -std::numeric_limits<float>::infinity())))
+                        , temp, unary_floor(temp, output_mem_config));
+}
+Tensor floor_div(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _floor_div)(input_a, input_b, output_mem_config);
+}
+
 Tensor _div_no_nan(
     const Tensor& input_a,
     const Tensor& input_b,
