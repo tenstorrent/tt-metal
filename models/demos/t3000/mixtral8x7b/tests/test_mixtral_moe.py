@@ -14,7 +14,7 @@ from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.utility_functions import get_devices_for_t3000
+from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
 # Set Mixtral flags for CI, if CI environment is setup
 if os.getenv("CI") == "true":
@@ -25,20 +25,12 @@ if os.getenv("CI") == "true":
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 
 
-def test_mixtral_moe_inference(all_devices, use_program_cache, reset_seeds):
+def test_mixtral_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     pcc = 0.99
     iterations = 1
     dtype = ttnn.bfloat8_b
 
-    devices = all_devices
-    num_devices = len(devices)
-    assert num_devices in (4, 8), "This test requires a T3000 (4 or 8 devices)"
-
-    devices = get_devices_for_t3000(devices, num_devices)  # [ttnn.open_device(device_id=i) for i in range(8)]
-    if num_devices == 4:
-        devices += devices
-
-    model_args = TtModelArgs(devices[0])
+    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
     state_dict = torch.load(model_args.state_dict_path)
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -57,24 +49,20 @@ def test_mixtral_moe_inference(all_devices, use_program_cache, reset_seeds):
     reference_model.load_state_dict(partial_state_dict_ref)
     # Initialize TT models
 
-    experts = [
-        TtMixtralMLP(
-            device=devices[i],
-            state_dict=state_dict,
-            args=model_args,
-            layer_num=0,
-            expert_num=i,
-            dtypes={
-                "w1": ttnn.bfloat4_b,
-                "w2": ttnn.bfloat8_b,
-                "w3": ttnn.bfloat4_b,
-            },
-        )
-        for i in range(len(devices))
-    ]
+    experts = TtMixtralMLP(
+        device_mesh=t3k_device_mesh,
+        state_dict=state_dict,
+        args=model_args,
+        layer_num=0,
+        dtypes={
+            "w1": ttnn.bfloat4_b,
+            "w2": ttnn.bfloat8_b,
+            "w3": ttnn.bfloat4_b,
+        },
+    )
 
     tt_model = TtMoeLayer(
-        devices=devices,
+        device_mesh=t3k_device_mesh,
         state_dict=state_dict,
         experts=experts,
         args=model_args,
@@ -93,19 +81,22 @@ def test_mixtral_moe_inference(all_devices, use_program_cache, reset_seeds):
 
         # input = torch.randn(1, 32, 4096)
         pt_decode_input = (torch.rand(batch, seqlen, model_args.dim) * 2) - 1
-        tt_decode_input = [
-            ttnn.from_torch(
-                pt_decode_input.clone().unsqueeze(1).view(1, 1, 32, 4096),
-                device=device,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            for device in devices
-        ]
+        tt_decode_input = ttnn.from_torch(
+            pt_decode_input.clone().unsqueeze(1).view(1, 1, 32, 4096),
+            device=t3k_device_mesh,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
+        )
+
         # Run TT model
         tt_out = tt_model(tt_decode_input)
-        tt_output_torch = ttnn.to_torch(tt_out[0]).squeeze(2).view(batch, 1, -1)
+        tt_output_torch = (
+            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
+            .squeeze(2)
+            .view(batch, 1, -1)
+        )
 
         # Reference model
         ref_output = reference_model(pt_decode_input)
