@@ -163,6 +163,7 @@ class TtFalconAttention:
         self.state_dict = state_dict
         self.model_config = model_config
         self.num_heads_per_device = self.num_heads // len(devices)
+        self.max_batch_size = 32
 
         if (self.head_dim * self.num_heads) != self.hidden_size:
             raise ValueError(
@@ -248,6 +249,49 @@ class TtFalconAttention:
         # Fused to SM
         # self.scalar = pad_by_zero(torch.Tensor([1 / math.sqrt(self.head_dim)]), self.device)[0]
         self.scalar = 1 / math.sqrt(self.head_dim)
+
+        # Preloading the kvcache
+        attn_cache_shape = (
+            self.max_batch_size,
+            self.num_kv_heads // len(devices),
+            self.max_position_embeddings,
+            # 2048 + 128,  # Meets benchmarking spec needs
+            self.head_dim,
+        )
+        kvcache_path = tt_cache_path / f"empty_attn_cache{attn_cache_shape}.bin"
+        k_cache = []
+        v_cache = []
+        if (kvcache_path).exists():
+            for i in range(len(self.devices)):
+                k_cache.append(
+                    tt_lib.tensor.load_tensor(str(kvcache_path)).to(devices[i], self.model_config["DRAM_MEMCFG"])
+                )
+                v_cache.append(
+                    tt_lib.tensor.load_tensor(str(kvcache_path)).to(devices[i], self.model_config["DRAM_MEMCFG"])
+                )
+        else:
+            attn_cache = torch.zeros(attn_cache_shape)
+            tt_attn_cache = torch2tt_tensor(
+                attn_cache,
+                None,
+                tt_memory_config=self.model_config["DRAM_MEMCFG"],
+                tt_dtype=ttnn.bfloat8_b,
+            )
+            for i in range(len(self.devices)):
+                k_cache.append(tt_attn_cache.to(devices[i], self.model_config["DRAM_MEMCFG"]))
+            for i in range(len(self.devices)):
+                v_cache.append(tt_attn_cache.to(devices[i], self.model_config["DRAM_MEMCFG"]))
+
+            tt_lib.tensor.dump_tensor(
+                str(kvcache_path),
+                tt_attn_cache,
+            )
+        self.layer_past = (
+            (
+                k_cache,
+                v_cache,
+            ),
+        )
 
         self.preprocessing(self.model_config["LLM_MODE"], self.model_config["BATCH_SIZE"], self.model_config["SEQ_LEN"])
 

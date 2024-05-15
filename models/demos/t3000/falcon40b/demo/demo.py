@@ -286,14 +286,8 @@ def run_falcon_demo_kv(
 
     synchronize_devices(devices)
 
-    profiler.start(f"initializing_KV_cache")
-    kv_cache_singlelayer = initialize_kv_cache(
-        model_config, configuration, 1, batch_size, max_seq_len, devices
-    )  # only used for compile
-    kv_cache = initialize_kv_cache(model_config, configuration, num_layers, batch_size, max_seq_len, devices)
-    profiler.end(f"initializing_KV_cache")
+    kv_cache_singlelayer = tt_FalconCausalLM_singlelayer.get_kv_cache()  # only used for compile
 
-    # TODO: Is this safe? Disabling kernel caching disable program caching as well?
     enable_persistent_kernel_cache()
 
     ### First prefill run with compile ###
@@ -394,6 +388,8 @@ def run_falcon_demo_kv(
     logger.info("Moved weights (all layers) to device!")
     profiler.end(f"moving_to_device")
 
+    kv_cache = tt_FalconCausalLM.get_kv_cache()  # Initialized kv cache for all layers
+
     ### Second prefill run without compile ###
     enable_persistent_kernel_cache()
 
@@ -415,7 +411,7 @@ def run_falcon_demo_kv(
             max_seq_len,
             devices,
         )
-        profiler.end(f"initializing_KV_cache")
+        profiler.end(f"initializing_KV_cache_on_host")
 
         output_ids = torch.zeros(num_users, 1, dtype=torch.int64)
         for user_id in range(num_users):
@@ -553,7 +549,6 @@ def run_falcon_demo_kv(
         "preprocessing": profiler.get("tokenizing_inputs"),
         "loading_weights": profiler.get("loading_weights"),
         "moving_to_device": profiler.get("moving_to_device"),
-        "initializing_KV_cache": profiler.get("initializing_KV_cache"),
         "compile_prefill": time_prefill_compile if not prefill_on_host else None,
         "compile_decode": time_decode_compile,
         "compile_total": time_prefill_compile + time_decode_compile,
@@ -571,7 +566,6 @@ def run_falcon_demo_kv(
     logger.info(
         f"conversion to TT (if downloaded) and moving weights to device: {round(measurements['moving_to_device'], 5)} s"
     )
-    logger.info(f"initializing KV cache: {round(measurements['initializing_KV_cache'], 5)} s")
     if not prefill_on_host:
         logger.info(f"prefill compile time: {round(measurements['compile_prefill'],5)} s")
     logger.info(f"decode compile time: {round(measurements['compile_decode'], 5)} s")
