@@ -48,3 +48,4 @@ multiprocess==0.70.14
 evaluate==0.4.0
 bert-score==0.3.12
 fsspec==2023.9.2 # Temporary pin to 2023.9.2: https://github.com/tenstorrent/tt-metal/issues/3314
+docopt==0.6.2
