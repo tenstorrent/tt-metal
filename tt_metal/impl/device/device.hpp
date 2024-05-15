@@ -262,7 +262,6 @@ class Device {
     // all tasks scheduled on this device
     WorkExecutor work_executor;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
-    vector<std::unique_ptr<Program, detail::ProgramDeleter>> command_queue_programs_;
     uint8_t num_hw_cqs_;
 
     vector<std::unique_ptr<Program, tt::tt_metal::detail::ProgramDeleter>> command_queue_programs;

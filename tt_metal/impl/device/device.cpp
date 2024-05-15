@@ -1633,6 +1633,7 @@ bool Device::close() {
 
     this->active_devices_.deactivate_device(this->id_);
     this->disable_and_clear_program_cache();
+    this->command_queue_programs.clear();
     this->sw_command_queues_.clear();
     this->hw_command_queues_.clear();
 
