@@ -13,6 +13,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
   TG-tests:
+    needs: build-artifact
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
