@@ -796,8 +796,10 @@ void Program::compile( Device * device )
                 bool cache_hit = true;
                 bool path_exists = std::filesystem::exists(build_options.path);
                 if (enable_persistent_kernel_cache && path_exists) {
-                    if (not detail::HashLookup::inst().exists(kernel_hash))
+                    if (not detail::HashLookup::inst().exists(kernel_hash)) {
                         detail::HashLookup::inst().add(kernel_hash);
+                        detail::HashLookup::inst().add_generated_bin(kernel_hash);
+                    }
                 } else if (detail::HashLookup::inst().add(kernel_hash)) {
                     GenerateBinaries(device, build_options, kernel);
                     cache_hit = false;
