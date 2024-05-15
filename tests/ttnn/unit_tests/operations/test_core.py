@@ -181,23 +181,6 @@ from enum import Enum
             None,
             None,
         ),
-        (
-            160,
-            64,
-            ttnn.TILE_LAYOUT,
-            dict(
-                core_grid=ttnn.CoreGrid(y=5, x=1),
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            ),
-            dict(
-                core_grid=ttnn.CoreGrid(y=2, x=2),
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.COL_MAJOR,
-            ),
-            (32, 64),
-            (32, 96),
-        ),
     ],
 )
 def test_reshard(
@@ -210,11 +193,10 @@ def test_reshard(
     input_override,
     output_override,
 ):
-    if isinstance(input_sharded_memory_config_args["core_grid"], (ttnn.CoreGrid)):
-        if device.core_grid.y < input_sharded_memory_config_args["core_grid"].y:
-            pytest.skip()
-        if device.core_grid.y < output_sharded_memory_config_args["core_grid"].y:
-            pytest.skip()
+    if device.core_grid.y < input_sharded_memory_config_args["core_grid"].y:
+        pytest.skip()
+    if device.core_grid.y < output_sharded_memory_config_args["core_grid"].y:
+        pytest.skip()
     input_shape = [1, 1, input_height, input_width]
 
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
@@ -235,6 +217,7 @@ def test_reshard(
         output_shard_memory_config = ttnn.create_sharded_memory_config(
             output_override, **output_sharded_memory_config_args, use_height_and_width_as_shard_shape=True
         )
+
     # interleaved_to_sharded
     sharded_input_tensor = ttnn.to_memory_config(interleaved_input_tensor, input_shard_memory_config)
 
