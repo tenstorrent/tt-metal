@@ -8,6 +8,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
+#include "hostdevcommon/common_runtime_address_map.h"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
@@ -21,7 +22,7 @@ typedef enum sanitization_features {
     SanitizeAlignmentDRAM
 } watcher_features_t;
 
-void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, bool is_eth_core, watcher_features_t feature) {
+void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, bool is_eth_core, watcher_features_t feature, bool use_ncrisc = false) {
     // Set up program
     Program program = Program();
     CoreCoord phys_core;
@@ -52,6 +53,8 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
 
     auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
     auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
+    log_info("Input DRAM: {}", input_dram_noc_xy);
+    log_info("Output DRAM: {}", output_dram_noc_xy);
 
     // A DRAM copy kernel, we'll feed it incorrect inputs to test sanitization.
     KernelHandle dram_copy_kernel;
@@ -77,8 +80,8 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         core,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
+            .processor = (use_ncrisc) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = (use_ncrisc) ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default,
             .defines=dram_copy_kernel_defines
         }
     );
@@ -147,15 +150,27 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
             break;
         case SanitizeAlignmentL1:
         case SanitizeAlignmentDRAM:
+            {
+            // NoC-1 has a different coordinate for the same DRAM
+            const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
+            int noc = (use_ncrisc) ? 1 : 0;
+            CoreCoord target_phys_core = {
+                NOC_0_X(noc, soc_d.grid_size.x, input_dram_noc_xy.x),
+                NOC_0_Y(noc, soc_d.grid_size.y, input_dram_noc_xy.y)
+            };
+            string risc_name = (is_eth_core) ? "erisc" : "brisc";
+            if (use_ncrisc)
+                risc_name = "ncrisc";
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2}): {} using noc0 tried to access DRAM core w/ physical coords {} DRAM[addr=0x{:08x},len=102400], misaligned with local L1[addr=0x{:08x}]",
+                "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2}): {} using noc{} tried to access DRAM core w/ physical coords {} DRAM[addr=0x{:08x},len=102400], misaligned with local L1[addr=0x{:08x}]",
                 device->id(),
                 (is_eth_core) ? "ethnet" : "worker",
                 core.x, core.y, phys_core.x, phys_core.y,
-                (is_eth_core) ? "erisc" : "brisc", input_dram_noc_xy.str(),
+                risc_name, noc, target_phys_core,
                 input_dram_buffer_addr,
                 l1_buffer_addr
             );
+            }
             break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
@@ -246,6 +261,18 @@ TEST_F(WatcherFixture, TestWatcherSanitizeAlignmentDRAM) {
         [](WatcherFixture *fixture, Device *device){
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, device, core, false, SanitizeAlignmentDRAM);
+        },
+        this->devices_[0]
+    );
+}
+
+TEST_F(WatcherFixture, TestWatcherSanitizeAlignmentDRAMNCrisc) {
+    if (this->slow_dispatch_)
+        GTEST_SKIP();
+    this->RunTestOnDevice(
+        [](WatcherFixture *fixture, Device *device){
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, device, core, false, SanitizeAlignmentDRAM, true);
         },
         this->devices_[0]
     );

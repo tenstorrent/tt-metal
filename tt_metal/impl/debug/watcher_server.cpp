@@ -256,7 +256,14 @@ static void log_ring_buffer(Device *device, CoreCoord core) {
     }
 }
 
-static std::pair<string, string> get_core_and_mem_type(Device *device, CoreCoord &phys_core) {
+static std::pair<string, string> get_core_and_mem_type(Device *device, CoreCoord &noc_coord, int noc) {
+    // Get the physical coord from the noc coord
+    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
+    CoreCoord phys_core = {
+        NOC_0_X(noc, soc_d.grid_size.x, noc_coord.x),
+        NOC_0_Y(noc, soc_d.grid_size.y, noc_coord.y)
+    };
+
     CoreType core_type;
     try {
         core_type = device->core_type_from_physical_core(phys_core);
@@ -285,25 +292,24 @@ static string get_noc_target_str(
     const debug_sanitize_noc_addr_msg_t* san
 ) {
     string out = fmt::format("{} using noc{} tried to access ", get_riscv_name(core, san->which), noc);
-
     if (san->multicast) {
-        CoreCoord target_phys_core_start = {NOC_MCAST_ADDR_START_X(san->noc_addr), NOC_MCAST_ADDR_START_Y(san->noc_addr)};
-        CoreCoord target_phys_core_end = {NOC_MCAST_ADDR_END_X(san->noc_addr), NOC_MCAST_ADDR_END_Y(san->noc_addr)};
-        auto type_and_mem = get_core_and_mem_type(device, target_phys_core_start);
+        CoreCoord target_phys_noc_core_start = {NOC_MCAST_ADDR_START_X(san->noc_addr), NOC_MCAST_ADDR_START_Y(san->noc_addr)};
+        CoreCoord target_phys_noc_core_end = {NOC_MCAST_ADDR_END_X(san->noc_addr), NOC_MCAST_ADDR_END_Y(san->noc_addr)};
+        auto type_and_mem = get_core_and_mem_type(device, target_phys_noc_core_start, noc);
         out += fmt::format(
             "{} core range w/ physical coords {}-{} {}",
             type_and_mem.first,
-            target_phys_core_start.str(),
-            target_phys_core_end.str(),
+            target_phys_noc_core_start.str(),
+            target_phys_noc_core_end.str(),
             type_and_mem.second
         );
     } else {
-        CoreCoord target_phys_core = {NOC_UNICAST_ADDR_X(san->noc_addr), NOC_UNICAST_ADDR_Y(san->noc_addr)};
-        auto type_and_mem = get_core_and_mem_type(device, target_phys_core);
+        CoreCoord target_phys_noc_core = {NOC_UNICAST_ADDR_X(san->noc_addr), NOC_UNICAST_ADDR_Y(san->noc_addr)};
+        auto type_and_mem = get_core_and_mem_type(device, target_phys_noc_core, noc);
         out += fmt::format(
             "{} core w/ physical coords {} {}",
             type_and_mem.first,
-            target_phys_core.str(),
+            target_phys_noc_core.str(),
             type_and_mem.second
         );
     }
