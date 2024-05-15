@@ -495,7 +495,13 @@ def conv2d(
         )
         if conv_config.core_grid:
             conv_config_.core_grid = conv_config.core_grid
-        return ttnn._ttnn.operations.conv2d.conv2d(
+        (
+            output_tensor_new,
+            output_height_new,
+            output_width_new,
+            weight_tensor_on_dev_new,
+            bias_tensor_on_dev_new,
+        ) = ttnn._ttnn.operations.conv2d.conv2d(
             input_tensor=input_tensor,
             weight_tensor=weight_tensor,
             device=device,
@@ -515,6 +521,8 @@ def conv2d(
 
     output_height = ((int)((input_height - kernel_size[0] + 2 * padding[0]) / stride[0])) + 1
     output_width = ((int)((input_width - kernel_size[1] + 2 * padding[1]) / stride[1])) + 1
+    assert output_height == output_height_new
+    assert output_width == output_width_new
     if "reader_patterns_cache" not in conv_op_cache:
         conv_op_cache["reader_patterns_cache"] = {}
     weight_is_on_device = ttnn.is_tensor_storage_on_device(weight_tensor)
@@ -729,7 +737,20 @@ def conv2d(
         # Cache conv by weight tensor
         conv_op_cache[conv.conv.weight] = conv
     # Run conv
-    return (conv(input_tensor), output_height, output_width, conv.conv.weight, conv.conv.bias)
+    output_tensor = conv(input_tensor)
+    weight_t_cpu_golden = ttnn.to_torch(conv.conv.weight)
+    bias_t_cpu_golden = ttnn.to_torch(conv.conv.bias)
+    bias_t_cpu_golden = bias_t_cpu_golden[:, :, 0:1, :]
+    weight_t_cpu = ttnn.to_torch(weight_tensor_on_dev_new)
+    bias_t_cpu = ttnn.to_torch(bias_tensor_on_dev_new)
+    output_t_cpu_golden = ttnn.to_torch(output_tensor)
+    output_t_cpu = ttnn.to_torch(output_tensor_new)
+    assert torch.all(torch.eq(weight_t_cpu_golden, weight_t_cpu))
+    assert torch.all(torch.eq(bias_t_cpu_golden, bias_t_cpu))
+    # breakpoint()
+    assert torch.all(torch.eq(output_t_cpu_golden, output_t_cpu))
+    # breakpoint()
+    return (output_tensor, output_height, output_width, conv.conv.weight, conv.conv.bias)
 
 
 __all__ = []

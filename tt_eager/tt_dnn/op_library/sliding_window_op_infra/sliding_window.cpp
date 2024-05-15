@@ -46,7 +46,7 @@ namespace tt::tt_metal::sliding_window {
     std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(const SlidingWindowConfig& config, const std::vector<uint32_t>& op_trace_metadata) {
         std::vector<std::pair<uint32_pair_t, uint32_pair_t>> shard_boundaries;
         uint32_t num_cores = config.num_cores_nhw_;
-        uint32_t output_shard_h = config.get_output_shard_y();
+        uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile_);
         uint32_t padded_input_w = config.input_hw_.second + 2 * config.pad_hw_.second;
         uint32_t max_index = op_trace_metadata.size();
         uint32_t halo_with_pad_len = (config.window_hw_.first - 1) * padded_input_w + config.window_hw_.second - 1;
@@ -58,14 +58,18 @@ namespace tt::tt_metal::sliding_window {
             shard_boundaries.push_back({{output_index_start, output_index_end}, {input_index_start, input_index_end}});
             output_index_start += output_shard_h;
         }
+        for (auto [output_shard, input_shard] : shard_boundaries) {
+            log_debug(LogOp, "output_shard: ({}, {}), input_shard: ({}, {})", output_shard.first, output_shard.second, input_shard.first, input_shard.second);
+        }
         return shard_boundaries;
     }
 
     std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(const std::vector<bool>& pad_metadata, const SlidingWindowConfig& config, uint32_t reshard_num_cores_nhw) {
         Shape input_shape = config.get_input_shape();
         uint32_t input_nhw = input_shape[0] * input_shape[1] * input_shape[2];
-        uint32_t input_shard_height = input_nhw / config.num_cores_nhw_;
-        uint32_t input_reshard_height = reshard_num_cores_nhw == 0 ? input_shard_height : input_nhw / reshard_num_cores_nhw;
+        uint32_t input_nhw_padded = round_up(input_nhw, config.num_cores_nhw_ * constants::TILE_HEIGHT);
+        uint32_t input_shard_height = input_nhw_padded / config.num_cores_nhw_;
+        uint32_t input_reshard_height = reshard_num_cores_nhw == 0 ? input_shard_height : round_up(input_nhw, reshard_num_cores_nhw * constants::TILE_HEIGHT) / reshard_num_cores_nhw;
 
         auto remap = [input_shard_height, input_reshard_height](uint32_t core_id, uint32_t local_idx) -> std::pair<uint32_t, uint32_t> {
             if (input_shard_height == input_reshard_height) {
@@ -94,19 +98,18 @@ namespace tt::tt_metal::sliding_window {
         return tensor_metadata;
     }
 
-    std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, uint32_t> generate_halo_kernel_config_tensors(const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool remote_read, Device* device) {
-        bool is_block_sharding = false; // TODO: get this from config
-        bool transpose_mcast = true;    // TODO: get this from config
-        auto core_id_to_noc_coords = [is_block_sharding, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
+    std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, uint32_t> generate_halo_kernel_config_tensors(const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool is_block_sharded, bool transpose_mcast, bool remote_read, Device* device) {
+        auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
             auto num_cores_x = device->compute_with_storage_grid_size().x;
-            auto core_coord = is_block_sharding ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id)) : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
+            auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id)) : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
             return device->worker_core_from_logical_core(core_coord);
         };
 
         const uint16_t pad_local = 0xFFFF;
         std::map<uint32_pair_t, std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>> per_core_gather_data;
 
-        uint32_t num_core_nhw = shard_boundaries.size();
+        uint32_t num_cores_nhw = shard_boundaries.size();
+        // log_debug(LogOp, "num_cores_nhw: {}", num_cores_nhw);
 
         uint32_t core_id = 0;
         for (auto [output_boundary, input_boundary] : shard_boundaries) {
@@ -116,6 +119,7 @@ namespace tt::tt_metal::sliding_window {
                 uint32_t local_idx = global_idx - input_start;
                 auto [is_pad_stick, src_idx] = tensor_metadata[global_idx];
                 auto [src_core_id, src_local_idx] = src_idx;
+                // log_debug(LogOp,"src_core_id: {}, src_local_idx: {}, dst_core_id: {}, local_idx: {}", src_core_id, src_local_idx, dst_core_id, local_idx);
                 TT_ASSERT(local_idx < pad_local && src_local_idx < pad_local, "Index overflow");
                 if (is_pad_stick) {
                     TT_ASSERT(src_local_idx == 0);
@@ -156,9 +160,9 @@ namespace tt::tt_metal::sliding_window {
         std::vector<std::vector<uint32_pair_t>> pad_config;
         std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>> local_config;
         std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>> remote_config;
-        pad_config.resize(num_core_nhw);
-        local_config.resize(num_core_nhw);
-        remote_config.resize(num_core_nhw);
+        pad_config.resize(num_cores_nhw);
+        local_config.resize(num_cores_nhw);
+        remote_config.resize(num_cores_nhw);
 
         for (auto [src_dst, data] : per_core_gather_data) {
             auto [src_core_id, dst_core_id] = src_dst;
@@ -179,16 +183,10 @@ namespace tt::tt_metal::sliding_window {
                     remote_config[dst_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
                 } else {
                     CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
+                    // log_debug(LogOp, "src_core_id: {}, dst_core_id: {}, noc_xy: ({}, {})", src_core_id, dst_core_id, noc_xy.x, noc_xy.y);
                     remote_config[src_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
                 }
             }
-        }
-
-        // NULL plug
-        for (uint32_t i = 0; i < num_core_nhw; ++ i) {
-            pad_config[i].push_back({0, 0});
-            local_config[i].second.push_back({0, 0, 0});
-            remote_config[i].push_back({{0, 0, 0}, {{0, 0, 0}}});
         }
 
         // flatten and uniformize the lengths of each config list
@@ -199,7 +197,6 @@ namespace tt::tt_metal::sliding_window {
                 max_len = std::max(max_len, 2 * data.size());   // each data is 2 * data.size()
             }
             std::vector<std::vector<uint16_t>> flattened_config;
-            // flattened_config.resize(config.size());
             for (auto& data : config) {
                 std::vector<uint16_t> flat_data(max_len, 0);
                 uint32_t idx = 0;
@@ -208,6 +205,9 @@ namespace tt::tt_metal::sliding_window {
                     flat_data[idx++] = dst_start;
                     flat_data[idx++] = length;
                 }
+                // null plug
+                flat_data.emplace_back(0);
+                flat_data.emplace_back(0);
                 flattened_config.emplace_back(flat_data);
             }
             return flattened_config;
@@ -221,7 +221,6 @@ namespace tt::tt_metal::sliding_window {
             }
             max_len += 3;   // key tuple
             std::vector<std::vector<uint16_t>> flattened_config;
-            // flattened_config.resize(config.size());
             for (auto& [key, data]: config) {
                 auto [nocx, nocy, len] = key;
                 std::vector<uint16_t> flat_data(max_len, 0);
@@ -235,6 +234,10 @@ namespace tt::tt_metal::sliding_window {
                     flat_data[idx++] = dst_start;
                     flat_data[idx++] = length;
                 }
+                // null plug
+                flat_data.emplace_back(0);
+                flat_data.emplace_back(0);
+                flat_data.emplace_back(0);
                 flattened_config.emplace_back(flat_data);
             }
             return flattened_config;
@@ -251,23 +254,26 @@ namespace tt::tt_metal::sliding_window {
                 max_len = std::max(max_len, curr_len);   // each key is 3, data is 3 * data.size()
             }
             std::vector<std::vector<uint16_t>> flattened_config;
-            // flattened_config.resize(config.size());
             for (auto& core_config : config) {
                 std::vector<uint16_t> flat_data(max_len, 0);
                 uint32_t idx = 0;
-                for (auto& [key, data]: core_config) {
-                    auto [nocx, nocy, len] = key;
-                    flat_data[0] = nocx;
-                    flat_data[1] = nocy;
-                    flat_data[2] = len;
-                    idx += 3;
-                    for (size_t i = 0; i < data.size(); ++i) {
-                        auto [src_start, dst_start, length] = data[i];
+                for (auto& key_data: core_config) {
+                    auto [nocx, nocy, len] = key_data.first;
+                    flat_data[idx++] = nocx;
+                    flat_data[idx++] = nocy;
+                    flat_data[idx++] = len;
+                    // log_debug(LogOp, "nocx: {}, nocy: {}, len: {}", nocx, nocy, len);
+                    for (size_t i = 0; i < key_data.second.size(); ++i) {
+                        auto [src_start, dst_start, length] = key_data.second[i];
                         flat_data[idx++] = src_start;
                         flat_data[idx++] = dst_start;
                         flat_data[idx++] = length;
                     }
                 }
+                // null plug
+                flat_data.emplace_back(0);
+                flat_data.emplace_back(0);
+                flat_data.emplace_back(0);
                 flattened_config.emplace_back(flat_data);
             }
             return flattened_config;
@@ -276,6 +282,33 @@ namespace tt::tt_metal::sliding_window {
         auto flattened_pad_config = flatten_pad_config(pad_config);
         auto flattened_local_config = flatten_local_config(local_config);
         auto flattened_remote_config = flatten_remote_config(remote_config);
+
+        auto align_config = [](auto& config, size_t align_granularity = 1, uint16_t align_value = 0) {
+            size_t max_len = 0;
+            for (auto& core_config : config) {
+                max_len = std::max(max_len, core_config.size());
+            }
+            if (align_granularity > 1) {
+                size_t align_amount = max_len % align_granularity;
+                max_len = align_amount > 0 ? max_len + align_granularity - align_amount : max_len;
+            }
+            for (auto& core_config : config) {
+                size_t curr_len = core_config.size();
+                size_t extend_amount = max_len - core_config.size();
+                if (extend_amount > 0) {
+                    std::vector<uint16_t> extend_v(extend_amount, align_value);
+                    core_config.insert(core_config.end(), extend_v.begin(), extend_v.end());
+                }
+            }
+        };
+
+        align_config(flattened_pad_config, 2);
+        align_config(flattened_local_config, 2);
+        align_config(flattened_remote_config, 2);
+
+        log_debug(LogOp, "flattened_pad_config: {}", flattened_pad_config);
+        log_debug(LogOp, "flattened_local_config: {}", flattened_local_config);
+        log_debug(LogOp, "flattened_remote_config: {}", flattened_remote_config);
 
         return std::make_tuple(flattened_pad_config,
                                 flattened_local_config,
@@ -292,8 +325,7 @@ namespace tt::tt_metal::sliding_window {
             TT_ASSERT(output_shard_start < op_trace_metadata.size());
             TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
             std::vector<uint16_t> local_top_left_indices;
-            for(size_t i = output_shard_start; i < output_shard_end; i++) {
-                // TT_ASSERT(i < local_top_left_indices.size());
+            for(size_t i = output_shard_start; i < output_shard_end + 1; i++) {
                 local_top_left_indices.push_back(op_trace_metadata[i] - op_trace_metadata[output_shard_start]);
             }
             sharded_input_top_left_indices.push_back(local_top_left_indices);
@@ -332,7 +364,6 @@ namespace tt::tt_metal::sliding_window {
 
     Tensor construct_on_host_config_tensor(const std::vector<std::vector<uint16_t>>& config, const SlidingWindowConfig& sw_config, const ParallelConfig& p_config) {
         std::vector<uint16_t> config_vector = flatten(config);
-        // Shape config_shape = {1, (uint32_t) config_vector.size()};
         Shape config_shape = {(uint32_t) config.size(), (uint32_t) config[0].size()};
         if (p_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
             auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
@@ -345,10 +376,10 @@ namespace tt::tt_metal::sliding_window {
             std::vector<uint16_t> repeat_config;
             uint32_t repeat_factor = 0;
             if (p_config.shard_orientation == ShardOrientation::ROW_MAJOR) {
-                TT_ASSERT(config.size() == ncores_y, "Invalid config size for BLOCK_SHARDED ROW_MAJOR");
+                TT_ASSERT(config.size() == ncores_y, "Invalid config size {} (!= {}) for BLOCK_SHARDED ROW_MAJOR", config.size(), ncores_y);
                 repeat_factor = ncores_x;
             } else if (p_config.shard_orientation == ShardOrientation::COL_MAJOR) {
-                TT_ASSERT(config.size() == ncores_x, "Invalid config size for BLOCK_SHARDED COL_MAJOR");
+                TT_ASSERT(config.size() == ncores_x, "Invalid config size {} (!= {}) for BLOCK_SHARDED COL_MAJOR", config.size(), ncores_x);
                 repeat_factor = ncores_y;
             } else {
                 TT_ASSERT(false, "Unsupported shard orientation");
@@ -357,6 +388,7 @@ namespace tt::tt_metal::sliding_window {
                 repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
             }
             auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
+            config_shape = {config_shape[0] * repeat_factor, config_shape[1]};
             return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
         } else {
             TT_ASSERT(false, "Unsupported shard scheme");
@@ -364,13 +396,12 @@ namespace tt::tt_metal::sliding_window {
         }
     }
 
-    Tensor move_config_tensor_to_device(const Tensor& config_tensor, const ParallelConfig& p_config, Device* device) {
-        // uint32_t num_cores_nhw = p_config.grid.num_cores();
-        // TT_FATAL(config_tensor.get_shape()[-1] % num_cores_nhw == 0, "Invalid config tensor shape");
+    Tensor move_config_tensor_to_device(const Tensor& config_tensor, const ParallelConfig& p_config, bool is_block_sharded, Device* device) {
         auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t) config_tensor.get_shape()[-1]});
-        ShardSpec shard_spec(p_config.grid, shard_shape, p_config.shard_orientation, false);
-        MemoryConfig memory_config{p_config.shard_scheme, BufferType::L1_SMALL, shard_spec};
-
+        auto config_shard_orientation = is_block_sharded ? (p_config.shard_orientation == ShardOrientation::COL_MAJOR ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR) : ShardOrientation::ROW_MAJOR;
+        ShardSpec shard_spec(p_config.grid, shard_shape, config_shard_orientation, false);
+        MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, shard_spec};
+        log_debug(LogOp, "config_tensor shape: {}, shard shape: {}, orientation: {}", config_tensor.get_shape(), shard_shape, config_shard_orientation);
         return config_tensor.to(device, memory_config);
     }
 

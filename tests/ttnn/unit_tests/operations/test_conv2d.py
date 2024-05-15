@@ -21,7 +21,7 @@ import os
 #     plt.figure(figsize=(100, 50))
 #     plt.xticks(torch.arange(0, stick_len) + 0.5, range(0, stick_len))
 #     plt.yticks(torch.arange(0, nsticks) + 0.5, range(0, nsticks))
-#     # plt.grid()
+#     plt.grid()
 #     bool_vals = vals > 0
 #     plt.imshow(bool_vals, interpolation="none", vmin=0, vmax=1, cmap="Blues")
 #     plt.savefig(f"diff_core_{fid}.png", bbox_inches="tight", pad_inches=0.1)

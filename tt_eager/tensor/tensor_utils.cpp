@@ -95,52 +95,66 @@ namespace tt_metal {
     template <typename T>
     Tensor to_weight_tile_layout(const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype) {
         auto w_shape = conv_weight_tensor.get_legacy_shape();
-        auto input_buffer = owned_buffer::get_as<T>(conv_weight_tensor);
-        auto weight_matrix_cols = w_shape[0];
-        // width padding
-        uint32_t in1_block_w_datums = in1_block_w * constants::TILE_WIDTH;
-        if(weight_matrix_cols%in1_block_w_datums != 0) {
-            weight_matrix_cols = (uint32_t) std::ceil( (double) weight_matrix_cols / (double) in1_block_w_datums ) * in1_block_w_datums;
-        }
-        // height padding
-        auto weight_matrix_rows = w_shape[1]*w_shape[2]*w_shape[3];
-        uint32_t in1_block_h_datums = in1_block_h * constants::TILE_HEIGHT;
-        if (weight_matrix_rows % in1_block_h_datums != 0) {
-            weight_matrix_rows = (uint32_t) std::ceil( (double) weight_matrix_rows / (double) in1_block_h_datums ) * in1_block_h_datums;
-        }
-        Shape output_shape = {1, 1, weight_matrix_rows, weight_matrix_cols};
-        auto output_buffer = owned_buffer::create<T>(compute_volume(output_shape));
-        for(auto r = 0; r < w_shape[2]; r++) {
-            for(auto s = 0; s < w_shape[3]; s++) {
-                for(auto c = 0; c < w_shape[1]; c++) {
-                    for(auto k = 0; k < w_shape[0]; k++) {
-                        auto matrix_idx = k + c * weight_matrix_cols + s * w_shape[1] * weight_matrix_cols + r * w_shape[3] * w_shape[1] * weight_matrix_cols;
-                        auto idx = k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
-                        output_buffer[matrix_idx] = input_buffer[idx];
+        auto compute =
+            [&w_shape, &in1_block_h, &in1_block_w, &output_dtype](const auto& input_buffer) {
+            auto weight_matrix_cols = w_shape[0];
+            // width padding
+            uint32_t in1_block_w_datums = in1_block_w * constants::TILE_WIDTH;
+            if(weight_matrix_cols%in1_block_w_datums != 0) {
+                weight_matrix_cols = (uint32_t) std::ceil( (double) weight_matrix_cols / (double) in1_block_w_datums ) * in1_block_w_datums;
+            }
+            // height padding
+            auto weight_matrix_rows = w_shape[1]*w_shape[2]*w_shape[3];
+            uint32_t in1_block_h_datums = in1_block_h * constants::TILE_HEIGHT;
+            if (weight_matrix_rows % in1_block_h_datums != 0) {
+                weight_matrix_rows = (uint32_t) std::ceil( (double) weight_matrix_rows / (double) in1_block_h_datums ) * in1_block_h_datums;
+            }
+            Shape output_shape = {1, 1, weight_matrix_rows, weight_matrix_cols};
+            auto output_buffer = owned_buffer::create<T>(compute_volume(output_shape));
+            for(auto r = 0; r < w_shape[2]; r++) {
+                for(auto s = 0; s < w_shape[3]; s++) {
+                    for(auto c = 0; c < w_shape[1]; c++) {
+                        for(auto k = 0; k < w_shape[0]; k++) {
+                            auto matrix_idx = k + c * weight_matrix_cols + s * w_shape[1] * weight_matrix_cols + r * w_shape[3] * w_shape[1] * weight_matrix_cols;
+                            auto idx = k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
+                            output_buffer[matrix_idx] = input_buffer[idx];
+                        }
                     }
                 }
             }
-        }
-        if constexpr (std::is_same<T, float>::value) {
-            if (output_dtype == DataType::BFLOAT8_B) {
-                auto output_float_data = output_buffer.get();
-                auto output_packed_data = pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
-                return rm_tensor.to(Layout::TILE);
+            if constexpr (std::is_same<T, float>::value) {
+                if (output_dtype == DataType::BFLOAT8_B) {
+                    auto output_float_data = output_buffer.get();
+                    auto output_packed_data = pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                    auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+                    auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
+                    return rm_tensor.to(Layout::TILE);
+                }
+                if (output_dtype == DataType::BFLOAT4_B) {
+                    auto output_float_data = output_buffer.get();
+                    auto output_packed_data = pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                    auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+                    auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
+                    return rm_tensor.to(Layout::TILE);
+                }
+            } else {
+                TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));
             }
-            if (output_dtype == DataType::BFLOAT4_B) {
-                auto output_float_data = output_buffer.get();
-                auto output_packed_data = pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
-                return rm_tensor.to(Layout::TILE);
-            }
-        } else {
-            TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));
-        }
-        auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
-        return rm_tensor.to(Layout::TILE);
+            auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
+            return rm_tensor.to(Layout::TILE);
+        };
+        return std::visit(
+            [&compute](auto&& storage) -> Tensor {
+                using StorageType = std::decay_t<decltype(storage)>;
+                if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                    return compute(owned_buffer::get_as<T>(storage.buffer));
+                } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                    return compute(borrowed_buffer::get_as<T>(storage.buffer));
+                } else {
+                    TT_THROW("Unsupported storage type");
+                }
+            },
+            conv_weight_tensor.get_storage());
     }
 
     // Converts convolution weights to tilized 2d matrix layout.

@@ -158,6 +158,8 @@ def decompose_conv_into_shards_and_generate_tensor_metadata(
         )
         conv_output_start_stick += conv_output_shard_height
 
+    print("req_conv_input_shard_start_end=", req_conv_input_shard_start_end)
+
     remap = lambda a, b: (a, b)
     if act_reshard_num_cores != 0:
         assert input_nhw_height != 0
@@ -452,10 +454,6 @@ def generate_untilize_with_halo_kernel_configs(
             remote_config[src_core_id].extend([noc_x, noc_y, len(core_data)])
             remote_config[src_core_id].extend(core_data)
 
-    print("padding_config", padding_config)
-    print("local_config", local_config)
-    print("remote_config", remote_config)
-
     # NULL plug
     for core_id in range(ncores):
         padding_config[core_id].extend([0, 0])
@@ -465,6 +463,10 @@ def generate_untilize_with_halo_kernel_configs(
     align_up_2d_python_list(padding_config, 0, align_granularity=2)
     align_up_2d_python_list(local_config, 0, align_granularity=2)
     align_up_2d_python_list(remote_config, 0, align_granularity=2)
+
+    print("padding_config", padding_config)
+    print("local_config", local_config)
+    print("remote_config", remote_config)
 
     max_out_nsticks_per_core = max(
         [
