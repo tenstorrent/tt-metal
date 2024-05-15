@@ -265,8 +265,12 @@ op_map = {
         "pytorch_op": pytorch_ops.div,
     },
     "eltwise-floor_div": {
-        "tt_lib_op": tt_lib_ops.eltwise_floor_div,
+        "tt_op": tt_lib_ops.eltwise_floor_div,
         "pytorch_op": pytorch_ops.floor_div,
+    },
+    "eltwise-unary_floor_div": {
+        "tt_op": tt_lib_ops.eltwise_unary_floor_div,
+        "pytorch_op": pytorch_ops.unary_floor_div,
     },
     "eltwise-div_no_nan": {
         "tt_op": tt_lib_ops.eltwise_div_no_nan,
