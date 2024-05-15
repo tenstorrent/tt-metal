@@ -88,6 +88,12 @@ void Cluster::detect_arch_and_target() {
         "Arch={} doesn't match compile-time build for WORMHOLE",
         get_string(this->arch_));
 #endif
+#ifdef ARCH_BLACKHOLE
+    TT_FATAL(
+        this->arch_ == tt::ARCH::BLACKHOLE,
+        "Arch={} doesn't match compile-time build for BLACKHOLE",
+        get_string(this->arch_));
+#endif
 
     TT_FATAL(this->target_type_ == TargetDevice::Versim or this->target_type_ == TargetDevice::Silicon);
 }
@@ -314,6 +320,13 @@ std::int32_t get_static_tlb_index(CoreCoord target) {
 }
 #endif
 
+// TODO: pull tlb config into sep file similar to BBE
+#ifdef ARCH_BLACKHOLE
+std::int32_t get_static_tlb_index(CoreCoord target) {
+    return -1;
+}
+#endif
+
 void Cluster::configure_static_tlbs(chip_id_t mmio_device_id) const {
     auto sdesc = get_soc_desc(mmio_device_id);
     auto statically_mapped_cores = sdesc.workers;
@@ -332,7 +345,9 @@ void Cluster::configure_static_tlbs(chip_id_t mmio_device_id) const {
         this->get_driver(mmio_device_id).configure_tlb(
             mmio_device_id, CoreCoord(DEVICE_DATA.DRAM_CHANNEL_0_X, DEVICE_DATA.DRAM_CHANNEL_0_Y), tlb_id, peer_dram_offset);
         // Align address space of 16MB TLB to 16MB boundary
+#ifndef ARCH_BLACKHOLE // TODO (abhullar): clean this up
         peer_dram_offset += DEVICE_DATA.DYNAMIC_TLB_16M_SIZE;
+#endif
     }
     this->get_driver(mmio_device_id).setup_core_to_tlb_map([](CoreCoord core) { return get_static_tlb_index(core); });
 }
