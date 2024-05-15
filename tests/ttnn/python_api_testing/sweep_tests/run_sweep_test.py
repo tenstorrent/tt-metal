@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_test import (
     generate_test_sweep_parameters,
     run_sweep_tests,
