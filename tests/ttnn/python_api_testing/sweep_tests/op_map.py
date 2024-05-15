@@ -595,7 +595,7 @@ op_map = {
     },
     "ttnn-pow": {
         "tt_op": ttnn_ops.pow,
-        "pytorch_op": pytorch_ops.power,
+        "pytorch_op": pytorch_ops.power_2,
     },
     "ttnn-logaddexp2": {
         "tt_op": ttnn_ops.logaddexp2,
