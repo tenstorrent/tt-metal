@@ -36,8 +36,8 @@ class Emb(torch.nn.Module):
 @pytest.mark.parametrize(
     "kv_cache_len, expected_compile_time, expected_inference_time",
     (
-        (32, 15, 0.11),
-        (128, 15, 0.14),
+        (32, 5, 0.105),
+        (128, 5, 0.125),
     ),
 )
 def test_mistral_model_perf(
@@ -123,11 +123,11 @@ def test_mistral_model_perf(
     profiler.print()
     iter_time = profiler.get("model_run_for_inference_0")
 
-    comment = f"num_layers={model_args.n_layers}"
+    comment = f"kv_cache_len={kv_cache_len}_num_layers={model_args.n_layers}"
     iter_time = profiler.get("model_run_for_inference_0")
 
     prep_perf_report(
-        model_name=f"Mistral7B",
+        model_name=f"Mistral7B_{comment}",
         batch_size=model_args.max_batch_size,
         inference_and_compile_time=compile_and_iter_time,
         inference_time=iter_time,
