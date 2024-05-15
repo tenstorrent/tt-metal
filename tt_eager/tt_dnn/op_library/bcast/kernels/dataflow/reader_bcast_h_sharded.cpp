@@ -9,9 +9,9 @@ void kernel_main() {
     uint32_t src1_addr  = get_arg_val<uint32_t>(0);
     uint32_t Ht         = get_arg_val<uint32_t>(1);
     uint32_t Wt         = get_arg_val<uint32_t>(2);
-    uint32_t i1         = get_arg_val<uint32_t>(3);
+    uint32_t offset         = get_arg_val<uint32_t>(3);
     uint32_t NC         =  get_arg_val<uint32_t>(4);
-    uint32_t tile_offset=  get_arg_val<uint32_t>(5);
+    uint32_t batch_offset=  get_arg_val<uint32_t>(5); //if weight has multiple batches
 
     //constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
@@ -35,7 +35,6 @@ void kernel_main() {
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
 
-    //uint32_t num_tiles = src0_num_tiles;
     uint32_t i = 0;
     cb_push_back(cb_id_in0, Ht * Wt);
     for (uint32_t ht = 0; ht < Ht; ht++) {
@@ -44,18 +43,18 @@ void kernel_main() {
                 // but we loop the second list around
                 cb_reserve_back(cb_id_in1, onetile);
                 l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                noc_async_read_tile(i1, s1, l1_write_addr_in1);
+                noc_async_read_tile(offset, s1, l1_write_addr_in1);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in1, onetile);
-                i1 ++;
+                offset ++;
             }
 
 
             // bcast tensor should be NC1W (actually NC32W padded with 0s in H)
             // wrap W around for each h (broadcast)
-            i1 -= Wt;
+            offset -= Wt;
             if(ht % NC == (NC -1)){
-                i1 += tile_offset;
+                offset += batch_offset; //switching to next batch
             }
         }
 }
