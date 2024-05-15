@@ -8,16 +8,13 @@ namespace tt {
 
 namespace tt_metal {
 
-
 #ifdef DEBUG
 
 namespace operation_history {
 
 namespace detail {
 
-OperationHistory::~OperationHistory() {
-    this->dump_to_csv();
-}
+OperationHistory::~OperationHistory() { this->dump_to_csv(); }
 
 void OperationHistory::append(OperationRecord&& record) {
     std::scoped_lock<std::mutex> lock(op_history_mutex);
@@ -132,15 +129,13 @@ void OperationHistory::clear() {
     this->records.clear();
 }
 
+OperationHistory OPERATION_HISTORY{};
+
 }  // namespace detail
 
-const char* csv_file_name() {
-    return std::getenv("OPERATION_HISTORY_CSV");
-}
+const char* csv_file_name() { return std::getenv("OPERATION_HISTORY_CSV"); }
 
-bool enabled() {
-    return csv_file_name() != nullptr;
-}
+bool enabled() { return csv_file_name() != nullptr; }
 
 void dump_to_csv() { detail::OPERATION_HISTORY.dump_to_csv(); }
 void clear() { detail::OPERATION_HISTORY.clear(); }

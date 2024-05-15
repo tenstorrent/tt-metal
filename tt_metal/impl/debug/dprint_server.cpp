@@ -710,7 +710,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                 case DPrintCSTR: // const char*
                     // terminating zero was included in size and should be present in the buffer
                     cptr = reinterpret_cast<const char*>(ptr);
-                    nlen = strnlen(cptr, 200);
+                    nlen = strnlen(cptr, sizeof(DebugPrintMemLayout::data));
                     if (nlen >= 200)
                         stream << "STRING BUFFER OVERFLOW DETECTED" << endl;
                     else

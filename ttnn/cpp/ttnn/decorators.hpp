@@ -164,8 +164,10 @@ auto map_launch_op_args_to_execute_on_worker_thread_args(
 }
 
 template <typename concrete_operation_t, typename T>
-constexpr Tensors map_execute_on_worker_thread_return_to_launch_op_return(T&& value) {
-    if constexpr (std::is_same_v<std::decay_t<decltype(value)>, Tensor>) {
+auto map_execute_on_worker_thread_return_to_launch_op_return(const T&& value) -> Tensors {
+    if constexpr (std::is_same_v<std::decay_t<decltype(value)>, Tensors>) {
+        return value;
+    } else if constexpr (std::is_same_v<std::decay_t<decltype(value)>, Tensor>) {
         return {value};
     } else if constexpr (is_homogenous_tuple<T, Tensor>()) {
         Tensors output_tensors;

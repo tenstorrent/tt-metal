@@ -707,7 +707,7 @@ enum class TensorPrintProfile {
     Full,
 };
 
-inline TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE = TensorPrintProfile::Short;
+extern TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE;
 
 namespace detail {
 
