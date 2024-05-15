@@ -1865,10 +1865,20 @@ def max_pool2d(x, *args, **kwargs):
 def repeat_2(x, *args, shape, **kwargs):
     return x.repeat(*shape)
 
-
 def power_2(x, y, *args, exponent=None, **kwargs):
     if exponent is None:
         result = torch.pow(x, y)
     else:
         result = x**exponent
     return result
+
+def subtract_and_apply_activation(x, y, *args, **kwargs):
+    activation = kwargs.pop("activation")
+    output = torch.sub(x, y)
+
+    if activation == "relu":
+        output = torch.relu(output)
+    elif activation == "gelu":
+        output = torch.gelu(output)
+
+    return output
