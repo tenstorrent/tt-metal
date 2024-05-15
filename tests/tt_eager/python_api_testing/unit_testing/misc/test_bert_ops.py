@@ -216,90 +216,21 @@ def test_bert_linear(
     assert passing
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
-@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
-@pytest.mark.parametrize("fp32_acc_mode", [True, False], ids=["fp32", "no_fp32"])
-@pytest.mark.parametrize(
-    "fidelity",
-    [
-        ttl.tensor.MathFidelity.LoFi,
-    ],
-    ids=["LoFi"],
-)
-@pytest.mark.parametrize("has_bias", [True, False], ids=["bias", "no_bias"])
-@pytest.mark.parametrize(
-    "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation",
-    [
-        # # in1-L1-fusedQKV
-        (False, True, True, 2688, 1024, 3072, None),  # both sharded
-        (False, True, False, 2688, 1024, 3072, None),  # out sharded, in0 interleaved
-        (False, False, True, 2688, 1024, 3072, None),  # out interleaved, in0 sharded
-        (False, False, False, 2688, 1024, 3072, None),  # out interleaved, in0 interleaved
-        # # # # in1-dram-fusedQKV
-        (True, True, True, 2688, 1024, 3072, None),
-        (True, True, False, 2688, 1024, 3072, None),
-        (True, False, True, 2688, 1024, 3072, None),
-        (True, False, False, 2688, 1024, 3072, None),
-        # # # # in1-L1-selfout
-        (False, True, True, 2688, 1024, 1024, None),
-        (False, True, False, 2688, 1024, 1024, None),
-        (False, False, True, 2688, 1024, 1024, None),
-        (False, False, False, 2688, 1024, 1024, None),
-        # # # # in1-dram-selfout
-        (True, True, True, 2688, 1024, 1024, None),
-        (True, True, False, 2688, 1024, 1024, None),
-        (True, False, True, 2688, 1024, 1024, None),
-        (True, False, False, 2688, 1024, 1024, None),
-        # # # # in1-L1-ff1
-        (False, True, True, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (False, True, False, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (False, False, True, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (False, False, False, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        # # # # in1-dram-ff1
-        (True, True, True, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (True, True, False, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (True, False, True, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        (True, False, False, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
-        # # # # # in1-L1-ff1 - no Gelu
-        (False, True, True, 2688, 1024, 4096, None),
-        (False, True, False, 2688, 1024, 4096, None),
-        (False, False, True, 2688, 1024, 4096, None),
-        (False, False, False, 2688, 1024, 4096, None),
-        # # # # in1-dram-ff1 - no Gelu
-        (True, True, True, 2688, 1024, 4096, None),
-        (True, True, False, 2688, 1024, 4096, None),
-        (True, False, True, 2688, 1024, 4096, None),
-        (True, False, False, 2688, 1024, 4096, None),
-        # # # # in1-L1-ff2
-        (False, True, True, 2688, 4096, 1024, None),
-        (False, True, False, 2688, 4096, 1024, None),
-        (False, False, True, 2688, 4096, 1024, None),
-        (False, False, False, 2688, 4096, 1024, None),
-        # # # # in1-dram-ff2
-        (True, True, True, 2688, 4096, 1024, None),
-        (True, True, False, 2688, 4096, 1024, None),
-        (True, False, True, 2688, 4096, 1024, None),
-        (True, False, False, 2688, 4096, 1024, None),
-    ],
-)
-def test_bert_linear_batch7(
+def run_bert_linear_batch7(
     device,
-    fidelity,
-    in0_sharded,
-    out_sharded,
-    in1_in_dram,
-    has_bias,
-    fp32_acc_mode,
     packer_l1_acc,
+    fp32_acc_mode,
+    fidelity,
+    has_bias,
+    in1_in_dram,
+    out_sharded,
+    in0_sharded,
     M,
     K,
     N,
     activation,
     function_level_defaults,
 ):
-    if K == 1024 and N == 4096 and fp32_acc_mode == True:
-        pytest.skip("Skipping float32 tests as tensor is too large")
-
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
@@ -417,6 +348,96 @@ def test_bert_linear_batch7(
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
     assert passing
+
+
+def run_test_bert_linear_batch7_all_combinations(device, function_level_defaults):
+    parameters = [
+        (packer_l1_acc, fp32_acc_mode, fidelity, has_bias, in1_in_dram, out_sharded, in0_sharded, M, K, N, activation)
+        for packer_l1_acc in [True, False]
+        for fp32_acc_mode in [True, False]
+        for fidelity in [ttl.tensor.MathFidelity.LoFi]
+        for has_bias in [True, False]
+        for in1_in_dram, out_sharded, in0_sharded, M, K, N, activation in [
+            (False, True, True, 2688, 1024, 3072, None),
+            (False, True, False, 2688, 1024, 3072, None),
+            (False, False, True, 2688, 1024, 3072, None),
+            (False, False, False, 2688, 1024, 3072, None),
+            # # # # in1-dram-fusedQKV
+            (True, True, True, 2688, 1024, 3072, None),
+            (True, True, False, 2688, 1024, 3072, None),
+            (True, False, True, 2688, 1024, 3072, None),
+            (True, False, False, 2688, 1024, 3072, None),
+            # # # # in1-L1-selfout
+            (False, True, True, 2688, 1024, 1024, None),
+            (False, True, False, 2688, 1024, 1024, None),
+            (False, False, True, 2688, 1024, 1024, None),
+            (False, False, False, 2688, 1024, 1024, None),
+            # # # # in1-dram-selfout
+            (True, True, True, 2688, 1024, 1024, None),
+            (True, True, False, 2688, 1024, 1024, None),
+            (True, False, True, 2688, 1024, 1024, None),
+            (True, False, False, 2688, 1024, 1024, None),
+            # # # # in1-L1-ff1
+            (False, True, True, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+            (False, True, False, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+            (False, False, True, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+            (False, False, False, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+            # # # # in1-dram-ff1
+            (True, True, True, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+            (True, True, False, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+            (True, False, True, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+            (True, False, False, 2688, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
+            # # # # # in1-L1-ff1 - no Gelu
+            (False, True, True, 2688, 1024, 4096, None),
+            (False, True, False, 2688, 1024, 4096, None),
+            (False, False, True, 2688, 1024, 4096, None),
+            (False, False, False, 2688, 1024, 4096, None),
+            # # # # in1-dram-ff1 - no Gelu
+            (True, True, True, 2688, 1024, 4096, None),
+            (True, True, False, 2688, 1024, 4096, None),
+            (True, False, True, 2688, 1024, 4096, None),
+            (True, False, False, 2688, 1024, 4096, None),
+            # # # # in1-L1-ff2
+            (False, True, True, 2688, 4096, 1024, None),
+            (False, True, False, 2688, 4096, 1024, None),
+            (False, False, True, 2688, 4096, 1024, None),
+            (False, False, False, 2688, 4096, 1024, None),
+            # # # # in1-dram-ff2
+            (True, True, True, 2688, 4096, 1024, None),
+            (True, True, False, 2688, 4096, 1024, None),
+            (True, False, True, 2688, 4096, 1024, None),
+            (True, False, False, 2688, 4096, 1024, None),
+        ]
+    ]
+
+    for i in range(1000):
+        for params in parameters:
+            (
+                packer_l1_acc,
+                fp32_acc_mode,
+                fidelity,
+                has_bias,
+                in1_in_dram,
+                out_sharded,
+                in0_sharded,
+                M,
+                K,
+                N,
+                activation,
+            ) = params
+            if not (K == 1024 and N == 4096 and fp32_acc_mode):
+                logger.info(params)
+                logger.info("iteration: " + str(i))
+                run_bert_linear_batch7(
+                    device,
+                    *params,
+                    function_level_defaults,
+                )
+
+
+@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
+def test_bert_linear_batch7(device, function_level_defaults):
+    run_test_bert_linear_batch7_all_combinations(device, function_level_defaults)
 
 
 def run_bert_linear_batch4(
