@@ -73,17 +73,14 @@ std::vector<Tensor> Halo::create_output_tensors(const std::vector<Tensor> &input
 
 operation::ProgramWithCallbacks Halo::create_program(const std::vector<Tensor>& inputs, std::vector<Tensor> &outputs) const {
     const auto& input_tensor = inputs.at(0);
-
-    // each of these input config tensors is on host
-    const auto& pad_config_tensor = inputs.at(1);
-    const auto& local_config_tensor = inputs.at(2);
-    const auto& remote_config_tensor = inputs.at(3);
     auto& output_tensor = outputs.at(0);
     auto device = input_tensor.device();
 
-    auto pad_config_device_tensor = sliding_window::move_config_tensor_to_device(pad_config_tensor, parallel_config_, device);
-    auto local_config_device_tensor = sliding_window::move_config_tensor_to_device(local_config_tensor, parallel_config_, device);
-    auto remote_config_device_tensor = sliding_window::move_config_tensor_to_device(remote_config_tensor, parallel_config_, device);
+    bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+
+    auto pad_config_device_tensor = sliding_window::move_config_tensor_to_device(pad_config_tensor_, parallel_config_, is_block_sharded, device);
+    auto local_config_device_tensor = sliding_window::move_config_tensor_to_device(local_config_tensor_, parallel_config_, is_block_sharded, device);
+    auto remote_config_device_tensor = sliding_window::move_config_tensor_to_device(remote_config_tensor_, parallel_config_, is_block_sharded, device);
 
     Program program = CreateProgram();
 
@@ -117,8 +114,9 @@ Tensor halo_op(const Tensor& input_tensor,
     TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along width)
+    bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
 
-    auto halo_func = [&config, pad_val, remote_read, transpose_mcast, reshard_num_cores_nhw, &output_memory_config]
+    auto halo_func = [&config, pad_val, remote_read, is_block_sharded, transpose_mcast, reshard_num_cores_nhw, &output_memory_config]
         (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
 
         auto input_tensor = input_tensors.at(0);
@@ -128,7 +126,7 @@ Tensor halo_op(const Tensor& input_tensor,
         auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config);
         auto shard_boundaries = sliding_window::generate_shard_boundaries(config, op_trace_metadata);
         auto tensor_metadata = sliding_window::generate_tensor_metadata(pad_metadata, config, reshard_num_cores_nhw);
-        auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(tensor_metadata, shard_boundaries, remote_read, device);
+        auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(tensor_metadata, shard_boundaries, is_block_sharded, transpose_mcast, remote_read, device);
 
         const auto& pad_config = std::get<0>(kernel_config);
         const auto& local_config = std::get<1>(kernel_config);
@@ -153,9 +151,12 @@ Tensor halo_op(const Tensor& input_tensor,
                 .transpose_mcast_ = transpose_mcast,
                 .reshard_num_cores_nhw_ = reshard_num_cores_nhw,
                 .max_out_nsticks_per_core_ = max_out_nsticks_per_core,
-                .output_memory_config_ = output_memory_config
+                .output_memory_config_ = output_memory_config,
+                .pad_config_tensor_=pad_config_tensor,
+                .local_config_tensor_=local_config_tensor,
+                .remote_config_tensor_=remote_config_tensor
             },
-            {input_tensor, pad_config_tensor, local_config_tensor, remote_config_tensor});
+            {input_tensor});
     };
 
     std::vector<Tensor> output_tensors = { Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}, {})) };
