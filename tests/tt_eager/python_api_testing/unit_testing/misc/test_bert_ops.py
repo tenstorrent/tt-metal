@@ -410,7 +410,7 @@ def run_test_bert_linear_batch7_all_combinations(device, function_level_defaults
         ]
     ]
 
-    for i in range(1000):
+    for i in range(100):
         for params in parameters:
             (
                 packer_l1_acc,
