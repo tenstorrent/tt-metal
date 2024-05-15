@@ -184,7 +184,12 @@ namespace tt::tt_metal::sliding_window {
             }
         }
 
-        // TODO: need null at end?
+        // NULL plug
+        for (uint32_t i = 0; i < num_core_nhw; ++ i) {
+            pad_config[i].push_back({0, 0});
+            local_config[i].second.push_back({0, 0, 0});
+            remote_config[i].push_back({{0, 0, 0}, {{0, 0, 0}}});
+        }
 
         // flatten and uniformize the lengths of each config list
         auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
@@ -194,7 +199,7 @@ namespace tt::tt_metal::sliding_window {
                 max_len = std::max(max_len, 2 * data.size());   // each data is 2 * data.size()
             }
             std::vector<std::vector<uint16_t>> flattened_config;
-            flattened_config.resize(config.size());
+            // flattened_config.resize(config.size());
             for (auto& data : config) {
                 std::vector<uint16_t> flat_data(max_len, 0);
                 uint32_t idx = 0;
@@ -327,7 +332,8 @@ namespace tt::tt_metal::sliding_window {
 
     Tensor construct_on_host_config_tensor(const std::vector<std::vector<uint16_t>>& config, const SlidingWindowConfig& sw_config, const ParallelConfig& p_config) {
         std::vector<uint16_t> config_vector = flatten(config);
-        Shape config_shape = {1, (uint32_t) config_vector.size()};
+        // Shape config_shape = {1, (uint32_t) config_vector.size()};
+        Shape config_shape = {(uint32_t) config.size(), (uint32_t) config[0].size()};
         if (p_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
             auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
             return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
@@ -359,6 +365,8 @@ namespace tt::tt_metal::sliding_window {
     }
 
     Tensor move_config_tensor_to_device(const Tensor& config_tensor, const ParallelConfig& p_config, Device* device) {
+        // uint32_t num_cores_nhw = p_config.grid.num_cores();
+        // TT_FATAL(config_tensor.get_shape()[-1] % num_cores_nhw == 0, "Invalid config tensor shape");
         auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t) config_tensor.get_shape()[-1]});
         ShardSpec shard_spec(p_config.grid, shard_shape, p_config.shard_orientation, false);
         MemoryConfig memory_config{p_config.shard_scheme, BufferType::L1_SMALL, shard_spec};
