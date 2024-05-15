@@ -46,7 +46,6 @@ class TtLlamaModelForGeneration:
             batch,
             emulated=emulated,
             cache_path=cache_path,
-            read_cache=True,
         )
         self.params = configuration
         self.devices = devices
