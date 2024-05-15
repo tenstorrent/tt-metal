@@ -3,9 +3,10 @@ name: "[TG] TG unit tests"
 on:
   push:
     branches:
-      - main/galaxy
+      - galaxy/main
   schedule:
     - cron: '0 0 * * *' # Runs every day at 12am UTC
+  workflow_dispatch:
 
 jobs:
   build-artifact:

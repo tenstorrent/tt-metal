@@ -39,6 +39,9 @@ tests/scripts/run_pre_post_commit_regressions_multi_device.sh @tt-rkim @aliuTT @
 tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh @tt-rkim @TT-billteng @ttmchiou
 tests/scripts/run_models.sh @tt-rkim
 tests/scripts/nightly/ @tt-rkim @vtangTT
+tests/scripts/multi_chip/ @tapspatel
+tests/scripts/tg/ @tapspatel
+tests/scripts/tgg/ @tapspatel
 
 # metal - base
 # tt_metal/tt_metal.cpp @abhullar-tt @TT-billteng
