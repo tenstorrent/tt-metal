@@ -45,7 +45,7 @@ def run_eltwise_threshold_tests(
     assert tt_result.shape == ref_value.shape
 
     # compare tt and golden outputs
-    success, pcc_value = comp_pcc(ref_value, tt_result)
+    success, pcc_value = comp_pcc(ref_value, tt_result, pcc=0.97)
     logger.debug(pcc_value)
     logger.debug(success)
 

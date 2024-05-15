@@ -27,7 +27,7 @@ namespace tt_metal {
 
 Tensor mk_zero_tensor_like(const Tensor& reference_tensor, const MemoryConfig& output_mem_config) {
     // Tensor zero_like = bcast(reference_tensor, , BcastOpMath::MUL, BcastOpDim::HW);
-    static const Tensor zero = mk_tiled_scalar(0.0f, reference_tensor.get_dtype());
+    Tensor zero = mk_tiled_scalar(0.0f, reference_tensor.get_dtype());
     Tensor zero_like = bcast(reference_tensor, zero, BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
     return zero_like;
 }
@@ -118,7 +118,9 @@ Tensor _softplus(const Tensor& x, float beta, float threshold, const MemoryConfi
     Tensor x_beta = mul_unary(x, beta, output_mem_config);
     Tensor exp_x = exp(x_beta, output_mem_config);
     Tensor result_log1p = log1p(exp_x, output_mem_config);
+    exp_x.deallocate();
     Tensor sp_result = mul_unary(result_log1p,  oned_beta, output_mem_config);
+    result_log1p.deallocate();
     sp_result = where(gt(x_beta, full_like(x, threshold, output_mem_config), std::nullopt, output_mem_config), x,
                 where(eqz(full_like(x, beta, output_mem_config), output_mem_config), std::numeric_limits<float>::infinity(), sp_result), output_mem_config);
     return sp_result;
