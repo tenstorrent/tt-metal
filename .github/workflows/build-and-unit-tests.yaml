@@ -42,3 +42,8 @@ jobs:
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode slow
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U0593J2RQRZ # Bill Teng
