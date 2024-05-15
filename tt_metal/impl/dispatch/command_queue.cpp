@@ -1831,40 +1831,6 @@ void EnqueueAddBufferToProgram(CommandQueue& cq, std::variant<std::reference_wra
     // });
 }
 
-void EnqueueUpdateRuntimeArgsImpl (const RuntimeArgsMetadata& runtime_args_md) {
-    std::vector<uint32_t> resolved_runtime_args = {};
-    resolved_runtime_args.reserve((*runtime_args_md.runtime_args_ptr).size());
-
-    for (const auto& arg : *(runtime_args_md.runtime_args_ptr)) {
-        std::visit([&resolved_runtime_args] (auto&& a) {
-            using T = std::decay_t<decltype(a)>;
-            if constexpr (std::is_same_v<T, Buffer*>) {
-                resolved_runtime_args.push_back(a -> address());
-            } else {
-                resolved_runtime_args.push_back(a);
-            }
-        }, arg);
-    }
-    auto& kernel_runtime_args = runtime_args_md.kernel->runtime_args(runtime_args_md.core_coord);
-    for (const auto& idx : runtime_args_md.update_idx) {
-        kernel_runtime_args[idx] = resolved_runtime_args[idx];
-    }
-}
-
-void EnqueueUpdateRuntimeArgs(CommandQueue& cq, const std::shared_ptr<Kernel> kernel, const CoreCoord &core_coord, std::vector<uint32_t> &update_idx, std::shared_ptr<RuntimeArgs> runtime_args_ptr, bool blocking) {
-    auto runtime_args_md = RuntimeArgsMetadata {
-            .core_coord = core_coord,
-            .runtime_args_ptr = runtime_args_ptr,
-            .kernel = kernel,
-            .update_idx = update_idx,
-    };
-    cq.run_command(CommandInterface {
-        .type = EnqueueCommandType::UPDATE_RUNTIME_ARGS,
-        .blocking = blocking,
-        .runtime_args_md = runtime_args_md,
-    });
-}
-
 void EnqueueSetRuntimeArgsImpl(const RuntimeArgsMetadata& runtime_args_md) {
     std::vector<uint32_t> resolved_runtime_args = {};
     resolved_runtime_args.reserve((*runtime_args_md.runtime_args_ptr).size());
@@ -2348,10 +2314,6 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
         case EnqueueCommandType::SET_RUNTIME_ARGS:
             TT_ASSERT(command.runtime_args_md.has_value(), "Must provide RuntimeArgs Metdata!");
             EnqueueSetRuntimeArgsImpl(command.runtime_args_md.value());
-            break;
-        case EnqueueCommandType::UPDATE_RUNTIME_ARGS:
-            TT_ASSERT(command.runtime_args_md.has_value(), "Must provide RuntimeArgs Metdata!");
-            EnqueueUpdateRuntimeArgsImpl(command.runtime_args_md.value());
             break;
         case EnqueueCommandType::ADD_BUFFER_TO_PROGRAM:
             TT_ASSERT(command.buffer.has_value(), "Must provide a buffer!");

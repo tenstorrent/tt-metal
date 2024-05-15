@@ -973,11 +973,6 @@ RuntimeArgsData & GetCommonRuntimeArgs(const Program &program, KernelHandle kern
     return detail::GetKernel(program, kernel_id)->common_runtime_args_data().at(0);
 }
 
-void UpdateRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const CoreCoord &core_coord, std::vector<uint32_t> &update_idx, std::shared_ptr<RuntimeArgs> runtime_args) {
-    detail::DispatchStateCheck(not device->using_slow_dispatch());
-    EnqueueUpdateRuntimeArgs(device->command_queue(), kernel, core_coord, update_idx, runtime_args, false);
-}
-
 }  // namespace tt_metal
 
 }  // namespace tt
