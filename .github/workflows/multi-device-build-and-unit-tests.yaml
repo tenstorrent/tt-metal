@@ -31,7 +31,6 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}
-      CONFIG: ci
     environment: dev
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
