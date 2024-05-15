@@ -1882,3 +1882,15 @@ def subtract_and_apply_activation(x, y, *args, **kwargs):
         output = torch.gelu(output)
 
     return output
+
+
+def multiply_and_apply_activation(x, y, *args, **kwargs):
+    activation = kwargs.pop("activation")
+    output = torch.mul(x, y)
+
+    if activation == "relu":
+        output = torch.relu(output)
+    elif activation == "gelu":
+        output = torch.gelu(output)
+
+    return output
