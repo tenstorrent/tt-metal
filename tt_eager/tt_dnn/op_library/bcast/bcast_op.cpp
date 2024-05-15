@@ -60,7 +60,12 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
         TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout);
         TT_FATAL(input_tensor_a.memory_config().buffer_type == this->output_mem_config.buffer_type);
     }
-    if (this->dim != BcastOpDim::HW) {
+    if (this->dim == BcastOpDim::W){
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED &&
+                this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+            "Bcast does not currently support input0 sharding, except if dim is W");
+    } else if (this->dim == BcastOpDim::H) {
         if(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED){
             TT_FATAL(
             input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED &&
@@ -69,7 +74,7 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
         }else{
             TT_FATAL(
             input_tensor_a.memory_config().is_sharded() && this->output_mem_config.is_sharded(),
-            "Bcast does not currently support input0 sharding, except if dim is HW");
+            "Input and output mem layouts must be the same for bcast H op!");
         }
     } else {
         TT_FATAL(
@@ -89,8 +94,9 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
     auto num_channels_b = input_shape_b[1];
     auto height_b = input_shape_b[2];
     auto width_b = input_shape_b[3];
-    if(input_tensor_a.is_sharded() == false)
-        TT_FATAL((batch_size_b * num_channels_b == 1 || (batch_size_b == batch_size_a && num_channels_b == num_channels_a)) && "Broadcast is currently only supported when bN*bC=1 or N & C match");
+    if((input_tensor_a.is_sharded() && this->dim == BcastOpDim::H) == false){
+        TT_FATAL((batch_size_b * num_channels_b == 1 || (batch_size_b == batch_size_a && num_channels_b == num_channels_a)) && "Broadcast is currently only supported when bN*bC=1 or N & C match"); //for H multi-batch weight is supported
+    }
 
     // validate input dimensions
     if (this->dim == BcastOpDim::W)
@@ -169,7 +175,7 @@ BcastOpParallelizationStrategy EltwiseBinaryBroadcast::get_parallelization_strat
     uint32_t Ht = input_tensor_a.get_legacy_shape()[2] / TILE_HEIGHT;
     uint32_t Wt = input_tensor_a.get_legacy_shape()[3] / TILE_WIDTH;
 
-    if(Ht > 1 and this->dim == BcastOpDim::H){
+    if(this->dim == BcastOpDim::H){
         if(input_tensor_a.is_sharded())
             return BcastOpParallelizationStrategy::MULTI_CORE_H_SHARDED;
         else

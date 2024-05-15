@@ -16,21 +16,8 @@ from tt_lib.utils import (
 )
 
 
-def write_to_file(tensor, file_name):
-    tensor = tensor.cpu().numpy()
-    print(tensor.shape)
-    with open(file_name, "w") as f:
-        for i in range(tensor.shape[0]):
-            for j in range(tensor.shape[1]):
-                for k in range(tensor.shape[2]):
-                    for l in range(tensor.shape[3]):
-                        f.write(f"{tensor[i][j][k][l]} ")
-                    f.write(f"\n")
-                f.write(f"\n")
-
-
 @pytest.mark.parametrize(
-    "input_height, input_width, num_cores, shard_grid, shard_stragey",
+    "input_height, input_width, num_cores, shard_grid, shard_strategy",
     (
         (2048, 320, 40, (8, 5), ttnn.ShardStrategy.BLOCK),
         (8192, 320, 40, (8, 5), ttnn.ShardStrategy.BLOCK),
@@ -63,11 +50,23 @@ def test_bcast(
     input_width,
     num_cores,
     shard_grid,
-    shard_stragey,
+    shard_strategy,
     dtype,
     op,
 ):
     torch.manual_seed(0)
+    if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
+        if shard_strategy == ttnn.ShardStrategy.BLOCK:
+            shard_grid = (
+                (shard_grid[0], 4)
+                if shard_grid[1] == 8 and orientation == ttnn.experimental.tensor.ShardOrientation.COL_MAJOR
+                else shard_grid
+            )
+            shard_grid = (
+                (4, shard_grid[1])
+                if shard_grid[0] == 8 and orientation == ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
+                else shard_grid
+            )
     input_shape = [batch_size, 1, input_height // batch_size, input_width]
     input = torch.rand(input_shape, dtype=torch.bfloat16)
 
@@ -77,7 +76,7 @@ def test_bcast(
     )
     input_2d_height = input_tensor.get_legacy_shape()[2]
     input_2d_width = input_tensor.get_legacy_shape()[3]
-    if shard_stragey == ttnn.ShardStrategy.BLOCK:
+    if shard_strategy == ttnn.ShardStrategy.BLOCK:
         input_2d_height_padded = _nearest_y(input_2d_height, shard_grid[0] * 32)
         shard_height = math.ceil(input_2d_height_padded / shard_grid[0])
         shard_width = math.ceil(input_2d_width / shard_grid[1])
@@ -102,7 +101,7 @@ def test_bcast(
         if shard_orientation == ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
         else (shard_width, shard_height),
         core_grid=core_grid,
-        strategy=shard_stragey,
+        strategy=shard_strategy,
         orientation=shard_orientation,
         use_height_and_width_as_shard_shape=True,
     )
