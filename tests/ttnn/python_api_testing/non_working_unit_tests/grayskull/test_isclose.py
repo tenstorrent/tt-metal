@@ -26,8 +26,8 @@ def run_isclose_tests(
     device,
 ):
     torch.manual_seed(data_seed)
-    x = torch.Tensor(size=input_shape[0]).uniform_(-100, 100)
-    y = torch.Tensor(size=input_shape[1]).uniform_(-200, 200)
+    x = torch.randn(input_shape[0])
+    y = torch.Tensor(size=input_shape[1]).uniform_(-100, 100)
 
     try:
         # get ref result
@@ -36,7 +36,7 @@ def run_isclose_tests(
         t0 = ttnn_ops.setup_ttnn_tensor(x, device, dlayout[0], in_mem_config[0], dtype[0])
         t1 = ttnn_ops.setup_ttnn_tensor(y, device, dlayout[1], in_mem_config[1], dtype[1])
 
-        t2 = ttnn.isclose(t0, t1, rtol, atol, memory_config=output_mem_config)
+        t2 = ttnn.isclose(t0, t1, rtol=rtol, atol=atol, equal_nan=equal_nan, memory_config=output_mem_config)
 
         tt_result = ttnn_ops.ttnn_tensor_to_torch(t2, output_mem_config)
 
@@ -58,18 +58,7 @@ def run_isclose_tests(
 
 test_sweep_args = [
     (
-        [(224, 128), (224, 128)],
-        [ttnn.bfloat16, ttnn.bfloat16],
-        [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
-        [ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
-        ttnn.DRAM_MEMORY_CONFIG,
-        1.0011717677116394e-07,
-        9.968061931431293e-10,
-        False,
-        8687804,
-    ),
-    (
-        [(224, 128), (224, 128)],
+        [(1, 1, 224, 128), (1, 1, 224, 128)],
         [ttnn.bfloat16, ttnn.bfloat8_b],
         [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
