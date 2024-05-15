@@ -384,21 +384,6 @@ std::vector< std::vector< RuntimeArgsData > > & GetRuntimeArgs(const Program &pr
 RuntimeArgsData & GetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id);
 
 /**
- * Update specific entries of the runtime args vector for a kernel using the command queue. This API must be used when Asynchronous Command Queue Mode is enabled.
- *
- * Return Value: void
- *
- * | Argument     | Description                                                            | Type                          | Valid Range                                                  | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|--------------------------------------------------------------|----------|
- * | cq           | The command queue used to send the runtime args update                 | CommandQueue &                |                                                              | Yes      |
- * | kernel       | The kernel for which the runtime args must be updated                  | std::shared_ptr<Kernel>       |                                                              | Yes      |
- * | core_coord   | The core receiving the runtime args update                             | const CoreCoord &             | A single core running the kernel                             | Yes      |
- * | update_idx   | The runtime arg vector indices that must be updated                    | std::vector<uint32_t> &       | Each index in this vector must be less than num runtime args | Yes      |
- * | runtime_args | Updated runtime args                                                   | std::shared_ptr<RuntimeArgs>  | 1:1 Mapping between each entry and the indices in update_idx | Yes      |
- */
-void UpdateRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const CoreCoord &core_coord, std::vector<uint32_t> &update_idx, std::shared_ptr<RuntimeArgs> runtime_args);
-
-/**
  * Reads a buffer from the device
  *
  * Return value: void
