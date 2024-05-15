@@ -233,7 +233,6 @@ Example::
     >>> print(output.shape)
     [1, 1, 32, 64]
 
-<<<<<<< HEAD
 """
 concat = ttnn.register_operation(
     name="ttnn.concat",
@@ -241,19 +240,6 @@ concat = ttnn.register_operation(
     golden_function=_golden_function,
     doc=doc,
 )(ttnn._ttnn.operations.data_movement.concat)
-=======
-    if rank <= 4 and all_tensors_are_tile_layout_without_padding:
-        tensors_4d = [ttnn.unsqueeze_to_4D(tensor) for tensor in tensors]
-        dim = dim + 4 - rank
-        output_tensor = ttl.tensor.concat(tensors_4d, dim=dim, output_mem_config=memory_config)
-        while len(output_tensor.shape) > rank:
-            output_tensor = ttnn.squeeze(output_tensor, dim=0)
-        return output_tensor
-    else:
-        raise NotImplementedError(
-            "ttnn.concat only supports tensors with Layout.TILE_LAYOUT without a padding, with rank <= 4"
-        )
->>>>>>> #8364: skip concat tests which fallback to torch
 
 
 def _golden_function(input_tensor, split_size, dim):
