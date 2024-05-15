@@ -190,6 +190,11 @@ Tensor floor_div(
     const Tensor& input_b,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor floor_div(
+    const Tensor& input_a,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 Tensor div_no_nan(
     const Tensor& input_a,
     const Tensor& input_b,

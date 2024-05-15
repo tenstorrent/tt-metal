@@ -871,6 +871,24 @@ Tensor floor_div(
     return operation::decorate_as_composite(__func__, _floor_div)(input_a, input_b, output_mem_config);
 }
 
+Tensor _floor_div_overload(
+    const Tensor& input_a,
+    float value,
+    const MemoryConfig& output_mem_config) {
+    Tensor t_inf = full_like(input_a, std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor t_nan = full_like(input_a, std::nanf(""), output_mem_config);
+    if (value == 0)
+        return where(eqz(input_a, output_mem_config), t_nan, mul(t_inf, sign(input_a, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+    Tensor temp = div_unary(input_a, value);
+    return temp;
+}
+Tensor floor_div(
+    const Tensor& input_a,
+    float value,
+    const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _floor_div_overload)(input_a, value, output_mem_config);
+}
+
 Tensor _div_no_nan(
     const Tensor& input_a,
     const Tensor& input_b,
