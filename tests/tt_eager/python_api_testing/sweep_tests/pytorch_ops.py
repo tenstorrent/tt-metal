@@ -685,6 +685,12 @@ def floor_div(x, y, *args, **kwargs):
     return result
 
 
+def unary_floor_div(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.floor_divide(x, value)
+    return result
+
+
 def div_no_nan(x, y, *args, **kwargs):
     result = torch.where(y == 0, 0, x / y)
     return result
