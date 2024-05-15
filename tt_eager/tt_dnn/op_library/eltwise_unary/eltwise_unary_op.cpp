@@ -383,8 +383,8 @@ const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tenso
 // unary op version tie
 template <BcastOpMath OP>
 Tensor tie_binop_to_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
-  Tensor t_value = mk_tiled_scalar(value, input_tensor.get_dtype());
-  return bcast(input_tensor, t_value, OP, BcastOpDim::HW);
+    Tensor t_value = mk_tiled_scalar(value, input_tensor.get_dtype());
+    return bcast(input_tensor, t_value, OP, BcastOpDim::HW);
 }
 
 Tensor lte_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
