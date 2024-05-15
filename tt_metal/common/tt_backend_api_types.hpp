@@ -134,17 +134,6 @@ inline constexpr static uint32_t tile_size(const DataFormat &format) {
     }
 }
 
-/**
- * @brief Device Enums
- */
-enum class DEVICE {
-    JAWBRIDGE = 0,
-    GRAYSKULL = 1,
-    WORMHOLE = 2,
-    WORMHOLE_B0 = 3,
-    Invalid = 0xFF,
-};
-
 std::string get_string(ARCH arch);
 std::string get_string_lowercase(ARCH arch);
 ARCH get_arch_from_string(const std::string &arch_str);

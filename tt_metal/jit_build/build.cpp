@@ -31,6 +31,7 @@ static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
         case tt::ARCH::GRAYSKULL: return "grayskull"; break;
         case tt::ARCH::WORMHOLE: return "wormhole"; break;
         case tt::ARCH::WORMHOLE_B0: return "wormhole"; break;
+        case tt::ARCH::BLACKHOLE: return "blackhole"; break;
         default: return "invalid"; break;
     }
 }
@@ -64,6 +65,9 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch)
     case ARCH::WORMHOLE_B0:
         common_flags = "-mwormhole -march=rv32imw -mtune=rvtt-b1 -mabi=ilp32 ";
         break;
+    case ARCH::BLACKHOLE:
+        common_flags = "-mblackhole -march=rv32iml -mtune=rvtt-b1 -mabi=ilp32 ";
+        break;
     default:
         TT_ASSERT(false, "Invalid arch");
         break;
@@ -88,6 +92,9 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch)
         break;
     case ARCH::WORMHOLE_B0:
         this->defines_ = "-DARCH_WORMHOLE ";
+        break;
+    case ARCH::BLACKHOLE:
+        this->defines_ = "-DARCH_BLACKHOLE ";
         break;
     default:
         break;

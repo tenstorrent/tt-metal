@@ -35,10 +35,6 @@ else
 $(error Unknown value for CONFIG "$(CONFIG)")
 endif
 
-ifeq ("$(ARCH_NAME)", "blackhole")
-$(error Blackhole support not yet added!)
-endif
-
 ifeq ($(TT_METAL_VERSIM_DISABLED),0)
   UMD_VERSIM_STUB = 0
 else
