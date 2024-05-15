@@ -177,7 +177,9 @@ struct operation_t {
     auto operator()(args_t&&... args) const {
         ZoneScopedN("ttnn::decorators::operation_t::operator()");
         tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", this->cpp_fully_qualified_name);
-        detail::log("Arguments: ", std::forward<args_t>(args)...);
+
+        //#8479: Fix and re-enable logging in cpp operation decorator
+        //detail::log("Arguments: ", std::forward<args_t>(args)...);
 
         static_assert(
             detail::has_execute<concrete_operation_t, args_t&&...>() xor
