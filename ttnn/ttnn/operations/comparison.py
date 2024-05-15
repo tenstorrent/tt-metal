@@ -8,7 +8,9 @@ from loguru import logger
 import ttnn
 
 
-@ttnn.register_operation(name="ttnn.compare", validate_input_tensors=lambda *args, **kwargs: None)
+@ttnn.register_operation(
+    name="ttnn.pearson_correlation_coefficient", validate_input_tensors=lambda *args, **kwargs: None
+)
 def pearson_correlation_coefficient(expected, actual):
     import torch
     import numpy as np

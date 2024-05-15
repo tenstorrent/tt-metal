@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+from typing import Union
 
 import tt_lib as ttl
 
@@ -359,6 +360,76 @@ TTL_TERNARY_FUNCTIONS_WHERE = [
 
 for ternary_function_name, ttl_ternary_function in TTL_TERNARY_FUNCTIONS_WHERE:
     register_ttl_ternary_function_where(ternary_function_name, ttl_ternary_function)
+
+
+def _golden_function(
+    input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, weight: Union[ttnn.Tensor, int, float], **_
+):
+    import torch
+
+    return torch.lerp(input_tensor_a, input_tensor_b, weight)
+
+
+def _validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_a,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+    ttnn.validate_input_tensor(
+        operation_name,
+        input_tensor_b,
+        ranks=(2, 3, 4),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
+        layouts=(ttnn.TILE_LAYOUT,),
+        can_be_on_device=True,
+        can_be_on_cpu=False,
+    )
+
+
+@ttnn.register_operation(
+    name=f"ttnn.lerp",
+    validate_input_tensors=_validate_input_tensors,
+    golden_function=_golden_function,
+)
+def lerp(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: ttnn.Tensor,
+    weight: Union[ttnn.Tensor, int, float],
+    *,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    if not (input_tensor_a.shape == input_tensor_b.shape):
+        raise RuntimeError("input_tensors must be of same size!")
+
+    if not isinstance(input_tensor_a, ttnn.Tensor) or not isinstance(input_tensor_b, ttnn.Tensor):
+        raise TypeError("Expected both arguments to be a ttnn.Tensor")
+
+    if not ttnn.is_tensor_storage_on_device(input_tensor_a) or not ttnn.is_tensor_storage_on_device(input_tensor_b):
+        raise RuntimeError("input_tensors must be on device!")
+
+    if isinstance(weight, ttnn.Tensor) and not (input_tensor_a.shape == weight.shape):
+        raise RuntimeError("weight tensor must be of same size!")
+
+    if isinstance(weight, ttnn.Tensor) and not ttnn.is_tensor_storage_on_device(weight):
+        raise RuntimeError("weight tensor must be on device!")
+
+    original_shape = input_tensor_a.shape
+
+    input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
+    input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
+
+    if isinstance(weight, ttnn.Tensor):
+        weight = ttnn.unsqueeze_to_4D(weight)
+
+    output_tensor = ttl.tensor.lerp(input_tensor_a, input_tensor_b, weight, output_mem_config=memory_config)
+
+    output_tensor = ttnn.reshape(output_tensor, original_shape)
+    return output_tensor
 
 
 __all__ = []
