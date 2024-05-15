@@ -23,7 +23,7 @@ from tt_metal.tools.profiler.process_model_log import get_samples_per_s
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, iterations, expected_compile_time, expected_inference_time",
-    ((32, 10, 15.0, 0.75),),  # Issue 7816 Compile time
+    ((32, 10, 12.5, 0.40),),  # Issue 7816 Compile time
 )
 def test_mamba_e2e_perf(
     device, batch, iterations, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds
