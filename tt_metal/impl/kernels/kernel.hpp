@@ -78,8 +78,6 @@ class Kernel : public JitBuildSettings {
 
     const std::set<CoreCoord>& cores_with_runtime_args() const { return core_with_runtime_args_; }
 
-    void update_runtime_arg( const CoreCoord &logical_core, size_t idx, uint32_t value);
-
     std::vector<uint32_t> & runtime_args(const CoreCoord &logical_core);
     RuntimeArgsData & runtime_args_data(const CoreCoord &logical_core);
     std::vector< std::vector< std::vector<uint32_t>> > & runtime_args();

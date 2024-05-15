@@ -169,7 +169,6 @@ UnaryOpType
 UpdateCircularBufferPageSize
 UpdateCircularBufferTotalSize
 UpdateDynamicCircularBufferAddress
-UpdateRuntimeArgs
 VC
 VCs
 WH
