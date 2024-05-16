@@ -18,6 +18,7 @@
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/op_library/to_layout/to_layout_op.hpp"
+#include "ttnn/op_library/to_dtype/to_dtype_op.hpp"
 #include "ttnn/op_library/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/validation.hpp"
@@ -292,6 +293,8 @@ using operations::core::squeeze_from_4D;
 using operations::core::to_device;
 using operations::core::unsqueeze_to_4D;
 
+constexpr auto to_dtype = ttnn::register_operation<ttnn::operations::core::ToDtype>("ttnn::to_dtype");
 constexpr auto to_memory_config = ttnn::register_operation<ttnn::operations::core::ToMemoryConfig>("ttnn::to_memory_config");
 constexpr auto to_layout = ttnn::register_operation<ttnn::operations::core::ToLayout>("ttnn::to_layout");
+
 }  // namespace ttnn

@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tensor/tensor_utils.hpp"
-#include "tensor/owned_buffer.hpp"
-#include "tensor/owned_buffer_functions.hpp"
+
+#include "tensor/host_buffer/functions.hpp"
+#include "tensor/host_buffer/types.hpp"
 
 namespace tt {
 

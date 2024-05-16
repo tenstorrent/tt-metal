@@ -5,15 +5,15 @@
 #include <algorithm>
 #include <cmath>
 
+#include "detail/util.hpp"
+#include "tensor/host_buffer/functions.hpp"
+#include "tensor/tensor_utils.hpp"
 #include "tt_dnn/op_library/pool/max_pool.hpp"
-#include "tt_dnn/op_library/reduce/reduce_op.hpp"   // for reduce_op_utils
-#include "tt_dnn/op_library/work_split.hpp"
+#include "tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
 #include "tt_dnn/op_library/sharding_utilities.hpp"
 #include "tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tensor/tensor_utils.hpp"
-#include "tensor/owned_buffer_functions.hpp"
-#include "detail/util.hpp"
 
 namespace tt {
 namespace tt_metal {
