@@ -11,6 +11,7 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded/multi_core/sharded_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded_partial/sharded_op_partial.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded_partial/multi_core/sharded_op_partial_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sliding_window_op_infra/sliding_window.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/copy/copy_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/copy/multi_core/copy_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/move_op.cpp
