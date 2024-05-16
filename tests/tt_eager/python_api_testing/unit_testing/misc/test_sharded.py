@@ -1655,7 +1655,6 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, d
 
     yt = ttl.tensor.untilize_with_unpadding(
         xt,
-        ttl.tensor.Shape([0, 0, 0, 0]),
         ttl.tensor.Shape([0, 0, 391, 511]),
         output_mem_config=out_mem_config,
     )
@@ -1744,7 +1743,6 @@ def test_width_sharded_untilize_with_unpadding(
 
     yt = ttl.tensor.untilize_with_unpadding(
         xt,
-        ttl.tensor.Shape([0, 0, 0, 0]),
         ttl.tensor.Shape([N - 1, C - 1, output_H - 1, W - 1]),
         output_mem_config=out_mem_config,
     )

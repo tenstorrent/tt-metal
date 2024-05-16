@@ -676,7 +676,6 @@ class resnet50:
         unpadded_shape = x.shape_without_padding()
         x = ttnn.experimental.tensor.untilize_with_unpadding(
             x,
-            (0, 0, 0, 0),
             (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
             ttnn.L1_MEMORY_CONFIG,
         )
@@ -735,7 +734,7 @@ class resnet50:
             x.get_legacy_shape()[3] - 1,
         ]
         x = ttnn.experimental.tensor.untilize_with_unpadding(
-            x, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            x, unpadded_shape_end, output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         )
 
         x = ttnn.reshape(
@@ -763,7 +762,6 @@ class resnet50:
         desired_shape[-1] = 1000
         x = ttnn.experimental.tensor.untilize_with_unpadding(
             x,
-            [0, 0, 0, 0],
             (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
             ttnn.L1_MEMORY_CONFIG,
         )

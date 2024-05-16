@@ -2217,7 +2217,6 @@ class ResNet(nn.Module):
         unpadded_shape = x.shape_without_padding()
         x = tt_lib.tensor.untilize_with_unpadding(
             x,
-            (0, 0, 0, 0),
             (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
             self.memory_config,
         )
@@ -2274,7 +2273,7 @@ class ResNet(nn.Module):
         ]
         if self.sharded:
             x = tt_lib.tensor.untilize_with_unpadding(
-                x, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=self.width_sharded_memory_config
+                x, unpadded_shape_end, output_mem_config=self.width_sharded_memory_config
             )
         else:
             x = tt_lib.tensor.untilize(x, self.memory_config, use_multicore=True)
@@ -2313,7 +2312,6 @@ class ResNet(nn.Module):
         desired_shape[-1] = 1000
         x = tt_lib.tensor.untilize_with_unpadding(
             x,
-            [0, 0, 0, 0],
             (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
             self.memory_config,
         )

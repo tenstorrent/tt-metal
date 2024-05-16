@@ -181,7 +181,7 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
 }
 
 
-operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end, bool use_pack_untilize, bool fp32_dest_acc_en) {
+operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     const Shape input_shape = a.get_legacy_shape();
     const Shape output_shape = output.get_legacy_shape();
 

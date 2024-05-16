@@ -85,8 +85,9 @@ Tensor execute(
         memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
 
     if (ttnn::is_tensor_on_device_or_multidevice(tensor_arg)) {
+        bool use_multicore = true;
+
         if (not requires_padding_change(layout, tensor.get_shape())) {
-            bool use_multicore = true;
             if (layout == ttnn::ROW_MAJOR_LAYOUT) {
                 TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
                 return tt::tt_metal::untilize(tensor, output_memory_config, use_multicore);
@@ -118,13 +119,11 @@ Tensor execute(
                 output_tensor_end.push_back(tensor.get_shape()[index] - 1);
             }
 
-            tensor =
-                tt::tt_metal::untilize_with_unpadding(tensor, {0, 0, 0, 0}, output_tensor_end, output_memory_config);
+            tensor = tt::tt_metal::untilize_with_unpadding(tensor, output_tensor_end, output_memory_config, use_multicore);
             return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape}));
 
         } else if (layout == ttnn::TILE_LAYOUT) {
             tensor = unsqueeze_to_4D(tensor);
-            bool use_multicore = true;
             std::vector<uint32_t> padded_4D_output_shape;
             padded_4D_output_shape.push_back(tensor.get_shape()[-4]);
             padded_4D_output_shape.push_back(tensor.get_shape()[-3]);

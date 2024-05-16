@@ -4,12 +4,9 @@
 
 #include <math.h>
 
-#include "padding.h"
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_dnn/op_library/work_split_tilize.hpp"
-
-#include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -19,60 +16,6 @@
 using namespace tt::constants;
 
 namespace tt::tt_metal {
-
-inline std::vector<std::vector<BlockRep>> distribute_work(const Shape& shape, uint32_t num_cores, uint32_t blocks_per_core, bool has_cliff, uint32_t nblocks_per_core_cliff) {
-    const auto& unpadded = shape.without_padding();
-    auto input_w = unpadded.rank() >= 4 ? unpadded[-4] : 1;
-    auto input_z = unpadded.rank() >= 3 ? unpadded[-3] : 1;
-    auto input_y = unpadded.rank() >= 2 ? unpadded[-2] : 1;
-
-    const auto& padding = shape.padding();
-    auto padding_w = unpadded.rank() >= 4 ? padding[shape.get_normalized_index(-4)].back : 0;
-    auto padding_z = unpadded.rank() >= 3 ? padding[shape.get_normalized_index(-3)].back : 0;
-    auto padding_y = unpadded.rank() >= 2 ? padding[shape.get_normalized_index(-2)].back : 0;
-
-    // total work is a full rep followed by a padding.
-    auto full_rep_blocks = FullRep(input_y, padding_y, input_z, padding_z, input_w).to_block_reps();
-    std::deque<BlockRep> total_work(full_rep_blocks.begin(), full_rep_blocks.end());
-    total_work.emplace_back(0, 0, (input_y + padding_y) * (input_z + padding_z) * padding_w, 1);
-
-    std::vector<std::vector<BlockRep>> core_assignments;
-    for (int i = 0; i < num_cores; i++) {
-        int blocks_to_process = blocks_per_core;
-        if (i == num_cores - 1 && has_cliff) {
-            blocks_to_process = nblocks_per_core_cliff;
-        }
-
-        // Assign blocks to cores
-        std::vector<BlockRep> core_blocks;
-        int core_blocks_count = 0;
-        while (core_blocks_count < blocks_to_process) {
-            if (total_work.empty()) {
-                break;
-            }
-
-            int remaining_core_blocks = blocks_to_process - core_blocks_count;
-            auto& first = total_work.front();
-            if (first.block_count() <= remaining_core_blocks) {
-                core_blocks.push_back(first);
-                core_blocks_count += first.block_count();
-                total_work.pop_front();
-            } else {
-                auto [head, tail] = first.split_at(remaining_core_blocks);
-                for (auto& el : head) {
-                    core_blocks.push_back(el);
-                    core_blocks_count += el.block_count();
-                }
-                total_work.pop_front();
-                total_work.insert(total_work.begin(), tail.begin(), tail.end());
-            }
-        }
-
-        core_assignments.push_back(core_blocks);
-    }
-
-    return core_assignments;
-}
 
 operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -89,7 +32,8 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
 
     Device* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
-    auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] = split_blocks_for_tilize(grid_size, nblocks);
+    auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
+        split_blocks_for_tilize(grid_size, nblocks);
 
     uint32_t src0_cb_index = CB::c_in0;
     uint32_t num_input_tiles = ntiles_per_block;
@@ -346,21 +290,22 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = detail::TileSize(output_cb_data_format);
 
-    const Shape& true_input_shape = a.get_legacy_shape();
-    const Shape& true_output_shape = output.get_legacy_shape();
+    const Shape& input_shape = a.get_legacy_shape();
+    const Shape& output_shape = output.get_legacy_shape();
 
     Device* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t num_blocks = output.volume() / true_output_shape[-1] / TILE_HEIGHT;
+    uint32_t num_blocks = output.volume() / output_shape[-1] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = output.get_legacy_shape()[-1] / TILE_WIDTH;
 
-    auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] = split_blocks_for_tilize(grid_size, num_blocks);
+    auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
+        split_blocks_for_tilize(grid_size, num_blocks);
 
     bool has_cliff = core_range_cliff.size() > 0;
 
-    uint32_t unpadded_row_size_bytes = true_input_shape[-1] * a.element_size();  // Assuming bfloat16 dataformat
-    uint32_t padded_row_size_bytes = true_output_shape[-1] * a.element_size();   // Assuming bfloat16 dataformat
+    uint32_t unpadded_row_size_bytes = input_shape[-1] * a.element_size();  // Assuming bfloat16 dataformat
+    uint32_t padded_row_size_bytes = output_shape[-1] * a.element_size();   // Assuming bfloat16 dataformat
 
     uint32_t src0_cb_index = CB::c_in0;
     tt_metal::CircularBufferConfig src0_cb_config =
@@ -426,7 +371,13 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
     // 1D distribution of blocks across cores
-    auto core_assignments = distribute_work(true_output_shape, ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff);
+    auto core_assignments = distribute_work(
+        output_shape.without_padding(),
+        output_shape.padding(),
+        ncores,
+        nblocks_per_core,
+        has_cliff,
+        nblocks_per_core_cliff);
 
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;

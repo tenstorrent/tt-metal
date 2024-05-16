@@ -1200,13 +1200,13 @@ def tilize_with_val_padding(x, output_tensor_shape, pad_value, *args, **kwargs):
     return tilized
 
 
-def untilize_with_unpadding(x, output_tensor_start, output_tensor_end, *args, **kwargs):
+def untilize_with_unpadding(x, output_tensor_end, *args, **kwargs):
     untilized = untilize_util(x)
     unpad = untilized[
-        output_tensor_start[0] : output_tensor_end[0] + 1,
-        output_tensor_start[1] : output_tensor_end[1] + 1,
-        output_tensor_start[2] : output_tensor_end[2] + 1,
-        output_tensor_start[3] : output_tensor_end[3] + 1,
+        : output_tensor_end[0] + 1,
+        : output_tensor_end[1] + 1,
+        : output_tensor_end[2] + 1,
+        : output_tensor_end[3] + 1,
     ]
     return unpad
 
