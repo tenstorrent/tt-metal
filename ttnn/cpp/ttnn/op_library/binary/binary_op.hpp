@@ -69,7 +69,7 @@ struct Binary {
             ttnn::TensorSchema{
                 2,
                 4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
+                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16},
                 {ttnn::TILE_LAYOUT},
                 true,
                 false,
@@ -78,7 +78,7 @@ struct Binary {
             ttnn::TensorSchema{
                 2,
                 4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
+                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16},
                 {ttnn::TILE_LAYOUT},
                 true,
                 false,
