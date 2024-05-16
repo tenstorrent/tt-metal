@@ -15,6 +15,7 @@
 #include "data_movement.hpp"
 #include "transformer.hpp"
 #include "normalization.hpp"
+#include "kv_cache.hpp"
 
 namespace py = pybind11;
 
@@ -46,6 +47,9 @@ void py_module(py::module& module) {
 
     auto m_ccl = module.def_submodule("ccl", "collective communication operations");
     ccl::py_module(m_ccl);
+
+    auto m_kv_cache = module.def_submodule("kv_cache", "KV cache operations");
+    kv_cache::py_module(m_kv_cache);
 }
 
 }  // namespace operations
