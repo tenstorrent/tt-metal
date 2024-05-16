@@ -212,9 +212,8 @@ class TtLlamaDecoder_optimized:
             )
 
             rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
-            # Use batch=1 because we assume all users use same rot_mat
-            rot_mat = get_rotation_mat(rot_emb, start_pos, seq_len, batch=1)
-            assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
+            rot_mat = get_rotation_mat(rot_emb, start_pos, seq_len, batch=batch)
+            assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
             rot_mats = as_tensor(
                 rot_mat,
                 ttnn.bfloat16,
@@ -224,6 +223,10 @@ class TtLlamaDecoder_optimized:
                 self.device_mesh,
             )
             rot_mats = ttnn.to_device(rot_mats, self.device_mesh)
+
+            rot_mats = tt_lib.tensor.interleaved_to_sharded(
+                rot_mats, sharded_mem_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"]
+            )
 
             padded_layer_past_len = nearest_32(start_pos + 1)
             attn_mask_shape = (seq_len, 1, self.padded_local_heads, padded_layer_past_len)
