@@ -5,14 +5,12 @@
 #include <cmath>
 
 #include "common/constants.hpp"
+#include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
-#include "tensor/owned_buffer.hpp"
-#include "tt_metal/host_api.hpp"
-
-#include "tt_numpy/functions.hpp"
-
-#include "tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_dnn/op_library/operation.hpp"
+#include "tt_dnn/op_library/pad/pad_op.hpp"
+#include "tt_metal/host_api.hpp"
+#include "tt_numpy/functions.hpp"
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::Device;

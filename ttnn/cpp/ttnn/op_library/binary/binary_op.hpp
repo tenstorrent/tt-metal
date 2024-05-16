@@ -9,7 +9,7 @@
 
 #include "tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "tt_eager/tensor/owned_buffer_functions.hpp"
+#include "tt_eager/tensor/host_buffer/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_eager/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "tt_eager/tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"

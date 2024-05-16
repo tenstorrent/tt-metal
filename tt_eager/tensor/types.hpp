@@ -11,8 +11,7 @@
 #include <vector>
 
 #include "common/bfloat16.hpp"
-#include "tensor/borrowed_buffer.hpp"
-#include "tensor/owned_buffer.hpp"
+#include "tensor/host_buffer/types.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/tt_stl/concepts.hpp"

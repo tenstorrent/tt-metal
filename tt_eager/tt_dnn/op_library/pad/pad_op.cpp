@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/pad/pad_op.hpp"
+
+#include "tensor/host_buffer/functions.hpp"
 #include "tt_dnn/op_library/copy/copy_op.hpp"
 #include "tt_dnn/op_library/math.hpp"
-
-#include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
-#include "tensor/owned_buffer_functions.hpp"
+#include "tt_metal/host_api.hpp"
 
 using namespace tt::constants;
 

@@ -7,8 +7,8 @@
 #include <common/math.hpp>
 #include <optional>
 #include <random>
-#include <tensor/owned_buffer.hpp>
-#include <tensor/owned_buffer_functions.hpp>
+#include <tensor/host_buffer/functions.hpp>
+#include <tensor/host_buffer/types.hpp>
 #include <tensor/tensor.hpp>
 #include <tensor/tensor_utils.hpp>
 #include <tensor/types.hpp>
