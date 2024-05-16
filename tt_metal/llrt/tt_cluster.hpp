@@ -94,6 +94,12 @@ class Cluster {
         return device->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
     }
 
+    std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
+        uint32_t associated_mmio_device_id = this->get_associated_mmio_device(device_id);
+        tt_SiliconDevice* driver = dynamic_cast<tt_SiliconDevice*>(this->mmio_device_id_to_driver_.at(associated_mmio_device_id).get());
+        return driver->get_numa_node_for_pcie_device(associated_mmio_device_id);
+    }
+
     void write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
     void read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
 
