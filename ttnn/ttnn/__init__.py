@@ -15,7 +15,6 @@ from loguru import logger
 import tt_lib as _tt_lib
 import ttnn._ttnn
 
-
 CPP_CONFIG: ttnn._ttnn.core.Config = ttnn._ttnn.CONFIG
 
 
@@ -240,6 +239,7 @@ from ttnn.decorators import (
     register_pre_operation_hook,
     register_post_operation_hook,
     get_golden_function,
+    get_fallback_function,
 )
 
 import ttnn.experimental
