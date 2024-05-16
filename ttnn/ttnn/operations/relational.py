@@ -150,117 +150,53 @@ ttnn.Tensor.__lt__ = lambda self, *args, **kwargs: getattr(THIS_MODULE, "lt")(se
 ttnn.Tensor.__le__ = lambda self, *args, **kwargs: getattr(THIS_MODULE, "le")(self, *args, **kwargs)
 
 
-def register_ttl_isclose_function(name, ttl_isclose_function, op_name, param1, param2):
-    def _golden_function(
-        input_tensor_a: ttnn.Tensor,
-        input_tensor_b: ttnn.Tensor,
-        param1: float = 1e-05,
-        param2: float = 1e-08,
-        equal_nan: bool = False,
-        **_,
-    ):
-        import torch
+def _golden_function(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: ttnn.Tensor,
+    param1: float = 1e-05,
+    param2: float = 1e-08,
+    equal_nan: bool = False,
+    **_,
+):
+    import torch
 
-        name_to_golden_function_function = {
-            "isclose": torch.isclose,
-        }
-        torch_function = name_to_golden_function_function[name]
-        return torch_function(input_tensor_a, input_tensor_b, rtol=param1, atol=param2, equal_nan=equal_nan)
-
-    def _relational_validate_input_tensors(operation_name, input_tensor_a, input_tensor_b, *args, **kwargs):
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor_a,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor_b,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT,),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
-
-    @ttnn.register_operation(
-        name=f"ttnn.{name}",
-        validate_input_tensors=_relational_validate_input_tensors,
-        golden_function=_golden_function,
-    )
-    def isclose_function(
-        input_tensor_a: ttnn.Tensor,
-        input_tensor_b: ttnn.Tensor,
-        rtol: float = 1e-05,
-        atol: float = 1e-08,
-        equal_nan: bool = False,
-        *,
-        memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-    ) -> ttnn.Tensor:
-        if not (input_tensor_a.shape == input_tensor_b.shape):
-            raise RuntimeError("input_tensors must be of same size!")
-
-        if not isinstance(input_tensor_a, ttnn.Tensor) or not isinstance(input_tensor_b, ttnn.Tensor):
-            raise TypeError("Expected both arguments to be a ttnn.Tensor")
-
-        if not ttnn.is_tensor_storage_on_device(input_tensor_a) or not ttnn.is_tensor_storage_on_device(input_tensor_b):
-            raise RuntimeError("input_tensors must be on device!")
-
-        if not _is_scalar(atol) or not _is_scalar(rtol):
-            raise TypeError("Expected float parameters!")
-
-        original_shape = input_tensor_a.shape
-
-        input_tensor_a = ttnn.unsqueeze_to_4D(input_tensor_a)
-        input_tensor_b = ttnn.unsqueeze_to_4D(input_tensor_b)
-
-        output_tensor = ttl_isclose_function(
-            input_tensor_a, input_tensor_b, rtol, atol, equal_nan, output_mem_config=memory_config
-        )
-
-        output_tensor = ttnn.reshape(output_tensor, original_shape)
-        return output_tensor
-
-    if isinstance(isclose_function, ttnn.decorators.Operation):
-        isclose_function.__name__ = f"ttnn.{name}"
-        isclose_function.decorated_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-            Applies the {name} function to the elements of the input tensor :attr:`input_a` and :attr:`input_b`.
-            {op_name}
-
-            .. math::
-                {name.replace('_',' ')}(\\mathrm{{input\\_tensor\\_a}}_i \\; , \\; \\mathrm{{input\\_tensor\\_b}}_i  \\; , \\; \\mathrm{{atol}}\\; , \\; \\mathrm{{rtol}})
-
-            Args:
-                * :attr:`input_tensor_a`
-                * :attr:`input_tensor_b`
-
-            Example::
-                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
-                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1 + 1e-10, 1], [4, 4 + 1e-10]]), dtype=torch.bfloat16)), device)
-                >>> output = ttnn.{name}(tensor1, tensor2, {param2}, {param1})
-            """
-
-    setattr(THIS_MODULE, name, isclose_function)
+    return torch.isclose(input_tensor_a, input_tensor_b, rtol=param1, atol=param2, equal_nan=equal_nan)
 
 
-TTL_ISCLOSE_FUNCTION = [
-    (
-        "isclose",
-        ttl.tensor.isclose,
-        "isclose(input_a, input_b, rtol, atol) = ∣input_a−input_B∣ ≤ atol+rtol×∣input_b∣.",
-        "atol",
-        "rtol",
-    ),
-]
+@ttnn.register_operation(
+    name=f"ttnn.isclose",
+    golden_function=_golden_function,
+)
+def isclose(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: ttnn.Tensor,
+    *,
+    rtol: float = 1e-05,
+    atol: float = 1e-08,
+    equal_nan: bool = False,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    """isclose(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, rtol: float = 1e-05, atol: float = 1e-08, equal_nan: bool = False, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+
+    Applies the isclose function to the elements of the input tensor :attr:`input_a` and :attr:`input_b`.
+
+    isclose(input_a, input_b, rtol, atol) = ∣input_a−input_B∣ ≤ atol+rtol×∣input_b∣.
+
+    .. math::
+        ttnn.isclose(\\mathrm{{input\\_tensor\\_a}}_i \\; , \\; \\mathrm{{input\\_tensor\\_b}}_i  \\; , \\; \\mathrm{{atol}}\\; , \\; \\mathrm{{rtol}})
+
+    Args:
+        * :attr:`input_tensor_a`
+        * :attr:`input_tensor_b`
 
 
-for isclose_function_name, ttl_isclose_function, op_name, param1, param2 in TTL_ISCLOSE_FUNCTION:
-    register_ttl_isclose_function(isclose_function_name, ttl_isclose_function, op_name, param1, param2)
+
+    Example::
+        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
+        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1 + 1e-10, 1], [4, 4 + 1e-10]]), dtype=torch.bfloat16)), device)
+        >>> output = ttnn.isclose(tensor1, tensor2, rtol, atol)
+    """
+    return ttl.tensor.isclose(input_tensor_a, input_tensor_b, rtol, atol, equal_nan, output_mem_config=memory_config)
 
 
 __all__ = []
