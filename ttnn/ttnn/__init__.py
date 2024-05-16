@@ -15,7 +15,6 @@ from loguru import logger
 import tt_lib as _tt_lib
 import ttnn._ttnn
 
-
 CPP_CONFIG: ttnn._ttnn.core.Config = ttnn._ttnn.CONFIG
 
 
@@ -468,4 +467,8 @@ from ttnn.operations.conv2d import Conv2d
 from ttnn.operations.maxpool2d import (
     MaxPool2d,
     global_avg_pool2d,
+)
+
+from ttnn.fallback import (
+    reshape,
 )
