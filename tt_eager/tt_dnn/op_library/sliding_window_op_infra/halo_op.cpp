@@ -118,7 +118,9 @@ Tensor halo_op(const Tensor& input_tensor,
     // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along width)
 
-    auto halo_func = [&config, pad_val, remote_read, transpose_mcast, reshard_num_cores_nhw, &output_memory_config]
+    bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+
+    auto halo_func = [&config, pad_val, remote_read, is_block_sharded, transpose_mcast, reshard_num_cores_nhw, &output_memory_config]
         (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) mutable -> std::vector<Tensor> {
 
         auto input_tensor = input_tensors.at(0);
@@ -128,7 +130,7 @@ Tensor halo_op(const Tensor& input_tensor,
         auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config);
         auto shard_boundaries = sliding_window::generate_shard_boundaries(config, op_trace_metadata);
         auto tensor_metadata = sliding_window::generate_tensor_metadata(pad_metadata, config, reshard_num_cores_nhw);
-        auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(tensor_metadata, shard_boundaries, remote_read, device);
+        auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(tensor_metadata, shard_boundaries, is_block_sharded, transpose_mcast, remote_read, device);
 
         const auto& pad_config = std::get<0>(kernel_config);
         const auto& local_config = std::get<1>(kernel_config);
