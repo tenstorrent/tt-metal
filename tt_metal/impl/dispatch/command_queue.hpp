@@ -57,7 +57,7 @@ string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 #define NOC_Y(y) y
 
 uint32_t get_noc_unicast_encoding(const CoreCoord &coord);
-uint32_t get_noc_multcast_encoding(const CoreCoord &start, const CoreCoord &end);
+uint32_t get_noc_multicast_encoding(const CoreCoord &start, const CoreCoord &end);
 
 class CommandQueue;
 class CommandInterface;
@@ -277,14 +277,23 @@ class EnqueueProgramCommand : public Command {
     SystemMemoryManager& manager;
     CoreType dispatch_core_type;
     uint32_t expected_num_workers_completed;
-    HostMemDeviceCommand preamble_command_sequence;
-    thread_local static std::unordered_map<uint64_t, std::vector<HostMemDeviceCommand>> runtime_args_command_sequences;
-    HostMemDeviceCommand program_command_sequence;
 
    public:
+
+    struct CachedProgramCommandSequence {
+        HostMemDeviceCommand preamble_command_sequence;
+        std::vector<HostMemDeviceCommand> runtime_args_command_sequences;
+        uint32_t runtime_args_fetch_size_bytes;
+        HostMemDeviceCommand program_command_sequence;
+        uint32_t cb_configs_payload_start;
+        uint32_t aligned_cb_config_size_bytes;
+        std::vector<std::vector<std::shared_ptr<CircularBuffer>>> circular_buffers_on_core_ranges;
+    };
+    thread_local static std::unordered_map<uint64_t, CachedProgramCommandSequence> cached_program_command_sequences;
+
     EnqueueProgramCommand(uint32_t command_queue_id, Device* device, Program& program, SystemMemoryManager& manager, uint32_t expected_num_workers_completed);
 
-    void assemble_preamble_commands();
+    void assemble_preamble_commands(bool prefetch_stall);
     void assemble_device_commands();
     void assemble_runtime_args_commands();
 
