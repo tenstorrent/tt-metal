@@ -40,6 +40,7 @@ inline std::string get_soc_description_file(const tt::ARCH &arch, tt::TargetDevi
             case tt::ARCH::GRAYSKULL: return tt_metal_home + "tt_metal/soc_descriptors/grayskull_versim_1x1_arch.yaml";
             case tt::ARCH::WORMHOLE: throw std::runtime_error("WORMHOLE arch not supported");
             case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/soc_descriptors/wormhole_b0_versim_1x1_arch.yaml";
+            case tt::ARCH::BLACKHOLE: return tt_metal_home + "tt_metal/soc_descriptors/blackhole_versim_1x1_arch.yaml";
             default: throw std::runtime_error("Unsupported device arch");
         };
     } else {
@@ -49,6 +50,7 @@ inline std::string get_soc_description_file(const tt::ARCH &arch, tt::TargetDevi
             case tt::ARCH::GRAYSKULL: return tt_metal_home + "tt_metal/soc_descriptors/grayskull_120_arch.yaml";
             case tt::ARCH::WORMHOLE: throw std::runtime_error("WORMHOLE arch not supported");
             case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml";
+            case tt::ARCH::BLACKHOLE: return tt_metal_home + "tt_metal/soc_descriptors/blackhole_140_arch.yaml";
             default: throw std::runtime_error("Unsupported device arch");
         };
     }

@@ -1,0 +1,41 @@
+# Anything using [[#, #]] is logical coordinates (Can be relative)
+# relative index: 0 means first row, -1 means last row of functional grid...
+
+# product name:
+#   num of HW command queues:
+#     core descriptor config
+
+blackhole:
+  1:
+    l1_bank_size:
+      1376256
+
+    compute_with_storage_grid_range: # Logical only start and end [x, y]
+      start: [0, 0]
+      end: [7, 6]
+
+    storage_cores: # Relative to grid of tensix cores
+      []
+
+    dispatch_cores:
+      []
+
+    dispatch_core_type:
+      "tensix"
+
+  2:
+    l1_bank_size:
+      1376256
+
+    compute_with_storage_grid_range: # Logical only start and end [x, y]
+      start: [0, 0]
+      end: [7, 6]
+
+    storage_cores: # Relative to grid of tensix cores
+      []
+
+    dispatch_cores:
+      []
+
+    dispatch_core_type:
+      "tensix"
