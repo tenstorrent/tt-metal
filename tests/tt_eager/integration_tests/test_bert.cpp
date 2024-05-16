@@ -121,7 +121,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         .per_core_M = 12,
         .per_core_N = 11,
         .transpose_mcast = false,
-        .fused_activation = UnaryWithParam{.op_type=UnaryOpType::GELU, .param=1.0f},
+        .fused_activation = UnaryWithParam(UnaryOpType::GELU,1.0f),
     };
     auto ff1_matmul_output = tt::operations::primary::matmul(
         attention_layernorm_output,
