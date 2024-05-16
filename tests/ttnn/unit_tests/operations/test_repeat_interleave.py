@@ -11,8 +11,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@pytest.mark.skip(reason="ttnn.repeat_interleave only supports 4D tensors")
 def test_repeat_interleave(device):
-    pytest.skip("ttnn.repeat_interleave only supports 4D tensors")
     torch_input_tensor = torch.tensor([[1, 2], [3, 4]])
     torch_result = torch.repeat_interleave(torch_input_tensor, 2, dim=0)
 
@@ -24,6 +24,7 @@ def test_repeat_interleave(device):
     assert_with_pcc(torch_result, output, 0.9999)
 
 
+@pytest.mark.skip(reason="ttnn.repeat_interleave only supports 4D tensors")
 def test_repeat_interleave_with_repeat_tensor(device):
     torch_input_tensor = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
     torch_repeats = torch.tensor([1, 2])
