@@ -18,17 +18,7 @@
 #include "tools/profiler/profiler.hpp"
 #include "tt_metal/impl/debug/sanitize_noc_host.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
-
-#ifdef ARCH_GRAYSKULL
-static constexpr uint32_t DYNAMIC_TLB_COUNT = 16;
-static constexpr unsigned int MEM_SMALL_READ_WRITE_TLB = DEVICE_DATA.TLB_BASE_INDEX_2M + 1;
-static constexpr unsigned int DYNAMIC_TLB_BASE_INDEX = DEVICE_DATA.MEM_LARGE_READ_TLB + 1;
-
-#else
-static constexpr uint32_t DYNAMIC_TLB_COUNT = 16;
-static constexpr unsigned int MEM_SMALL_READ_WRITE_TLB = DEVICE_DATA.TLB_BASE_INDEX_2M + 1;
-static constexpr uint32_t DYNAMIC_TLB_BASE_INDEX = DEVICE_DATA.MEM_LARGE_READ_TLB + 1;
-#endif
+#include "tt_metal/llrt/tlb_config.hpp"
 
 namespace tt {
 
@@ -218,8 +208,7 @@ void Cluster::open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &c
         // Silicon driver will attempt to open this many hugepages as channels, and assert if workload uses more than available.
         // Metal currently uses assigns 1 channel per device
         uint32_t num_host_mem_ch_per_mmio_device = controlled_device_ids.size();
-        std::unordered_map<std::string, std::int32_t> dynamic_tlb_config = {};
-        dynamic_tlb_config["REG_TLB"] = DEVICE_DATA.REG_TLB;
+        std::unordered_map<std::string, std::int32_t> dynamic_tlb_config = ll_api::get_dynamic_tlb_config();
         // This will remove harvested rows from the soc descriptor
         const bool perform_harvesting = true;
         const bool clean_system_resources = true;
@@ -248,111 +237,6 @@ void Cluster::open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &c
     this->mmio_device_id_to_driver_[mmio_device_id] = std::move(device_driver);
 }
 
-#ifdef ARCH_WORMHOLE
-std::int32_t get_static_tlb_index(CoreCoord target) {
-    bool is_eth_location =
-        std::find(std::cbegin(DEVICE_DATA.ETH_LOCATIONS), std::cend(DEVICE_DATA.ETH_LOCATIONS), target) !=
-        std::cend(DEVICE_DATA.ETH_LOCATIONS);
-    bool is_tensix_location =
-        std::find(std::cbegin(DEVICE_DATA.T6_X_LOCATIONS), std::cend(DEVICE_DATA.T6_X_LOCATIONS), target.x) !=
-            std::cend(DEVICE_DATA.T6_X_LOCATIONS) &&
-        std::find(std::cbegin(DEVICE_DATA.T6_Y_LOCATIONS), std::cend(DEVICE_DATA.T6_Y_LOCATIONS), target.y) !=
-            std::cend(DEVICE_DATA.T6_Y_LOCATIONS);
-    // implementation migrated from wormhole.py in `src/t6ifc/t6py/packages/tenstorrent/chip/wormhole.py` from tensix
-    // repo (t6py-wormhole-bringup branch)
-
-    // Special handling for DRAM TLBs : return a 2MB TLB pointing to the start of the Epoch Cmd Queue Table
-    // The default 1MB TLB is not used for DRAM cores
-    // auto DRAM_TLB_IDX = std::find(DEVICE_DATA.DRAM_LOCATIONS.begin(), DEVICE_DATA.DRAM_LOCATIONS.end(), target);
-    // if (DRAM_TLB_IDX != DEVICE_DATA.DRAM_LOCATIONS.end()) {
-    //     return EPOCH_CMD_QUEUE_TLBS.at(DRAM_TLB_IDX - DEVICE_DATA.DRAM_LOCATIONS.begin());
-    // }
-
-    if (is_eth_location) {
-        if (target.y == 6) {
-            target.y = 1;
-        }
-
-        if (target.x >= 5) {
-            target.x -= 1;
-        }
-        target.x -= 1;
-
-        int flat_index = target.y * 8 + target.x;
-        int tlb_index = flat_index;
-        return tlb_index;
-
-    } else if (is_tensix_location) {
-        if (target.x >= 5) {
-            target.x -= 1;
-        }
-        target.x -= 1;
-
-        if (target.y >= 6) {
-            target.y -= 1;
-        }
-        target.y -= 1;
-
-        int flat_index = target.y * 8 + target.x;
-
-        // All 80 get single 1MB TLB.
-        int tlb_index = DEVICE_DATA.ETH_LOCATIONS.size() + flat_index;
-
-        return tlb_index;
-    } else {
-        return -1;
-    }
-}
-#endif
-
-#ifdef ARCH_GRAYSKULL
-std::int32_t get_static_tlb_index(CoreCoord target) {
-    // Special handling for DRAM TLBs : return a 2MB TLB pointing to the start of the Epoch Cmd Queue Table
-    // The default 1MB TLB is not used for DRAM cores
-    // auto DRAM_TLB_IDX = std::find(DEVICE_DATA.DRAM_LOCATIONS.begin(), DEVICE_DATA.DRAM_LOCATIONS.end(), target);
-    // if (DRAM_TLB_IDX != DEVICE_DATA.DRAM_LOCATIONS.end()) {
-    //     return EPOCH_CMD_QUEUE_TLBS.at(DRAM_TLB_IDX - DEVICE_DATA.DRAM_LOCATIONS.begin());
-    // }
-    int flat_index = target.y * DEVICE_DATA.GRID_SIZE_X + target.x;
-    if (flat_index == 0) {
-        return -1;
-    }
-    return flat_index;
-}
-#endif
-
-// TODO: pull tlb config into sep file similar to BBE
-#ifdef ARCH_BLACKHOLE
-std::int32_t get_static_tlb_index(CoreCoord target) {
-    return -1;
-}
-#endif
-
-void Cluster::configure_static_tlbs(chip_id_t mmio_device_id) const {
-    auto sdesc = get_soc_desc(mmio_device_id);
-    auto statically_mapped_cores = sdesc.workers;
-    statically_mapped_cores.insert(
-        statically_mapped_cores.end(), sdesc.ethernet_cores.begin(), sdesc.ethernet_cores.end());
-    std::int32_t address = 0;
-
-    // Setup static TLBs for all worker cores
-    for (auto &core : statically_mapped_cores) {
-        auto tlb_index = get_static_tlb_index(core);
-        this->get_driver(mmio_device_id).configure_tlb(mmio_device_id, core, tlb_index, address);
-    }
-    // Setup static TLBs for MMIO mapped data space
-    uint64_t peer_dram_offset = DEVICE_DATA.DRAM_CHANNEL_0_PEER2PEER_REGION_START;
-    for (uint32_t tlb_id = DYNAMIC_TLB_BASE_INDEX; tlb_id < DYNAMIC_TLB_BASE_INDEX + DYNAMIC_TLB_COUNT; tlb_id++) {
-        this->get_driver(mmio_device_id).configure_tlb(
-            mmio_device_id, CoreCoord(DEVICE_DATA.DRAM_CHANNEL_0_X, DEVICE_DATA.DRAM_CHANNEL_0_Y), tlb_id, peer_dram_offset);
-        // Align address space of 16MB TLB to 16MB boundary
-#ifndef ARCH_BLACKHOLE // TODO (abhullar): clean this up
-        peer_dram_offset += DEVICE_DATA.DYNAMIC_TLB_16M_SIZE;
-#endif
-    }
-    this->get_driver(mmio_device_id).setup_core_to_tlb_map([](CoreCoord core) { return get_static_tlb_index(core); });
-}
-
 void Cluster::start_driver(chip_id_t mmio_device_id, tt_device_params &device_params) const {
     device_params.init_device = true;
 
@@ -360,7 +244,7 @@ void Cluster::start_driver(chip_id_t mmio_device_id, tt_device_params &device_pa
 
     // static TLBs avoided for Blackhole bring up
     if (this->target_type_ == TargetDevice::Silicon && device_params.init_device && this->arch_ != tt::ARCH::BLACKHOLE) {
-        configure_static_tlbs(mmio_device_id);
+        ll_api::configure_static_tlbs(this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), this->get_driver(mmio_device_id));
     }
 
     this->mmio_device_id_to_driver_.at(mmio_device_id)->start_device(device_params);
