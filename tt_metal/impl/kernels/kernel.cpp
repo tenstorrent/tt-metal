@@ -270,7 +270,7 @@ void Kernel::set_common_runtime_args(const RuntimeArgsData& common_runtime_args)
     TT_FATAL(!set_rt_args.empty() and set_rt_args.size() == common_runtime_args.size(), "Illegal Common Runtime Args: Number of common runtime args cannot be modified!");
     for (auto& rt_args_data : this->common_runtime_args_data_) {
         if (common_runtime_args.data() != rt_args_data.data()) {
-            memcpy(rt_args_data.data(), common_runtime_args.data(), common_runtime_args.size() * sizeof(uint32_t));
+            std::memcpy((void *)rt_args_data.data(),(void *) common_runtime_args.data(), common_runtime_args.size() * sizeof(uint32_t));
         }
     }
 }

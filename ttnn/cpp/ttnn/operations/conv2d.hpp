@@ -415,7 +415,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_requi
         auto input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(input_tensor.get_shape(), parallel_config, 32);
 
         if (input_is_on_device) {
-            input_tensor = ttnn::operations::core::to_memory_config(input_tensor, input_tensor_sharded_memory_config);
+            input_tensor = ttnn::operations::core::ToMemoryConfig::execute(input_tensor, input_tensor_sharded_memory_config,{});
         } else {
             input_tensor = ttnn::operations::core::to_device(input_tensor, const_cast<Device*>(&device), input_tensor_sharded_memory_config);
         }
@@ -508,7 +508,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             0
         );
         bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, const_cast<Device*>(&device), nullopt);
-        bias_tensor_ = ttnn::operations::core::to_layout(bias_tensor_, Layout::TILE, weights_bias_dtype, nullopt);
+        bias_tensor_ = ttnn::operations::core::ToLayout::execute(bias_tensor_, Layout::TILE, weights_bias_dtype,{}, (Device *)nullptr);
     }
     cout << "Done preparing weights" << endl;
 
@@ -559,7 +559,7 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
     bool is_1x1_s1_p0_conv = kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == 1 && stride[1] == 1 && padding[0] == 1 && padding[1] == 1 && dilation[0] == 1 && dilation[1] == 1 && groups == 1;
     if (is_1x1_s1_p0_conv) {
-        input_tensor_post_tm = ttnn::operations::core::to_layout(input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config());
+        input_tensor_post_tm = ttnn::operations::core::ToLayout::execute(input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config(),&device);
     }
     // call optimized conv op or matmul micro op
     bool input_is_on_device = ttnn::has_storage_type_of(input_tensor_post_tm, ttnn::DEVICE_STORAGE_TYPE);
@@ -590,7 +590,7 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
     } else {
         // run conv as matmul
         // TODO add support for running downsample here for stride 2
-        auto matmul_output = ttnn::operations::matmul::linear(input_tensor_post_tm, weight_tensor_on_device, bias_tensor_on_device, input_tensor_post_tm.memory_config(), conv_config.dtype, conv_config.activation, compute_kernel_config);
+        auto matmul_output = ttnn::operations::matmul::linear(input_tensor_post_tm, weight_tensor_on_device, bias_tensor_on_device, {}, input_tensor_post_tm.memory_config(), conv_config.dtype, conv_config.activation, compute_kernel_config);
         if (conv_config.deallocate_activation) {
             input_tensor_post_tm.deallocate();
         }

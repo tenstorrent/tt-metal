@@ -453,9 +453,7 @@ def _conv_op_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
     )
 
 
-@ttnn.register_operation(
-    name="ttnn.conv2d", is_cpp_function=False, validate_input_tensors=_conv_op_validate_input_tensors
-)
+@ttnn.register_operation(name="ttnn.conv2d", validate_input_tensors=_conv_op_validate_input_tensors)
 def conv2d(
     *,
     input_tensor: ttnn.Tensor,  # may or may not be sharded
