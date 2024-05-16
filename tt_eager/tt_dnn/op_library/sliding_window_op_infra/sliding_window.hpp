@@ -51,9 +51,10 @@ namespace tt::tt_metal {
         uint32_t num_cores_nhw_;        // num cores along collapsed height nhw
         CoreRangeSet core_range_set_;   // active cores
 
+        bool snap_to_tile_;
 
-        SlidingWindowConfig(uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t window_h, uint32_t window_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w, uint32_t dilation_h = 1, uint32_t dilation_w = 1, uint32_t num_cores_nhw = 0, CoreRangeSet core_range = {{}})
-            : batch_size_(batch_size), input_hw_(input_h, input_w), window_hw_(window_h, window_w), stride_hw_(stride_h, stride_w), pad_hw_(pad_h, pad_w), dilation_hw_(dilation_h, dilation_w), has_parallel_config_(false), num_cores_nhw_(num_cores_nhw), core_range_set_(core_range) {
+        SlidingWindowConfig(uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t window_h, uint32_t window_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w, uint32_t dilation_h = 1, uint32_t dilation_w = 1, uint32_t num_cores_nhw = 0, CoreRangeSet core_range = {{}}, bool snap_to_tile = false)
+            : batch_size_(batch_size), input_hw_(input_h, input_w), window_hw_(window_h, window_w), stride_hw_(stride_h, stride_w), pad_hw_(pad_h, pad_w), dilation_hw_(dilation_h, dilation_w), has_parallel_config_(false), num_cores_nhw_(num_cores_nhw), core_range_set_(core_range), snap_to_tile_(snap_to_tile) {
                 has_parallel_config_ = num_cores_nhw_ > 0 && !core_range_set_.ranges().empty();
             }
 
@@ -104,7 +105,7 @@ namespace tt::tt_metal {
         std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config);    // {
         std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(const SlidingWindowConfig& config, const std::vector<uint32_t>& op_trace_metadata);  // {
         std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(const std::vector<bool>& pad_metadata, const SlidingWindowConfig& config, uint32_t reshard_num_cores_nhw = 0); // {
-        std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, uint32_t> generate_halo_kernel_config_tensors(const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool remote_read, Device* device);   // {
+        std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, uint32_t> generate_halo_kernel_config_tensors(const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool is_block_sharded, bool transpose_mcast, bool remote_read, Device* device);   // {
         std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(const std::vector<uint32_t>& op_trace_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool pad_tile = false, bool pad_last_core = false);  // {
         std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input); // {
         Tensor construct_on_host_config_tensor(const std::vector<std::vector<uint16_t>>& config, const SlidingWindowConfig& sw_config, const ParallelConfig& p_config); // {
