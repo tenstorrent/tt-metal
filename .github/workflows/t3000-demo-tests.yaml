@@ -1,9 +1,9 @@
-name: "Multi-chip demo tests"
+name: "[T3K] T3000 demo tests"
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
+    - cron: '0 0 * * 6' # This cron schedule runs the workflow every Saturday at 12am UTC
 
 jobs:
   build-artifact:
@@ -11,28 +11,25 @@ jobs:
     with:
       arch: '["wormhole_b0"]'
     secrets: inherit
-
-  multi-chip-unit-tests:
+  t3000-demo-tests:
     needs: build-artifact
     strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
       fail-fast: false
       matrix:
         test-group: [
-          # N300 2x4
           {
-            name: "T3000 end to end demo tests",
+            name: "T3000 demo tests",
             arch: wormhole_b0,
-            runs-on: ["perf-t3000", "arch-wormhole_b0", "multi-chip-num-pcie-4", "multi-chip-num-chips-8"],
-            machine-type: "bare_metal",
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type end_to_end_demos_multi_device --dispatch-mode ""'
+            runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "runner-test", "bare-metal", "pipeline-functional"],
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_t3000_device --dispatch-mode ""'
           },
         ]
-    name: ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
+    name: ${{ matrix.test-group.name }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
@@ -46,9 +43,10 @@ jobs:
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
       - uses: ./.github/actions/install-python-deps
-      - name: Run pre/post regression tests
+      - name: Run demo regression tests
         timeout-minutes: 180
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-group.cmd }}

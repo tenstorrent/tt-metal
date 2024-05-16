@@ -102,42 +102,6 @@ run_frequent_api_pipeline_tests() {
     fi
 }
 
-# Run frequent multi device pipeline tests - these are the t3000 + 4xn300 tests
-run_frequent_multi_device_pipeline_tests() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    ./tests/scripts/multi_chip/run_frequent_regressions_multi_device.sh
-}
-
-# Run end to end demos - these are the t3000 + 4xn300 tests
-run_end_to_end_demos_multi_device() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    ./tests/scripts/multi_chip/run_end_to_end_demos.sh
-}
-
-# Run post commit TG tests - these are 4xn150 + galaxy tests
-run_post_commit_tg_pipeline_tests() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    ./tests/scripts/tg/run_pre_post_commit_regressions_tg.sh
-}
-
-# Run post commit TGG tests - these are 8xn150 + 2xgalaxy tests
-run_post_commit_tgg_pipeline_tests() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    ./tests/scripts/tgg/run_pre_post_commit_regressions_tgg.sh
-}
-
 run_models_performance() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -158,14 +122,6 @@ run_models_performance_bare_metal_pipeline_tests() {
     local dispatch_mode=$3
 
     run_models_performance "$tt_arch" "$pipeline_type"
-}
-
-run_models_performance_bare_metal_multi_device_pipeline_tests() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    run_models_performance_multi_device "$tt_arch" "$pipeline_type"
 }
 
 run_models_performance_virtual_machine_pipeline_tests() {
@@ -203,14 +159,6 @@ run_stress_post_commit_pipeline_tests() {
     done
 }
 
-run_post_commit_multi_device_pipeline_tests() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    ./tests/scripts/multi_chip/run_pre_post_commit_regressions_multi_device.sh
-}
-
 run_post_commit_multi_device_unstable_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -239,6 +187,66 @@ run_ttnn_sweeps_pipeline_tests() {
     ./tests/scripts/run_ttnn_sweeps.sh
 }
 
+##########################T3000##########################
+# Run t3000 unit tests
+unit_t3000_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/t3000/run_t3000_unit_tests.sh
+}
+
+# Run t3000 frequent tests
+frequent_t3000_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/t3000/run_t3000_frequent_tests.sh
+}
+
+# Run t3000 demo tests
+demos_t3000_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/t3000/run_t3000_demo_tests.sh
+}
+
+# Run t3000 model perf tests
+model_perf_t3000_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/t3000/run_t3000_model_perf_tests.sh --pipeline-type "$pipeline_type"
+}
+##########################T3000##########################
+
+##########################TG##########################
+# Run TG unit tests
+unit_tg_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/tg/run_tg_unit_tests.sh
+}
+##########################TG##########################
+
+##########################TGG##########################
+# Run TGG unit tests
+unit_tgg_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/tgg/run_tgg_unit_tests.sh
+}
+##########################TGG##########################
+
 run_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -257,28 +265,29 @@ run_pipeline_tests() {
         run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == *"models_performance_bare_metal" || $pipeline_type == "models_device_performance_bare_metal" ]]; then
         run_models_performance_bare_metal_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == *"models_performance_bare_metal_multi_device" ]]; then
-        run_models_performance_bare_metal_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "models_performance_virtual_machine" ]]; then
         run_models_performance_virtual_machine_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "stress_post_commit" ]]; then
         run_stress_post_commit_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "post_commit_multi_device" ]]; then
-        run_post_commit_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "post_commit_multi_device_unstable" ]]; then
-        run_post_commit_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "frequent_multi_device" ]]; then
-        run_frequent_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "end_to_end_demos_multi_device" ]]; then
-        run_end_to_end_demos_multi_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "post_commit_tg" ]]; then
-        run_post_commit_tg_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "post_commit_tgg" ]]; then
-        run_post_commit_tgg_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "microbenchmarks" ]]; then
         run_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "ttnn_sweeps" ]]; then
         run_ttnn_sweeps_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    # T3000 pipelines
+    elif [[ $pipeline_type == "unit_t3000_device" ]]; then
+        unit_t3000_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "frequent_t3000_device" ]]; then
+        frequent_t3000_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "demos_t3000_device" ]]; then
+        demos_t3000_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == *"model_perf_t3000_device" ]]; then
+        model_perf_t3000_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    # TG pipelines
+    elif [[ $pipeline_type == "unit_tg_device" ]]; then
+        unit_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    # TGG pipelines
+    elif [[ $pipeline_type == "unit_tgg_device" ]]; then
+        unit_tgg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
     else
         echo "Unknown pipeline: $pipeline_type"
         exit 1
