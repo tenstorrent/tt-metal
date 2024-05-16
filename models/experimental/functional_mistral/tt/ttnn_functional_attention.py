@@ -83,9 +83,10 @@ def attention(config, x, bcast_freq_xq, bcast_freq_xk, positions, mask, seqlen, 
     xk = xk[:, :seqlen, :]
     xv = xv[:, :seqlen, :]
 
-    xq = ttnn.reshape(xq, (bsz, seqlen, config.n_heads, config.head_dim))
-    xk = ttnn.reshape(xk, (bsz, seqlen, config.n_kv_heads, config.head_dim))
-    xv = ttnn.reshape(xv, (bsz, seqlen, config.n_kv_heads, config.head_dim))
+    fallback_reshape = ttnn.get_fallback_function(ttnn.reshape)
+    xq = fallback_reshape(xq, (bsz, seqlen, config.n_heads, config.head_dim))
+    xk = fallback_reshape(xk, (bsz, seqlen, config.n_kv_heads, config.head_dim))
+    xv = fallback_reshape(xv, (bsz, seqlen, config.n_kv_heads, config.head_dim))
 
     xq, xk = apply_rotary_emb(xq, xk, bcast_freq_xq, bcast_freq_xk, device, mem_config)
 
@@ -148,7 +149,7 @@ def attention(config, x, bcast_freq_xq, bcast_freq_xk, positions, mask, seqlen, 
     output = scores @ value
     output = ttnn.permute(output, (0, 2, 1, 3))
     output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
-    output = ttnn.reshape(output, (1, bsz, seqlen, -1))
+    output = fallback_reshape(output, (1, bsz, seqlen, -1))
     output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
     output = output @ parameters.wo.weight
     return output

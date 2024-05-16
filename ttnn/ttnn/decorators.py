@@ -558,7 +558,6 @@ class Operation:
                         f"{self.python_fully_qualified_name}: falling back to CPU due to {exception_message}"
                     )
                     output = golden_function(*function_args, **function_kwargs)
-
                 if ttnn.CONFIG.throw_exception_on_fallback and ran_golden_function:
                     raise RuntimeError(
                         f"Fallbacks are disabled, but {self.python_fully_qualified_name} used a fallback"
@@ -690,7 +689,6 @@ class Operation:
             function = fallback_to_golden_function_decorator(function)
 
         function = runtime_decorator(function)
-
         self.decorated_function = function
 
     def __call__(self, *function_args, **function_kwargs):
@@ -730,10 +728,15 @@ def query_registered_operations(include_experimental=False):
 
 
 OPERATION_TO_GOLDEN_FUNCTION = {}
+OPERATION_TO_FALLBACK_FUNCTION = {}
 
 
 def get_golden_function(operation):
     return OPERATION_TO_GOLDEN_FUNCTION[operation]
+
+
+def get_fallback_function(operation):
+    return OPERATION_TO_FALLBACK_FUNCTION[operation]
 
 
 def register_operation(
@@ -751,9 +754,19 @@ def register_operation(
     def operation_decorator(function: callable):
         global REGISTERED_APIS
         global OPERATION_TO_GOLDEN_FUNCTION
+        global OPERATION_TO_FALLBACK_FUNCTION
+
+        def fallback_function(*function_args, **function_kwargs):
+            updated_function_args, updated_function_kwargs = preprocess_golden_function_inputs(
+                function_args, function_kwargs
+            )
+            output = golden_function(*updated_function_args, **updated_function_kwargs)
+            output = postprocess_golden_function_outputs(output, function_args, function_kwargs)
+            return output
 
         if ttnn.CONFIG.enable_fast_runtime_mode:
             OPERATION_TO_GOLDEN_FUNCTION[function] = golden_function
+            OPERATION_TO_FALLBACK_FUNCTION[function] = fallback_function
             return function
 
         is_cpp_function = hasattr(function, "__ttnn__")
@@ -806,6 +819,7 @@ def register_operation(
         REGISTERED_APIS.add(api)
 
         OPERATION_TO_GOLDEN_FUNCTION[api] = golden_function
+        OPERATION_TO_FALLBACK_FUNCTION[api] = fallback_function
 
         return api
 
