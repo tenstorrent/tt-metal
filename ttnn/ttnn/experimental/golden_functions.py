@@ -123,6 +123,18 @@ if not ttnn.CONFIG.enable_fast_runtime_mode:
 
     attach_golden(ttnn.experimental.tensor.interleaved_to_sharded_partial, _golden_function)
 
+    def _golden_function(in0, in1, op, dir, *args, **kwargs):
+        in0 = in0.reshape((in1.shape[0], 1, -1, in0.shape[-1]))
+        if op == ttnn.experimental.tensor.BcastOpMath.ADD:
+            res = in0 + in1
+        elif op == ttnn.experimental.tensor.BcastOpMath.SUB:
+            res = in0 - in1
+        elif op == ttnn.experimental.tensor.BcastOpMath.MUL:
+            res = in0 * in1
+        return res
+
+    ttnn.experimental.tensor.bcast.golden_function = _golden_function
+
     def _nop_golden_function(input_tensor, *args, **kwargs):
         return input_tensor
 

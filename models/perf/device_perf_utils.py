@@ -49,8 +49,9 @@ def run_device_perf(command, subdir, num_iterations, cols, batch_size, has_signp
     return post_processed_results
 
 
-def check_device_perf(post_processed_results, margin, expected_perf_cols):
+def check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=False):
     expected_results = {}
+    failed = False
     for col, expected_perf in expected_perf_cols.items():
         lower_threshold = (1 - margin) * expected_perf
         upper_threshold = (1 + margin) * expected_perf
@@ -62,9 +63,12 @@ def check_device_perf(post_processed_results, margin, expected_perf_cols):
         )
         passing = lower_threshold <= post_processed_results[col] <= upper_threshold
         if not passing:
+            failed = True
             logger.error(
                 f"{col} {post_processed_results[col]} is outside of expected range ({lower_threshold}, {upper_threshold})"
             )
+    if assert_on_fail:
+        assert not failed, "Some performance metrics are outside of expected range, see above for details."
     return expected_results
 
 
