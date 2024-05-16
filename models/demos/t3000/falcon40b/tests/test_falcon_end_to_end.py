@@ -87,24 +87,26 @@ def run_test_FalconCausalLM_end_to_end(
         assert q_len % 32 == 0, "For prefill, seq_len must be multiple of 32!"
         assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
 
+        past_key_values = None
+
     elif llm_mode == "decode":
         q_len, kv_len = seq_len, kv_cache_len + 1
         assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
         assert q_len == 1, "For decode, q_len must be 1!"
 
+        past_key_values = ()
+        for i in range(num_layers):
+            k_cache = torch.zeros(batch, num_kv_heads, kv_cache_len, head_dim)
+            v_cache = torch.zeros(batch, num_kv_heads, kv_cache_len, head_dim)
+            past_key_values += (
+                (
+                    torch.repeat_interleave(k_cache, num_attention_heads // num_kv_heads, 1),
+                    (torch.repeat_interleave(v_cache, num_attention_heads // num_kv_heads, 1)),
+                ),
+            )
+
     else:
         raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
-
-    past_key_values = ()
-    for i in range(num_layers):
-        k_cache = torch.zeros(batch, num_kv_heads, kv_cache_len, head_dim)
-        v_cache = torch.zeros(batch, num_kv_heads, kv_cache_len, head_dim)
-        past_key_values += (
-            (
-                torch.repeat_interleave(k_cache, num_attention_heads // num_kv_heads, 1),
-                (torch.repeat_interleave(v_cache, num_attention_heads // num_kv_heads, 1)),
-            ),
-        )
 
     # Prepare output -----------------------------------------------------------------------
     logger.info("Running HF reference model")
@@ -137,7 +139,7 @@ def run_test_FalconCausalLM_end_to_end(
     logger.info("Done loading TT Falcon Model")
 
     # Initialize past layer values
-    tt_layer_past = tt_FalconCausalLM.get_kv_cache()
+    tt_layer_past = tt_FalconCausalLM.initialize_kv_cache()
 
     profiler.start("processing_of_input")
     if llm_mode == "prefill":
