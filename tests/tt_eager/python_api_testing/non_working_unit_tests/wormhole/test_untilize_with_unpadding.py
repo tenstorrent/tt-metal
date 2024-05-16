@@ -25,7 +25,6 @@ def run_untilize_with_unpadding_tests(
     in_mem_config,
     out_mem_config,
     data_seed,
-    output_tensor_start,
     output_tensor_end,
     device,
 ):
@@ -37,13 +36,10 @@ def run_untilize_with_unpadding_tests(
     x = gen_rand(size=input_shape, low=-100, high=100).to(torch.bfloat16)
     # compute ref value
     x_ref = x.detach().clone()
-    ref_value = pytorch_ops.untilize_with_unpadding(
-        x_ref, output_tensor_start=output_tensor_start, output_tensor_end=output_tensor_end
-    )
+    ref_value = pytorch_ops.untilize_with_unpadding(x_ref, output_tensor_end=output_tensor_end)
 
     tt_result = tt_untilize_with_unpadding(
         x=x,
-        output_tensor_start=output_tensor_start,
         output_tensor_end=output_tensor_end,
         device=device,
         dtype=[dtype],
@@ -68,14 +64,13 @@ test_sweep_args = [
         "SYSTEM_MEMORY",
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         5263366,
-        [0, 0, 0, 0],
         [10, 9, 4, 1],
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, output_tensor_start, output_tensor_end",
+    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, output_tensor_end",
     (test_sweep_args),
 )
 def test_untilize_with_unpadding_test(
@@ -85,7 +80,6 @@ def test_untilize_with_unpadding_test(
     in_mem_config,
     out_mem_config,
     data_seed,
-    output_tensor_start,
     output_tensor_end,
     device,
 ):
@@ -97,7 +91,6 @@ def test_untilize_with_unpadding_test(
         in_mem_config,
         out_mem_config,
         data_seed,
-        output_tensor_start,
         output_tensor_end,
         device,
     )
