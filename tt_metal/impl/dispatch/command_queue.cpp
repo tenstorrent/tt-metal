@@ -1213,10 +1213,6 @@ void HWCommandQueue::enqueue_command(T& command, bool blocking) {
     if (blocking) {
         this->finish();
     }
-
-    // If this command has side-effects, then the next scheduled read needs
-    // to stall before fetching. Else, it can pre-fetch
-    this->stall_before_read = command.has_side_effects();
 }
 
 // TODO: Currently converting page ordering from interleaved to sharded and then doing contiguous read/write
