@@ -146,7 +146,8 @@ OutputTensors run_device_operation(
         const DeviceOperation<OutputTensors>&,
         const Tensors&,
         const OptionalConstTensors&,
-        OutputTensors&)>
+        OutputTensors&,
+        const OptionalTensors&)>
         get_or_create_program;
 
     auto& program_cache = input_tensors[0].device()->program_cache;
@@ -157,12 +158,18 @@ OutputTensors run_device_operation(
                                     const DeviceOperation<OutputTensors>& operation,
                                     const Tensors& input_tensors,
                                     const OptionalConstTensors& optional_input_tensors,
-                                    OutputTensors& output_tensors) -> std::reference_wrapper<Program> {
+                                    OutputTensors& output_tensors,
+                                    const OptionalTensors& optional_output_tensors) -> std::reference_wrapper<Program> {
             program_hash = operation.compute_program_hash(input_tensors, optional_input_tensors);
             auto program_ptr = program_cache.find(program_hash);
 
             bool cache_hit = program_ptr.has_value();
             log_debug(tt::LogOp, "Program Hash: {} ({})", program_hash, cache_hit ? "HIT" : "MISS");
+
+            if (not cache_hit or operation.uses_custom_program_hash()) {
+                operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
+            }
+
             if (not cache_hit) {
                 program_ptr = std::make_shared<operation::CacheableProgram<OutputTensors>>(operation.create_program(input_tensors, optional_input_tensors, output_tensors));
                 program_cache.insert(program_hash, program_ptr.value());
@@ -196,16 +203,18 @@ OutputTensors run_device_operation(
         get_or_create_program = [](const DeviceOperation<OutputTensors>& operation,
                                    const Tensors& input_tensors,
                                    const OptionalConstTensors& optional_input_tensors,
-                                   OutputTensors& output_tensors) -> std::shared_ptr<Program> {
+                                   OutputTensors& output_tensors,
+                                   const OptionalTensors& optional_output_tensors) -> std::shared_ptr<Program> {
+            operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
             auto program_with_callbacks =
                 operation.create_program(input_tensors, optional_input_tensors, output_tensors);
             return std::make_shared<Program>(std::move(program_with_callbacks.program));
         };
     }
 
-    operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
     auto output_tensors = operation.create_output_tensors(input_tensors, optional_output_tensors);
-    auto program = get_or_create_program(operation, input_tensors, optional_input_tensors, output_tensors);
+    auto program = get_or_create_program(
+        operation, input_tensors, optional_input_tensors, output_tensors, optional_output_tensors);
     uint32_t device_id = detail::get_device(input_tensors, optional_input_tensors)->id();
 
     // Enqueue or Launch Program

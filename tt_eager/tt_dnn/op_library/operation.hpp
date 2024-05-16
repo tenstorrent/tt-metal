@@ -12,6 +12,7 @@
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_stl/concepts.hpp"
 #include "tt_stl/reflection.hpp"
+#include "ttnn/config.hpp"
 
 namespace tt {
 
@@ -498,6 +499,8 @@ struct DeviceOperation final {
             output_tensors);
     }
 
+    inline bool uses_custom_program_hash() const { return this->uses_custom_program_hash_impl_(); }
+
     inline const Hash compute_program_hash(
         const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) const {
         ZoneScoped;
@@ -536,6 +539,9 @@ struct DeviceOperation final {
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors,
                const OptionalTensors& optional_output_tensors) -> void {
+                if (ttnn::CONFIG.enable_fast_runtime_mode) {
+                    return;
+                }
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (
                     (detail::implements_validate<T>() or
@@ -663,6 +669,15 @@ struct DeviceOperation final {
                     static_assert(tt::stl::concepts::always_false_v<T>, "Operation doesn't implement create_program");
                 }
             }},
+        uses_custom_program_hash_impl_{[]() -> bool {
+            if constexpr (detail::implements_compute_program_hash<T>()) {
+                return true;
+            } else if constexpr (detail::implements_compute_program_hash_with_optional_input_tensors<T>()) {
+                return true;
+            } else {
+                return false;
+            }
+        }},
         create_profiler_info_impl_{[](const storage_t& storage, const Tensors& input_tensors) -> const ProfilerInfo {
             const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
             std::optional<std::string> preferred_name = tt::stl::get_type_name<T>();
@@ -720,6 +735,7 @@ struct DeviceOperation final {
         const Tensors&,
         const std::vector<std::optional<const Tensor>>&,
         OutputTensors&);
+    bool (*uses_custom_program_hash_impl_)();
     const Hash (*compute_program_hash_impl_)(
         const storage_t& value, const Tensors&, const std::vector<std::optional<const Tensor>>&);
     const ProfilerInfo (*create_profiler_info_impl_)(const storage_t& value, const Tensors& input_tensors);
