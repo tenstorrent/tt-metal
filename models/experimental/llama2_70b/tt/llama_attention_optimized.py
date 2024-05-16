@@ -279,9 +279,8 @@ class TtLlamaAttention_optimized:
             xs = tt_lib.tensor.interleaved_to_sharded(xs, sharded_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"])
 
             rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
-            # Use batch=1 because we assume all users use same rot_mat
-            rot_mat = get_rotation_mat(rot_emb, start_pos, seq_len, batch=1)
-            assert rot_mat.size() == (1, 1, self.head_dim, self.head_dim)
+            rot_mat = get_rotation_mat(rot_emb, start_pos, seq_len, batch=batch)
+            assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
             rot_mats = as_tensor(
                 rot_mat,
                 ttnn.bfloat16,
@@ -291,6 +290,10 @@ class TtLlamaAttention_optimized:
                 self.device_mesh,
             )
             rot_mats = ttnn.to_device(rot_mats, self.device_mesh)
+
+            rot_mats = tt_lib.tensor.interleaved_to_sharded(
+                rot_mats, sharded_mem_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"]
+            )
 
             padded_layer_past_len = nearest_32(start_pos + 1)
             attn_mask_shape = (seq_len, 1, self.padded_local_heads, padded_layer_past_len)
@@ -366,7 +369,9 @@ class TtLlamaAttention_optimized:
 
         # Reshard
         if self.model_config["LN_ATTN_OUTPUT_MEMCFG"] != self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]:
-            xs = tt_lib.tensor.reshard(xs, self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"])
+            # xs = tt_lib.tensor.reshard(xs, self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"])
+            xs = tt_lib.tensor.sharded_to_interleaved(xs, self.model_config["L1_MEMCFG"])
+            xs = tt_lib.tensor.interleaved_to_sharded(xs, self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"])
 
         # Fused QKV
         fused_query_key_value = tt_lib.operations.primary.matmul_1d(
@@ -380,12 +385,6 @@ class TtLlamaAttention_optimized:
         xs.deallocate(True)
 
         # TMs
-        # TODO: Remove this and consume 40-core sharded output of previous op
-        if self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] != self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]:
-            fused_query_key_value = tt_lib.tensor.reshard(
-                fused_query_key_value, self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]
-            )
-
         (
             query_layer,  # [seqlen, n_local_heads, bsz, head_dim]
             key_layer,  # [seqlen, n_local_kv_heads, bsz, head_dim]
@@ -404,7 +403,7 @@ class TtLlamaAttention_optimized:
         query_layer = tt_lib.operations.primary.matmul(
             query_layer,
             rot_mats,
-            program_config=self.model_config["ROT_MAT_Q_MM_PROGCFG"],
+            program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
             output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
             compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"]
             # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_heads, bsz, head_dim]
@@ -413,9 +412,9 @@ class TtLlamaAttention_optimized:
         key_layer = tt_lib.operations.primary.matmul(
             key_layer,
             rot_mats,
+            program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
             output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
             compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
-            # [seqlen, n_kv_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_kv_heads, bsz, head_dim]
         )
 
         return query_layer, key_layer, value_layer
@@ -548,19 +547,18 @@ class TtLlamaAttention_optimized:
         # attn_output = tt_lib.tensor.sharded_to_interleaved(
         #     attn_output, output_mem_config=self.model_config["L1_MEMCFG"]
         # )
-
         attn_output = ttnn.all_gather(
             attn_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             # memory_config=self.model_config["L1_MEMCFG"],
-            memory_config=self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"],
+            memory_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
         )
 
         # attn_output = tt_lib.tensor.interleaved_to_sharded(
         #     attn_output, sharded_mem_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"]
         # )
-        attn_output = tt_lib.tensor.reshard(attn_output, self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"])
+        attn_output = tt_lib.tensor.reshard(attn_output, self.model_config["SELFOUT_MM_INPUT_MEMCFG"])
 
         attn_output = tt_lib.operations.primary.matmul_1d(
             attn_output,
