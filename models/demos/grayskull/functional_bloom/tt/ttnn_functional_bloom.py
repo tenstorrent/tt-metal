@@ -129,7 +129,7 @@ def merge_heads(x: ttnn.Tensor) -> ttnn.Tensor:
 
     # batch_size, seq_length, num_heads, head_dim -> batch_size, seq_length, num_heads * head_dim
     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-    x = ttnn.reshape(x, shape=(batch_size, seq_length, num_heads * head_size))
+    x = ttnn.get_fallback_function(ttnn.reshape)(x, shape=(batch_size, seq_length, num_heads * head_size))
     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
     return x
 

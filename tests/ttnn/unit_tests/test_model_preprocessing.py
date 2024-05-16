@@ -328,7 +328,7 @@ def test_conv_relu_linear(
     output_tensor = ttnn.relu(output_tensor)
     output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2))
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.reshape(output_tensor, (-1, num_output_channels))
+    output_tensor = ttnn.get_fallback_function(ttnn.reshape)(output_tensor, (-1, num_output_channels))
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = output_tensor @ linear.weight + linear.bias
     output_tensor = ttnn.to_torch(output_tensor)

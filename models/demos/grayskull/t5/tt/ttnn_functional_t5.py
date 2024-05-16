@@ -168,7 +168,7 @@ def t5_attention(
     def shape(states, head_size, is_key=False):
         """projection"""
         states = ttnn.to_layout(states, layout=ttnn.ROW_MAJOR_LAYOUT)
-        states = ttnn.reshape(states, (batch_size, seq_length, config.num_heads, head_size))
+        states = ttnn.get_fallback_function(ttnn.reshape)(states, (batch_size, seq_length, config.num_heads, head_size))
         if is_key:
             states = ttnn.permute(states, (0, 2, 3, 1))
         else:
@@ -180,7 +180,7 @@ def t5_attention(
         """reshape"""
         states = ttnn.permute(states, (0, 2, 1, 3))
         states = ttnn.to_layout(states, ttnn.ROW_MAJOR_LAYOUT)
-        states = ttnn.reshape(states, (batch_size, seq_length, hidden_size))
+        states = ttnn.get_fallback_function(ttnn.reshape)(states, (batch_size, seq_length, hidden_size))
         states = ttnn.to_layout(states, ttnn.TILE_LAYOUT)
         return states
 
