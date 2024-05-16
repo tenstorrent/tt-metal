@@ -18,4 +18,4 @@ runs:
         cache-dependency-path: |
           tt_metal/python_env/requirements-dev.txt
           pyproject.toml
-        install-cmd: CONFIG=ci ./build_metal.sh
+        install-cmd: ./scripts/build_scripts/create_venv.sh

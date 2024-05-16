@@ -134,7 +134,7 @@ class CMakeBuild(build_ext):
         nproc = subprocess.check_output(["nproc"]).decode().strip()
         build_args = [f"-j{nproc}"]
 
-        subprocess.check_call(["cmake", source_dir, *cmake_args], cwd=build_dir, env=build_env)
+        subprocess.check_call(["cmake", "-G", "Ninja", source_dir, *cmake_args], cwd=build_dir, env=build_env)
         subprocess.check_call(
             ["cmake", "--build", ".", "--target", "install", *build_args], cwd=build_dir, env=build_env
         )
