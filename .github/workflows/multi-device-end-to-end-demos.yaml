@@ -6,7 +6,14 @@ on:
     - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
 
 jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      arch: '["wormhole_b0"]'
+    secrets: inherit
+
   multi-chip-unit-tests:
+    needs: build-artifact
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -30,17 +37,18 @@ jobs:
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dyanmic env vars for build
+      - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: |
-          PYTHON_ENV_DIR=$(pwd)/build/python_env ./build_metal.sh
-      - name: Build tt-metal CPP tests
-        run: cmake --build build --target tests -- -j`nproc`
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.test-group.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
       - name: Run pre/post regression tests
         timeout-minutes: 180
         run: |
-          source build/python_env/bin/activate
+          source ${{ github.workspace }}/python_env/bin/activate
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-group.cmd }}
