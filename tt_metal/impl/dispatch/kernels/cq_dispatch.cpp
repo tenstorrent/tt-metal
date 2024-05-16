@@ -535,35 +535,28 @@ void process_write_packed() {
     data_ptr = round_up_pow2(data_ptr, L1_NOC_ALIGNMENT);
     uint32_t stride = round_up_pow2(xfer_size, L1_NOC_ALIGNMENT);
 
+    cq_noc_async_write_init_state<CQ_NOC_snDL, mcast>(0, dst_addr, xfer_size);
+
     DPRINT << "dispatch_write_packed: " << xfer_size << " " << stride << " " << data_ptr << " " << count << ENDL();
     while (count != 0) {
         uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
         uint32_t num_dests = mcast ?
             ((volatile CQDispatchWritePackedMulticastSubCmd tt_l1_ptr *)sub_cmd_ptr)->num_mcast_dests :
-            0;
+            1;
         sub_cmd_ptr++;
         uint64_t dst = get_noc_addr_helper(dst_noc, dst_addr);
-
         // Get a page if needed
         if (data_ptr + xfer_size > cb_fence) {
-            DPRINT << data_ptr << " " << cb_fence << ENDL();
             // Check for block completion
-            uint32_t remainder_xfer_size = 0;
-            uint32_t remainder_dst_addr;
-            uint32_t orphan_size;
+            uint32_t orphan_size = 0;
             if (cb_fence == block_next_start_addr[rd_block_idx]) {
                 // Check for dispatch_cb wrap
                 if (rd_block_idx == dispatch_cb_blocks - 1) {
-                    orphan_size = dispatch_cb_end - data_ptr;
+                    ASSERT(cb_fence == dispatch_cb_end);
+                    orphan_size = cb_fence - data_ptr;
                     if (orphan_size != 0) {
-                        if constexpr (mcast) {
-                            noc_async_write_multicast<dispatch_cb_page_size>(data_ptr, dst, remainder_xfer_size, num_dests);
-                        } else {
-                            noc_async_write<dispatch_cb_page_size>(data_ptr, dst, orphan_size);
-                        }
+                        cq_noc_async_write_with_state<CQ_NOC_SNdL>(data_ptr, dst, orphan_size, num_dests);
                         block_noc_writes_to_clear[rd_block_idx]++;
-                        remainder_xfer_size = xfer_size - orphan_size;
-                        remainder_dst_addr = dst_addr + orphan_size;
                     }
                     cb_fence = dispatch_cb_base;
                     data_ptr = dispatch_cb_base;
@@ -582,13 +575,13 @@ void process_write_packed() {
             cb_fence += n_pages * dispatch_cb_page_size;
 
             // This is done here so the common case doesn't have to restore the pointers
-            if (remainder_xfer_size != 0) {
-                uint64_t dst = get_noc_addr_helper(dst_noc, remainder_dst_addr);
-                if constexpr (mcast) {
-                    noc_async_write_multicast<dispatch_cb_page_size>(data_ptr, dst, remainder_xfer_size, num_dests);
-                } else {
-                    noc_async_write<dispatch_cb_page_size>(data_ptr, dst, remainder_xfer_size);
-                }
+            if (orphan_size != 0) {
+                uint32_t remainder_xfer_size = xfer_size - orphan_size;
+                uint32_t remainder_dst_addr = dst_addr + orphan_size;
+                uint64_t remainder_dst = get_noc_addr_helper(dst_noc, remainder_dst_addr);
+                cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, remainder_dst, remainder_xfer_size, num_dests);
+                // Reset values expected below
+                cq_noc_async_write_with_state<CQ_NOC_snDL, CQ_NOC_WAIT, CQ_NOC_send>(0, dst, xfer_size);
                 block_noc_writes_to_clear[rd_block_idx]++;
 
                 count--;
@@ -598,20 +591,15 @@ void process_write_packed() {
             }
         }
 
-        if constexpr (mcast) {
-            noc_async_write_multicast<dispatch_cb_page_size>(data_ptr, dst, xfer_size, num_dests);
-        } else {
-            noc_async_write<dispatch_cb_page_size>(data_ptr, dst, xfer_size);
-        }
-
-        block_noc_writes_to_clear[rd_block_idx]++; // XXXXX maybe just write the noc internal api counter
+        cq_noc_async_write_with_state<CQ_NOC_SNdl>(data_ptr, dst, xfer_size, num_dests);
+        block_noc_writes_to_clear[rd_block_idx]++;
 
         count--;
         data_ptr += stride;
     }
 
     // Release pages for prefetcher
-    // Since we gate how much we acquire to < 1/4 the buffer, this should be called enough
+    // packed_write releases pages at the end so the first page (w/ the sub_cmds) remains valid
     cb_block_release_pages<upstream_noc_xy,
                            upstream_dispatch_cb_sem_id,
                            dispatch_cb_blocks,
