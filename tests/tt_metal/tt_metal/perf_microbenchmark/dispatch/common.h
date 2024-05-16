@@ -588,21 +588,30 @@ inline void generate_random_paged_payload(Device *device,
 inline void generate_random_packed_payload(vector<uint32_t>& cmds,
                                            vector<CoreCoord>& worker_cores,
                                            DeviceData& data,
-                                           uint32_t size_words) {
+                                           uint32_t size_words,
+                                           bool repeat = false) {
 
     static uint32_t coherent_count = 0;
     const uint32_t bank_id = 0; // No interleaved pages here.
 
+    bool first_core = true;
+    vector<uint32_t>results;
+    CoreCoord first_worker = worker_cores[0];
+    for (uint32_t i = 0; i < size_words; i++) {
+        uint32_t datum = (use_coherent_data_g) ? ((first_worker.x << 16) | (first_worker.y << 24) | coherent_count++) : std::rand();
+        results.push_back(datum);
+    }
     for (CoreCoord core : worker_cores) {
         for (uint32_t i = 0; i < size_words; i++) {
-            uint32_t datum = (use_coherent_data_g) ? ((core.x << 16) | (core.y << 24) | coherent_count++) : std::rand();
-
-            cmds.push_back(datum);
-            data.push_one(core, bank_id, datum);
+            data.push_one(core, bank_id, results[i]);
+            if (!repeat || first_core) {
+                cmds.push_back(results[i]);
+            }
         }
 
         cmds.resize(padded_size(cmds.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
         data.pad(core, bank_id, 16); // L1_ALIGNMENT16
+        first_core = false;
     }
 }
 
@@ -709,7 +718,8 @@ inline void add_dispatcher_packed_cmd(Device *device,
                                       vector<CoreCoord>& worker_cores,
                                       DeviceData& device_data,
                                       CQDispatchCmd cmd,
-                                      uint32_t size_words) {
+                                      uint32_t size_words,
+                                      bool repeat = false) {
 
     size_t prior_end = debug_prologue(cmds);
 
@@ -720,7 +730,7 @@ inline void add_dispatcher_packed_cmd(Device *device,
     }
     cmds.resize(padded_size(cmds.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
 
-    generate_random_packed_payload(cmds, worker_cores, device_data, size_words);
+    generate_random_packed_payload(cmds, worker_cores, device_data, size_words, repeat);
 
     debug_epilogue(cmds, prior_end);
 }
@@ -843,7 +853,8 @@ inline void gen_dispatcher_packed_write_cmd(Device *device,
                                             vector<uint32_t>& cmds,
                                             vector<CoreCoord>& worker_cores,
                                             DeviceData& device_data,
-                                            uint32_t size_words) {
+                                            uint32_t size_words,
+                                            bool repeat = false) {
 
     // Pad w/ blank data until all workers are at the same address
     device_data.relevel(CoreType::WORKER);
@@ -852,12 +863,15 @@ inline void gen_dispatcher_packed_write_cmd(Device *device,
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
-    cmd.write_packed.is_multicast = 0;
+    cmd.write_packed.flags = repeat ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE;
     cmd.write_packed.count = worker_cores.size();
     cmd.write_packed.addr = device_data.get_result_data_addr(worker_cores[0]);
     cmd.write_packed.size = size_words * sizeof(uint32_t);
 
-    add_dispatcher_packed_cmd(device, cmds, worker_cores, device_data, cmd, size_words);
+    uint32_t sub_cmds_size = padded_size(worker_cores.size() * sizeof(uint32_t), sizeof(CQDispatchCmd));
+    TT_FATAL(repeat == false || size_words * sizeof(uint32_t) + sizeof(CQDispatchCmd) + sub_cmds_size <= dispatch_buffer_page_size_g);
+
+    add_dispatcher_packed_cmd(device, cmds, worker_cores, device_data, cmd, size_words, repeat);
 }
 
 inline void gen_rnd_dispatcher_packed_write_cmd(Device *device,
@@ -887,8 +901,22 @@ inline void gen_rnd_dispatcher_packed_write_cmd(Device *device,
         }
     }
 
+    bool repeat = std::rand() % 2;
+    if (repeat) {
+        // TODO fix this if/when we add mcast
+        uint32_t sub_cmds_size = padded_size(gets_data.size() * sizeof(uint32_t), 16); // L1_ALIGNMENT16
+        if (xfer_size_bytes + sizeof (CQDispatchCmd) + sub_cmds_size > dispatch_buffer_page_size_g) {
+            static bool warned = false;
+            if (!warned) {
+                log_warning(tt::LogTest, "Clamping packed_write cmd w/ stride=0 size to fit a dispatch page.  Adjust max/min xfer sizes for reliable perf data");
+                warned = true;
+            }
+            xfer_size_bytes = dispatch_buffer_page_size_g - sizeof (CQDispatchCmd) - sub_cmds_size;
+        }
+    }
+
     gen_dispatcher_packed_write_cmd(device, cmds, gets_data, device_data,
-                                    xfer_size_bytes / sizeof(uint32_t));
+                                    xfer_size_bytes / sizeof(uint32_t), repeat);
 }
 
 inline void gen_dispatcher_host_write_cmd(vector<uint32_t>& cmds,

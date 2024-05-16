@@ -980,6 +980,10 @@ void gen_smoke_test(Device *device,
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
     dispatch_cmds.resize(0);
+    gen_dispatcher_packed_write_cmd(device, dispatch_cmds, worker_cores, device_data, 12, true);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+
+    dispatch_cmds.resize(0);
     worker_cores.resize(0);
     worker_cores.push_back(first_worker_g);
     worker_cores.push_back(all_workers_g.end);
