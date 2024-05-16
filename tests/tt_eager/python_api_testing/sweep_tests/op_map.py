@@ -397,7 +397,32 @@ op_map = {
         "pytorch_op": pytorch_ops.atan2,
     },
     "eltwise-lerp_binary": {
-        "tt_op": tt_lib_ops.e
+        "tt_op": tt_lib_ops.eltwise_lerp_binary,
+        "pytorch_op": pytorch_ops.lerp_binary,
+    },
+    "eltwise-lerp_ternary": {
+        "tt_op": tt_lib_ops.eltwise_lerp_ternary,
+        "pytorch_op": pytorch_ops.lerp_ternary,
+    },
+    "eltwise-leaky_relu": {
+        "tt_op": tt_lib_ops.eltwise_leaky_relu,
+        "pytorch_op": pytorch_ops.leaky_relu,
+    },
+    "eltwise-prelu": {
+        "tt_op": tt_lib_ops.eltwise_prelu,
+        "pytorch_op": pytorch_ops.prelu,
+    },
+    "eltwise-hardshrink": {
+        "tt_op": tt_lib_ops.eltwise_hardshrink,
+        "pytorch_op": pytorch_ops.hardshrink,
+    },
+    "eltwise-bias_gelu_unary": {
+        "tt_op": tt_lib_ops.eltwise_bias_gelu_unary,
+        "pytorch_op": pytorch_ops.bias_gelu_unary,
+    },
+    "eltwise-softshrink": {
+        "tt_op": tt_lib_ops.eltwise_softshrink,
+        "pytorch_op": pytorch_ops.softshrink,
     },
     "eltwise-softsign": {
         "tt_op": tt_lib_ops.eltwise_softsign,
@@ -703,32 +728,7 @@ op_map = {
     # Eltwise ternary
     "eltwise-arange": {
         "tt_op": tt_lib_ops.arange,
-        "pytorch_op": pytorch_ops.arange,ltwise_lerp_binary,
-        "pytorch_op": pytorch_ops.lerp_binary,
-    },
-    "eltwise-lerp_ternary": {
-        "tt_op": tt_lib_ops.eltwise_lerp_ternary,
-        "pytorch_op": pytorch_ops.lerp_ternary,
-    },
-    "eltwise-leaky_relu": {
-        "tt_op": tt_lib_ops.eltwise_leaky_relu,
-        "pytorch_op": pytorch_ops.leaky_relu,
-    },
-    "eltwise-prelu": {
-        "tt_op": tt_lib_ops.eltwise_prelu,
-        "pytorch_op": pytorch_ops.prelu,
-    },
-    "eltwise-hardshrink": {
-        "tt_op": tt_lib_ops.eltwise_hardshrink,
-        "pytorch_op": pytorch_ops.hardshrink,
-    },
-    "eltwise-bias_gelu_unary": {
-        "tt_op": tt_lib_ops.eltwise_bias_gelu_unary,
-        "pytorch_op": pytorch_ops.bias_gelu_unary,
-    },
-    "eltwise-softshrink": {
-        "tt_op": tt_lib_ops.eltwise_softshrink,
-        "pytorch_op": pytorch_ops.softshrink,
+        "pytorch_op": pytorch_ops.arange,
     },
     "eltwise-where": {
         "tt_op": tt_lib_ops.where,
