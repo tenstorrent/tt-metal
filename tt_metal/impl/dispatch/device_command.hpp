@@ -324,7 +324,8 @@ class DeviceCommand {
 
         auto initialize_write_packed_cmd = [&](CQDispatchCmd *write_packed_cmd) {
             write_packed_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
-            write_packed_cmd->write_packed.is_multicast = multicast;
+            write_packed_cmd->write_packed.flags =
+                multicast ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE;
             write_packed_cmd->write_packed.count = num_sub_cmds;
             write_packed_cmd->write_packed.addr = common_addr;
             write_packed_cmd->write_packed.size = packed_data_sizeB;

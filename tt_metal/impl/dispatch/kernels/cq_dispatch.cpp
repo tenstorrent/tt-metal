@@ -543,7 +543,7 @@ void process_write_paged() {
 // Since all subcmds all appear in the first page and given the size restrictions
 // this command can't be too many pages.  All pages are released at the end
 template<bool mcast, typename WritePackedSubCmd>
-void process_write_packed() {
+void process_write_packed(uint32_t flags) {
     volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
 
     uint32_t count = cmd->write_packed.count;
@@ -560,7 +560,9 @@ void process_write_packed() {
 
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd) + count * sizeof(WritePackedSubCmd);
     data_ptr = round_up_pow2(data_ptr, L1_NOC_ALIGNMENT);
-    uint32_t stride = round_up_pow2(xfer_size, L1_NOC_ALIGNMENT);
+    uint32_t stride = (flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE) ? 0 : round_up_pow2(xfer_size, L1_NOC_ALIGNMENT);
+    DPRINT << data_ptr << " " << cmd_ptr << " " << xfer_size << " " << dispatch_cb_page_size << ENDL();
+    ASSERT(stride != 0 || data_ptr - cmd_ptr + xfer_size <= dispatch_cb_page_size);
 
     volatile uint32_t tt_l1_ptr *l1_addr = (uint32_t *)(cmd_ptr + sizeof(CQDispatchCmd));
     cq_noc_async_write_init_state<CQ_NOC_snDL, mcast>(0, dst_addr, xfer_size);
@@ -766,11 +768,14 @@ static inline bool process_cmd_d(uint32_t& cmd_ptr) {
         break;
 
     case CQ_DISPATCH_CMD_WRITE_PACKED:
-        DPRINT << "cmd_write_packed" << ENDL();
-        if (cmd->write_packed.is_multicast) {
-            process_write_packed<true, CQDispatchWritePackedMulticastSubCmd>();
-        } else {
-            process_write_packed<false, CQDispatchWritePackedUnicastSubCmd>();
+        {
+            DPRINT << "cmd_write_packed" << ENDL();
+            uint32_t flags = cmd->write_packed.flags;
+            if (flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST) {
+                process_write_packed<true, CQDispatchWritePackedMulticastSubCmd>(flags);
+            } else {
+                process_write_packed<false, CQDispatchWritePackedUnicastSubCmd>(flags);
+            }
         }
         break;
 
