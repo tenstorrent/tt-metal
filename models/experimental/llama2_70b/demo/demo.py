@@ -19,7 +19,7 @@ from models.experimental.llama2_70b.tt.model_config import (
     get_model_config,
 )
 from models.utility_functions import get_devices_for_t3000
-from models.experimental.llama2_70b.tt.llama_common import get_llama_path
+from models.experimental.llama2_70b.tt.llama_common import get_llama_path, load_llama_state_dict
 
 
 def main(args):
@@ -55,9 +55,12 @@ def build_generator(args):
         n_layers=1 if args.implementation == "tt" else args.num_layers,
     )
 
+    state_dict = load_llama_state_dict(args.ckpt_dir, n_layers=args.num_layers)
+
     if args.implementation == "tt":
         generator.model = TtLlamaModelForGeneration(
-            reference_model=generator.model,
+            configuration=generator.model.params,
+            state_dict=state_dict,
             device_mesh=args.device_mesh,
             n_devices=args.n_devices,
             n_layers=args.num_layers,

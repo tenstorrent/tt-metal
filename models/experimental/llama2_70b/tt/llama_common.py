@@ -13,6 +13,11 @@ import ttnn.experimental as tt_lib
 import ttnn
 from models.utility_functions import tt2torch_tensor, torch2tt_tensor
 from loguru import logger
+from pathlib import Path
+from models.experimental.llama2_70b.reference.llama.llama.generation import (
+    load_chunked_checkpoints,
+    load_sharded_checkpoints,
+)
 
 MAX_SEQ_LEN = 4096
 BASE_URL = "layers"
@@ -20,6 +25,18 @@ UNIT_TEST_N_LAYER = 1
 UNIT_TEST_LAYER_NUM = 0
 UNIT_TEST_START_POS = 0
 UNIT_TEST_GENERATION_LENGTH = 20
+
+
+def load_llama_state_dict(ckpt_dir, n_layers, start_layer_idx=0):
+    checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
+    assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
+    is_chunked = "layers_" in str(checkpoints[0])
+    if is_chunked:
+        checkpoint = load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx)
+    else:
+        checkpoint = load_sharded_checkpoints(checkpoints, n_layers)
+
+    return checkpoint
 
 
 def should_skip_model_load():

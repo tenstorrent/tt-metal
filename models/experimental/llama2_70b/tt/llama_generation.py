@@ -21,10 +21,11 @@ from models.experimental.llama2_70b.tt.model_config import (
 
 
 class TtLlamaModelForGeneration:
-    def __init__(self, reference_model, device_mesh, n_devices, n_layers, batch, emulated=False, cache_path=None):
+    def __init__(
+        self, configuration, state_dict, device_mesh, n_devices, n_layers, batch, emulated=False, cache_path=None
+    ):
         ## Get state dict
-        state_dict = reference_model.state_dict()
-        configuration = copy.deepcopy(reference_model.params)
+        configuration = copy.deepcopy(configuration)
 
         # Cache Weights setup
         if n_layers == None:
@@ -43,7 +44,7 @@ class TtLlamaModelForGeneration:
             batch,
             emulated=emulated,
             cache_path=cache_path,
-            read_cache=True,
+            read_cache=False,
         )
         self.params = configuration
         self.device_mesh = device_mesh
@@ -52,7 +53,6 @@ class TtLlamaModelForGeneration:
         # for device in devices:
         #     ttl.device.Synchronize(device)
 
-        del reference_model
         del state_dict
 
     def forward(self, tokens: torch.Tensor, start_pos: int, *args, **kwargs):
