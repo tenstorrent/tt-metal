@@ -823,14 +823,13 @@ def gen_untilize_with_unpadding_args(
         input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
-            output_tensor_start = [0, 0, 0, 0]
-            output_tensor_end = [random.randrange(output_tensor_start[i], input_shapes[0][i], 1) for i in range(4)]
+            output_tensor_end = [random.randrange(0, input_shapes[0][i], 1) for i in range(4)]
             if output_tensor_end[-1] % 2 == 0:
                 output_tensor_end[-1] += 1
             input_info.update(
                 {
-                    "output_tensor_start": output_tensor_start,
                     "output_tensor_end": output_tensor_end,
+                    "use_multicore": True,
                 }
             )
             yield input_info
