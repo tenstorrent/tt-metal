@@ -54,7 +54,19 @@ def constant_prop_time_embeddings(timesteps, sample, time_proj):
 
 
 def tt_guide(noise_pred, guidance_scale):  # will return latents
-    noise_pred_uncond, noise_pred_text = ttnn.split(noise_pred, noise_pred.shape[0] // 2, dim=0)
+    noise_pred_uncond = noise_pred[:1, :, :, :]
+    noise_pred_text = ttnn.experimental.tensor.unpad(
+        noise_pred,
+        [1, 0, 0, 0],
+        [
+            noise_pred.shape[0] - 1,
+            noise_pred.shape[1] - 1,
+            noise_pred.shape[2] - 1,
+            noise_pred.shape[3] - 1,
+        ],
+    )
+
+    # noise_pred_uncond, noise_pred_text = ttnn.split(noise_pred, noise_pred.shape[0] // 2, dim=0)
     noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
     return noise_pred
 

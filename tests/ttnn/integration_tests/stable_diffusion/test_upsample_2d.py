@@ -88,9 +88,8 @@ def test_upsample2d_256x256(device, scale_factor, batch_size, in_channels, input
     ],
 )
 @pytest.mark.parametrize("scale_factor", [2])
+@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 def test_upsample2d_512x512(device, scale_factor, batch_size, in_channels, input_height, input_width, index):
-    # TODO
-    pytest.skip()
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
 
@@ -122,8 +121,9 @@ def test_upsample2d_512x512(device, scale_factor, batch_size, in_channels, input
     input = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output = resnet_upsampler(input)
 
+    input = input.permute(0, 2, 3, 1)
+    input = input.reshape(1, 1, batch_size * input_height * input_width, in_channels)
     tt_input_tensor = ttnn.from_torch(input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    tt_input_tensor = pre_process_input(device, tt_input_tensor)
     tt_up = model(
         tt_input_tensor,
         in_channels,

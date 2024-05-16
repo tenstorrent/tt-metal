@@ -538,13 +538,13 @@ class resnetBlock2D:
                 )
 
         if temb is not None and time_embedding_norm == "default":
-            # Need block and width sharded broadcast to eliminate interleaved.
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
-            hidden_states = ttnn.reshape(
+            hidden_states = ttnn.experimental.tensor.bcast(
                 hidden_states,
-                (self.conv2.batch_size, 1, self.conv2.input_height * self.conv2.input_width, out_channels),
+                temb,
+                ttnn.experimental.tensor.BcastOpMath.ADD,
+                ttnn.experimental.tensor.BcastOpDim.H,
+                output_mem_config=hidden_states.memory_config(),
             )
-            hidden_states = ttnn.add(hidden_states, temb, memory_config=hidden_states.memory_config())
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         hidden_states = ttnn.to_memory_config(hidden_states, self.second_gn_expected_input_sharded_memory_config)

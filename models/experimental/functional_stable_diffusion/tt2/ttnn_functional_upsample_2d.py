@@ -45,12 +45,15 @@ class upsample2d:
             parameters.conv.weight, parameters.conv.bias
         )
 
+        out_channels = parameters.conv.weight.shape[0]
+        in_channels = parameters.conv.weight.shape[1]
+
         self.scale_factor = 2
+        self.upsample_nearest2d = upsample_nearest2d(input_height, input_width, in_channels, self.scale_factor)
+
         input_height = input_height * self.scale_factor
         input_width = input_width * self.scale_factor
 
-        out_channels = parameters.conv.weight.shape[0]
-        in_channels = parameters.conv.weight.shape[1]
         # breakpoint()
         parameters.conv.bias = torch.reshape(parameters.conv.bias, (1, 1, 1, out_channels))
         tt_weight_tensor = ttnn.from_torch(parameters.conv.weight, ttnn.float32)
@@ -90,20 +93,15 @@ class upsample2d:
             input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
         # # slice out batch
         input = ttnn.reshape(input, (2, self.input_height, self.input_width, input.shape[3]))
-        tt_out = upsample_nearest2d(input, self.scale_factor)
+        tt_out = self.upsample_nearest2d(input)
+
         del input
         tt_out = ttnn.reshape(tt_out, (1, 1, tt_out.shape[0] * tt_out.shape[1] * tt_out.shape[2], tt_out.shape[3]))
         if ttnn.get_memory_config(tt_out) != self.conv.conv.input_sharded_memory_config:
+            # untie #8808 is resolved we need to go to interleaved
+            if tt_out.shape[-2] == 512:
+                tt_out = ttnn.to_memory_config(tt_out, ttnn.L1_MEMORY_CONFIG)
             tt_out = ttnn.to_memory_config(tt_out, self.conv.conv.input_sharded_memory_config)
         tt_out = self.conv(tt_out)
-        # tt_out = run_ttnn_conv_with_pre_and_post_tensor_formatting(
-        #     self.device,
-        #     self.conv,
-        #     tt_out,
-        #     self.conv.batch_size,
-        #     self.conv.input_height,
-        #     self.conv.input_width,
-        #     self.conv.out_channels,
-        # )
 
         return tt_out
