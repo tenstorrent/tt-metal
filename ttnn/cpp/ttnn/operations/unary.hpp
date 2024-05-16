@@ -67,7 +67,8 @@ struct Unary : public EltwiseUnary {
     }
 };
 
-struct Exp : public EltwiseUnary {
+template <UnaryOpType unary_op_type>
+struct UnaryWithFastAndApproximateMode : public EltwiseUnary {
     static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
 
     template <typename... Args>
@@ -80,14 +81,29 @@ struct Exp : public EltwiseUnary {
         const bool parameter = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         return detail::execute(
-            input_tensor,
-            {UnaryWithParam{
-                ttnn::operations::unary::UnaryOpType::EXP, static_cast<float>(parameter)}},
-            memory_config);
+            input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config);
     }
 };
 
-struct Softplus : public EltwiseUnary {
+template <UnaryOpType unary_op_type>
+struct UnaryWithFloatParameter : public EltwiseUnary {
+    static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
+
+    template <typename... Args>
+    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
+        return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
+    }
+
+    static Tensor execute(
+        const Tensor& input_tensor,
+        const float parameter,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+        return detail::execute(
+            input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config);
+    }
+};
+
+struct Softplus {
     static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
 
     template <typename... Args>
@@ -110,11 +126,72 @@ struct Softplus : public EltwiseUnary {
 }  // namespace unary
 }  // namespace operations
 
-constexpr auto exp = ttnn::register_operation<ttnn::operations::unary::Exp>("ttnn::exp");
+#define REGISTER_UNARY_OPERATION(operation_name, operation_type)                               \
+    constexpr auto operation_name = ttnn::register_operation<                                  \
+        ttnn::operations::unary::Unary<ttnn::operations::unary::UnaryOpType::operation_type>>( \
+        "ttnn::" #operation_name);
 
+#define REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(operation_name, operation_type)                        \
+    constexpr auto operation_name = ttnn::register_operation<ttnn::operations::unary::UnaryWithFastAndApproximateMode< \
+        ttnn::operations::unary::UnaryOpType::operation_type>>("ttnn::" #operation_name);
+
+#define REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(operation_name, operation_type)                            \
+    constexpr auto operation_name = ttnn::register_operation<                                                    \
+        ttnn::operations::unary::UnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::operation_type>>( \
+        "ttnn::" #operation_name);
+
+REGISTER_UNARY_OPERATION(abs, ABS);
+REGISTER_UNARY_OPERATION(acos, ACOS);
+REGISTER_UNARY_OPERATION(asin, ASIN);
+REGISTER_UNARY_OPERATION(atan, ATAN);
+REGISTER_UNARY_OPERATION(cos, COS);
+REGISTER_UNARY_OPERATION(erfinv, ERFINV);
+REGISTER_UNARY_OPERATION(exp2, EXP2);
+REGISTER_UNARY_OPERATION(expm1, EXPM1);
+REGISTER_UNARY_OPERATION(eqz, EQZ);
+REGISTER_UNARY_OPERATION(gez, GEZ);
+REGISTER_UNARY_OPERATION(gtz, GTZ);
+REGISTER_UNARY_OPERATION(i0, I0);
+REGISTER_UNARY_OPERATION(isfinite, ISFINITE);
+REGISTER_UNARY_OPERATION(isinf, ISINF);
+REGISTER_UNARY_OPERATION(isnan, ISNAN);
+REGISTER_UNARY_OPERATION(isneginf, ISNEGINF);
+REGISTER_UNARY_OPERATION(isposinf, ISPOSINF);
+REGISTER_UNARY_OPERATION(lez, LEZ);
+REGISTER_UNARY_OPERATION(log, LOG);
+REGISTER_UNARY_OPERATION(log10, LOG10);
+REGISTER_UNARY_OPERATION(log2, LOG2);
+REGISTER_UNARY_OPERATION(logical_not, LOGICAL_NOT_UNARY);
+REGISTER_UNARY_OPERATION(ltz, LTZ);
+REGISTER_UNARY_OPERATION(neg, NEG);
+REGISTER_UNARY_OPERATION(nez, NEZ);
+REGISTER_UNARY_OPERATION(reciprocal, RECIP);
+REGISTER_UNARY_OPERATION(relu, RELU);
+REGISTER_UNARY_OPERATION(relu6, RELU6);
+REGISTER_UNARY_OPERATION(sigmoid, SIGMOID);
+REGISTER_UNARY_OPERATION(sign, SIGN);
+REGISTER_UNARY_OPERATION(signbit, SIGNBIT);
+REGISTER_UNARY_OPERATION(silu, SILU);
+REGISTER_UNARY_OPERATION(sin, SIN);
+REGISTER_UNARY_OPERATION(sqrt, SQRT);
+REGISTER_UNARY_OPERATION(square, SQUARE);
+REGISTER_UNARY_OPERATION(tan, TAN);
+REGISTER_UNARY_OPERATION(tanh, TANH);
+
+// Unaries with fast_and_approximate_mode
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erf, ERF);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erfc, ERFC);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(gelu, GELU);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT);
+
+// Unaries with float parameter
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(elu, ELU);
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(heaviside, HEAVISIDE);
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(leaky_relu, LEAKY_RELU);
+auto prelu = leaky_relu;  // Alias for leaky_relu. TODO(#8544): implement PReLU properly
+
+// Other unaries (composite operations)
 constexpr auto softplus = ttnn::register_operation<ttnn::operations::unary::Softplus>("ttnn::softplus");
-
-constexpr auto silu =
-    ttnn::register_operation<ttnn::operations::unary::Unary<ttnn::operations::unary::UnaryOpType::SILU>>("ttnn::silu");
 
 } // namespace ttnn
