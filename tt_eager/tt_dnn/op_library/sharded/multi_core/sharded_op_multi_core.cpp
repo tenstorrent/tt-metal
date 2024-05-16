@@ -620,7 +620,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
             auto expected_next_page = start_page + 1;
             Stride stride = Stride{.core = {0,0} , .data = 0};
             if ((it + 1) == end) {
-                ret_map[output_core].push_back(PageStride{.start_core = start_core, .start_data=it->second,  .stride_size=1, .stride=stride, .num_strides=1});
+                ret_map[output_core].push_back(PageStride{.start_core = start_core, .start_data=it->second,  .stride_size=1, .stride=stride, .num_strides=1, .skip=false});
                 it = end;
             }
             else {
@@ -672,7 +672,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
                     }
                     // diff data and diff core, not handled yet
                     else {
-                        ret_map[output_core].push_back(PageStride{.start_core = start_core, .start_data=it->second,  .stride_size=stride_size, .stride=stride, .num_strides=1});
+                        ret_map[output_core].push_back(PageStride{.start_core = start_core, .start_data=it->second,  .stride_size=stride_size, .stride=stride, .num_strides=1, .skip=false});
                         it = stride_it;
                         continue;
                     }
@@ -725,7 +725,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
                         break;
                     }
                 }
-                ret_map[output_core].push_back(PageStride{.start_core = start_core, .start_data=it->second,  .stride_size=stride_size, .stride=stride, .num_strides=num_strides});
+                ret_map[output_core].push_back(PageStride{.start_core = start_core, .start_data=it->second,  .stride_size=stride_size, .stride=stride, .num_strides=num_strides, .skip=false});
                 it = stride_it;
             }
         }
@@ -785,7 +785,7 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges(const std::vector<uint32
             runtime_args.push_back((uint32_t)core_start_stride); //start_x
             uint32_t stride_data_start = (ps.stride.data << 16) | (start_data);
             runtime_args.push_back((uint32_t)stride_data_start); //stride_data
-            uint32_t stride_size_num_strides = (ps.stride_size << 16) | (num_strides);
+            uint32_t stride_size_num_strides = (ps.stride_size << 16) | (num_strides << 8) | ((uint32_t)ps.skip);
             runtime_args.push_back((uint32_t)stride_size_num_strides);  // stride_size
             num_output_pages += ps.stride_size * num_strides;
         }
