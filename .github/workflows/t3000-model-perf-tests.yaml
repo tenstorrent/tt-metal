@@ -1,4 +1,4 @@
-name: "Multi-Nebula model perf regressions and output report"
+name: "[T3K] T3000 model perf tests"
 
 on:
   workflow_dispatch:
@@ -11,32 +11,38 @@ jobs:
     with:
       arch: '["wormhole_b0"]'
     secrets: inherit
-
-  multi-device-models-perf:
+  t3000-model-perf-tests:
     needs: build-artifact
     strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        runner-info: [
-          # N300 2x4
-          # NOTE: Never use arch-wormhole_b0 tags, however we're using it here because this machine is used by devs during the day
-          # We don't want other CI runs to interrupt dev flows. However, we need to fix this once we have more 2x4 machines dedicated to CI
-          {name: "n300-2x4", arch: wormhole_b0, runs-on: ["perf-t3000", "arch-wormhole_b0", "multi-chip-num-pcie-4", "multi-chip-num-chips-8"], machine-type: "bare_metal"},
+        test-group: [
+          {
+            name: "T3000 LLM model perf tests", 
+            model-type: "LLM",
+            arch: wormhole_b0, 
+            runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "runner-test", "bare-metal", "pipeline-perf"],
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type llm_model_perf_t3000_device --dispatch-mode ""'
+          },
+          {
+            name: "T3000 CNN model perf tests", 
+            model-type: "CNN",
+            arch: wormhole_b0, 
+            runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "runner-test", "bare-metal", "pipeline-perf"],
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_t3000_device --dispatch-mode ""'
+          },
         ]
-        model-type: [llm_javelin, cnn_javelin, other]
-    name: "${{ matrix.model-type }} ${{ matrix.runner-info.arch }}"
+    name: ${{ matrix.test-group.name }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-info.arch }}
+      ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
-      TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": true}'
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on: ${{ matrix.runner-info.runs-on }}
+    runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Enable Performance mode
+      - name: Enable performance mode
         run: |
           sudo cpupower frequency-set -g performance
       - name: Ensure weka mount is active
@@ -50,15 +56,17 @@ jobs:
           echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.runner-info.arch }}
+          name: TTMetal_build_${{ matrix.test-group.arch }}
       - name: Extract files
-        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
+        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
       - uses: ./.github/actions/install-python-deps
-      - name: Run performance regressions
+      - name: Run model perf regression tests
         timeout-minutes: 60
         run: |
-          source python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.runner-info.machine-type }}_multi_device
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          ${{ matrix.test-group.cmd }}
       - name: Check perf report exists
         id: check-perf-report
         if: ${{ !cancelled() }}
@@ -71,9 +79,9 @@ jobs:
         if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: perf-report-csv-${{ matrix.model-type }}-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}
+          name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
-      - name: Disable Performance mode
+      - name: Disable performance mode
         if: always()
         run: |
           sudo cpupower frequency-set -g ondemand
