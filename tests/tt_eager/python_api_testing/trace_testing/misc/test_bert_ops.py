@@ -254,7 +254,6 @@ def test_bert_linear(
         (True, False, False, 2688, 4096, 1024, None),
     ],
 )
-@skip_for_wormhole_b0("WH ND hang, see issue #4392")
 def test_bert_linear_batch7(
     device,
     fidelity,
@@ -270,6 +269,9 @@ def test_bert_linear_batch7(
     activation,
     function_level_defaults,
 ):
+    if K == 1024 and N == 4096 and fp32_acc_mode == True:
+        pytest.skip("Skipping float32 tests as tensor is too large")
+
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]

@@ -319,7 +319,6 @@ def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defau
     assert passing
 
 
-@skip_for_wormhole_b0("WH ND hang, see issue #4392")
 @pytest.mark.parametrize("M", [127 * 32])
 @pytest.mark.parametrize("K", [1 * 32])
 @pytest.mark.parametrize("N", [1 * 32])
@@ -387,7 +386,6 @@ def test_height_sharded_matmul_1d_padding(device, M, K, N, num_cores):
     assert passing
 
 
-@skip_for_wormhole_b0("WH ND hang, see issue #4392")
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("M, num_cores", [[25088, 98], [50176, 98]])
