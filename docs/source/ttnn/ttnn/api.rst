@@ -179,9 +179,9 @@ Pointwise Binary
    ttnn/nez
    ttnn/eqz
    ttnn/gt
-   ttnn/gte
+   ttnn/ge
    ttnn/lt
-   ttnn/lte
+   ttnn/le
    ttnn/eq
    ttnn/ne
    ttnn/isclose

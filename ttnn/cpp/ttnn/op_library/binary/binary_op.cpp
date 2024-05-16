@@ -189,7 +189,11 @@ template <BinaryOpType binary_op_type, bool in_place>
 std::vector<tt::tt_metal::Shape> Binary<binary_op_type, in_place>::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    return {input_tensor_a.get_legacy_shape()};
+    const auto& input_tensor_b = input_tensors.at(1);
+    if (input_tensor_a.get_shape().rank() >= input_tensor_b.get_shape().rank()) {
+        return {input_tensor_a.get_legacy_shape()};
+    }
+    return {input_tensor_b.get_legacy_shape()};
 }
 
 template <BinaryOpType binary_op_type, bool in_place>
@@ -282,35 +286,49 @@ operation::ProgramWithCallbacks Binary<binary_op_type, in_place>::create_program
     }
 
     auto program_type = get_program_type(*this, input_tensors);
-    switch (program_type) {
-        case BinaryProgramType::ElementWiseMultiCore:
-            return eltwise_binary_multi_core(
-                input_tensor_a, input_tensor_b, output_tensor, binary_op_type, activations);
-        case BinaryProgramType::ElementWiseSingleCore:
-            return eltwise_binary_single_core(
-                input_tensor_a, input_tensor_b, output_tensor, binary_op_type, activations);
-        case BinaryProgramType::BroadcastHeightAndWidthMultiCore:
-            return bcast_multi_core_hw(
-                input_tensor_a,
-                input_tensor_b,
-                output_tensor,
-                binary_op_type_to_bcast_op_math<binary_op_type>(),
-                tt::tt_metal::BcastOpDim::HW);
-        case BinaryProgramType::BroadcastHeightMultiCore:
-            return bcast_multi_core_h(
-                input_tensor_a,
-                input_tensor_b,
-                output_tensor,
-                binary_op_type_to_bcast_op_math<binary_op_type>(),
-                tt::tt_metal::BcastOpDim::H);
-        case BinaryProgramType::BroadcastWidthMultiCore:
-            return bcast_multi_core_w(
-                input_tensor_a,
-                input_tensor_b,
-                output_tensor,
-                binary_op_type_to_bcast_op_math<binary_op_type>(),
-                tt::tt_metal::BcastOpDim::W);
-        default: TT_THROW("Invalid program type");
+    if constexpr (std::is_same_v<
+                      decltype(binary_op_type_to_bcast_op_math<binary_op_type>()),
+                      tt::tt_metal::BcastOpMath>) {
+        switch (program_type) {
+            case BinaryProgramType::ElementWiseMultiCore:
+                return eltwise_binary_multi_core(
+                    input_tensor_a, input_tensor_b, output_tensor, binary_op_type, activations);
+            case BinaryProgramType::ElementWiseSingleCore:
+                return eltwise_binary_single_core(
+                    input_tensor_a, input_tensor_b, output_tensor, binary_op_type, activations);
+            case BinaryProgramType::BroadcastHeightAndWidthMultiCore:
+                return bcast_multi_core_hw(
+                    input_tensor_a,
+                    input_tensor_b,
+                    output_tensor,
+                    binary_op_type_to_bcast_op_math<binary_op_type>(),
+                    tt::tt_metal::BcastOpDim::HW);
+            case BinaryProgramType::BroadcastHeightMultiCore:
+                return bcast_multi_core_h(
+                    input_tensor_a,
+                    input_tensor_b,
+                    output_tensor,
+                    binary_op_type_to_bcast_op_math<binary_op_type>(),
+                    tt::tt_metal::BcastOpDim::H);
+            case BinaryProgramType::BroadcastWidthMultiCore:
+                return bcast_multi_core_w(
+                    input_tensor_a,
+                    input_tensor_b,
+                    output_tensor,
+                    binary_op_type_to_bcast_op_math<binary_op_type>(),
+                    tt::tt_metal::BcastOpDim::W);
+            default: TT_THROW("Invalid program type");
+        }
+    } else {
+        switch (program_type) {
+            case BinaryProgramType::ElementWiseMultiCore:
+                return eltwise_binary_multi_core(
+                    input_tensor_a, input_tensor_b, output_tensor, binary_op_type, activations);
+            case BinaryProgramType::ElementWiseSingleCore:
+                return eltwise_binary_single_core(
+                    input_tensor_a, input_tensor_b, output_tensor, binary_op_type, activations);
+            default: TT_THROW("Invalid program type");
+        }
     }
 }
 
@@ -362,6 +380,14 @@ template class Binary<BinaryOpType::SUB, false>;
 template class Binary<BinaryOpType::SUB, true>;
 template class Binary<BinaryOpType::MUL, false>;
 template class Binary<BinaryOpType::MUL, true>;
+template class Binary<BinaryOpType::EQ, false>;
+template class Binary<BinaryOpType::NE, false>;
+template class Binary<BinaryOpType::LT, false>;
+template class Binary<BinaryOpType::LTE, false>;
+template class Binary<BinaryOpType::GT, false>;
+template class Binary<BinaryOpType::GTE, false>;
+template class Binary<BinaryOpType::LOGICAL_AND, false>;
+template class Binary<BinaryOpType::LOGICAL_OR, false>;
 
 }  // namespace binary
 

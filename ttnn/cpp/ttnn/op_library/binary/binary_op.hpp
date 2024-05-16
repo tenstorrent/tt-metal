@@ -97,11 +97,11 @@ struct Binary {
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::optional<const DataType> &dtype = std::nullopt,
         std::optional<std::vector<std::string>> activations = std::nullopt) {
-        auto &&[input_tensor_a, input_tensor_b] = [](const auto &input_tensor_a_arg,
-                                                        const auto &input_tensor_b_arg) {
+        auto &&[input_tensor_a, input_tensor_b] = [](const auto &input_tensor_a_arg, const auto &input_tensor_b_arg) {
+            const auto input_shape_a = input_tensor_a_arg.get_shape();
+            const auto input_shape_b = input_tensor_b_arg.get_shape();
             // Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
-            if (tt::tt_metal::compute_volume(input_tensor_a_arg.get_shape()) <
-                tt::tt_metal::compute_volume(input_tensor_b_arg.get_shape())) {
+            if (tt::tt_metal::compute_volume(input_shape_a) < tt::tt_metal::compute_volume(input_shape_b)) {
                 return std::make_tuple(input_tensor_b_arg, input_tensor_a_arg);
             }
             return std::make_tuple(input_tensor_a_arg, input_tensor_b_arg);
