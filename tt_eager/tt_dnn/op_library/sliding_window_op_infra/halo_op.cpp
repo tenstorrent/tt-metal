@@ -81,9 +81,11 @@ operation::ProgramWithCallbacks Halo::create_program(const std::vector<Tensor>& 
     auto& output_tensor = outputs.at(0);
     auto device = input_tensor.device();
 
-    auto pad_config_device_tensor = sliding_window::move_config_tensor_to_device(pad_config_tensor, parallel_config_, device);
-    auto local_config_device_tensor = sliding_window::move_config_tensor_to_device(local_config_tensor, parallel_config_, device);
-    auto remote_config_device_tensor = sliding_window::move_config_tensor_to_device(remote_config_tensor, parallel_config_, device);
+    bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+
+    auto pad_config_device_tensor = sliding_window::move_config_tensor_to_device(pad_config_tensor, parallel_config_, is_block_sharded, device);
+    auto local_config_device_tensor = sliding_window::move_config_tensor_to_device(local_config_tensor, parallel_config_, is_block_sharded, device);
+    auto remote_config_device_tensor = sliding_window::move_config_tensor_to_device(remote_config_tensor, parallel_config_, is_block_sharded, device);
 
     Program program = CreateProgram();
 
