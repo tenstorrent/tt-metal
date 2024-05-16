@@ -73,6 +73,11 @@ std::vector<Tensor> Halo::create_output_tensors(const std::vector<Tensor> &input
 
 operation::ProgramWithCallbacks Halo::create_program(const std::vector<Tensor>& inputs, std::vector<Tensor> &outputs) const {
     const auto& input_tensor = inputs.at(0);
+
+    // each of these input config tensors is on host
+    const auto& pad_config_tensor = pad_config_tensor_;
+    const auto& local_config_tensor = local_config_tensor_;
+    const auto& remote_config_tensor = remote_config_tensor_;
     auto& output_tensor = outputs.at(0);
     auto device = input_tensor.device();
 
@@ -142,7 +147,6 @@ Tensor halo_op(const Tensor& input_tensor,
         auto pad_config_tensor = sliding_window::construct_on_host_config_tensor(pad_config, config, p_config);
         auto local_config_tensor = sliding_window::construct_on_host_config_tensor(local_config, config, p_config);
         auto remote_config_tensor = sliding_window::construct_on_host_config_tensor(remote_config, config, p_config);
-
         return operation::run(
             Halo{
                 .config_ = config,

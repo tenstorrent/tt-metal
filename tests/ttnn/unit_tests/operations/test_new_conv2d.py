@@ -63,7 +63,7 @@ def run_conv(
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
-    torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
+    torch_bias_tensor = torch.zeros(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor_nchw,
         torch_weight_tensor,
@@ -291,8 +291,7 @@ def run_conv_with_split(
         # rn50 layer2
         (128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True),
         (128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True),
-        # rn50 layer3
-        # Block sharded test cases fail currently
+        # # rn50 layer3
         # (256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False),
         # (256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False),
         # # rn50 layer4
@@ -315,7 +314,6 @@ def run_conv_with_split(
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 def test_resnet50_conv_gs(
     device,
-    use_program_cache,
     math_fidelity,
     activations_dtype,
     weights_dtype,

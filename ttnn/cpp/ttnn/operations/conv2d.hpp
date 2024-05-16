@@ -511,8 +511,8 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             {0, 0, 0, 0},
             0
         );
+        bias_tensor_ = ttnn::operations::core::to_layout(bias_tensor_, Layout::TILE, nullopt, nullopt);
         bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, const_cast<Device*>(&device), nullopt);
-        bias_tensor_ = ttnn::operations::core::to_layout(bias_tensor_, Layout::TILE, weights_bias_dtype, nullopt);
     }
     cout << "Done preparing weights" << endl;
 
@@ -545,10 +545,10 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
     auto [input_tensor_post_tm, parallel_config, tensor_manipulated] = shard_or_reshard_tensor_if_required(device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels);
     if (tensor_manipulated) {
         if (conv_config.deallocate_activation) {
-            ttnn::Tensor input_tensor_ = input_tensor; // TODO: allow in place modification of inputs to the op
-            input_tensor_.deallocate();
+            //ttnn::Tensor input_tensor_ = input_tensor; // TODO: allow in place modification of inputs to the op
+            //input_tensor_.deallocate();
         }
-        conv_config.deallocate_activation = true;
+        //conv_config.deallocate_activation = true;
     }
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(Shape({1, 1, batch_size * output_height * output_width, round_up(out_channels, 32)}), parallel_config, 32);
     auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(conv_out_memory_config, get_num_cores_nhw_from_parallel_config(parallel_config));
@@ -580,7 +580,7 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
         SlidingWindowConfig sliding_window_config = SlidingWindowConfig(batch_size, input_height, input_width, kernel_size[0], kernel_size[1], stride[0], stride[1], padding[0], padding[1], dilation[0], dilation[1], opt_conv_op_parallel_config.num_cores_nhw, input_tensor_post_tm.memory_config().shard_spec.value().grid, true);
         auto halo_output = ttnn::operations::halo::halo_op(input_tensor_post_tm, sliding_window_config, 0, false, parallel_config.shard_orientation == ShardOrientation::COL_MAJOR, 0, input_tensor_post_tm.memory_config());
         if (conv_config.deallocate_activation) {
-            input_tensor_post_tm.deallocate();
+            //input_tensor_post_tm.deallocate();
         }
         if (conv_config.reallocate_halo_output) {
             halo_output = ttnn::operations::core::reallocate(halo_output, halo_output.memory_config());
@@ -589,14 +589,14 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
         std::vector<int> conv_params = {(int) kernel_size[0], (int) kernel_size[1], (int) stride[0], (int) stride[1], (int) padding[0], (int) padding[1]};
         auto conv_output = tt::tt_metal::optimized_conv_new(halo_output, weight_tensor_on_device, bias_tensor_on_device, conv_params, out_channels, conv_config.output_layout == Layout::ROW_MAJOR, conv_config.activation == "relu", conv_config.math_fidelity,
             opt_conv_op_parallel_config, opt_conv_op_block_config, 0, conv_out_memory_config, conv_config.dtype, {batch_size, input_height, input_width, in_channels}, conv_config.input_channels_alignment == 16, compute_kernel_config);
-        halo_output.deallocate();
-        return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+       //halo_output.deallocate();
+        return {input_tensor_post_tm, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
         // run conv as matmul
         // TODO add support for running downsample here for stride 2
         auto matmul_output = ttnn::operations::matmul::linear(input_tensor_post_tm, weight_tensor_on_device, bias_tensor_on_device, input_tensor_post_tm.memory_config(), conv_config.dtype, conv_config.activation, compute_kernel_config);
         if (conv_config.deallocate_activation) {
-            input_tensor_post_tm.deallocate();
+            //input_tensor_post_tm.deallocate();
         }
         return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }

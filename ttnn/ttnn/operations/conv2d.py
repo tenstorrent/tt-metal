@@ -520,6 +520,7 @@ def conv2d(
             bias_tensor=bias_tensor,
             conv_config=conv_config_,
         )
+        # return (output_tensor_new, output_height_new, output_width_new, weight_tensor_on_dev_new, bias_tensor_on_dev_new)
 
     output_height = ((int)((input_height - kernel_size[0] + 2 * padding[0]) / stride[0])) + 1
     output_width = ((int)((input_width - kernel_size[1] + 2 * padding[1]) / stride[1])) + 1

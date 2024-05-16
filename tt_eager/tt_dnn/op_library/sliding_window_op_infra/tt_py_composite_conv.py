@@ -406,7 +406,7 @@ class TTPyCompositeConv(TTPyOp):
             reader_patterns_cache["conv"] = {}
         if "halo" not in reader_patterns_cache:
             reader_patterns_cache["halo"] = {}
-
+        self.reader_patterns_cache = reader_patterns_cache
         for key in reader_patterns_cache:
             assert (
                 key == "conv" or key == "halo" or key == "max_pool"
@@ -825,7 +825,10 @@ class TTPyCompositeConv(TTPyOp):
 
         def composite_conv_with_deallocate_input(activation):
             # assert(activation.get_layout() == ttl.tensor.Layout.ROW_MAJOR)
+            return activation
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
+            breakpoint()
+            return utwh_output
             activation.deallocate()
             return conv_(utwh_output)
 
@@ -879,6 +882,8 @@ class TTPyCompositeConv(TTPyOp):
                 self.conv = composite_conv
 
     def __call__(self, activation):
+        # breakpoint()
+        # return self.reader_patterns_cache["halo"]["local_config"]
         # print("Going to run conv with input shape-", self.input_tensor_shape)
         # print("with output shape = ", self.conv_output_shape)
         if self.enable_auto_formatting and not activation.is_sharded():
