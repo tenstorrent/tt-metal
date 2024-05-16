@@ -837,6 +837,7 @@ void Program::compile( Device * device )
         detail::MemoryReporter::inst().flush_program_memory_usage(*this, device);
     }
     compile_needed_[device->id()] = false;
+    this->loaded_onto_device = false;
 }
 
 Program::~Program() {
