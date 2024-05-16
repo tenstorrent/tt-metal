@@ -53,7 +53,7 @@ def run(
 
     torch_input_tensor_a = torch_random(input_shape_a, -0.1, 0.1, dtype=torch.float32)
     torch_input_tensor_b = torch_random(input_shape_b, -0.1, 0.1, dtype=torch.float32)
-    torch_output_tensor = torch.ge(torch_input_tensor_a, torch_input_tensor_b)
+    torch_output_tensor = torch.le(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -70,7 +70,7 @@ def run(
         memory_config=input_a_memory_config,
     )
 
-    output_tensor = ttnn.gte(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    output_tensor = ttnn.le(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
     return check_with_pcc(torch_output_tensor, output_tensor, 0.99)

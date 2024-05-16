@@ -421,6 +421,13 @@ from ttnn.operations.binary import (
     atan2,
     hypot,
     squared_difference,
+    gt,
+    ge,
+    lt,
+    le,
+    eq,
+    ne,
+    isclose,
 )
 
 from ttnn.operations.ternary import (
@@ -429,16 +436,6 @@ from ttnn.operations.ternary import (
     mac,
     where,
     lerp,
-)
-
-from ttnn.operations.relational import (
-    gt,
-    gte,
-    lt,
-    lte,
-    eq,
-    ne,
-    isclose,
 )
 
 from ttnn.operations.normalization import (
