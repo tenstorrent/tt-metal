@@ -131,7 +131,8 @@ std::filesystem::path get_cluster_desc_yaml() {
 void Cluster::generate_cluster_descriptor() {
     this->cluster_desc_path_ = (this->target_type_ == TargetDevice::Silicon and this->arch_ == tt::ARCH::WORMHOLE_B0) ? get_cluster_desc_yaml().string() : "";
 
-    if (this->arch_ == tt::ARCH::GRAYSKULL) {
+    // create-eth-map not available for Blackhole bring up
+    if (this->arch_ == tt::ARCH::GRAYSKULL or this->arch_ == tt::ARCH::BLACKHOLE) {
         // Cannot use tt_SiliconDevice::detect_available_device_ids because that returns physical device IDs
         std::vector<chip_id_t> physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids();
         std::set<chip_id_t> logical_mmio_device_ids;
@@ -357,7 +358,8 @@ void Cluster::start_driver(chip_id_t mmio_device_id, tt_device_params &device_pa
 
     TT_FATAL(this->sdesc_per_chip_.size(), "Descriptor must be loaded. Try open_driver()");
 
-    if (this->target_type_ == TargetDevice::Silicon && device_params.init_device) {
+    // static TLBs avoided for Blackhole bring up
+    if (this->target_type_ == TargetDevice::Silicon && device_params.init_device && this->arch_ != tt::ARCH::BLACKHOLE) {
         configure_static_tlbs(mmio_device_id);
     }
 
@@ -408,6 +410,11 @@ void Cluster::verify_eth_fw() const {
 }
 
 int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
+    if (this->arch_ == tt::ARCH::BLACKHOLE) {
+        // For Blackhole bring up remove AICLK query due to lack of ARC message support
+        log_info(tt::LogDevice, "For Blackhole remove AICLK query due to lack of ARC message support");
+        return 0;
+    }
     if (this->device_to_mmio_device_.find(chip_id) != this->device_to_mmio_device_.end()) {
         // get_clocks returns MMIO device ID -> clock frequency
         // There is one driver per MMIO device, so we use that to index returned map
