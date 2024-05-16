@@ -10,7 +10,7 @@ jobs:
   build-cmake:
     strategy:
       matrix:
-        arch: [grayskull, wormhole_b0]
+        arch: [grayskull, wormhole_b0, blackhole]
     name: CMake Build
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}

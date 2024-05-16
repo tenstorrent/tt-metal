@@ -13,7 +13,7 @@ jobs:
   build-artifact:
     strategy:
       matrix:
-        arch: ${{ fromJson(inputs.arch || '["grayskull", "wormhole_b0"]') }}
+        arch: ${{ fromJson(inputs.arch || '["grayskull", "wormhole_b0", "blackhole"]') }}
 
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
