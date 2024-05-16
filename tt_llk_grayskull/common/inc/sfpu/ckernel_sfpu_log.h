@@ -88,8 +88,6 @@ sfpi_inline void _calculate_log_body_(const int log_base_scale_factor)
     v_endif;
 
     dst_reg[0] = result;
-
-    dst_reg++;
 }
 
 template <bool APPROXIMATION_MODE, bool HAS_BASE_SCALING, int ITERATIONS>
@@ -98,6 +96,7 @@ inline void _calculate_log_(uint log_base_scale_factor)
     #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         _calculate_log_body_<HAS_BASE_SCALING>(log_base_scale_factor);
+        dst_reg++;
     }
 }
 
