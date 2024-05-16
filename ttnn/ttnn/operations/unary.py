@@ -12,6 +12,146 @@ import ttnn
 THIS_MODULE = sys.modules[__name__]
 
 
+def register_ttnn_cpp_unary_function(unary_function):
+    import torch
+
+    def torch_heaviside(x, *args, **kwargs):
+        value = kwargs.pop("scalar")
+        result = torch.heaviside(x, torch.tensor(value, dtype=x.dtype))
+        return result
+
+    def torch_prelu(x, *args, **kwargs):
+        weight = kwargs.pop("scalar")
+        result = torch.nn.functional.prelu(x, torch.tensor(weight, dtype=x.dtype))
+        return result
+
+    name_to_golden_function = {
+        "abs": torch.abs,
+        "acos": torch.acos,
+        "asin": torch.asin,
+        "atan": torch.atan,
+        "cos": torch.cos,
+        "erfinv": torch.erfinv,
+        "exp2": torch.exp2,
+        "expm1": torch.expm1,
+        "eqz": lambda x: torch.eq(x, 0),
+        "gez": lambda x: torch.ge(x, 0),
+        "gtz": lambda x: torch.gt(x, 0),
+        "i0": torch.i0,
+        "isfinite": torch.isfinite,
+        "isinf": torch.inf,
+        "isnan": torch.isnan,
+        "isneginf": torch.isneginf,
+        "isposinf": torch.isposinf,
+        "lez": lambda x: torch.le(x, 0),
+        "log": torch.log,
+        "log10": torch.log10,
+        "log2": torch.log2,
+        "logical_not": torch.logical_not,
+        "ltz": lambda x: torch.lt(x, 0),
+        "neg": torch.neg,
+        "nez": lambda x: torch.ne(x, 0),
+        "reciprocal": torch.reciprocal,
+        "relu": torch.relu,
+        "relu6": torch.nn.functional.relu6,
+        "sigmoid": torch.sigmoid,
+        "sign": torch.sign,
+        "signbit": torch.signbit,
+        "silu": torch.nn.functional.silu,
+        "sin": torch.sin,
+        "sqrt": torch.sqrt,
+        "square": torch.square,
+        "tan": torch.tan,
+        "tanh": torch.tanh,
+        # Unaries with fast_and_approximate_mode
+        "exp": torch.exp,
+        "erf": torch.erf,
+        "erfc": torch.erfc,
+        "gelu": torch.nn.functional.gelu,
+        "rsqrt": torch.rsqrt,
+        # Unaries with float parameter
+        "elu": torch.nn.functional.elu,
+        "heaviside": torch_heaviside,
+        "leaky_relu": torch.nn.functional.leaky_relu,
+        # "prelu": torch_prelu, # Alias for leaky_relu. TODO(#8544): implement PReLU properly
+        # Other unaries (composite operations)
+        "softplus": torch.nn.functional.softplus,
+    }
+
+    golden_keys = set(name_to_golden_function.keys())
+    function_names = {function.name for function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS}
+    if golden_keys != function_names:
+        raise ImportError(f"Missing or extra golden functions:\n{golden_keys}\nshould be equal to\n{function_names}")
+
+    def _golden_function(input_tensor: ttnn.Tensor, **_):
+        torch_function = name_to_golden_function[unary_function.name]
+        return torch_function(input_tensor)
+
+    operation = ttnn.register_operation(golden_function=_golden_function)(unary_function)
+    setattr(THIS_MODULE, unary_function.name, operation)
+
+
+TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
+    ttnn._ttnn.operations.unary.abs,
+    ttnn._ttnn.operations.unary.acos,
+    ttnn._ttnn.operations.unary.asin,
+    ttnn._ttnn.operations.unary.atan,
+    ttnn._ttnn.operations.unary.cos,
+    ttnn._ttnn.operations.unary.erfinv,
+    ttnn._ttnn.operations.unary.exp2,
+    ttnn._ttnn.operations.unary.expm1,
+    ttnn._ttnn.operations.unary.eqz,
+    ttnn._ttnn.operations.unary.gez,
+    ttnn._ttnn.operations.unary.gtz,
+    ttnn._ttnn.operations.unary.i0,
+    ttnn._ttnn.operations.unary.isfinite,
+    ttnn._ttnn.operations.unary.isinf,
+    ttnn._ttnn.operations.unary.isnan,
+    ttnn._ttnn.operations.unary.isneginf,
+    ttnn._ttnn.operations.unary.isposinf,
+    ttnn._ttnn.operations.unary.lez,
+    ttnn._ttnn.operations.unary.log,
+    ttnn._ttnn.operations.unary.log10,
+    ttnn._ttnn.operations.unary.log2,
+    ttnn._ttnn.operations.unary.logical_not,
+    ttnn._ttnn.operations.unary.ltz,
+    ttnn._ttnn.operations.unary.neg,
+    ttnn._ttnn.operations.unary.nez,
+    ttnn._ttnn.operations.unary.reciprocal,
+    ttnn._ttnn.operations.unary.relu,
+    ttnn._ttnn.operations.unary.relu6,
+    ttnn._ttnn.operations.unary.sigmoid,
+    ttnn._ttnn.operations.unary.sign,
+    ttnn._ttnn.operations.unary.signbit,
+    ttnn._ttnn.operations.unary.silu,
+    ttnn._ttnn.operations.unary.sin,
+    ttnn._ttnn.operations.unary.sqrt,
+    ttnn._ttnn.operations.unary.square,
+    ttnn._ttnn.operations.unary.tan,
+    ttnn._ttnn.operations.unary.tanh,
+    # Unaries with fast_and_approximate_mode
+    ttnn._ttnn.operations.unary.exp,
+    ttnn._ttnn.operations.unary.erf,
+    ttnn._ttnn.operations.unary.erfc,
+    ttnn._ttnn.operations.unary.gelu,
+    ttnn._ttnn.operations.unary.rsqrt,
+    # Unaries with float parameter
+    ttnn._ttnn.operations.unary.elu,
+    ttnn._ttnn.operations.unary.heaviside,
+    ttnn._ttnn.operations.unary.leaky_relu,
+    # ttnn._ttnn.operations.unary.prelu,  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
+    # Other unaries (composite operations)
+    ttnn._ttnn.operations.unary.softplus,
+]
+for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
+    register_ttnn_cpp_unary_function(unary_function)
+
+
+def prelu(*args, **kwargs):  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
+    leaky_relu = getattr(THIS_MODULE, "leaky_relu")
+    return leaky_relu(*args, **kwargs)
+
+
 def torch_cbrt(x, *args, **kwargs):
     import torch
 
@@ -30,70 +170,41 @@ def torch_multigammaln(x, *args, **kwargs):
 
 
 def register_ttl_unary_function(name, ttl_unary_function):
-    def _golden_function(input_tensor: ttnn.Tensor, **_):
-        import torch
+    import torch
 
-        name_to_golden_function_function = {
-            "tanh": torch.tanh,
-            "gelu": torch.nn.functional.gelu,
-            "rsqrt": torch.rsqrt,
-            "relu": torch.relu,
-            "log": torch.log,
-            "sin": torch.sin,
-            "cos": torch.cos,
-            "tan": torch.tan,
-            "asin": torch.asin,
-            "acos": torch.acos,
-            "atan": torch.atan,
-            "sinh": torch.sinh,
-            "cosh": torch.cosh,
-            "asinh": torch.asinh,
-            "acosh": torch.acosh,
-            "atanh": torch.atanh,
-            "logical_not": torch.logical_not,
-            "signbit": torch.signbit,
-            "i0": torch.i0,
-            "isfinite": torch.isfinite,
-            "isinf": torch.inf,
-            "isnan": torch.isnan,
-            "isneginf": torch.isneginf,
-            "isposinf": torch.isposinf,
-            "lgamma": torch.lgamma,
-            "log10": torch.log10,
-            "log1p": torch.log1p,
-            "log2": torch.log2,
-            "multigammaln": torch_multigammaln,
-            "neg": torch.neg,
-            "abs": torch.abs,
-            "cbrt": torch_cbrt,
-            "deg2rad": torch.deg2rad,
-            "digamma": torch.digamma,
-            "erf": torch.erf,
-            "erfc": torch.erfc,
-            "erfinv": torch.erfinv,
-            "exp2": torch.exp2,
-            "expm1": torch.expm1,
-            "rad2deg": torch.rad2deg,
-            "reciprocal": torch.reciprocal,
-            "sqrt": torch.sqrt,
-            "square": torch.square,
-            "tril": torch.tril,
-            "triu": torch.triu,
-            "hardsigmoid": torch.nn.functional.hardsigmoid,
-            "hardswish": torch.nn.functional.hardswish,
-            "hardtanh": torch.nn.functional.hardtanh,
-            "log_sigmoid": torch.nn.functional.logsigmoid,
-            "mish": lambda _x: torch.nn.functional.mish(_x.to(torch.float)),
-            "relu6": torch.nn.functional.relu6,
-            "sigmoid": torch.sigmoid,
-            "sigmoid_accurate": torch.sigmoid,
-            "sign": torch.sign,
-            "celu": torch.nn.functional.celu,
-            "softsign": torch.nn.functional.softsign,
-            "swish": torch.nn.functional.hardswish,
-            "softplus": torch.nn.functional.softplus,
-        }
-        torch_function = name_to_golden_function_function[name]
+    name_to_golden_function = {
+        "acosh": torch.acosh,
+        "asinh": torch.asinh,
+        "atanh": torch.atanh,
+        "cbrt": torch_cbrt,
+        "cosh": torch.cosh,
+        "deg2rad": torch.deg2rad,
+        "digamma": torch.digamma,
+        "hardswish": torch.nn.functional.hardswish,
+        "hardsigmoid": torch.nn.functional.hardsigmoid,
+        "hardtanh": torch.nn.functional.hardtanh,
+        "lgamma": torch.lgamma,
+        "log1p": torch.log1p,
+        "log_sigmoid": torch.nn.functional.logsigmoid,
+        "mish": lambda _x: torch.nn.functional.mish(_x.to(torch.float)),
+        "multigammaln": torch_multigammaln,
+        "rad2deg": torch.rad2deg,
+        "sigmoid_accurate": torch.sigmoid,
+        "sinh": torch.sinh,
+        "softsign": torch.nn.functional.softsign,
+        "swish": torch.nn.functional.hardswish,
+        "tanhshrink": ttl.tensor.tanhshrink,
+        "tril": torch.tril,
+        "triu": torch.triu,
+    }
+
+    golden_keys = set(name_to_golden_function.keys())
+    function_names = {name for name, _ in TTL_UNARY_FUNCTIONS}
+    if golden_keys != function_names:
+        raise ImportError(f"Missing or extra golden functions:\n{golden_keys}\nshould be equal to\n{function_names}")
+
+    def _golden_function(input_tensor: ttnn.Tensor, **_):
+        torch_function = name_to_golden_function[name]
         return torch_function(input_tensor)
 
     def _unary_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -152,66 +263,29 @@ def register_ttl_unary_function(name, ttl_unary_function):
 
 
 TTL_UNARY_FUNCTIONS = [
-    ("tanh", ttl.tensor.tanh),
-    ("gelu", ttl.tensor.gelu),
-    ("relu", ttl.tensor.relu),
-    ("rsqrt", ttl.tensor.rsqrt),
-    ("log", ttl.tensor.log),
-    ("sin", ttl.tensor.sin),
-    ("cos", ttl.tensor.cos),
-    ("tan", ttl.tensor.tan),
-    ("asin", ttl.tensor.asin),
-    ("acos", ttl.tensor.acos),
-    ("atan", ttl.tensor.atan),
-    ("sinh", ttl.tensor.sinh),
-    ("cosh", ttl.tensor.cosh),
-    ("asinh", ttl.tensor.asinh),
-    ("acosh", ttl.tensor.acosh),
-    ("atanh", ttl.tensor.atanh),
-    ("logical_not", ttl.tensor.logical_not_unary),
-    ("signbit", ttl.tensor.signbit),
-    ("i0", ttl.tensor.i0),
-    ("isfinite", ttl.tensor.isfinite),
-    ("isinf", ttl.tensor.isinf),
-    ("isnan", ttl.tensor.isnan),
-    ("isneginf", ttl.tensor.isneginf),
-    ("isposinf", ttl.tensor.isposinf),
-    ("lgamma", ttl.tensor.lgamma),
-    ("log10", ttl.tensor.log10),
-    ("log1p", ttl.tensor.log1p),
-    ("log2", ttl.tensor.log2),
-    (
-        "multigammaln",
-        ttl.tensor.multigammaln,
-    ),
-    ("neg", ttl.tensor.neg),
-    ("abs", ttl.tensor.abs),
-    ("cbrt", ttl.tensor.cbrt),
-    ("deg2rad", ttl.tensor.deg2rad),
-    ("digamma", ttl.tensor.digamma),
-    ("erf", ttl.tensor.erf),
-    ("erfc", ttl.tensor.erfc),
-    ("erfinv", ttl.tensor.erfinv),
-    ("exp2", ttl.tensor.exp2),
-    ("expm1", ttl.tensor.expm1),
-    ("rad2deg", ttl.tensor.rad2deg),
-    ("reciprocal", ttl.tensor.recip),
-    ("sqrt", ttl.tensor.sqrt),
-    ("square", ttl.tensor.square),
-    ("tril", ttl.tensor.tril),
-    ("triu", ttl.tensor.triu),
-    ("hardsigmoid", ttl.tensor.hardsigmoid),
-    ("hardswish", ttl.tensor.hardswish),
-    ("hardtanh", ttl.tensor.hardtanh),
-    ("log_sigmoid", ttl.tensor.log_sigmoid),
-    ("mish", ttl.tensor.mish),
-    ("relu6", ttl.tensor.relu6),
-    ("sigmoid", ttl.tensor.sigmoid),
-    ("sigmoid_accurate", ttl.tensor.sigmoid_accurate),
-    ("sign", ttl.tensor.sign),
-    ("softsign", ttl.tensor.softsign),
-    ("swish", ttl.tensor.swish),
-    ("tanhshrink", ttl.tensor.tanhshrink),
+    ("acosh", ttl.tensor.acosh),  # composite
+    ("asinh", ttl.tensor.asinh),  # composite
+    ("atanh", ttl.tensor.atanh),  # composite
+    ("cbrt", ttl.tensor.cbrt),  # composite
+    ("cosh", ttl.tensor.cosh),  # composite
+    ("deg2rad", ttl.tensor.deg2rad),  # composite
+    ("digamma", ttl.tensor.digamma),  # composite
+    ("hardswish", ttl.tensor.hardswish),  # composite
+    ("hardsigmoid", ttl.tensor.hardsigmoid),  # composite
+    ("hardtanh", ttl.tensor.hardtanh),  # composite
+    ("lgamma", ttl.tensor.lgamma),  # composite
+    ("log1p", ttl.tensor.log1p),  # composite
+    ("log_sigmoid", ttl.tensor.log_sigmoid),  # composite
+    ("mish", ttl.tensor.mish),  # composite
+    ("multigammaln", ttl.tensor.multigammaln),  # composite
+    ("rad2deg", ttl.tensor.rad2deg),  # composite
+    ("sigmoid_accurate", ttl.tensor.sigmoid_accurate),  # composite
+    ("sinh", ttl.tensor.sinh),  # composite
+    ("softsign", ttl.tensor.softsign),  # composite
+    ("swish", ttl.tensor.swish),  # composite
+    ("tanhshrink", ttl.tensor.tanhshrink),  # composite
+    ("tril", ttl.tensor.tril),  # composite
+    ("triu", ttl.tensor.triu),  # composite
 ]
 
 
@@ -227,11 +301,11 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, param):
     def _golden_function(input_tensor: ttnn.Tensor, parameter, **_):
         import torch
 
-        name_to_golden_function_function = {
+        name_to_golden_function = {
             "logit": torch.logit,
             "polygamma": torch.special.polygamma,
         }
-        torch_function = name_to_golden_function_function[name]
+        torch_function = name_to_golden_function[name]
         return torch_function(input_tensor, parameter)
 
     def _unary_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
@@ -292,57 +366,16 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, param):
 
 
 TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM = [
-    ("logit", ttl.tensor.logit, "eps"),
-    ("polygamma", ttl.tensor.polygamma, "parameter"),
+    ("logit", ttl.tensor.logit, "eps"),  # composite
+    ("polygamma", ttl.tensor.polygamma, "parameter"),  # composite
 ]
 
 for unary_function_name, ttl_unary_function, param in TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAM:
     register_ttl_unary_function_with_float(unary_function_name, ttl_unary_function, param)
 
 
-def register_eltwise_unary_cpp_function(unary_function):
-    def _golden_function(input_tensor: ttnn.Tensor, **_):
-        import torch
-
-        ttnn_function_to_golden_function = {
-            ttnn._ttnn.operations.unary.exp: torch.exp,
-            ttnn._ttnn.operations.unary.silu: torch.nn.functional.silu,
-            ttnn._ttnn.operations.unary.softplus: torch.nn.functional.softplus,
-        }
-        torch_function = ttnn_function_to_golden_function[unary_function]
-        return torch_function(input_tensor)
-
-    operation = ttnn.register_operation(golden_function=_golden_function)(unary_function)
-    setattr(THIS_MODULE, unary_function.name, operation)
-
-
-TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
-    ttnn._ttnn.operations.unary.exp,
-    ttnn._ttnn.operations.unary.silu,
-    ttnn._ttnn.operations.unary.softplus,
-]
-for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
-    register_eltwise_unary_cpp_function(unary_function)
-
-
 def _is_scalar(value):
     return isinstance(value, (int, float))
-
-
-def torch_heaviside(x, *args, **kwargs):
-    import torch
-
-    value = kwargs.pop("scalar")
-    result = torch.heaviside(x, torch.tensor(value, dtype=x.dtype))
-    return result
-
-
-def torch_prelu(x, *args, **kwargs):
-    import torch
-
-    weight = kwargs.pop("scalar")
-    result = torch.nn.functional.prelu(x, torch.tensor(weight, dtype=x.dtype))
-    return result
 
 
 def register_ttl_activation_function_with_float(name, ttl_activation_function, param):
@@ -351,10 +384,6 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, p
 
         name_to_torch_function = {
             "hardshrink": torch.nn.functional.hardshrink,
-            "heaviside": torch_heaviside,
-            "leaky_relu": torch.nn.functional.leaky_relu,
-            "prelu": torch_prelu,
-            "elu": torch.nn.functional.elu,
             "softshrink": torch.nn.functional.softshrink,
             "tanhshrink": torch.nn.functional.tanhshrink,
         }
@@ -423,13 +452,9 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, p
 
 
 TTL_ACTIVATION_FUNCTIONS_WITH_FLOAT_PARAM = [
-    ("hardshrink", ttl.tensor.hardshrink, "lambda"),
-    ("heaviside", ttl.tensor.heaviside, "value"),
-    ("leaky_relu", ttl.tensor.leaky_relu, "slope"),
-    ("prelu", ttl.tensor.prelu, "weight"),
-    ("elu", ttl.tensor.elu, "alpha"),
-    ("celu", ttl.tensor.celu, "alpha"),
-    ("softshrink", ttl.tensor.softshrink, "lambda"),
+    ("hardshrink", ttl.tensor.hardshrink, "lambda"),  # composite
+    ("celu", ttl.tensor.celu, "alpha"),  # composite
+    ("softshrink", ttl.tensor.softshrink, "lambda"),  # composite
 ]
 
 for activation_function_name, ttl_activation_function, param in TTL_ACTIVATION_FUNCTIONS_WITH_FLOAT_PARAM:
@@ -512,8 +537,8 @@ def register_ttl_activation_function_with_two_float_params(name, ttl_activation_
 
 
 TTL_ACTIVATION_FUNCTIONS_WITH_TWO_FLOAT_PARAMS = [
-    ("clip", ttl.tensor.clip, "min", "max"),
-    ("threshold", ttl.tensor.threshold, "value", "threshold"),
+    ("clip", ttl.tensor.clip, "min", "max"),  # composite
+    ("threshold", ttl.tensor.threshold, "value", "threshold"),  # composite
 ]
 
 for (
@@ -631,10 +656,10 @@ def register_ttl_activation_function_glu(name, ttl_activation_function, param):
 
 
 TTL_ACTIVATION_FUNCTIONS_GLU = [
-    ("glu", ttl.tensor.glu, "dim"),
-    ("reglu", ttl.tensor.reglu, "dim"),
-    ("swiglu", ttl.tensor.swiglu, "dim"),
-    ("geglu", ttl.tensor.geglu, "dim"),
+    ("glu", ttl.tensor.glu, "dim"),  # composite
+    ("reglu", ttl.tensor.reglu, "dim"),  # composite
+    ("swiglu", ttl.tensor.swiglu, "dim"),  # composite
+    ("geglu", ttl.tensor.geglu, "dim"),  # composite
 ]
 
 
