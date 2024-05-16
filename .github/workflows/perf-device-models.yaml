@@ -13,18 +13,18 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        runner-info: [
-          {name: "GS", arch: grayskull, runs-on: ["perf-no-reset-grayskull", "self-reset"], machine-type: "bare_metal"},
-          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "self-reset"], machine-type: "bare_metal"},
+        test-info: [
+          {name: "GS", arch: grayskull, runs-on: ["perf-no-reset-grayskull", "self-reset"], machine-type: "bare_metal", timeout: 40},
+          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "self-reset"], machine-type: "bare_metal", timeout: 20},
         ]
-    name: "${{ matrix.runner-info.name }} device perf"
+    name: "${{ matrix.test-info.name }} device perf"
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-info.arch }}
+      ARCH_NAME: ${{ matrix.test-info.arch }}
       TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": true}'
       LOGURU_LEVEL: INFO
     environment: dev
-    runs-on: ${{ matrix.runner-info.runs-on }}
+    runs-on: ${{ matrix.test-info.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Ensure weka mount is active
@@ -39,10 +39,10 @@ jobs:
         run: |
           ./scripts/build_scripts/build_with_profiler_opt.sh
       - name: Run device performance regressions
-        timeout-minutes: 90
+        timeout-minutes: ${{ matrix.test-info.timeout }}
         run: |
           source build/python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_device_performance_${{ matrix.runner-info.machine-type }}
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_device_performance_${{ matrix.test-info.machine-type }}
       - name: Check device perf report exists
         id: check-device-perf-report
         if: ${{ !cancelled() }}
@@ -55,5 +55,5 @@ jobs:
         if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: device-perf-report-csv-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}
+          name: device-perf-report-csv-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
           path: "${{ steps.check-device-perf-report.outputs.device_perf_report_filename }}"
