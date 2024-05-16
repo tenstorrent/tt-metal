@@ -1017,12 +1017,14 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_new(
     uint32_t out_h = output_shape[1];
     uint32_t out_w = output_shape[2];
 
+    bool is_block_sharded = input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+
     auto pad_metadata = sliding_window::generate_pad_metadata(sliding_window_config);
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(sliding_window_config);
     auto shard_boundaries = sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
     auto top_left_indices = sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, false, false);
     auto reader_indices = sliding_window::construct_on_host_config_tensor(top_left_indices, sliding_window_config, parallel_config);
-    auto reader_indices_on_device = sliding_window::move_config_tensor_to_device(reader_indices, parallel_config, input.device());
+    auto reader_indices_on_device = sliding_window::move_config_tensor_to_device(reader_indices, parallel_config, is_block_sharded, input.device());
 
     detail::AddConfigTensor(program, reader_indices_on_device);
 

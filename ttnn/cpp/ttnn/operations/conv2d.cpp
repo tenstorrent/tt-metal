@@ -331,7 +331,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_requi
                 tensor_width, conv_config.input_channels_alignment
             );
             TT_ASSERT(input_tensor_width_snapped_to_channels_alignment >= tensor_width);
-            if (input_tensor_height_snapped_to_tile != tensor_height || input_tensor_width_snapped_to_channels_alignment != tensor_height) {
+            if (input_tensor_height_snapped_to_tile != tensor_height || input_tensor_width_snapped_to_channels_alignment != tensor_width) {
                 input_tensor = tt::tt_metal::pad_on_host(
                     input_tensor,
                     {input_tensor.get_shape()[0], input_tensor.get_shape()[1], input_tensor_height_snapped_to_tile, input_tensor_width_snapped_to_channels_alignment},
@@ -502,7 +502,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     }
     if (!is_1x1_s1_p0_conv) {
         // call halo op
-        SlidingWindowConfig sliding_window_config = SlidingWindowConfig(batch_size, input_height, input_width, kernel_size[0], kernel_size[1], stride[0], stride[1], padding[0], padding[1], dilation[0], dilation[1], opt_conv_op_parallel_config.num_cores_nhw, input_tensor_post_tm.memory_config().shard_spec.value().grid);
+        SlidingWindowConfig sliding_window_config = SlidingWindowConfig(batch_size, input_height, input_width, kernel_size[0], kernel_size[1], stride[0], stride[1], padding[0], padding[1], dilation[0], dilation[1], opt_conv_op_parallel_config.num_cores_nhw, input_tensor_post_tm.memory_config().shard_spec.value().grid,true);
         auto halo_output = ttnn::operations::halo::halo_op(input_tensor_post_tm, sliding_window_config, 0, false, parallel_config.shard_orientation == ShardOrientation::COL_MAJOR, 0, input_tensor_post_tm.memory_config());
         if (conv_config.deallocate_activation) {
             input_tensor_post_tm.deallocate();
