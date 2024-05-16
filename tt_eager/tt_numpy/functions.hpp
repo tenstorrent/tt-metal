@@ -296,7 +296,7 @@ static Tensor index_width(
                 value = 0;
                 index = index + (shape[ultimate] -  up_shape[ultimate]);
             }// dim H
-            index = index + ((shape[penultimate] -  up_shape[penultimate]) * TILE_WIDTH);
+            index = index + ((shape[penultimate] -  up_shape[penultimate]) * tt::constants::TILE_WIDTH);
         } //dim c
     }              // dim N
     auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR).to(layout);
@@ -332,7 +332,7 @@ static Tensor index_height(
                 index = index + (shape[ultimate] -  up_shape[ultimate]);
             }      // dim H
             value = 0;
-            index = index + ((shape[penultimate] -  up_shape[penultimate]) * TILE_WIDTH);
+            index = index + ((shape[penultimate] -  up_shape[penultimate]) * tt::constants::TILE_WIDTH);
         }          // dim C
     }              // dim N
     auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR).to(layout);
@@ -367,7 +367,7 @@ static Tensor index_all(
                 }  // dim W
                 index = index + (shape[ultimate] -  up_shape[ultimate]);
             }// dim H
-            index = index + ((shape[penultimate] -  up_shape[penultimate]) * TILE_WIDTH);
+            index = index + ((shape[penultimate] -  up_shape[penultimate]) * tt::constants::TILE_WIDTH);
         }          // dim C
     }              // dim N
     auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR).to(layout);
@@ -555,7 +555,7 @@ static Tensor index_channel(
                 index = index + (shape[ultimate] - up_shape[ultimate]);
             }      // dim H
             value = value + 1;
-            index = index + ((shape[penultimate] -  up_shape[penultimate]) * TILE_WIDTH);
+            index = index + ((shape[penultimate] -  up_shape[penultimate]) * tt::constants::TILE_WIDTH);
         }          // dim C
         value = 0;
     }              // dim N
@@ -591,7 +591,7 @@ static Tensor index_batch(
                 }  // dim W
                 index = index + (shape[ultimate] - up_shape[ultimate]);
             }      // dim H
-            index = index + ((shape[penultimate] -  up_shape[penultimate]) * TILE_WIDTH);
+            index = index + ((shape[penultimate] -  up_shape[penultimate]) * tt::constants::TILE_WIDTH);
         }          // dim C
         value = value + 1;
     }              // dim N
