@@ -65,9 +65,6 @@ void kernel_main() {
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
 
-    if (noop) {
-        return;
-    }
 
     uint32_t act_mcast_dest_noc_start_x = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_mcast_dest_noc_start_y = get_arg_val<uint32_t>(i); i+=1;

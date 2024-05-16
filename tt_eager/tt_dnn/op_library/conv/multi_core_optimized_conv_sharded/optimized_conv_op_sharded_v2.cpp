@@ -630,10 +630,23 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         // 1D mcast
         if (total_num_cores > 1) {
             std::set<CoreRange> mcast_receiver_set;
+
             if (num_cores_x > 1) {
                 mcast_receiver_set.insert(CoreRange(CoreCoord(1, 0), CoreCoord(num_cores_x - 1, 0)));
-            } if (num_cores_y > 1) {
-                mcast_receiver_set.insert(CoreRange(CoreCoord(0, 1), bottom_right_core));
+            }
+            if (num_cores_y > 1) {
+                if(total_noop_cores>0)
+                {
+                    if(num_active_cores_y_with_full_x>1)
+                    {
+                        mcast_receiver_set.insert(CoreRange(CoreCoord(0, 1),CoreCoord(num_active_cores_x - 1, num_active_cores_y_with_full_x - 1)));
+                    }
+                    if (num_active_cores_x_last_y > 0) {
+                        mcast_receiver_set.insert(CoreRange(CoreCoord(0, num_active_cores_y_with_full_x), CoreCoord(num_active_cores_x_last_y - 1, num_active_cores_y_with_full_x)));
+                    }
+                } else {
+                    mcast_receiver_set.insert(CoreRange(CoreCoord(0, 1), bottom_right_core));
+                }
             }
             mcast_receiver_cores = mcast_receiver_set;
             weights_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -953,7 +966,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     auto reader_id = CreateKernel(
         program,
         reader_kernel,
-        all_cores,
+        all_active_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = reader_noc,
@@ -972,12 +985,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
             .compile_args = compute_kernel_args,
             .defines = compute_defines});
 
-    if (total_noop_cores > 0) {
-        auto compute_id = CreateKernel(
-            program,
-            "tt_metal/kernels/compute/blank.cpp",
-            noop_cores, ComputeConfig{});
-    }
 
     vector<KernelHandle> reader_ids;
     vector<KernelHandle> writer_ids;
@@ -1068,12 +1075,14 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         }
 
         // log_debug("Core: {}, READER RT ARGS: {}", core, reader_rt_args.size());
-
-        SetRuntimeArgs(
-            program, reader_id, core,
-            reader_rt_args
-        );
-        reader_ids.push_back(reader_id);
+        if(not noop_core)
+        {
+            SetRuntimeArgs(
+                program, reader_id, core,
+                reader_rt_args
+            );
+            reader_ids.push_back(reader_id);
+        }
 
         writer_rt_args = {
             out_dram_addr,
@@ -1153,12 +1162,14 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
                     writer_rt_args.push_back(right_core_physical.y); // weights_mcast_sender_noc_y
                     writer_rt_args.push_back(weights_mcast_sender_semaphore);
                     writer_rt_args.push_back(weights_mcast_receiver_semaphore);
-
-                    SetRuntimeArgs(
-                        program, writer_mcast_receiver_id, core,
-                        writer_rt_args
-                    );
-                    writer_ids.push_back(writer_mcast_receiver_id);
+                    if(not noop_core)
+                    {
+                        SetRuntimeArgs(
+                            program, writer_mcast_receiver_id, core,
+                            writer_rt_args
+                        );
+                        writer_ids.push_back(writer_mcast_receiver_id);
+                    }
                 }
             } else {
                 CoreCoord top_core = {(std::size_t) core_x_i, 0};
@@ -1196,12 +1207,14 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
                     writer_rt_args.push_back(top_left_core_physical.y); // weights_mcast_sender_noc_y
                     writer_rt_args.push_back(weights_mcast_sender_semaphore);
                     writer_rt_args.push_back(weights_mcast_receiver_semaphore);
-
-                    SetRuntimeArgs(
-                        program, writer_mcast_receiver_id, core,
-                        writer_rt_args
-                    );
-                    writer_ids.push_back(writer_mcast_receiver_id);
+                    if(not noop_core)
+                    {
+                        SetRuntimeArgs(
+                            program, writer_mcast_receiver_id, core,
+                            writer_rt_args
+                        );
+                        writer_ids.push_back(writer_mcast_receiver_id);
+                    }
                 }
             }
         } else {

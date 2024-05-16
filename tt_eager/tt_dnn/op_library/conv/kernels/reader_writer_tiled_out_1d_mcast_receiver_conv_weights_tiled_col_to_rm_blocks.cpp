@@ -64,9 +64,6 @@ void kernel_main() {
     i+=10;
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
 
-    if(noop) {
-        return;
-    }
 
     // mcast args
     uint32_t weights_mcast_sender_noc_x           = get_arg_val<uint32_t>(i); i+=1;

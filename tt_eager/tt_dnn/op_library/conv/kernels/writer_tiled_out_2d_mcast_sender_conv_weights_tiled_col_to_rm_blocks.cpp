@@ -73,9 +73,6 @@ void kernel_main() {
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i); i += 1;
 
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
-    if(noop) {
-        return;
-    }
 
     // mcast args
     uint32_t weights_mcast_dest_noc_start_x         = get_arg_val<uint32_t>(i); i+=1;
