@@ -185,6 +185,7 @@ def test_bert_linear(
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing
+    ttl.device.ReleaseLastTrace(device)
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
