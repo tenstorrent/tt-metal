@@ -396,9 +396,9 @@ namespace tt::tt_metal::sliding_window {
         }
     }
 
-    Tensor move_config_tensor_to_device(const Tensor& config_tensor, const ParallelConfig& p_config, Device* device) {
+    Tensor move_config_tensor_to_device(const Tensor& config_tensor, const ParallelConfig& p_config, bool is_block_sharded, Device* device) {
         auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t) config_tensor.get_shape()[-1]});
-        auto config_shard_orientation = p_config.shard_orientation == ShardOrientation::COL_MAJOR ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
+        auto config_shard_orientation = is_block_sharded ? (p_config.shard_orientation == ShardOrientation::COL_MAJOR ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR) : ShardOrientation::ROW_MAJOR;
         ShardSpec shard_spec(p_config.grid, shard_shape, config_shard_orientation, false);
         MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, shard_spec};
         log_debug(LogOp, "config_tensor shape: {}, shard shape: {}, orientation: {}", config_tensor.get_shape(), shard_shape, config_shard_orientation);
