@@ -160,13 +160,13 @@ struct CQDispatchWaitCmd {
     uint8_t clear_count;      // if true, reset count to 0
     uint32_t addr;            // address to read
     uint32_t count;           // wait while address is < count
-};
+} __attribute__((packed));
 
 struct CQDispatchDelayCmd {
     uint8_t pad1;
     uint16_t pad2;
     uint32_t delay;
-};
+} __attribute__((packed));
 
 struct CQDispatchCmd {
     CQDispatchBaseCmd base;
