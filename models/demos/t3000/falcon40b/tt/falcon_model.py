@@ -133,10 +133,10 @@ class TtFalconModelShared:
 
         self.layernorm_eps = config.layer_norm_epsilon
 
-    def get_kv_cache(self):
+    def initialize_kv_cache(self):
         layer_past = ()
         for layer_num in range(self.num_layers):
-            layer_past += self.layers[layer_num].self_attn.layer_past
+            layer_past += self.layers[layer_num].self_attn.initialize_kvcache()
         return layer_past
 
     def set_model_config(self, model_config):

@@ -121,7 +121,7 @@ def run_test_FalconCausalLM_end_to_end(
     del state_dict
 
     # Initialize past layer values
-    tt_layer_past = tt_FalconCausalLM.get_kv_cache()
+    tt_layer_past = tt_FalconCausalLM.initialize_kv_cache()
 
     profiler.start("processing_of_input")
     if llm_mode == "prefill":
