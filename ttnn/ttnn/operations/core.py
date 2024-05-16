@@ -491,6 +491,13 @@ def _golden_function(tensor, *args, **kwargs):
 to_layout = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.core.to_layout)
 
 
+def _golden_function(tensor, *args, **kwargs):
+    return tensor
+
+
+to_dtype = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.core.to_dtype)
+
+
 def _clone_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
     ttnn.validate_input_tensor(
         operation_name,

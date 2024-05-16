@@ -2,22 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/constants.hpp"
-#include "tensor/tensor.hpp"
-#include "tensor/owned_buffer.hpp"
-#include "tt_metal/host_api.hpp"
-
-#include "tt_numpy/functions.hpp"
-
-#include "tt_dnn/op_library/operation.hpp"
-
-#include "tt_dnn/op_library/bmm/bmm_op.hpp"
-#include "tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
-#include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
-#include "tt_dnn/op_library/softmax/softmax_op.hpp"
-
 #include <chrono>
+
+#include "tensor/host_buffer/types.hpp"
+#include "tensor/tensor.hpp"
+#include "tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "tt_dnn/op_library/operation.hpp"
+#include "tt_dnn/op_library/softmax/softmax_op.hpp"
+#include "tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
+#include "tt_metal/common/constants.hpp"
+#include "tt_metal/host_api.hpp"
+#include "tt_numpy/functions.hpp"
 
 using Parameters = std::map<std::string, Tensor>;
 

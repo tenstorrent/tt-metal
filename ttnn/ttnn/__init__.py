@@ -251,6 +251,7 @@ from ttnn.operations.core import (
     to_device,
     from_device,
     to_layout,
+    to_dtype,
     reshape,
     to_memory_config,
     deallocate,

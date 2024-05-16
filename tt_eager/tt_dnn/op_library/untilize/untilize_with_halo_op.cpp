@@ -4,15 +4,14 @@
 
 #include <math.h>
 
-
+#include "tensor/host_buffer/functions.hpp"
+#include "tt_dnn/op_library/math.hpp"
+#include "tt_dnn/op_library/sharding_utilities.hpp"
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
-#include "tt_dnn/op_library/sharding_utilities.hpp"
-#include "tt_dnn/op_library/math.hpp"
-#include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
-#include "tensor/owned_buffer_functions.hpp"
+#include "tt_metal/host_api.hpp"
 
 using namespace tt::constants;
 

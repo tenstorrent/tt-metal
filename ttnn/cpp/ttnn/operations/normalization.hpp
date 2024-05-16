@@ -50,7 +50,7 @@ struct Softmax {
     }
 };
 
-struct LayerNorm : tt::operations::primary::LayerNorm {
+struct LayerNorm {
     static inline const std::array<ttnn::TensorSchema, 4> input_tensor_schemas() {
         return {
             ttnn::TensorSchema{
@@ -123,7 +123,7 @@ struct LayerNorm : tt::operations::primary::LayerNorm {
     }
 };
 
-struct RMSNorm : tt::operations::primary::LayerNorm {
+struct RMSNorm {
     static inline const std::array<ttnn::TensorSchema, 2> input_tensor_schemas() {
         return {
             ttnn::TensorSchema{

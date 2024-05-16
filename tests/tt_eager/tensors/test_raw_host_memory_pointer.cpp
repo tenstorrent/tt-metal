@@ -8,8 +8,8 @@
 
 #include "common/bfloat16.hpp"
 #include "common/constants.hpp"
-#include "tensor/owned_buffer.hpp"
-#include "tensor/owned_buffer_functions.hpp"
+#include "tensor/host_buffer/functions.hpp"
+#include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
 #include "tensor/tensor_impl.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
