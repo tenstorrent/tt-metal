@@ -203,7 +203,7 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_perf",
-    ((10.10),),
+    ((10.31),),
 )
 def test_stable_diffusion_device_perf(expected_perf):
     subdir = "ttnn_stable_diffusion"
@@ -223,7 +223,7 @@ def test_stable_diffusion_device_perf(expected_perf):
 
     os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
     post_processed_results = run_device_perf(command, subdir, iterations, cols, batch, has_signposts=True)
-    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
+    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
     prep_device_perf_report(
         model_name=f"stable_diffusion_{batch}batch",
         batch_size=batch,
