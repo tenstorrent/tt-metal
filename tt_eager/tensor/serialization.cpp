@@ -10,8 +10,7 @@
 #include <string>
 #include <type_traits>
 
-#include "tensor/borrowed_buffer_functions.hpp"
-#include "tensor/owned_buffer_functions.hpp"
+#include "tensor/host_buffer/functions.hpp"
 #include "tensor/tensor_utils.hpp"
 
 namespace tt {

@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/common/math.hpp"
+#include "tt_metal/common/tt_backend_api_types.hpp"
+#include "tt_metal/hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/kernels/data_types.hpp"
 
 namespace tt::tt_metal::detail{

@@ -5,8 +5,7 @@
 #include <chrono>
 #include <memory>
 
-#include "tensor/borrowed_buffer.hpp"
-#include "tensor/owned_buffer.hpp"
+#include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor_impl.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_lib_bindings_tensor.hpp"
