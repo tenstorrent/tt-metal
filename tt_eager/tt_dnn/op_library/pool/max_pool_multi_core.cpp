@@ -14,6 +14,7 @@
 #include "tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt {
