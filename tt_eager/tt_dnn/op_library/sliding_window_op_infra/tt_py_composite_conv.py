@@ -825,9 +825,9 @@ class TTPyCompositeConv(TTPyOp):
 
         def composite_conv_with_deallocate_input(activation):
             # assert(activation.get_layout() == ttl.tensor.Layout.ROW_MAJOR)
-            return activation
+            # return activation
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
-            breakpoint()
+            # breakpoint()
             return utwh_output
             activation.deallocate()
             return conv_(utwh_output)

@@ -590,7 +590,7 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
         auto conv_output = tt::tt_metal::optimized_conv_new(halo_output, weight_tensor_on_device, bias_tensor_on_device, conv_params, out_channels, conv_config.output_layout == Layout::ROW_MAJOR, conv_config.activation == "relu", conv_config.math_fidelity,
             opt_conv_op_parallel_config, opt_conv_op_block_config, 0, conv_out_memory_config, conv_config.dtype, {batch_size, input_height, input_width, in_channels}, conv_config.input_channels_alignment == 16, compute_kernel_config);
        //halo_output.deallocate();
-        return {input_tensor_post_tm, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        return {halo_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
         // run conv as matmul
         // TODO add support for running downsample here for stride 2
