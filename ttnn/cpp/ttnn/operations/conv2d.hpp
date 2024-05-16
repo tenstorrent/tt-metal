@@ -166,9 +166,12 @@ ParallelConfig determine_parallel_config(
             return grid;
         } else {
             uint32_t total_cores_for_channels = block_shard_orientation == ShardOrientation::COL_MAJOR ? device_grid_size[1] : device_grid_size[0];
+            cout << "conv_out_2d_matrix_width_ntiles = " << conv_out_2d_matrix_width_ntiles << endl;
+            cout << "input_channels = " <<  input_channels << endl;
             uint32_t num_cores_channels = find_closest_common_largest_divisor(
                     conv_out_2d_matrix_width_ntiles, ceil((double) input_channels / (double) 32), total_cores_for_channels
                 );
+            cout << "num_cores_channels = " << num_cores_channels << endl;
             uint32_t cores_x = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_channels;
             uint32_t cores_y = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_channels : num_cores_nhw;
             CoreRange core_range = CoreRange(CoreCoord({0,0}), CoreCoord({cores_x-1, cores_y - 1}));
@@ -209,10 +212,10 @@ uint32_t get_num_cores_channels_from_parallel_config(const ParallelConfig& pconf
     if (pconfig.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         num_cores_channels = 1;
     } else if (pconfig.shard_orientation == ShardOrientation::COL_MAJOR) {
-        num_cores_channels = grid_size.x;
+        num_cores_channels = grid_size.y;
     } else {
         TT_ASSERT(pconfig.shard_orientation == ShardOrientation::ROW_MAJOR);
-        num_cores_channels = grid_size.y;
+        num_cores_channels = grid_size.x;
     }
     TT_ASSERT(num_cores_channels > 0);
     return num_cores_channels;
@@ -230,6 +233,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(const Shape& tens
     uint32_t nhw_shape = tensor_shape[0] * tensor_shape[1] * tensor_shape[2];
     uint32_t nhw_padded = round_up(nhw_shape, num_cores_nhw * tile_size);
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
+    cout << "channels = " << channels << " num_cores_channels " << num_cores_channels << endl;
     TT_ASSERT(channels % num_cores_channels == 0);
     uint32_t channel_shard = channels / num_cores_channels;
     auto shard_spec = ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
