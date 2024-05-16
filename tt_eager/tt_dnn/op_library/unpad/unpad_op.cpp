@@ -147,19 +147,19 @@ tt::stl::reflection::Attributes Unpad::attributes() const {
 
 const operation::Hash Unpad::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     auto input_tensor = input_tensors.at(0);
-    auto input_mem_config = input_tensor.memory_config();
+    auto input_mem_config = std::get<DeviceStorage>(input_tensor.storage()).memory_config();
     auto output_mem_config = this->output_mem_config;
-    auto dtype = input_tensor.get_dtype();
-    auto num_dims = input_tensor.get_legacy_shape().rank();
+    auto dtype = input_tensor.dtype();
+    auto num_dims = input_tensor.shape().rank();
 
     std::string rm_width = "TILE";
     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        rm_width = fmt::format("{}", input_tensor.get_legacy_shape()[3]);
+        rm_width = fmt::format("{}", input_tensor.legacy_shape()[3]);
     }
 
     auto str = operation::hash_operation<Unpad>(
         num_dims,
-        input_tensor.get_layout(),
+        input_tensor.layout(),
         input_mem_config.memory_layout,
         input_mem_config.buffer_type,
         output_mem_config.memory_layout,
