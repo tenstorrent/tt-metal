@@ -1,4 +1,4 @@
-name: "Nightly multi-chip tests"
+name: "[T3K] T3000 frequent tests"
 
 on:
   workflow_dispatch:
@@ -11,23 +11,27 @@ jobs:
     with:
       arch: '["wormhole_b0"]'
     secrets: inherit
-
-  multi-chip-nightly:
+  t3000-frequent-tests:
     needs: build-artifact
     strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        runner-info: [
-          # N300 2x4
-          {name: "n300-2x4", arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-4", "multi-chip-num-chips-8"]},
+        test-group: [
+          {
+            name: "T3000 frequent tests",
+            arch: wormhole_b0,
+            runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "runner-test", "bare-metal", "pipeline-functional"],
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_t3000_device --dispatch-mode ""'
+          },
         ]
+    name: ${{ matrix.test-group.name }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-info.arch }}
+      ARCH_NAME: ${{ matrix.test-group.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on: ${{ matrix.runner-info.runs-on }}
+    runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
@@ -35,9 +39,9 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.runner-info.arch }}
+          name: TTMetal_build_${{ matrix.test-group.arch }}
       - name: Extract files
-        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
+        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run frequent regression tests
         timeout-minutes: 60
@@ -45,4 +49,4 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type frequent_multi_device --dispatch-mode ""
+          ${{ matrix.test-group.cmd }}

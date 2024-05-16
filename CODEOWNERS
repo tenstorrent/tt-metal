@@ -2,6 +2,13 @@
 # precedence.
 
 .github/ @tt-rkim
+.github/t3000-unit-tests.yaml @tapspatel
+.github/t3000-profiler-tests.yaml @tapspatel
+.github/t3000-model-perf-tests.yaml @tapspatel
+.github/t3000-frequent-tests.yaml @tapspatel
+.github/t3000-demo-tests.yaml @tapspatel
+.github/tg-unit-tests.yaml @tapspatel
+.github/tgg-unit-tests.yaml @tapspatel
 
 /infra/ @tt-rkim
 
@@ -39,7 +46,7 @@ tests/scripts/run_pre_post_commit_regressions_multi_device.sh @tt-rkim @aliuTT @
 tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh @tt-rkim @TT-billteng @ttmchiou
 tests/scripts/run_models.sh @tt-rkim
 tests/scripts/nightly/ @tt-rkim @vtangTT
-tests/scripts/multi_chip/ @tapspatel
+tests/scripts/t3000/ @tapspatel
 tests/scripts/tg/ @tapspatel
 tests/scripts/tgg/ @tapspatel
 

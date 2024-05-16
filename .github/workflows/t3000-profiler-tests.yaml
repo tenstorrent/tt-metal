@@ -1,30 +1,32 @@
-name: "[post-commit] metal - Run profiler regression"
+name: "[T3K] T3000 profiler tests"
 
 on:
-
   workflow_dispatch:
   workflow_call:
+  schedule:
+    - cron: "0 */8 * * *" # This cron schedule runs the workflow every 8 hours
 
 jobs:
-  profiler-regression:
+  t3000-profiler-tests:
     strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        runner-info: [
-          # No GS as tests now require synced starts. GS profiler tests will run on dedicated BMs
-          # N150
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"]},
-          # N300
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"]},
+        test-group: [
+          {
+            name: "T3000 profiler tests",
+            arch: wormhole_b0,
+            runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "runner-test", "bare-metal", "pipeline-perf"],
+            cmd: './tests/scripts/run_profiler_regressions.sh'
+          },
         ]
+    name: ${{ matrix.test-group.name }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-info.arch }}
+      ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on: ${{ matrix.runner-info.runs-on }}
+    runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
