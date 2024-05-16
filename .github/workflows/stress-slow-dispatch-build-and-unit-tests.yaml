@@ -6,7 +6,12 @@ on:
     - cron: "0 4 * * *"
 
 jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+
   stress-build-and-unit-tests:
+    needs: build-artifact
     timeout-minutes: 1440
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
@@ -34,13 +39,15 @@ jobs:
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: PYTHON_ENV_DIR=$(pwd)/build/python_env ./build_metal.sh
-      - name: Build tt-metal CPP tests
-        run: cmake --build build --target tests -- -j`nproc`
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
       - name: Run pre/post regression tests in a loop
         run: |
-          source build/python_env/bin/activate
+          source python_env/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type stress_post_commit --dispatch-mode slow
       - name: Upload watcher log
         if: always()

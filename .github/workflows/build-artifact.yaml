@@ -2,13 +2,19 @@ name: "Build tt-metal artifacts"
 
 on:
   workflow_call:
+    inputs:
+      arch:
+        required: false
+        type: string
+        default: '["grayskull", "wormhole_b0"]'
   workflow_dispatch:
 
 jobs:
   build-artifact:
     strategy:
       matrix:
-        arch: ["grayskull", "wormhole_b0"]
+        arch: ${{ fromJson(inputs.arch || '["grayskull", "wormhole_b0"]') }}
+
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}

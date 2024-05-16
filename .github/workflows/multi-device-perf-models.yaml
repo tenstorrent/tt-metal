@@ -6,7 +6,14 @@ on:
     - cron: "0 */12 * * *" # This cron schedule runs the workflow every 12 hours
 
 jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      arch: '["wormhole_b0"]'
+    secrets: inherit
+
   multi-device-models-perf:
+    needs: build-artifact
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -41,12 +48,16 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
           echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: PYTHON_ENV_DIR=$(pwd)/build/python_env ./build_metal.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.runner-info.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
       - name: Run performance regressions
         timeout-minutes: 60
         run: |
-          source build/python_env/bin/activate
+          source python_env/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.runner-info.machine-type }}_multi_device
       - name: Check perf report exists
         id: check-perf-report
