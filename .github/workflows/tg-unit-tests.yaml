@@ -1,9 +1,6 @@
 name: "[TG] TG unit tests"
 
 on:
-  push:
-    branches:
-      - galaxy/main
   schedule:
     - cron: '0 0 * * *' # Runs every day at 12am UTC
   workflow_dispatch:
@@ -11,27 +8,30 @@ on:
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    with:
+      arch: '["wormhole_b0"]'
     secrets: inherit
   TG-tests:
+    needs: build-artifact
     strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        runner-info: [
-          # TG
-          {arch: wormhole_b0, runs-on: ["config-tg", "in-service"]},
-        ]
         test-group: [
-          {name: "TG Unit Tests", cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type post_commit_tg --dispatch-mode ""'},
+          {
+            name: "TG unit tests",
+            arch: wormhole_b0,
+            runs-on: [arch-wormhole_b0, "config-tg", "in-service", "runner-test", "bare-metal", "pipeline-functional"],
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type unit_tg_device --dispatch-mode ""'
+          },
         ]
-    name: ${{ matrix.test-group.name }} ${{ matrix.runner-info.arch }} ${{ matrix.runner-info.name }}
+    name: ${{ matrix.test-group.name }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-info.arch }}
+      ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: ${{ matrix.runner-info.runs-on }}
+    environment: dev
+    runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
@@ -39,11 +39,11 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.runner-info.arch }}
+          name: TTMetal_build_${{ matrix.test-group.arch }}
       - name: Extract files
-        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
+        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
       - uses: ./.github/actions/install-python-deps
-      - name: ${{ matrix.test-group.name }} tests
+      - name: Run unit regression tests
         timeout-minutes: 45
         run: |
           source ${{ github.workspace }}/python_env/bin/activate

@@ -19,7 +19,7 @@ namespace tt {
 namespace tt_metal {
 
 enum class CopyOpParallelizationStrategy {
-    MULTI_CORE = 0, SINGLE_CORE = 1
+    MULTI_CORE, SINGLE_CORE
 };
 
 struct Copy {

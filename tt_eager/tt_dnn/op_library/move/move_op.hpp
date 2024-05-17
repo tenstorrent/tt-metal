@@ -26,7 +26,7 @@ namespace tt {
 namespace tt_metal {
 
 enum class MoveOpParallelizationStrategy {
-    MULTI_CORE = 0, SINGLE_CORE = 1, MULTI_CORE_OVERLAP = 2, MULTI_CORE_SHARDED = 3
+    MULTI_CORE, SINGLE_CORE, MULTI_CORE_OVERLAP, MULTI_CORE_SHARDED
 };
 
 struct Move {
