@@ -2,13 +2,25 @@
 # precedence.
 
 .github/ @tt-rkim
+
+# T3000 workflows
 .github/t3000-unit-tests.yaml @tapspatel
 .github/t3000-profiler-tests.yaml @tapspatel
 .github/t3000-model-perf-tests.yaml @tapspatel
 .github/t3000-frequent-tests.yaml @tapspatel
 .github/t3000-demo-tests.yaml @tapspatel
+
+# TG workflows
 .github/tg-unit-tests.yaml @tapspatel
+.github/tg-model-perf-tests.yaml @tapspatel
+.github/tg-frequent-tests.yaml @tapspatel
+.github/tg-demo-tests.yaml @tapspatel
+
+# TGG workflows
 .github/tgg-unit-tests.yaml @tapspatel
+.github/tgg-model-perf-tests.yaml @tapspatel
+.github/tgg-frequent-tests.yaml @tapspatel
+.github/tgg-demo-tests.yaml @tapspatel
 
 /infra/ @tt-rkim
 
