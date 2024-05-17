@@ -16,7 +16,7 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class RotaryEmbeddingOpParallelizationStrategy { MULTI_CORE = 0, SINGLE_CORE = 1 };
+enum class RotaryEmbeddingOpParallelizationStrategy { MULTI_CORE, SINGLE_CORE };
 
 operation::ProgramWithCallbacks rotary_embedding_single_core(
     const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &output, std::optional<uint32_t> token_idx, DeviceComputeKernelConfig compute_kernel_config);

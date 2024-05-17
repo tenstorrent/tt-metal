@@ -11,7 +11,7 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class TilizeOpParallelizationStrategy { MULTI_CORE = 0, SINGLE_CORE = 1 };
+enum class TilizeOpParallelizationStrategy { MULTI_CORE, SINGLE_CORE };
 
 struct Tilize {
     const MemoryConfig output_mem_config;
@@ -32,7 +32,7 @@ struct Tilize {
     }
 };
 
-enum class TilizeWithValPaddingOpParallelizationStrategy { MULTI_CORE = 0, SINGLE_CORE = 1 };
+enum class TilizeWithValPaddingOpParallelizationStrategy { MULTI_CORE, SINGLE_CORE };
 
 struct TilizeWithValPadding {
     const Shape output_tensor_shape;

@@ -11,7 +11,7 @@
 
 namespace tt::tt_metal {
 
-enum class FoldOpParallelizationStrategy { SINGLE_CORE = 0, SHARDED_MULTI_CORE = 1 };
+enum class FoldOpParallelizationStrategy { SINGLE_CORE, SHARDED_MULTI_CORE };
 
 struct Fold {
     uint8_t stride_h;

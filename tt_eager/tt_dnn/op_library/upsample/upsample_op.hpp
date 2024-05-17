@@ -11,7 +11,7 @@ namespace tt {
 namespace tt_metal {
 
 enum class UpSampleParallelizationStrategy {
-    MULTI_CORE = 0, SINGLE_CORE = 1
+    MULTI_CORE, SINGLE_CORE
 };
 
 struct UpSample{

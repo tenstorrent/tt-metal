@@ -15,7 +15,7 @@ namespace tt_metal {
 #define MAX_PACK_UNTILIZE_WIDTH 8       // pack untilize currently does not support > 8 width
 
 enum class UntilizeOpParallelizationStrategy {
-    MULTI_CORE = 0, SINGLE_CORE = 1
+    MULTI_CORE, SINGLE_CORE
 };
 
 struct Untilize {
@@ -39,7 +39,7 @@ struct Untilize {
 };
 
 enum class UntilizeWithUnpaddingOpParallelizationStrategy {
-    MULTI_CORE = 0, SINGLE_CORE = 1
+    MULTI_CORE, SINGLE_CORE
 };
 
 struct UntilizeWithUnpadding {

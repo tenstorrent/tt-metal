@@ -13,15 +13,15 @@ namespace tt {
 
 namespace tt_metal {
 enum class ReduceOpMath {
-    SUM = 0, MAX = 1, MIN = 2
+    SUM, MAX, MIN
 };
 
 enum class ReduceOpDim {
-    H = 0, W = 1, HW = 2
+    H, W, HW
 };
 
 enum class ReduceOpParallelizationStrategy {
-    MULTI_CORE_H = 0, MULTI_CORE_W = 1, MULTI_CORE_HW = 2, SINGLE_CORE = 3
+    MULTI_CORE_H, MULTI_CORE_W, MULTI_CORE_HW, SINGLE_CORE
 };
 
 // TODO: Accept parallelization

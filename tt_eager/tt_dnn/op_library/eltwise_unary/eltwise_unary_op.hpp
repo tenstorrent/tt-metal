@@ -68,10 +68,6 @@ enum class UnaryOpType {
     SILU,
     IDENTITY,
     NEG,
-    ADD_UNARY,
-    SUB_UNARY,
-    MUL_UNARY,
-    DIV_UNARY,
     ADD_UNARY_SFPU,
     SUB_UNARY_SFPU,
     MUL_UNARY_SFPU,
@@ -99,10 +95,6 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::RSUB:
         case UnaryOpType::RDIV:
         case UnaryOpType::EXP:
-        case UnaryOpType::ADD_UNARY:
-        case UnaryOpType::SUB_UNARY:
-        case UnaryOpType::MUL_UNARY:
-        case UnaryOpType::DIV_UNARY:
         case UnaryOpType::ADD_UNARY_SFPU:
         case UnaryOpType::SUB_UNARY_SFPU:
         case UnaryOpType::MUL_UNARY_SFPU:
@@ -165,7 +157,7 @@ inline UnaryWithParam string_to_unary_with_param(const std::string& name) {
     TT_THROW("Unknown unary op: " + name);
 }
 
-enum class UnaryOpParallelizationStrategy { SINGLE_CORE = 0, MULTI_CORE = 1, SHARDED_MULTI_CORE = 2 };
+enum class UnaryOpParallelizationStrategy { SINGLE_CORE, MULTI_CORE, SHARDED_MULTI_CORE };
 
 struct EltwiseUnary {
     const std::vector<UnaryWithParam> op_chain;

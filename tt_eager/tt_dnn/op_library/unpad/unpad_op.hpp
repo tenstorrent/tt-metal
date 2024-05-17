@@ -13,7 +13,7 @@ namespace tt {
 namespace tt_metal {
 
 enum class UnpadOpParallelizationStrategy {
-    MULTI_CORE = 0, SINGLE_CORE = 1
+    MULTI_CORE, SINGLE_CORE
 };
 
 uint32_t get_tiled_start_offset(const Tensor &input_tensor, const Shape &output_tensor_start);

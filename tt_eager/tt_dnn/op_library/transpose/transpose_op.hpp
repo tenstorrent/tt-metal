@@ -12,11 +12,11 @@ namespace tt {
 namespace tt_metal {
 
 enum class TransposeOpDim {
-    WH = 0, HC = 1, CN = 2, NH = 3, NW = 4, CW = 5
+    WH, HC, CN, NH, NW, CW
 };
 
 enum class TransposeOpParallelizationStrategy {
-    MULTI_CORE_WH = 0, MULTI_CORE_HC = 1, MULTI_CORE_CN = 2, SINGLE_CORE = 3
+    MULTI_CORE_WH, MULTI_CORE_HC, MULTI_CORE_CN, SINGLE_CORE
 };
 
 struct Transpose {

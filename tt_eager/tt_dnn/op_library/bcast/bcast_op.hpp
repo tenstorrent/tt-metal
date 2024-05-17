@@ -14,12 +14,12 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class BcastOpMath { ADD = 0, SUB = 1, MUL = 2 };
+enum class BcastOpMath { ADD, SUB, MUL };
 
-enum class BcastOpDim { H = 0, W = 1, HW = 2 };
+enum class BcastOpDim { H, W, HW };
 
 // TODO: Accept parallelization
-enum class BcastOpParallelizationStrategy { MULTI_CORE_H = 0, MULTI_CORE_W = 1, MULTI_CORE_HW = 2, SINGLE_CORE = 3 };
+enum class BcastOpParallelizationStrategy { MULTI_CORE_H, MULTI_CORE_W, MULTI_CORE_HW, SINGLE_CORE };
 
 operation::ProgramWithCallbacks bcast_single_core(
     const Tensor &input_tensor_a,
