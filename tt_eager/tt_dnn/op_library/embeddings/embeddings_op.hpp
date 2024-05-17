@@ -15,8 +15,8 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class EmbeddingsType { GENERIC = 0, PADDED = 1, BINARY = 2 };
-enum class EmbeddingsIndexType { UINT32 = 0, BFP16 = 1};
+enum class EmbeddingsType { GENERIC, PADDED, BINARY };
+enum class EmbeddingsIndexType { UINT32, BFP16};
 
 struct Embeddings {
     const MemoryConfig output_mem_config;

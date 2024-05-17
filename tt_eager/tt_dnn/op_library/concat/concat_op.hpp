@@ -11,7 +11,7 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class ConcatOpParallelizationStrategy { SINGLE_CORE = 0, MULTI_CORE = 1, SHARDED_MULTI_CORE = 2 };
+enum class ConcatOpParallelizationStrategy { SINGLE_CORE, MULTI_CORE, SHARDED_MULTI_CORE };
 
 struct Concat {
     uint32_t dim;
