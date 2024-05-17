@@ -6,10 +6,11 @@
 
 #include "tt_metal/detail/tt_metal.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/device_pool.hpp"
 namespace ttnn {
 
 namespace device {
+
+using Device = ttnn::Device;
 
 Device &open_device(int device_id, size_t l1_small_size = DEFAULT_L1_SMALL_SIZE);
 void close_device(Device &device);

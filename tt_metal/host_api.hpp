@@ -12,6 +12,7 @@
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/event/event.hpp"
+#include "tt_metal/impl/device/device_pool.hpp"
 
 /** @file */
 

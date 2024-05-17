@@ -22,7 +22,7 @@ class DeviceMesh
 public:
     DeviceGrid device_grid;
     std::map<chip_id_t, Device *> managed_devices;
-    std::vector<std::pair<int, std::unique_ptr<Device>>> mesh_devices;
+    std::vector<std::pair<int, Device *>> mesh_devices;
 
     DeviceMesh(const DeviceGrid &device_grid, const DeviceIds &device_ids, size_t l1_small_size);
     ~DeviceMesh();

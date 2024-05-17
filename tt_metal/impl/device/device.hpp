@@ -48,25 +48,6 @@ using on_close_device_callback = std::function<void ()>;
 static constexpr float  EPS_GS = 0.001953125f;
 static constexpr float  EPS_WHB0 = 1.19209e-7f;
 
-class ActiveDevices {
-    enum class ActiveState {
-        UNINITIALIZED = 0,
-        INACTIVE = 1,
-        ACTIVE = 2,
-    };
-
-    std::mutex lock_;
-    std::vector<enum ActiveState>active_devices_;
-
-public:
-    ActiveDevices();
-    ~ActiveDevices();
-
-    bool activate_device(chip_id_t id);
-    void deactivate_device(chip_id_t id);
-    bool is_device_active(chip_id_t id);
-};
-
 // A physical PCIexpress Tenstorrent device
 class Device {
    public:
@@ -227,7 +208,7 @@ class Device {
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    bool initialize(size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap = {}, bool minimal = false);
+    bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap = {}, bool minimal = false);
     void initialize_cluster();
     void initialize_allocator(size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap = {});
     void initialize_build();
@@ -262,7 +243,6 @@ class Device {
     friend class SystemMemoryManager;
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
-    static ActiveDevices active_devices_;
     chip_id_t id_;
     uint32_t build_key_;
     std::unique_ptr<Allocator> allocator_ = nullptr;
@@ -289,7 +269,7 @@ class Device {
     uint8_t num_hw_cqs_;
 
     vector<std::unique_ptr<Program, tt::tt_metal::detail::ProgramDeleter>> command_queue_programs;
-    bool using_fast_dispatch = false;
+    bool using_fast_dispatch;
     program_cache::detail::ProgramCache program_cache;
 
     // Program cache interface. Syncrhonize with worker worker threads before querying or
@@ -303,9 +283,9 @@ class Device {
         log_info(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
         this->synchronize();
         if (this->program_cache.is_enabled()) {
-            program_cache.clear();
             program_cache.disable();
         }
+        program_cache.clear();
     }
     std::size_t num_program_cache_entries() {
         this->synchronize();

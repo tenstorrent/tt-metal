@@ -965,6 +965,7 @@ void EnqueueProgramCommand::process() {
         this->assemble_device_commands();
     } else {
         static constexpr uint32_t count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
+        TT_ASSERT(this->cached_program_command_sequences.find(program.id) != this->cached_program_command_sequences.end(), "Program cache hit, but no stored command sequence");
         this->cached_program_command_sequences[program.id].preamble_command_sequence.update_cmd_sequence(
             count_offset, &this->expected_num_workers_completed, sizeof(uint32_t));
         this->assemble_device_commands();

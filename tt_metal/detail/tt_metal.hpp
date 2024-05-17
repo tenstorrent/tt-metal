@@ -12,6 +12,8 @@
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
+#include "tt_metal/impl/device/device_pool.hpp"
+
 #include "tt_metal/detail/program.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/host_api.hpp"
@@ -39,13 +41,13 @@ namespace tt::tt_metal{
         }
 
         std::map<chip_id_t, Device *> CreateDevices(
+            // TODO: delete this in favour of DevicePool
             std::vector<chip_id_t> device_ids,
             const uint8_t num_hw_cqs = 1,
             const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
             const std::vector<uint32_t> &l1_bank_remap = {});
 
         void CloseDevices(std::map<chip_id_t, Device *> devices);
-        Device *GetDeviceHandle(chip_id_t device_id);
 
         /**
         * Copies data from a host buffer into the specified buffer

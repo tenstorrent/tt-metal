@@ -20,3 +20,15 @@ class BasicFixture : public ::testing::Test  {
     }
 
 };
+
+class FDBasicFixture : public ::testing::Test  {
+   protected:
+    void SetUp() override {
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch) {
+            TT_THROW("This suite can only be run with FD runtime");
+            GTEST_SKIP();
+        }
+    }
+
+};

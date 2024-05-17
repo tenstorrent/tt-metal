@@ -72,10 +72,13 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
         GTEST_SKIP();
     }
     ASSERT_TRUE(num_devices > 0);
-    std::vector<tt::tt_metal::Device *> devices(num_devices);
+    std::vector<tt::tt_metal::Device *> devices;
+    vector<chip_id_t> ids;
     for (unsigned int id = 0; id < num_devices; id++) {
-        devices.at(id) = tt::tt_metal::CreateDevice(id);
+        ids.push_back(id);
     }
+    tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE);
+    devices = tt::DevicePool::instance().get_all_active_devices();
     for (auto device : devices) {
         ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
     }
@@ -88,15 +91,16 @@ TEST_P(DeviceParamFixture, DeviceLoadBlankKernels) {
         GTEST_SKIP();
     }
     ASSERT_TRUE(num_devices > 0);
-    std::vector<tt::tt_metal::Device *> devices(num_devices);
+    std::vector<tt::tt_metal::Device *> devices;
+    vector<chip_id_t> ids;
     for (unsigned int id = 0; id < num_devices; id++) {
-        devices.at(id) = (tt::tt_metal::CreateDevice(id));
+        ids.push_back(id);
     }
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+    tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE);
+    devices = tt::DevicePool::instance().get_all_active_devices();
     for (auto device : devices) {
         ASSERT_TRUE(unit_tests_common::basic::test_device_init::load_all_blank_kernels(device));
     }
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     for (auto device : devices) {
         ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
     }

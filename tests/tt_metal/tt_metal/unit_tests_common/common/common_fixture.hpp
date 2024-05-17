@@ -81,13 +81,14 @@ protected:
         // An extra flag for if we have remote devices, as some tests are disabled for fast
         // dispatch + remote devices.
         this->has_remote_devices_ = num_devices > num_pci_devices;
+        vector<chip_id_t> ids;
         for (unsigned int id = 0; id < num_devices; id++) {
             if (SkipTest(id))
                 continue;
-            auto* device = tt::tt_metal::CreateDevice(id);
-            devices_.push_back(device);
+            ids.push_back(id);
         }
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+        tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE);
+        devices_ = tt::DevicePool::instance().get_all_active_devices();
     }
 
     void TearDown() override {

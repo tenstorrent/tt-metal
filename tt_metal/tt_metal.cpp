@@ -4,7 +4,6 @@
 
 #include "tt_metal/detail/tt_metal.hpp"
 
-#include <numa.h>
 #include <algorithm>
 #include <filesystem>
 #include <mutex>
@@ -165,99 +164,6 @@ inline void SetRuntimeArgs(
 }  // namespace
 
 // #define DEBUG_PRINT_SHARD
-namespace device_pool {
-
-// Definition of the global device vector
-std::vector<Device *> devices;
-
-}  // namespace device_pool
-
-namespace device_cpu_allocator {
-std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(std::unordered_set<uint32_t> &free_cores) {
-    std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = {};
-    if (numa_available() != -1) {
-        // Host has NUMA enabled. Group CPU IDs by the NUMA nodes they belong to.
-        for (int cpu = 0; cpu < numa_num_configured_cpus(); ++cpu) {
-            int node = numa_node_of_cpu(cpu);
-            if (cpu_cores_per_numa_node.find(node) == cpu_cores_per_numa_node.end()) {
-                cpu_cores_per_numa_node.insert({node, {}});
-            }
-            free_cores.insert(cpu);
-            cpu_cores_per_numa_node.at(node).push_back(cpu);
-        }
-    } else {
-        // Host does not have NUMA. Place all CPU Ids under a single node (0).
-        log_warning(tt::LogMetal, "Host does not use NUMA. May see reduced performance.");
-        for (int cpu = 0; cpu < sysconf(_SC_NPROCESSORS_ONLN); ++cpu) {
-            free_cores.insert(cpu);
-        }
-    }
-    return cpu_cores_per_numa_node;
-}
-
-int get_cpu_core_for_device_worker_thread(
-    int mmio_controlled_device_id,
-    const std::unordered_map<int, std::vector<uint32_t>> &cpu_cores_per_numa_node,
-    std::unordered_set<uint32_t> &free_cores) {
-    int core_assigned_to_device = 0;
-    if (numa_available() != -1) {
-        // Get NUMA node that the current device is mapped to through UMD
-        int numa_node_for_device = tt::Cluster::instance().get_numa_node_for_device(mmio_controlled_device_id);
-        if (cpu_cores_per_numa_node.find(numa_node_for_device) != cpu_cores_per_numa_node.end()) {
-            // NUMA node reported by UMD exists on host. Choose a core on this numa-node using round robin policy
-            int num_cores_in_numa_node = cpu_cores_per_numa_node.at(numa_node_for_device).size();
-            core_assigned_to_device =
-                cpu_cores_per_numa_node.at(numa_node_for_device).at(mmio_controlled_device_id % num_cores_in_numa_node);
-        } else {
-            // NUMA node reported by UMD does not exist on host. Use round-robin binding policy for this worker thread.
-            log_warning(
-                tt::LogMetal,
-                "NUMA node {} for device {} does not exist on host.",
-                numa_node_for_device,
-                mmio_controlled_device_id);
-            core_assigned_to_device = mmio_controlled_device_id % sysconf(_SC_NPROCESSORS_ONLN);
-        }
-    } else {
-        // System does not use NUMA. Use-round robin binding strategy.
-        core_assigned_to_device = mmio_controlled_device_id % sysconf(_SC_NPROCESSORS_ONLN);
-    }
-    free_cores.erase(core_assigned_to_device);
-    return core_assigned_to_device;
-}
-
-std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(const std::vector<chip_id_t>& device_ids, std::unordered_set<uint32_t>& free_cores, bool use_numa_node_based_thread_binding) {
-    std::unordered_map<uint32_t, uint32_t> device_to_core_map = {};
-    if (use_numa_node_based_thread_binding) {
-        auto cpu_cores_per_numa_node = device_cpu_allocator::get_cpu_cores_per_numa_node(free_cores);
-        for (const auto &device_id : device_ids) {
-            device_to_core_map.insert({device_id, device_cpu_allocator::get_cpu_core_for_device_worker_thread(device_id, cpu_cores_per_numa_node, free_cores)});
-        }
-    } else {
-        for (const auto &device_id : device_ids) {
-            device_to_core_map.insert({device_id, device_id % sysconf(_SC_NPROCESSORS_ONLN)});
-        }
-    }
-    return device_to_core_map;
-}
-
-void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t> &free_cores) {
-    cpu_set_t cpuset;
-    pthread_t current_thread = pthread_self();
-    CPU_ZERO(&cpuset);
-
-    for (const auto &free_core : free_cores) {
-        CPU_SET(free_core, &cpuset);
-    }
-    int rc = pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
-    if (rc) {
-        log_warning(
-            tt::LogMetal,
-            "Unable to bind main thread to free CPU cores. May see performance degradation. Error Code: {}",
-            rc);
-    }
-}
-
-}  // namespace device_cpu_allocator
 
 namespace detail {
 
@@ -267,83 +173,21 @@ std::map<chip_id_t, Device *> CreateDevices(
     const size_t l1_small_size,
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
-    std::map<chip_id_t, Device *> active_devices;  // TODO: pass this to CloseDevices
-    static bool use_numa_node_based_thread_binding = parse_env("TT_METAL_NUMA_BASED_AFFINITY", false);
-
-    std::unordered_set<uint32_t> free_cores = {};
-    std::vector<chip_id_t> all_device_ids = {};
-
+    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size);
+    std::vector<Device *> devices = tt::DevicePool::instance().get_all_active_devices();
+    std::map<chip_id_t, Device *> ret_devices;
+    //Only include the mmio device in the active devices set returned to the caller if we are not running
+    //on a Galaxy cluster.
+    //On Galaxy, gateway (mmio devices) cannot run compute workloads.
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
-    for (const auto &device_id : device_ids) {
-        // Get list of all devices in the cluster connected to the passed in device_ids
-        const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-        if (std::find(all_device_ids.begin(), all_device_ids.end(), mmio_device_id) == all_device_ids.end()) {
-            for (const auto &mmio_controlled_device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
-                all_device_ids.push_back(mmio_controlled_device_id);
-            }
-        }
-    }
-
-    // Determine which CPU cores the worker threads need to be placed on for each device
-    std::unordered_map<uint32_t, uint32_t> device_to_core_map = device_cpu_allocator::get_device_id_to_core_map(all_device_ids, free_cores, use_numa_node_based_thread_binding);
-
-    for (const auto &device_id : all_device_ids) {
-        // For Galaxy init, we only need to loop over mmio devices
-        const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-        if (is_galaxy and mmio_device_id != device_id) {
+    for (Device * dev: devices) {
+        if (is_galaxy and dev->is_mmio_capable()) {
             continue;
         }
-        if (active_devices.find(mmio_device_id) == active_devices.end()) {
-            log_debug(tt::LogMetal, "MMIO Device {} Tunnel Count: {}", mmio_device_id, tt::Cluster::instance().get_mmio_device_tunnel_count(mmio_device_id));
-            log_debug(tt::LogMetal, "MMIO Device {} Tunnel Depth: {}", mmio_device_id, tt::Cluster::instance().get_mmio_device_max_tunnel_depth(mmio_device_id));
-            log_debug(tt::LogMetal, "MMIO Device {} Tunnel Stop: {}", mmio_device_id, tt::Cluster::instance().get_device_tunnel_depth(mmio_device_id));
-            int core_assigned_to_device = device_to_core_map.at(mmio_device_id);
-            Device *mmio_device = new Device(
-                mmio_device_id,
-                num_hw_cqs,
-                l1_small_size,
-                l1_bank_remap,
-                false,
-                core_assigned_to_device);
-            //Only include the mmio device in the active devices set returned to the caller if we are not running
-            //on a Galaxy cluster.
-            //On Galaxy, gateway (mmio devices) cannot run compute workloads.
-            if (!is_galaxy) {
-                active_devices.insert({mmio_device_id, mmio_device});
-                detail::InitDeviceProfiler(mmio_device);
-            }
-
-            auto tunnels_from_mmio = mmio_device->tunnels_from_mmio_;
-            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
-                //Need to create devices from farthest to the closest.
-                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0 ; ts--) {
-                    uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
-                    log_debug(tt::LogMetal, "Tunnel {} Device {} Tunnel Stop: {}", t, mmio_controlled_device_id, ts);
-                    int core_assigned_to_device = device_to_core_map.at(mmio_controlled_device_id);
-                    Device *dev = new Device(
-                        mmio_controlled_device_id,
-                        num_hw_cqs,
-                        l1_small_size,
-                        l1_bank_remap,
-                        false,
-                        core_assigned_to_device);
-                    active_devices.insert({mmio_controlled_device_id, dev});
-                    detail::InitDeviceProfiler(dev);
-                }
-            }
-        }
+        ret_devices.insert({dev->id(), dev});
     }
 
-    if (use_numa_node_based_thread_binding) {
-        // Bind main thread to cores not being used by workers.
-        device_cpu_allocator::bind_current_thread_to_free_cores(free_cores);
-    }
-    // TODO: need to only enable routing for used mmio chips
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
-    for (auto &active_device: active_devices){
-        detail::InitDeviceProfiler(active_device.second);
-    }
-    return active_devices;
+    return ret_devices;
 }
 
 void CloseDevices(std::map<chip_id_t, Device *> devices) {
@@ -358,7 +202,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         for (const auto &[device_id, dev] : devices) {
             const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
             if (mmio_devices.find(mmio_device_id) == mmio_devices.end()) {
-                auto dev_handle = tt::tt_metal::detail::GetDeviceHandle(mmio_device_id);
+                auto dev_handle = tt::DevicePool::instance().get_active_device(mmio_device_id);
                 mmio_devices.insert({mmio_device_id, dev_handle});
             }
         }
@@ -867,13 +711,6 @@ void GetBufferAddress(const Buffer *buffer, uint32_t *address_on_host) {
     EnqueueGetBufferAddr(buffer->device()->command_queue(), address_on_host, buffer, false);
 }
 
-Device *GetDeviceHandle(chip_id_t device_id) {
-    ZoneScoped;
-    TT_ASSERT(device_id < device_pool::devices.size());
-    TT_ASSERT(device_pool::devices[device_id] != nullptr);
-    return device_pool::devices[device_id];
-}
-
 void DisableAllocs(Device *device) { tt::tt_metal::allocator::disable_allocs(*(device->allocator_)); }
 
 void EnableAllocs(Device *device) { tt::tt_metal::allocator::enable_allocs(*(device->allocator_)); }
@@ -902,16 +739,8 @@ Device *CreateDevice(
     const size_t l1_small_size,
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
-    static bool use_numa_node_based_thread_binding = parse_env("TT_METAL_NUMA_BASED_AFFINITY", false);
-    std::unordered_set<uint32_t> free_cores = {};
-    int core_assigned_to_device = device_cpu_allocator::get_device_id_to_core_map({device_id}, free_cores, use_numa_node_based_thread_binding)[device_id];
-    Device *dev = new Device(device_id, num_hw_cqs, l1_small_size, l1_bank_remap, false, core_assigned_to_device);
-    if (use_numa_node_based_thread_binding) {
-        // Bind main thread to cores not being used by workers.
-        device_cpu_allocator::bind_current_thread_to_free_cores(free_cores);
-    }
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
-    detail::InitDeviceProfiler(dev);
+    tt::DevicePool::initialize({device_id}, num_hw_cqs, l1_small_size, l1_bank_remap, true);
+    auto dev = tt::DevicePool::instance().get_active_device(device_id);
     return dev;
 }
 
@@ -924,13 +753,8 @@ Device *CreateDeviceMinimal(chip_id_t device_id) {
 
 bool CloseDevice(Device *device) {
     ZoneScoped;
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     auto device_id = device->id();
-    TT_ASSERT(device_id < device_pool::devices.size());
-    if (device_pool::devices[device_id] != nullptr) {
-        device_pool::devices[device_id] = nullptr;
-    }
-    return device->close();
+    return tt::DevicePool::instance().close_device(device_id);
 }
 
 Program CreateProgram() { return Program(); }

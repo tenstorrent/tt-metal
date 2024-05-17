@@ -23,11 +23,12 @@ class N300DeviceFixture : public ::testing::Test {
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 2 and
             tt::tt_metal::GetNumPCIeDevices() == 1) {
+            vector<chip_id_t> ids;
             for (unsigned int id = 0; id < num_devices_; id++) {
-                auto* device = tt::tt_metal::CreateDevice(id);
-                devices_.push_back(device);
+                ids.push_back(id);
             }
-            tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+            tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE);
+            devices_ = tt::DevicePool::instance().get_all_active_devices();
 
         } else {
             GTEST_SKIP();
