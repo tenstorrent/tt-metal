@@ -753,7 +753,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(tt_met
             tilize_in0 = false;
         } else {
             // 1D conv
-            assert(act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH));
+            TT_ASSERT(act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH));
+
             reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp";
             if (split_reader) {
                 writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
