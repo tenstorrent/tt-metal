@@ -85,8 +85,26 @@ std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<s
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN0_0"));
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
             op_name = "add_tiles";
-            op_code = "0";
+
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LOG2, std::nullopt, "0", idst));
+            break;
+        case BinaryOpType::ADD_WITH_DEST:
+            defines.insert({"ELTWISE_DEST_REUSE_TYPE", "EltwiseBinaryReuseDestType::DEST_TO_SRCA"});
+            defines.insert({"ELTWISE_BINARY_OP_TYPE", "EltwiseBinaryType::ELWADD"});
+            op_name = "binary_dest_reuse_tiles";
+            op_code = "0";
+            break;
+        case BinaryOpType::SUB_WITH_DEST:
+            defines.insert({"ELTWISE_DEST_REUSE_TYPE", "EltwiseBinaryReuseDestType::DEST_TO_SRCA"});
+            defines.insert({"ELTWISE_BINARY_OP_TYPE", "EltwiseBinaryType::ELWSUB"});
+            op_name = "binary_dest_reuse_tiles";
+            op_code = "1";
+            break;
+         case BinaryOpType::MUL_WITH_DEST:
+            defines.insert({"ELTWISE_DEST_REUSE_TYPE", "EltwiseBinaryReuseDestType::DEST_TO_SRCA"});
+            defines.insert({"ELTWISE_BINARY_OP_TYPE", "EltwiseBinaryType::ELWMUL"});
+            op_name = "binary_dest_reuse_tiles";
+            op_code = "2";
             break;
         default: TT_ASSERT(false && "Undefined op type");
     }

@@ -29,6 +29,9 @@ namespace tt::tt_metal::detail {
         detail::bind_binary_op(m_tensor, "logaddexp", logaddexp, R"doc(Perform an eltwise-binary logaddexp (``log(exp({0}) + exp({1}))``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "logaddexp2", logaddexp2, R"doc(Perform an eltwise-binary logaddexp2 (``log2(2^({0}) + 2^({1}))``) on two tensors for input range [-64,64].)doc");
         detail::bind_binary_op(m_tensor, "logical_or", logical_or, R"doc(Perform an eltwise-binary logical OR (``{0} || {1}``) on two tensors.)doc");
+        detail::bind_binary_op(m_tensor, "add_with_dest", add_with_dest, R"doc(Perform an eltwise-binary add (``{0} + {1}``) on two tensors. Can be fused with unary operations, since one of tensors is copied to dest first)doc");
+        detail::bind_binary_op(m_tensor, "sub_with_dest", sub_with_dest, R"doc(Perform an eltwise-binary sub (``{0} - {1}``) on two tensors. Can be fused with unary operations, since one of tensors is copied to dest first)doc");
+        detail::bind_binary_op(m_tensor, "mul_with_dest", mul_with_dest, R"doc(Perform an eltwise-binary mul (``{0} * {1}``) on two tensors. Can be fused with unary operations, since one of tensors is copied to dest first)doc");
 
         // *** eltwise unary ***
         detail::bind_unary_op(m_tensor, "identity", identity, R"doc(Returns a copy of same tensor ``input``; useful for profiling the SFPU.
