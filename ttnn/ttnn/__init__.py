@@ -262,10 +262,6 @@ from ttnn.operations.core import (
     as_tensor,
     allocate_tensor_on_device,
     copy_host_to_device_tensor,
-    begin_trace_capture,
-    end_trace_capture,
-    execute_trace,
-    release_trace,
 )
 
 from ttnn.operations.matmul import (
@@ -455,6 +451,13 @@ from ttnn.operations.normalization import (
     create_group_norm_input_mask,
     determine_expected_group_norm_sharded_config_and_grid_size,
     get_group_norm_cores_accross_channel,
+)
+
+from ttnn.operations.trace import (
+    begin_trace_capture,
+    end_trace_capture,
+    execute_trace,
+    release_trace,
 )
 
 from ttnn.operations.ccl import all_gather

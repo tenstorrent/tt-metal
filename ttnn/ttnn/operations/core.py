@@ -668,20 +668,4 @@ def as_tensor(
         return tensor
 
 
-begin_trace_capture = ttnn.register_operation(
-    name="ttnn.begin_trace_capture",
-)(ttnn._ttnn.operations.core.begin_trace_capture)
-
-end_trace_capture = ttnn.register_operation(
-    name="ttnn.end_trace_capture",
-)(ttnn._ttnn.operations.core.end_trace_capture)
-
-execute_trace = ttnn.register_operation(
-    name="ttnn.execute_trace",
-)(ttnn._ttnn.operations.core.execute_trace)
-
-release_trace = ttnn.register_operation(
-    name="ttnn.release_trace",
-)(ttnn._ttnn.operations.core.release_trace)
-
 __all__ = []
