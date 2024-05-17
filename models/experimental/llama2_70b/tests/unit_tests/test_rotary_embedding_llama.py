@@ -81,49 +81,63 @@ class TtLlamaRotary(torch.nn.Module):
         return x_chunked
 
     def apply_rotary(self, x, cos, sin):
-        batch, n_heads, _, _ = x.shape
-
         # n_head = 8 for Q
         # n_head = 1 for K
 
         # x.shape = (1, 8, 128, 128)
+        batch, n_heads, _, _ = x.shape
         # cos = ttnn.repeat(cos, ttnn.Shape([batch, n_heads, 1, 1]))
         # sin = ttnn.repeat(sin, ttnn.Shape([batch, n_heads, 1, 1]))
+        rotary_output = tt_lib.tensor.rotary_embedding_llama(x, cos, sin, self.transformation_mat)
 
-        x = tt2torch_tensor(x)
-        cos = tt2torch_tensor(cos)
-        sin = tt2torch_tensor(sin)
+        breakpoint()
 
-        x_chunked = self.chunk_to_tile(x)
-        cos_chunked = self.chunk_to_tile(cos)
-        sin_chunked = self.chunk_to_tile(sin)
-
-        x_transformed = torch.zeros(x.shape, dtype=torch.bfloat16)
-
-        trans_mat = tt2torch_tensor(self.transformation_mat)
-
-        x_cos = torch.zeros(x.shape, dtype=torch.bfloat16)
-        x_sin = torch.zeros(x.shape, dtype=torch.bfloat16)
-        rotary_output = torch.zeros(x.shape, dtype=torch.bfloat16)
-
-        tile_size = 32
-
-        for i in range(len(x_chunked)):
-            for j in range(len(x_chunked[i])):
-                row_window = slice(i * tile_size, (i + 1) * tile_size)
-                col_window = slice(j * tile_size, (j + 1) * tile_size)
-
-                x_transformed[:, :, row_window, col_window] = torch.matmul(x_chunked[i][j], trans_mat)
-                x_cos[:, :, row_window, col_window] = torch.mul(cos_chunked[i][j], x_chunked[i][j])
-                x_sin[:, :, row_window, col_window] = torch.mul(
-                    sin_chunked[i][j], x_transformed[:, :, row_window, col_window]
-                )
-                rotary_output[:, :, row_window, col_window] = torch.add(
-                    x_cos[:, :, row_window, col_window], x_sin[:, :, row_window, col_window]
-                )
-
-        rotary_output = torch2tt_tensor(rotary_output, self.device)
         return rotary_output
+
+    # def apply_rotary(self, x, cos, sin):
+    #     batch, n_heads, _, _ = x.shape
+
+    #     # n_head = 8 for Q
+    #     # n_head = 1 for K
+
+    #     # x.shape = (1, 8, 128, 128)
+    #     # cos = ttnn.repeat(cos, ttnn.Shape([batch, n_heads, 1, 1]))
+    #     # sin = ttnn.repeat(sin, ttnn.Shape([batch, n_heads, 1, 1]))
+
+    #     x = tt2torch_tensor(x)
+    #     cos = tt2torch_tensor(cos)
+    #     sin = tt2torch_tensor(sin)
+
+    #     x_chunked = self.chunk_to_tile(x)
+    #     cos_chunked = self.chunk_to_tile(cos)
+    #     sin_chunked = self.chunk_to_tile(sin)
+
+    #     x_transformed = torch.zeros(x.shape, dtype=torch.bfloat16)
+
+    #     trans_mat = tt2torch_tensor(self.transformation_mat)
+
+    #     x_cos = torch.zeros(x.shape, dtype=torch.bfloat16)
+    #     x_sin = torch.zeros(x.shape, dtype=torch.bfloat16)
+    #     rotary_output = torch.zeros(x.shape, dtype=torch.bfloat16)
+
+    #     tile_size = 32
+
+    #     for i in range(len(x_chunked)):
+    #         for j in range(len(x_chunked[i])):
+    #             row_window = slice(i * tile_size, (i + 1) * tile_size)
+    #             col_window = slice(j * tile_size, (j + 1) * tile_size)
+
+    #             x_transformed[:, :, row_window, col_window] = torch.matmul(x_chunked[i][j], trans_mat)
+    #             x_cos[:, :, row_window, col_window] = torch.mul(cos_chunked[i][j], x_chunked[i][j])
+    #             x_sin[:, :, row_window, col_window] = torch.mul(
+    #                 sin_chunked[i][j], x_transformed[:, :, row_window, col_window]
+    #             )
+    #             rotary_output[:, :, row_window, col_window] = torch.add(
+    #                 x_cos[:, :, row_window, col_window], x_sin[:, :, row_window, col_window]
+    #             )
+
+    #     rotary_output = torch2tt_tensor(rotary_output, self.device)
+    #     return rotary_output
 
     def forward(self, xq, xk, cos, sin):
         xq = self.apply_rotary(xq, cos, sin)

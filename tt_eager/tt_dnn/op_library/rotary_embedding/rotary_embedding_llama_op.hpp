@@ -20,8 +20,8 @@ enum class RotaryEmbeddingLlamaOpParallelizationStrategy { MULTI_CORE = 0, SINGL
 
 operation::ProgramWithCallbacks rotary_embedding_llama_single_core(
     const Tensor &input, const Tensor &cos, const Tensor &sin, const Tensor &trans_mat, Tensor &output, DeviceComputeKernelConfig compute_kernel_config);
-operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
-    const Tensor &input, const Tensor &cos, const Tensor &sin, const Tensor &trans_mat, Tensor &output, DeviceComputeKernelConfig compute_kernel_config);
+// operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
+//     const Tensor &input, const Tensor &cos, const Tensor &sin, const Tensor &trans_mat, Tensor &output, DeviceComputeKernelConfig compute_kernel_config);
 
 struct RotaryEmbeddingLlama {
     const uint32_t seq_len;
@@ -55,6 +55,7 @@ inline Tensor rotary_embedding_llama(
             auto& input_tensor = input_tensors.at(0);
             auto& cos = input_tensors.at(1);
             auto& sin = input_tensors.at(2);
+            auto& trans_mat = input_tensors.at(3);
             TT_FATAL(input_tensor.get_legacy_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
             uint32_t seq_len = input_tensor.get_legacy_shape()[-2];
             uint32_t B = input_tensor.get_legacy_shape()[0];

@@ -20,7 +20,7 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
     const auto& cos = input_tensors.at(1);
     const auto& sin = input_tensors.at(2);
     const auto& trans_mat = input_tensors.at(3);
-    TT_FATAL(input_tensors.size() == 3);
+    TT_FATAL(input_tensors.size() == 4);
     auto ref_device = input_tensor.device();
     for (const auto& input : input_tensors) {
         TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
@@ -68,9 +68,9 @@ operation::ProgramWithCallbacks RotaryEmbeddingLlama::create_program(
     auto& output_tensor = output_tensors.at(0);
 
     switch (this->get_parallelization_strategy(input_tensors)) {
-        case RotaryEmbeddingLlamaOpParallelizationStrategy::MULTI_CORE:
-            return rotary_embedding_llama_multi_core(input_tensor, cos, sin, trans_mat, output_tensor, this->compute_kernel_config);
-            break;
+        // case RotaryEmbeddingLlamaOpParallelizationStrategy::MULTI_CORE:
+        //     return rotary_embedding_llama_multi_core(input_tensor, cos, sin, trans_mat, output_tensor, this->compute_kernel_config);
+        //     break;
         case RotaryEmbeddingLlamaOpParallelizationStrategy::SINGLE_CORE:
         default: return rotary_embedding_llama_single_core(input_tensor, cos, sin, trans_mat, output_tensor, this->compute_kernel_config);
     }

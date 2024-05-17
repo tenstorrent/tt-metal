@@ -42,10 +42,9 @@ operation::ProgramWithCallbacks rotary_embedding_llama_single_core(
 
     uint32_t num_tiles = input.volume() / TILE_HW;
     uint32_t num_rows = input.volume() / input.get_legacy_shape()[-1] / TILE_HEIGHT;
-    uint32_t Ht = input.get_legacy_shape()[-2] / TILE_HEIGHT;
-    uint32_t Wt = input.get_legacy_shape()[-1] / TILE_WIDTH;
-    uint32_t half_Wt = Wt / 2;
-    uint32_t HtWt = Ht * Wt;
+    uint32_t Ht = input.get_legacy_shape()[-2] / TILE_HEIGHT; // 128 // 32 = 4
+    uint32_t Wt = input.get_legacy_shape()[-1] / TILE_WIDTH; // 128 // 32 = 4
+    uint32_t HtWt = Ht * Wt; // 4 * 4 = 16
     uint32_t Wbytes = input.get_legacy_shape()[-1] * sizeof(bfloat16);
 
     tt_metal::Device *device = input.device();
@@ -92,6 +91,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_single_core(
     auto cb_sin = tt_metal::CreateCircularBuffer(program, core, cb_sin_config);
 
     uint32_t trans_mat_cb_index = CB::c_in3;
+    // We only take one tile of trans_mat, doubled buffered
     uint32_t num_trans_mat_tiles = 2;
     tt_metal::CircularBufferConfig cb_trans_mat_config =
         tt_metal::CircularBufferConfig(num_input_tiles * trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
@@ -148,23 +148,23 @@ operation::ProgramWithCallbacks rotary_embedding_llama_single_core(
         (std::uint32_t)src_is_dram,
         (std::uint32_t)cos_is_dram,
         (std::uint32_t)sin_is_dram,
-        (std::uint32_t)trans_mat_is_dram
+        (std::uint32_t)trans_mat_is_dram,
         (std::uint32_t)Ht,
         (std::uint32_t)Wt,
-        (std::uint32_t)HtWt,
+        (std::uint32_t)HtWt
     };
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/rotary_embedding/kernels/dataflow/reader_rotary_embedding_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/rotary_embedding/kernels/dataflow/reader_rotary_embedding_llama_interleaved_start_id.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/rotary_embedding/kernels/dataflow/writer_rotary_embedding_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/rotary_embedding/kernels/dataflow/writer_rotary_embedding_llama_interleaved_start_id.cpp",
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
@@ -183,7 +183,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_single_core(
 
     auto rotary_embedding_kernel_group_1_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/rotary_embedding/kernels/compute/rotary_embedding.cpp",
+        "tt_eager/tt_dnn/op_library/rotary_embedding/kernels/compute/rotary_embedding_llama.cpp",
         core,
         tt_metal::ComputeConfig{.math_fidelity=math_fidelity, .fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args, .defines = kernel_defines});
 
@@ -198,7 +198,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_single_core(
         program,
         unary_reader_kernel_id,
         core,
-        {src_buffer->address(), cos_buffer->address(), sin_buffer->address(), num_rows, 0, 0, cos_sin_start_id});
+        {src_buffer->address(), cos_buffer->address(), sin_buffer->address(), trans_mat_buffer->address(), num_rows, 0, 0, cos_sin_start_id});
 
     SetRuntimeArgs(
         program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles, 0, cos_sin_offset, Wt, Wbytes});
@@ -209,20 +209,16 @@ operation::ProgramWithCallbacks rotary_embedding_llama_single_core(
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {
-        const auto token_idx = static_cast<const RotaryEmbedding *>(operation)->token_idx;
 
         auto src_buffer = input_tensors.at(0).buffer();
         auto cos_buffer = input_tensors.at(1).buffer();
         auto sin_buffer = input_tensors.at(2).buffer();
+        auto trans_mat_buffer = input_tensors.at(3).buffer();
 
         auto dst_buffer = output_tensors.at(0).buffer();
 
         uint32_t cos_sin_offset = 0;
         uint32_t cos_sin_start_id = 0;
-        if (token_idx.has_value()) {
-            cos_sin_offset = token_idx.value() % TILE_HEIGHT * Wbytes;
-            cos_sin_start_id = token_idx.value() / TILE_HEIGHT * Wt;
-        }
 
         CoreCoord core = {0, 0};
 
@@ -231,13 +227,13 @@ operation::ProgramWithCallbacks rotary_embedding_llama_single_core(
             runtime_args[0] = src_buffer->address();
             runtime_args[1] = cos_buffer->address();
             runtime_args[2] = sin_buffer->address();
+            runtime_args[3] = trans_mat_buffer->address();
             runtime_args[6] = cos_sin_start_id;
         }
 
         {
             auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
-            runtime_args[3] = cos_sin_offset;
         }
     };
 
