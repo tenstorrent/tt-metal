@@ -3,8 +3,8 @@
 set -eo pipefail
 
 run_tgg_tests() {
-  # Write tests here
-  echo "LOG_METAL: Fill me!"
+  # Add tests here
+  echo "Fill me!"
 }
 
 main() {
@@ -21,7 +21,7 @@ main() {
   # Run all tests
   cd $TT_METAL_HOME
   export PYTHONPATH=$TT_METAL_HOME
-  
+
   run_tgg_tests
 }
 
