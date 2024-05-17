@@ -36,7 +36,7 @@ inline const std::array<ttnn::TensorSchema, 1> input_tensor_schemas() {
 template <typename... Args>
 inline auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
     return std::make_tuple(input_tensor);
-};
+}
 
 inline Tensor execute(
     const Tensor& input_tensor,
@@ -53,7 +53,7 @@ inline Tensor execute(
 }  // namespace detail
 
 template <UnaryOpType unary_op_type>
-struct Unary : public EltwiseUnary {
+struct Unary {
     static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
 
     template <typename... Args>
@@ -68,7 +68,7 @@ struct Unary : public EltwiseUnary {
 };
 
 template <UnaryOpType unary_op_type>
-struct UnaryWithFastAndApproximateMode : public EltwiseUnary {
+struct UnaryWithFastAndApproximateMode {
     static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
 
     template <typename... Args>

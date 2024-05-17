@@ -87,6 +87,19 @@ void py_module(py::module& module) {
 
     module.def("deallocate", &ttnn::operations::core::deallocate, py::arg("tensor"), py::arg("force") = true);
 
+    module.def(
+        "reallocate",
+        [](ttnn::Tensor& input_tensor, const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt)
+            -> ttnn::Tensor { return reallocate(input_tensor, memory_config); },
+        py::arg("tensor"),
+        py::arg("memory_config") = std::nullopt,
+        R"doc(
+            Deallocates device tensor and returns a reallocated tensor
+
+            Args:
+                * :attr:`input_tensor`: Input Tensor
+        )doc");
+
     bind_registered_operation(
         module,
         ttnn::to_memory_config,
@@ -106,29 +119,25 @@ void py_module(py::module& module) {
                 >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
                 >>> tensor = ttnn.to_memory_config(tensor, memory_config)
         )doc",
-        ttnn::pybind_overload_t{
-            [](const std::decay_t<decltype(ttnn::to_memory_config)> self,
-               const ttnn::Tensor& tensor,
-               const ttnn::MemoryConfig& memory_config,
-               const std::optional<ttnn::DataType>& dtype) -> ttnn::Tensor {
-                return self(tensor, memory_config, dtype);
-               },
-               py::arg("tensor"),
-               py::arg("memory_config"),
-               py::arg("dtype") = std::nullopt});
+        ttnn::pybind_arguments_t{py::arg("tensor"), py::arg("memory_config"), py::arg("dtype") = std::nullopt});
 
-    module.def(
-        "reallocate",
-        [](ttnn::Tensor& input_tensor, const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt)
-            -> ttnn::Tensor { return reallocate(input_tensor, memory_config); },
-        py::arg("tensor"),
-        py::arg("memory_config") = std::nullopt,
-        R"doc(
-Deallocates device tensor and returns a reallocated tensor
+    bind_registered_operation(
+        module,
+        ttnn::to_dtype,
+        R"doc(to_dtype(tensor: ttnn.Tensor, dtype: DataType = None) -> ttnn.Tensor
 
-Args:
-    * :attr:`input_tensor`: Input Tensor
-    )doc");
+            Converts a tensor to the desired dtype
+
+
+            Args:
+                * :attr:`tensor`: the ttnn.Tensor
+                * :attr:`dtype`: `ttnn` data type.
+
+            Example::
+                >>> tensor = ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16))
+                >>> tensor = ttnn.to_dtype(tensor, dtype=ttnn.uint16)
+        )doc",
+        ttnn::pybind_arguments_t{py::arg("tensor"), py::arg("dtype")});
 
     module.def(
         "allocate_tensor_on_device",

@@ -182,9 +182,9 @@ borrowed_buffer::Buffer<T> get_as(Tensor& tensor) {
         [](auto&& storage) -> borrowed_buffer::Buffer<T> {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                return get_as<T>(storage.buffer);
+                return host_buffer::get_as<T>(storage.buffer);
             } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                return get_as<T>(storage.buffer);
+                return host_buffer::get_as<T>(storage.buffer);
             } else {
                 TT_THROW("Tensor must have OwnedStorage or BorrowedStorage");
             }
@@ -198,9 +198,9 @@ const borrowed_buffer::Buffer<T> get_as(const Tensor& tensor) {
         [](auto&& storage) -> const borrowed_buffer::Buffer<T> {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                return get_as<T>(storage.buffer);
+                return host_buffer::get_as<T>(storage.buffer);
             } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                return get_as<T>(storage.buffer);
+                return host_buffer::get_as<T>(storage.buffer);
             } else {
                 TT_THROW("Tensor must have OwnedStorage or BorrowedStorage");
             }
