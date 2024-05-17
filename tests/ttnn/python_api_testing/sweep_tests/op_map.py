@@ -419,7 +419,7 @@ op_map = {
     },
     "ttnn-rmsnorm": {
         "tt_op": ttnn_ops.rmsnorm,
-        "pytorch_op": pytorch_ops.rms_norm,
+        "pytorch_op": ttnn_pytorch_ops.rmsnorm,
     },
     "ttnn-transformer_concatenate_heads": {
         "tt_op": ttnn_ops.transformer_concatenate_heads,

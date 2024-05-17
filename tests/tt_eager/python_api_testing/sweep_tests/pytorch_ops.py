@@ -1756,16 +1756,6 @@ def clamp_bw(x, y, scalar, *args, **kwargs):
     return in_data.grad
 
 
-def rms_norm(hidden_states, weight, *, epsilon=1e-6):
-    variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
-    hidden_states = hidden_states * torch.rsqrt(variance + epsilon)
-
-    if weight.dtype in [torch.float16, torch.bfloat16]:
-        hidden_states = hidden_states.to(weight.dtype)
-
-    return weight * hidden_states
-
-
 def global_avg_pool2d(x, *args, **kwargs):
     output_size = (1, 1)
     x = x.to(torch.float32)

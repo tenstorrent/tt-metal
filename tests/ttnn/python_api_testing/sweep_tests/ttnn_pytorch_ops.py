@@ -91,6 +91,16 @@ def transformer_concatenate_heads(x, *args, **kwargs):
     return ttnn.transformer.concatenate_heads.golden_function(x)
 
 
+def rmsnorm(hidden_states, weight, epsilon=1e-6, *args, **kwargs):
+    variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
+    hidden_states = hidden_states * torch.rsqrt(variance + epsilon)
+
+    if weight.dtype in [torch.float16, torch.bfloat16]:
+        hidden_states = hidden_states.to(weight.dtype)
+
+    return weight * hidden_states
+
+
 def groupnorm(x, y, z, *args, **kwargs):
     torch_output_tensor = torch.nn.functional.group_norm(x, num_groups=1, weight=y, bias=z)
     return torch_output_tensor
