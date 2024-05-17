@@ -226,9 +226,7 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(cons
         TT_ASSERT(act_block_h_override % 32 == 0, "Config Error: act_block_h_override must be a multiple of 32 (tile height).");
     }
     auto grid_size = parallel_config.grid.bounding_box().grid_size();
-    cout << "act_block_h_override = " << act_block_h_override << endl;
     uint32_t act_block_h_ntiles = act_block_h_override > 0 ? act_block_h_override / 32 : conv_op_parallel_config.per_core_out_matrix_height_ntiles;
-    cout << "act_block_h_ntiles=" << act_block_h_ntiles << endl;
     uint32_t act_block_w = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? round_up(padded_in_channels * window_w, 32) : padded_in_channels;
     TT_ASSERT(act_block_w % 32 == 0);
     uint32_t act_block_w_ntiles = act_block_w / 32;
@@ -438,13 +436,12 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             {0, 0, 0, 0},
             0
         );
-        bias_tensor_ = ttnn::operations::core::ToLayout::execute(bias_tensor_, Layout::TILE, bias_tensor_.get_dtype(),{}, (Device *)nullptr);
+        bias_tensor_ = ttnn::operations::core::ToLayout::execute(bias_tensor_, Layout::TILE, {}, {}, (Device *)nullptr);
         if(bias_tensor_.get_dtype()!=weights_bias_dtype) {
             bias_tensor_ = ttnn::operations::core::ToDtype::execute(bias_tensor_, weights_bias_dtype);
         }
         bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, const_cast<Device*>(&device), nullopt);
     }
-    std::cout<< "Weights Prepared" << endl;
 
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
 }
