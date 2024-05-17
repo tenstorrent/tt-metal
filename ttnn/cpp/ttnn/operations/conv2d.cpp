@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv2d.hpp"
-
+#include "ttnn/cpp/ttnn/op_library/to_dtype/to_dtype_op.hpp"
 using namespace tt;
 namespace ttnn {
 
@@ -436,10 +436,12 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             {0, 0, 0, 0},
             0
         );
-        bias_tensor_ = ttnn::operations::core::ToLayout::execute(bias_tensor_, Layout::TILE, weights_bias_dtype,{}, (Device *)nullptr);
+        if(bias_tensor_.get_dtype()!=weights_bias_dtype) {
+            bias_tensor_ = ttnn::operations::core::ToDtype::execute(bias_tensor_, weights_bias_dtype);
+        }
         bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, const_cast<Device*>(&device), nullopt);
     }
-    cout << "Weights Prepared" << endl;
+    std::cout<< "Weights Prepared" << endl;
 
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
 }
