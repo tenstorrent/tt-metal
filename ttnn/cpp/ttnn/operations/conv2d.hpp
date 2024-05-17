@@ -233,6 +233,8 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(const Shape& tens
     uint32_t nhw_shape = tensor_shape[0] * tensor_shape[1] * tensor_shape[2];
     uint32_t nhw_padded = round_up(nhw_shape, num_cores_nhw * tile_size);
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
+    cout << "nhw_shape " << nhw_shape << endl;
+    cout << "nhw_padded " << nhw_padded << " num_cores_nhw " << num_cores_nhw << endl;
     cout << "channels = " << channels << " num_cores_channels " << num_cores_channels << endl;
     TT_ASSERT(channels % num_cores_channels == 0);
     uint32_t channel_shard = channels / num_cores_channels;
@@ -407,6 +409,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_requi
             );
             TT_ASSERT(input_tensor_width_snapped_to_channels_alignment >= tensor_width);
             if (input_tensor_height_snapped_to_tile != tensor_height || input_tensor_width_snapped_to_channels_alignment != tensor_width) {
+                cout << "HERE in padding input tensor" << endl;
                 input_tensor = tt::tt_metal::pad_on_host(
                     input_tensor,
                     {input_tensor.get_shape()[0], input_tensor.get_shape()[1], input_tensor_height_snapped_to_tile, input_tensor_width_snapped_to_channels_alignment},
@@ -578,6 +581,7 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
     if (!is_1x1_s1_p0_conv) {
         // call halo op
         SlidingWindowConfig sliding_window_config = SlidingWindowConfig(batch_size, input_height, input_width, kernel_size[0], kernel_size[1], stride[0], stride[1], padding[0], padding[1], dilation[0], dilation[1], opt_conv_op_parallel_config.num_cores_nhw, input_tensor_post_tm.memory_config().shard_spec.value().grid, true);
+        //return {input_tensor_post_tm, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
         auto halo_output = ttnn::operations::halo::halo_op(input_tensor_post_tm, sliding_window_config, 0, false, parallel_config.shard_orientation == ShardOrientation::COL_MAJOR, 0, input_tensor_post_tm.memory_config());
         //return {halo_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
         bool is_block_sharded = parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED;
@@ -588,7 +592,7 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
         auto conv_sharded_input_top_left_indices = sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, true, true);
         auto conv_reader_indices_tensor = sliding_window::construct_on_host_config_tensor(conv_sharded_input_top_left_indices, sliding_window_config, parallel_config);
         conv_reader_indices_tensor = sliding_window::move_config_tensor_to_device(conv_reader_indices_tensor, parallel_config, is_block_sharded, &device);
-        return {conv_reader_indices_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        //return {conv_reader_indices_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
         if (conv_config.deallocate_activation) {
             //input_tensor_post_tm.deallocate();
         }
@@ -599,7 +603,7 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
         std::vector<int> conv_params = {(int) kernel_size[0], (int) kernel_size[1], (int) stride[0], (int) stride[1], (int) padding[0], (int) padding[1]};
         auto conv_output = tt::tt_metal::optimized_conv_new(halo_output, weight_tensor_on_device, bias_tensor_on_device, conv_params, out_channels, conv_config.output_layout == Layout::ROW_MAJOR, conv_config.activation == "relu", conv_config.math_fidelity,
             opt_conv_op_parallel_config, opt_conv_op_block_config, 0, conv_out_memory_config, conv_config.dtype, {batch_size, input_height, input_width, in_channels}, conv_config.input_channels_alignment == 16, compute_kernel_config);
-       return {halo_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+       return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
        //halo_output.deallocate();
 
     } else {
