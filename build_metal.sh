@@ -21,26 +21,13 @@ echo "Building tt-metal"
 cmake -B build -G Ninja
 cmake --build build --target install
 
-echo "Creating virtual env in: $PYTHON_ENV_DIR"
-python3 -m venv $PYTHON_ENV_DIR
-
-source $PYTHON_ENV_DIR/bin/activate
-
-echo "Setting up virtual env"
-python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
-python3 -m pip install setuptools wheel
-
-echo "Installing dev dependencies"
-python3 -m pip install -r $(pwd)/tt_metal/python_env/requirements-dev.txt
-
-echo "Installing tt-metal"
-pip install -e .
-pip install -e ttnn
+./scripts/build_scripts/create_venv.sh
 
 if [ "$CONFIG" != "ci" ]; then
     echo "Building cpp tests"
     cmake --build build --target tests -- -j`nproc`
 
+    source $PYTHON_ENV_DIR/bin/activate
     echo "Generating stubs"
     stubgen -m tt_lib -m tt_lib.device -m tt_lib.profiler -m tt_lib.tensor -m tt_lib.operations -m tt_lib.operations.primary -m tt_lib.operations.primary.transformers -o tt_eager
     stubgen -p ttnn._ttnn -o ttnn
