@@ -436,6 +436,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             {0, 0, 0, 0},
             0
         );
+        bias_tensor_ = ttnn::operations::core::ToLayout::execute(bias_tensor_, Layout::TILE, bias_tensor_.get_dtype(),{}, (Device *)nullptr);
         if(bias_tensor_.get_dtype()!=weights_bias_dtype) {
             bias_tensor_ = ttnn::operations::core::ToDtype::execute(bias_tensor_, weights_bias_dtype);
         }
