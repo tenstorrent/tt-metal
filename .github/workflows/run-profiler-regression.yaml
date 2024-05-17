@@ -1,10 +1,76 @@
 name: "[internal] metal - Run profiler regression impl"
 
+# https://github.com/actions/runner/issues/3146 
+# On trying to get both workflow dispatch and call to work, 
+# https://github.com/actions/runner/discussions/1884
+# Hence we have to use this hack to duplicate workflows here
+
 on:
+  workflow_dispatch:
+    inputs:
+      build_docker:
+        description: 'Trigger build docker image workflow'
+        type: boolean
+        required: false
+        default: true
   workflow_call:
+    inputs:
+      build_docker:
+        description: 'Trigger build docker image workflow'
+        type: boolean
+        required: false
+        default: false
 
 jobs:
+  build-docker-artifact:
+    if: ${{ inputs.build_docker }}
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
+  profiler-regression-dispatch:
+    if: ${{ inputs.build_docker }}
+    needs: build-docker-artifact
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        runner-info: [
+          # No GS as tests now require synced starts. GS profiler tests will run on dedicated BMs
+          # N150
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"]},
+          # N300
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"]},
+        ]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.runner-info.arch }}
+      LOGURU_LEVEL: INFO
+    environment: dev
+    runs-on: ${{ matrix.runner-info.runs-on }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: ./.github/actions/load-docker-image
+      - name: Build tt-metal and libs
+        run: |
+          ./scripts/docker/run_docker_cmd.sh -e ENABLE_TRACY=1 -e ENABLE_PROFILER=1 -- \
+          cmake -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++-17 \
+          && cmake --build build --target install \
+          && cmake --build build --target programming_examples
+      - name: Run profiler regression tests
+        timeout-minutes: 30
+        run: |
+          ./scripts/docker/run_docker_cmd.sh -- ./tests/scripts/run_profiler_regressions.sh
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U0593J2RQRZ # Bill Teng
   profiler-regression:
+    if: ${{ !inputs.build_docker }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -36,10 +102,16 @@ jobs:
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
       - uses: ./.github/actions/install-python-deps
+      - uses: ./.github/actions/load-docker-image
+      - name: Build tt-metal and libs
+        run: |
+          ./scripts/docker/run_docker_cmd.sh -- \
+          ./scripts/build_scripts/build_with_profiler_opt.sh
+          ./create_venv.sh
       - name: Run profiler regression tests
         timeout-minutes: 30
         run: |
-          ./tests/scripts/run_profiler_regressions.sh
+          ./scripts/docker/run_docker_cmd.sh -- ./tests/scripts/run_profiler_regressions.sh
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:

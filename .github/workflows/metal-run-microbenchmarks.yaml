@@ -7,7 +7,11 @@ on:
   workflow_call:
 
 jobs:
+  build-docker-artifact:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
   run-microbenchmarks:
+    needs: build-docker-artifact
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -24,6 +28,7 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       # Use BM for microbenchmarks
       ARCH_NAME: ${{ matrix.runner-info.arch }}
+      LOGURU_LEVEL: INFO
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
@@ -31,15 +36,20 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
+      - uses: ./.github/actions/load-docker-image
+      - name: Build tt-metal cmake build 
         run: |
+          ./scripts/docker/run_docker_cmd.sh -- \
           ./scripts/build_scripts/build_with_profiler_opt.sh
           ./create_venv.sh
       - name: Build tests
-        run: cmake --build build --target tests -- -j`nproc`
+        run: |
+          ./scripts/docker/run_docker_cmd.sh -- cmake --build build --target tests -- -j`nproc`
       - name: Run microbenchmark tests
         timeout-minutes: 90
-        run: ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type microbenchmarks
+        run: |
+          ./scripts/docker/run_docker_cmd.sh -- \
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type microbenchmarks
       - name: Upload microbenchmark report csvs
         uses: actions/upload-artifact@v4
         with:

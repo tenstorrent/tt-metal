@@ -7,9 +7,15 @@ on:
     - cron: "0 */2 * * *"
 
 jobs:
+  build-docker-artifact:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
   build-artifact:
+    needs: build-docker-artifact
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+    
   fd-nightly:
     needs: build-artifact
     strategy:
@@ -53,10 +59,8 @@ jobs:
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
       - uses: ./.github/actions/install-python-deps
+      - uses: ./.github/actions/load-docker-image
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ${{ matrix.test-group.cmd }}
+          ./scripts/docker/run_docker_cmd.sh -- ${{ matrix.test-group.cmd }}

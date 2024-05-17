@@ -53,7 +53,8 @@ RUN cd $TT_METAL_INFRA_DIR \
     && tar -xvf gdb-14.2.tar.gz \
     && cd gdb-14.2 \
     && ./configure \
-    && make -j$(nproc)
+    && make -j$(nproc) \
+    && make install
 ENV PATH="$TT_METAL_INFRA_DIR/gdb-14.2/gdb:$PATH"
 
 # Can only be installed after Clang-17 installed

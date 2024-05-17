@@ -36,17 +36,17 @@ on:
         default: false
         description: "Build with tracy enabled"
 jobs:
-  build-artifact:
+
+  build-docker-images:
     strategy:
       matrix:
         arch: ${{ fromJson(inputs.arch || '["grayskull", "wormhole_b0", "blackhole"]') }}
+        docker_image_tag: [ tt-metalium/ubuntu-20.04-amd64 ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
-      SILENT: 0
-      VERBOSE: 1
     environment: dev
-    runs-on: build
+    runs-on: build-docker
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
@@ -55,11 +55,18 @@ jobs:
       - name: Update submodules
         run: |
           git submodule update --init --recursive
-      - name: Build tt-metal and libs
-        run: |
-          nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
-          nice -n 19 cmake --build build --target tests
-          nice -n 19 cmake --build build --target install
+      - name: Execute in docker image
+        uses: ./.github/actions/docker-run
+        with:
+          docker_username: ${{ github.actor }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          run_args: |
+            nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
+            nice -n 19 cmake --build build --target tests
+            nice -n 19 cmake --build build --target install
+          docker_opts: |
+            -e CONFIG=${{ env.CONFIG }} 
+            -e ARCH_NAME=${{ matrix.arch }} 
       - name: 'Tar files'
         run: tar -cvf ttm_${{ matrix.arch }}.tar build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime
       - name: 'Upload Artifact'
@@ -67,3 +74,4 @@ jobs:
         with:
           name: TTMetal_build_${{ matrix.arch }}${{ (inputs.tracy && '_profiler') || '' }}
           path: ttm_${{ matrix.arch }}.tar
+          

@@ -6,6 +6,10 @@ on:
     - cron: "0 */8 * * *" # This cron schedule runs the workflow every 8 hours
 
 jobs:
+  build-docker-artifact:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     with:
@@ -42,11 +46,7 @@ jobs:
           name: TTMetal_build_${{ matrix.test-group.arch }}
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
       - name: Run frequent regression tests
         timeout-minutes: 60
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ${{ matrix.test-group.cmd }}
+          ./scripts/docker/run_docker_cmd.sh -- ${{ matrix.test-group.cmd }}

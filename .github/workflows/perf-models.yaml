@@ -7,7 +7,11 @@ on:
   workflow_call:
 
 jobs:
+  build-docker-artifact:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
   build-artifact:
+    needs: build-docker-artifact
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
   models-perf:
@@ -49,13 +53,13 @@ jobs:
           name: TTMetal_build_${{ matrix.test-info.arch }}
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.test-info.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
+      - uses: ./.github/actions/load-docker-image
       - name: Run performance regressions
         id: performance_tests
         timeout-minutes: 50
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.test-info.machine-type }}
+          ./scripts/docker/run_docker_cmd.sh -e TTNN_CONFIG_OVERRIDES=${TTNN_CONFIG_OVERRIDES} -- 
+            ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.test-info.machine-type }}
       # TODO: Fix the pipeline before enabling notifications.
       #- uses: ./.github/actions/slack-report
       #  if: ${{ failure() }}

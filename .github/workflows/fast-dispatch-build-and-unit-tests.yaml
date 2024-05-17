@@ -50,6 +50,7 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.runner-info.arch }}
@@ -58,11 +59,25 @@ jobs:
       - uses: ./.github/actions/install-python-deps
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: 45
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ${{ matrix.test-group.cmd }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_username: ${{ github.actor }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e CONFIG=${{ env.CONFIG }} 
+            -e ARCH_NAME=${{ matrix.runner-info.arch }}
+            -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
+            -e LD_LIBRARY_PATH=${{ env.LD_LIBRARY_PATH }}
+            -e TT_METAL_ENV=${{ env.TT_METAL_ENV }}
+            -e PYTHONPATH=${{ env.PYTHONPATH }}
+            -v /dev/hugepages-1G:/dev/hugepages-1G
+            --device /dev/tenstorrent
+          run_args: |
+            source ${{ github.workspace }}/python_env/bin/activate
+            cd $TT_METAL_HOME
+            export PYTHONPATH=$TT_METAL_HOME
+            ${{ matrix.test-group.cmd }}
+            
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
