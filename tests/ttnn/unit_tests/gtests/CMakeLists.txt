@@ -1,6 +1,7 @@
 
 set(TTNN_UNIT_TESTS_SRC
-    ${CMAKE_SOURCE_DIR}/tests/ttnn/unit_tests/gtests/test_async_runtime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_add.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_async_runtime.cpp
 )
 
 add_executable(unit_tests_ttnn ${TTNN_UNIT_TESTS_SRC})
