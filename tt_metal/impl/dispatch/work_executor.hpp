@@ -23,6 +23,11 @@ enum class WorkExecutorMode {
     ASYNCHRONOUS = 1,
 };
 
+enum class WorkerQueueMode {
+    LOCKFREE = 0,
+    LOCKBASED = 1,
+};
+
 enum class WorkerState {
     RUNNING = 0,
     TERMINATE = 1,
@@ -63,7 +68,8 @@ class WorkExecutor {
 
     WorkExecutor(int device_id) : managed_device_id(device_id) {
         set_process_priority(0);
-        if (this->worker_queue_mode == WorkExecutorMode::ASYNCHRONOUS) {
+        if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS) {
+            this->set_worker_queue_mode(this->worker_queue_mode);
             this->start_worker();
         }
     }
@@ -74,7 +80,7 @@ class WorkExecutor {
     }
 
     ~WorkExecutor() {
-        if (this->worker_queue_mode == WorkExecutorMode::ASYNCHRONOUS) {
+        if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS) {
             stop_worker();
         }
     }
@@ -137,7 +143,7 @@ class WorkExecutor {
     }
 
     inline void synchronize() {
-        if (this->worker_queue_mode == WorkExecutorMode::ASYNCHRONOUS and std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.parent_thread_id.load()) {
+        if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS and std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.parent_thread_id.load()) {
             // Blocking = wait for queue flushed. Only main thread can explcitly insert a synchronize, otherwise we have a deadlock.
             this->worker_queue.push([](){}); // Send flush command (i.e. empty function)
             {
@@ -152,19 +158,31 @@ class WorkExecutor {
     }
 
     inline void set_worker_mode(const WorkExecutorMode& mode) {
-         if (this->worker_queue_mode == mode) {
+        if (this->work_executor_mode == mode) {
             return;
         }
-        this->worker_queue_mode = mode;
-        if (this->worker_queue_mode == WorkExecutorMode::ASYNCHRONOUS) {
+        this->work_executor_mode = mode;
+        if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS) {
             this->start_worker();
-        } else if (this->worker_queue_mode == WorkExecutorMode::SYNCHRONOUS) {
+        } else if (this->work_executor_mode == WorkExecutorMode::SYNCHRONOUS) {
             this->synchronize();
             this->stop_worker();
         }
     }
 
-    WorkExecutorMode get_worker_mode() { return worker_queue_mode; }
+    WorkExecutorMode get_worker_mode() { return work_executor_mode; }
+
+    inline void set_worker_queue_mode(const WorkerQueueMode& mode) {
+        if (mode == WorkerQueueMode::LOCKFREE) {
+            this->worker_queue.set_lock_free();
+        }
+        else {
+            this->worker_queue.set_lock_based();
+        }
+        this->worker_queue_mode = mode;
+    }
+
+    WorkerQueueMode get_worker_queue_mode() { return worker_queue_mode; }
 
     inline std::size_t get_parent_thread_id() { return this->worker_queue.parent_thread_id; }
     private:
@@ -196,12 +214,18 @@ class WorkExecutor {
         this->worker_state = WorkerState::IDLE;
     }
 
-    static WorkExecutorMode default_worker_queue_mode() {
+    static WorkExecutorMode default_worker_executor_mode() {
         static int value = parse_env<int>("TT_METAL_ASYNC_DEVICE_QUEUE", static_cast<int>(WorkExecutorMode::SYNCHRONOUS));
         return static_cast<WorkExecutorMode>(value);
     }
 
-    WorkExecutorMode worker_queue_mode = default_worker_queue_mode();
+    static WorkerQueueMode default_worker_queue_mode() {
+        static int value = parse_env<int>("TT_METAL_LOCK_BASED_QUEUE", static_cast<int>(WorkerQueueMode::LOCKFREE));
+        return static_cast<WorkerQueueMode>(value);
+    }
+
+    WorkExecutorMode work_executor_mode = default_worker_executor_mode();
+    WorkerQueueMode worker_queue_mode = default_worker_queue_mode();
 };
 
 } // namespace tt

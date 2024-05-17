@@ -23,6 +23,10 @@ class LockFreeQueue {
         std::atomic<Node*> head;
         std::atomic<Node*> tail;
 
+        std::mutex queue_mutex;
+        std::function<void()> lock_func = [](){};
+        std::function<void()> unlock_func = [](){};
+
         inline Node* pop_head() {
             Node* oldHead = head.load();
             if (oldHead == tail.load()) {
@@ -68,9 +72,11 @@ class LockFreeQueue {
             // to match the location of head (rptr). The current push can
             // thus overwrite data that's being read. Stall until head
             // has progressed (data has been read).
+            lock_func();
             while(tail.load()->next == head.load()) {};
             tail.load()->data = std::make_shared<T>(value);
             tail.store(tail.load()->next);
+            unlock_func();
         }
 
         inline void push(std::shared_ptr<T> value) {
@@ -81,9 +87,11 @@ class LockFreeQueue {
             // to match the location of head (rptr). The current push can
             // thus overwrite data that's being read. Stall until head
             // has progressed (data has been read).
+            lock_func();
             while(tail.load()->next == head.load()) {};
             tail.load()->data = value;
             tail.store(tail.load()->next);
+            unlock_func();
         }
 
         inline std::shared_ptr<T> pop() {
@@ -104,6 +112,16 @@ class LockFreeQueue {
         bool empty() const {
             return head.load() == tail.load();
         }
+        void set_lock_free() {
+            lock_func = [](){};
+            unlock_func = [](){};
+        }
+
+        void set_lock_based() {
+            lock_func = [this](){this->queue_mutex.lock();};
+            unlock_func = [this](){this->queue_mutex.unlock();};
+        }
+
         class Iterator {
            public:
             using iterator_category = std::forward_iterator_tag;
