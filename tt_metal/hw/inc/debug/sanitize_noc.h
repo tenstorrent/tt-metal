@@ -19,9 +19,9 @@
 // Add the ability to skip NOC logging, we can't have the tunneling cores stalling waiting for the
 // print server.
 #if !defined(SKIP_NOC_LOGGING)
-#define LOG_LEN(l) DPRINT << NOC_LOG_XFER(l)
-#define LOG_READ_LEN_FROM_STATE() LOG_LEN(NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE))
-#define LOG_WRITE_LEN_FROM_STATE() LOG_LEN(NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE))
+#define LOG_LEN(l) DPRINT << NOC_LOG_XFER(l);
+#define LOG_READ_LEN_FROM_STATE() LOG_LEN(NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));
+#define LOG_WRITE_LEN_FROM_STATE() LOG_LEN(NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
 #else
 #define LOG_LEN(l)
 #define LOG_READ_LEN_FROM_STATE()
