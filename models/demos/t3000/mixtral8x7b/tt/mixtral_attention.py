@@ -112,7 +112,7 @@ class TtMixtralAttention(torch.nn.Module):
                 device=self.device_mesh,
                 mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=0),
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
             )
             for lp in layer_past
         ]
@@ -192,6 +192,7 @@ class TtMixtralAttention(torch.nn.Module):
             num_kv_heads=self.n_local_kv_heads,
             output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
         )
+        xqkv_fused.deallocate(True)
 
         ###
         # Rotary embeddings
@@ -258,9 +259,10 @@ class TtMixtralAttention(torch.nn.Module):
             attn_1B4P,
             self.scale,
             attn_mask_1B4P,
-            program_config=self.model_config["ATTN_BATCHED_SOFTMAX_PROGCFG"],
+            program_config=self.model_config["ATTN_BATCHED_SOFTMAX_PROGCFG"](padded_layer_past_len),
             is_causal_mask=True,
         )
+        attn_mask_1B4P.deallocate(True)
 
         # values matmul
         values_1BPD = ttnn.experimental.tensor.nlp_kv_cache_load_slice(
@@ -274,6 +276,8 @@ class TtMixtralAttention(torch.nn.Module):
             core_grid=self.core_grid_attention,
             compute_kernel_config=self.compute_kernel_attn,
         )
+        attn_1B4P.deallocate(True)
+        values_1BPD.deallocate(True)
 
         attn_output_11BH = ttnn.experimental.tensor.nlp_concat_heads_decode(
             attn_output_1B4D,
@@ -296,6 +300,7 @@ class TtMixtralAttention(torch.nn.Module):
             compute_kernel_config=self.compute_kernel,
             dtype=ttnn.bfloat8_b,
         )
+        attn_output_11BH.deallocate(True)
         # All gather
         dense_outputs_11BH = ttnn.all_gather(dense_out_11BH, dim=2, num_links=1)
 
