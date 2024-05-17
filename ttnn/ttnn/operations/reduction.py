@@ -128,10 +128,13 @@ def var(
 
     if isinstance(dim, tuple):
         if dim == (rank - 1,):
+            reduce_index = input_shape[-1]
             reduce_op_dim = ttl.tensor.ReduceOpDim.W
         elif dim == (rank - 2,):
+            reduce_index = input_shape[-2]
             reduce_op_dim = ttl.tensor.ReduceOpDim.H
         elif dim == (rank - 1, rank - 2):
+            reduce_index = input_shape[-1] * input_shape[-2]
             reduce_op_dim = ttl.tensor.ReduceOpDim.HW
         else:
             raise RuntimeError("Unsupported dim")
@@ -152,9 +155,9 @@ def var(
 
     input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
 
-    mean_tensor = ttl.tensor.reduce(input_tensor, ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / input_shape[-1])
+    mean_tensor = ttl.tensor.reduce(input_tensor, ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / reduce_index)
     mean_square_tensor = ttl.tensor.reduce(
-        ttl.tensor.pow(input_tensor, 2.0), ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / input_shape[-1]
+        ttl.tensor.pow(input_tensor, 2.0), ttl.tensor.ReduceOpMath.SUM, reduce_op_dim, 1 / reduce_index
     )
     output_tensor = ttl.tensor.sub(mean_square_tensor, ttl.tensor.pow(mean_tensor, 2.0))
     output_tensor = ttnn.reshape(output_tensor, ttnn.Shape(output_shape, padded_output_shape))
