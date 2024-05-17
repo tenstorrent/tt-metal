@@ -16,6 +16,7 @@
 #include "transformer.hpp"
 #include "normalization.hpp"
 #include "kv_cache.hpp"
+#include "pool.hpp"
 
 namespace py = pybind11;
 
@@ -50,6 +51,9 @@ void py_module(py::module& module) {
 
     auto m_kv_cache = module.def_submodule("kv_cache", "KV cache operations");
     kv_cache::py_module(m_kv_cache);
+
+    auto m_pool = module.def_submodule("pool", "pool operations");
+    pool::py_module(m_pool);
 }
 
 }  // namespace operations
