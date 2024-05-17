@@ -98,28 +98,49 @@ class TtModelArgs:
         # Update memory layouts (Tile, except MLP)
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
+        self.model_config["WIDTH_SHARDED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttnn.experimental.tensor.BufferType.L1
+        )
+
+        self.model_config["HEIGHT_SHARDED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.L1
+        )
+
+        self.model_config["BLOCK_SHARDED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttnn.experimental.tensor.BufferType.L1
+        )
+
+        self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, 32),
+            core_grid=ttnn.CoreGrid(y=4, x=6),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        self.model_config[
+            "ROT_MAT_MM_PROGCFG"
+        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=4,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        )
+
+        self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,  # Highest fidelity
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
         self.model_config["Q_TRANSPOSE_MEMCFG"] = ttnn.create_sharded_memory_config(
             shape=(32, 128),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-        self.model_config[
-            "K_CACHE_SLICE_OUTPUT_MEMCFG"
-        ] = lambda padded_layer_past_len: ttnn.create_sharded_memory_config(
-            shape=(128, padded_layer_past_len),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-        self.model_config[
-            "V_CACHE_SLICE_OUTPUT_MEMCFG"
-        ] = lambda padded_layer_past_len: ttnn.create_sharded_memory_config(
-            shape=(padded_layer_past_len, 128),
             core_grid=ttnn.CoreGrid(y=4, x=8),
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
