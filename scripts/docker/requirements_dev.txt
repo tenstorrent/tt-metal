@@ -1,5 +1,6 @@
 sudo
 nano
-acl=2.2.53-6
-jq=1.6-1ubuntu0.20.04.1
+acl
+jq
 openssh-server
+vim
