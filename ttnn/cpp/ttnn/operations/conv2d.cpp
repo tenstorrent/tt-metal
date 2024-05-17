@@ -138,10 +138,10 @@ uint32_t get_num_cores_channels_from_parallel_config(const ParallelConfig& pconf
     if (pconfig.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         num_cores_channels = 1;
     } else if (pconfig.shard_orientation == ShardOrientation::COL_MAJOR) {
-        num_cores_channels = grid_size.x;
+        num_cores_channels = grid_size.y;
     } else {
         TT_ASSERT(pconfig.shard_orientation == ShardOrientation::ROW_MAJOR);
-        num_cores_channels = grid_size.y;
+        num_cores_channels = grid_size.x;
     }
     TT_ASSERT(num_cores_channels > 0);
     return num_cores_channels;
