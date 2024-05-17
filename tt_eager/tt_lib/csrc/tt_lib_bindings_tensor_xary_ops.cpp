@@ -9,6 +9,7 @@
 #include "tt_lib_bindings_tensor_impl.hpp"
 
 namespace tt::tt_metal::detail {
+<<<<<<< HEAD
     void TensorModuleXaryOPs( py::module & m_tensor){
 
         // *** eltwise binary ***
@@ -51,9 +52,75 @@ namespace tt::tt_metal::detail {
         )doc");
         // *** eltwise unary ***
         detail::bind_unary_op(m_tensor, "identity", identity, R"doc(Returns a copy of same tensor ``input``; useful for profiling the SFPU.
+=======
+void TensorModuleXaryOPs(py::module &m_tensor) {
+    // *** eltwise binary ***
+
+    detail::bind_binary_op(
+        m_tensor, "add", add, R"doc(Perform an eltwise-binary add (``{0} + {1}``) on two tensors.)doc");
+    detail::bind_binary_op(
+        m_tensor, "sub", sub, R"doc(Perform an eltwise-binary sub (``{0} - {1}``) on two tensors.)doc");
+    detail::bind_binary_op(
+        m_tensor, "mul", mul, R"doc(Perform an eltwise-binary mul (``{0} * {1}``) on two tensors.)doc");
+    detail::bind_binary_op(
+        m_tensor,
+        "squared_difference",
+        squared_difference,
+        R"doc(Perform an eltwise-binary squared_difference (``{0} - {1}``)^2 on two tensors.)doc");
+    detail::bind_binary_op(
+        m_tensor,
+        "logical_and",
+        logical_and,
+        R"doc(Performs the element-wise logical AND of the given input tensors ``{0}`` && ``{1}``, Zeros are treated as False and nonzeros are treated as True.)doc");
+    detail::bind_binary_op(
+        m_tensor,
+        "bias_gelu",
+        bias_gelu,
+        R"doc(Perform an eltwise-binary bias_gelu (``{0} + {1}``) on two tensors.)doc");
+    detail::bind_binary_op(
+        m_tensor, "gt", gt, R"doc(Perform an eltwise-binary greater-than (``{0} > {1}``) on two tensors.)doc");
+    detail::bind_binary_op(
+        m_tensor, "lt", lt, R"doc(Perform an eltwise-binary less-than (``{0} < {1}``) on two tensors.)doc");
+    detail::bind_binary_op(
+        m_tensor, "lte", lte, R"doc(Perform an eltwise-binary less-than-or-equal (``{0} <= {1}``) on two tensors.)doc");
+    detail::bind_binary_op(
+        m_tensor,
+        "gte",
+        gte,
+        R"doc(Perform an eltwise-binary greater-than-or-equal (``{0} >= {1}``) on two tensors.)doc");
+    detail::bind_binary_op(
+        m_tensor, "eq", eq, R"doc(Perform an eltwise-binary equal (``{0} == {1}``) on two tensors.)doc");
+    detail::bind_binary_op(
+        m_tensor, "ne", ne, R"doc(Perform an eltwise-binary not-equal (``{0} != {1}``) on two tensors.)doc");
+    detail::bind_binary_op(
+        m_tensor, "ldexp", ldexp, R"doc(Performs eltwise-binary ldexp (``{0} * 2**{1}``) on two tensors.)doc");
+    detail::bind_binary_op(
+        m_tensor,
+        "logaddexp",
+        logaddexp,
+        R"doc(Perform an eltwise-binary logaddexp (``log(exp({0}) + exp({1}))``) on two tensors.)doc");
+    detail::bind_binary_op(
+        m_tensor,
+        "logaddexp2",
+        logaddexp2,
+        R"doc(Perform an eltwise-binary logaddexp2 (``log2(2^({0}) + 2^({1}))``) on two tensors for input range [-64,64].)doc");
+    detail::bind_binary_op(
+        m_tensor,
+        "logical_or",
+        logical_or,
+        R"doc(Perform an eltwise-binary logical OR (``{0} || {1}``) on two tensors.)doc");
+
+    // *** eltwise unary ***
+    detail::bind_unary_op(
+        m_tensor, "identity", identity, R"doc(Returns a copy of same tensor ``input``; useful for profiling the SFPU.
+>>>>>>> #8681: Update floor with improved version
         this shouldn't normally be used; users should normally use clone operation instead for same functionality as this would be lower performance.
         )doc");
-        detail::bind_unary_op(m_tensor, "identity_uint32", identity_uint32, R"doc(Returns a copy of same tensor ``input``; useful for profiling the SFPU.
+    detail::bind_unary_op(
+        m_tensor,
+        "identity_uint32",
+        identity_uint32,
+        R"doc(Returns a copy of same tensor ``input``; useful for profiling the SFPU.
         this shouldn't normally be used; users should normally use clone operation instead for same functionality as this would be lower performance.
         Use this version of identity only if input is in uint32 format
         )doc");
@@ -150,31 +217,37 @@ namespace tt::tt_metal::detail {
             py::arg("upper_limit"),
             R"doc(Returns tensor with the relu max of all of elements of the input tensor ``{0}``. This is equivalent
             to relu_max[x] = relu(min(x, ``{1}``)). It caps off the input to a max value and a min value of 0.)doc",
-            R"doc("max value", "float", "")doc"
+        R"doc("max value", "float", "")doc"
 
-        );
-        detail::bind_unary_op_with_param(
-            m_tensor, "relu_min", relu_min,
-            py::arg("lower_limit"),
-            R"doc(Returns tensor with the relu min of all of elements of the input tensor ``{0}``. This is equivalent
+    );
+    detail::bind_unary_op_with_param(
+        m_tensor,
+        "relu_min",
+        relu_min,
+        py::arg("lower_limit"),
+        R"doc(Returns tensor with the relu min of all of elements of the input tensor ``{0}``. This is equivalent
             to relu_min[x] = max(x, ``{1}``). It moves relu function down to carry out operation at minvalue
             instead of the standard 0.)doc",
-            R"doc("min value", "float", "")doc"
+        R"doc("min value", "float", "")doc"
 
-        );
-        detail::bind_unary_op_with_param(
-            m_tensor, "elu", elu,
-            py::arg("alpha"),
-            R"doc(Returns tensor with the elu activation of all of elements of the input tensor ``{0}`` and scale
+    );
+    detail::bind_unary_op_with_param(
+        m_tensor,
+        "elu",
+        elu,
+        py::arg("alpha"),
+        R"doc(Returns tensor with the elu activation of all of elements of the input tensor ``{0}`` and scale
             factor alpha as ``{1}``. ELU(x) = alpha*(exp(x) - 1) if x < 0 else x.)doc",
-            R"doc("alpha value", "float", "")doc"
-        );
-        detail::bind_unary_op_with_param(
-            m_tensor, "heaviside", heaviside,
-            py::arg("value"),
-            R"doc(Returns tensor with the Heaviside step function of all of elements of the input tensor ``{0}`` and value factor as ``{1}``.
+        R"doc("alpha value", "float", "")doc");
+    detail::bind_unary_op_with_param(
+        m_tensor,
+        "heaviside",
+        heaviside,
+        py::arg("value"),
+        R"doc(Returns tensor with the Heaviside step function of all of elements of the input tensor ``{0}`` and value factor as ``{1}``.
 
             HEAVISIDE(x) = 0 if x < 0 , 1 if x > 0 , else value.)doc",
+<<<<<<< HEAD
             R"doc("value", "float", "")doc"
 
         );
@@ -252,6 +325,91 @@ namespace tt::tt_metal::detail {
 
         m_tensor.def("mul_unary", py::overload_cast<float, const Tensor&, const MemoryConfig&>(&mul_unary),
             py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+=======
+        R"doc("value", "float", "")doc"
+
+    );
+    detail::bind_unary_op_with_param(
+        m_tensor,
+        "unary_ne",
+        unary_ne,
+        py::arg("value"),
+        R"doc(Perform an eltwise-unary not-equal (``{0} != {1}``) on input tensor.)doc",
+        R"doc("value", "float", "")doc"
+
+    );
+    detail::bind_unary_op_with_param(
+        m_tensor,
+        "rdiv",
+        rdiv,
+        py::arg("denominator"),
+        R"doc(Returns tensor  with value ``{1}`` divided by each of respective elements of the input tensor ``{0}``.)doc",
+        R"doc("denominator value which is actually calculated as numerator", "float", ">=0.0")doc");
+    detail::bind_unary_op_with_param(
+        m_tensor,
+        "rsub",
+        rsub,
+        py::arg("value"),
+        R"doc(Returns tensor  with respective elements of the input tensor ``{0}`` subtracted from the ``{1}``.)doc",
+        R"doc("subtrahent value which is actually calculated as minuend", "float")doc");
+    detail::bind_unary_op_with_param(
+        m_tensor,
+        "leaky_relu",
+        leaky_relu,
+        py::arg("slope"),
+        R"doc(Returns tensor with the leaky relu of all of elements of the input tensor ``{0}`` with negative slope as ``{1}``.)doc",
+        R"doc("slope value", "float", "")doc");
+    detail::bind_unary_op_with_param(
+        m_tensor,
+        "prelu",
+        prelu,
+        py::arg("weight"),
+        R"doc(Returns tensor with the prelu of all of elements of the input tensor ``{0}`` with negative slope as ``{1}``.)doc",
+        R"doc("weight value", "float", "")doc");
+    detail::bind_unary_op_with_param(
+        m_tensor,
+        "unary_chain",
+        &unary_chain,
+        py::arg("unary_chain"),
+        R"doc(Returns tensor with the unary op chain applied to all of elements of the input tensor ``{0}``.)doc",
+        R"doc("Unary op chain", "Vector<FusibleActivation>", "At least 1 activation")doc");
+    detail::bind_unary_op_with_param(
+        m_tensor,
+        "unary_gt",
+        unary_gt,
+        py::arg("value"),
+        R"doc(Perform an eltwise-unary greater-than (``{0} > {1}``) on input tensor.)doc",
+        R"doc("value", "float", "")doc");
+    detail::bind_unary_op_with_param(
+        m_tensor,
+        "unary_lt",
+        unary_lt,
+        py::arg("value"),
+        R"doc(Perform an eltwise-unary less-than (``{0} < {1}``) on input tensor.)doc",
+        R"doc("value", "float", "")doc");
+
+    // *** bcast binary tied to unary ***
+    detail::bind_unary_op(
+        m_tensor, "add1", &add1, R"doc(Returns tensor with the addition of one with input tensor ``{0}``.)doc");
+    detail::bind_unary_op(
+        m_tensor,
+        "deg2rad",
+        &deg2rad,
+        R"doc(Returns tensor with the deg2rad conversion of elements of the input tensor ``{0}``.)doc");
+    detail::bind_unary_op(
+        m_tensor,
+        "rad2deg",
+        &rad2deg,
+        R"doc(Returns tensor with the rad2deg conversion of elements of the input tensor ``{0}``.)doc");
+
+    m_tensor.def(
+        "mul_unary",
+        py::overload_cast<float, const Tensor &, const MemoryConfig &>(&mul_unary),
+        py::arg("scalar"),
+        py::arg("input"),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+>>>>>>> #8681: Update floor with improved version
             Perform an eltwise-binary mul on one tensor and one scalar.
 
             Both inputs, the tensor and scalar, must have BFLOAT16 data type.
@@ -267,8 +425,13 @@ namespace tt::tt_metal::detail {
 
         )doc");
 
-        m_tensor.def("div_unary", py::overload_cast<float, const Tensor&, const MemoryConfig&>(&div_unary),
-            py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+    m_tensor.def(
+        "div_unary",
+        py::overload_cast<float, const Tensor &, const MemoryConfig &>(&div_unary),
+        py::arg("scalar"),
+        py::arg("input"),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
             Perform an eltwise-binary div on one tensor and one scalar.
 
             Both inputs, the tensor and scalar, must have BFLOAT16 data type.
@@ -284,8 +447,13 @@ namespace tt::tt_metal::detail {
 
         )doc");
 
-        m_tensor.def("sub_unary", py::overload_cast<float, const Tensor&, const MemoryConfig&>(&sub_unary),
-            py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+    m_tensor.def(
+        "sub_unary",
+        py::overload_cast<float, const Tensor &, const MemoryConfig &>(&sub_unary),
+        py::arg("scalar"),
+        py::arg("input"),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
             Perform an eltwise-binary sub on one tensor and one scalar.
 
             Both inputs, the tensor and scalar, must have BFLOAT16 data type.
@@ -301,8 +469,13 @@ namespace tt::tt_metal::detail {
 
         )doc");
 
-        m_tensor.def("add_unary", py::overload_cast<float, const Tensor&, const MemoryConfig&>(&add_unary),
-            py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+    m_tensor.def(
+        "add_unary",
+        py::overload_cast<float, const Tensor &, const MemoryConfig &>(&add_unary),
+        py::arg("scalar"),
+        py::arg("input"),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
             Perform an eltwise-binary add on one tensor and one scalar.
 
             Both inputs, the tensor and scalar, must have BFLOAT16 data type.
@@ -317,40 +490,55 @@ namespace tt::tt_metal::detail {
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        detail::bind_unary_op_with_param(
-            m_tensor, "sub_unary", py::overload_cast<const Tensor&, float, const MemoryConfig&>(&sub_unary),
-            py::arg("scalar"),
-            R"doc(Perform an eltwise-binary sub on one tensor ``{0}`` and one scalar ``{1}``.)doc",
-            R"doc("Scalar", "float", "")doc"
-        );
-        detail::bind_unary_op_with_param(
-            m_tensor, "mul_unary", py::overload_cast<const Tensor&, float, const MemoryConfig&>(&mul_unary),
-            py::arg("scalar"),
-            R"doc(Perform an eltwise-binary mul on one tensor ``{0}`` and one scalar ``{1}``.)doc",
-            R"doc("Scalar", "float", "")doc"
-        );
-        detail::bind_unary_op_with_param(
-            m_tensor, "div_unary", py::overload_cast<const Tensor&, float, const MemoryConfig&>(&div_unary),
-            py::arg("scalar"),
-            R"doc(Perform an eltwise-binary div on one tensor ``{0}`` and one scalar ``{1}``.)doc",
-            R"doc("Scalar", "float", "")doc"
-        );
-        detail::bind_unary_op_with_param(
-            m_tensor, "add_unary", py::overload_cast<const Tensor&, float, const MemoryConfig&>(&add_unary),
-            py::arg("scalar"),
-            R"doc(Perform an eltwise-binary add on one tensor ``{0}`` and one scalar ``{1}``.)doc",
-            R"doc("Scalar", "float", "")doc"
-        );
+    detail::bind_unary_op_with_param(
+        m_tensor,
+        "sub_unary",
+        py::overload_cast<const Tensor &, float, const MemoryConfig &>(&sub_unary),
+        py::arg("scalar"),
+        R"doc(Perform an eltwise-binary sub on one tensor ``{0}`` and one scalar ``{1}``.)doc",
+        R"doc("Scalar", "float", "")doc");
+    detail::bind_unary_op_with_param(
+        m_tensor,
+        "mul_unary",
+        py::overload_cast<const Tensor &, float, const MemoryConfig &>(&mul_unary),
+        py::arg("scalar"),
+        R"doc(Perform an eltwise-binary mul on one tensor ``{0}`` and one scalar ``{1}``.)doc",
+        R"doc("Scalar", "float", "")doc");
+    detail::bind_unary_op_with_param(
+        m_tensor,
+        "div_unary",
+        py::overload_cast<const Tensor &, float, const MemoryConfig &>(&div_unary),
+        py::arg("scalar"),
+        R"doc(Perform an eltwise-binary div on one tensor ``{0}`` and one scalar ``{1}``.)doc",
+        R"doc("Scalar", "float", "")doc");
+    detail::bind_unary_op_with_param(
+        m_tensor,
+        "add_unary",
+        py::overload_cast<const Tensor &, float, const MemoryConfig &>(&add_unary),
+        py::arg("scalar"),
+        R"doc(Perform an eltwise-binary add on one tensor ``{0}`` and one scalar ``{1}``.)doc",
+        R"doc("Scalar", "float", "")doc");
 
-        // softmax
-        m_tensor.def("softmax", &softmax,
-            py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("compute_kernel_config").noconvert() = std::nullopt,
-            "Performs a softmax operation on the last tensor dimension.");
+    // softmax
+    m_tensor.def(
+        "softmax",
+        &softmax,
+        py::arg("input").noconvert(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        "Performs a softmax operation on the last tensor dimension.");
 
-        // softmax with scale and mask, regular mask has a dim of (batch, 1, 1, seq_len), causal mask has a dim of (batch, 1, seq_len, seq_len)
-        m_tensor.def("scale_mask_softmax", &transformers::scale_mask_softmax,
-        py::arg("input").noconvert(), py::arg("scale"), py::arg("mask").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("is_causal_mask").noconvert() = false, py::arg("compute_kernel_config").noconvert() = std::nullopt,
+    // softmax with scale and mask, regular mask has a dim of (batch, 1, 1, seq_len), causal mask has a dim of (batch,
+    // 1, seq_len, seq_len)
+    m_tensor.def(
+        "scale_mask_softmax",
+        &transformers::scale_mask_softmax,
+        py::arg("input").noconvert(),
+        py::arg("scale"),
+        py::arg("mask").noconvert(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("is_causal_mask").noconvert() = false,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a fused scale->attention_mask->softmax operation.");
-
-    }
 }
+}  // namespace tt::tt_metal::detail
