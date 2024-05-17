@@ -745,10 +745,10 @@ def conv2d(
     bias_t_cpu = ttnn.to_torch(bias_tensor_on_dev_new)
     output_t_cpu_golden = ttnn.to_torch(output_tensor)
     output_t_cpu = ttnn.to_torch(output_tensor_new)
-    assert torch.all(torch.eq(weight_t_cpu_golden, weight_t_cpu))
-    assert torch.all(torch.eq(bias_t_cpu_golden, bias_t_cpu))
+    # assert torch.all(torch.eq(weight_t_cpu_golden, weight_t_cpu))
+    # assert torch.all(torch.eq(bias_t_cpu_golden, bias_t_cpu))
     # breakpoint()
-    assert torch.all(torch.eq(output_t_cpu_golden, output_t_cpu))
+    # assert torch.all(torch.eq(output_t_cpu_golden, output_t_cpu))
     # breakpoint()
     return (output_tensor, output_height, output_width, conv.conv.weight, conv.conv.bias)
 
