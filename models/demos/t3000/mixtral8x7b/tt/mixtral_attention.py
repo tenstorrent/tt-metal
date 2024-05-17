@@ -119,15 +119,8 @@ class TtMixtralAttention(torch.nn.Module):
 
         self.layer_past = [ttnn.to_device(lp, self.device_mesh) for lp in self.layer_past]
 
-        # Scale tensor for q_heads to avoid falling back to host.
-        self.head_dims = ttnn.from_torch(
-            torch.ones(1, self.max_batch_size, 32, self.head_dim) * (self.head_dim**-0.5),
-            device=self.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-        )
-        self.head_dims = ttnn.to_device(self.head_dims, self.device_mesh)
+        self.scale = self.head_dim**-0.5
+
         reduce_mask_torch = torch.zeros(1, 1, self.max_batch_size, self.max_batch_size * 8)
         for i in range(self.max_batch_size):
             reduce_mask_torch[:, :, i, range(i, self.max_batch_size * 8, self.max_batch_size)] = 1
@@ -151,12 +144,14 @@ class TtMixtralAttention(torch.nn.Module):
         xs,
         start_pos,
         current_pos,
+        attn_masks,
         rot_mats,
     ):
         """
         x: (seq_len, 1, batch, hidden_dim)
         start_pos: the length of the KV cache. Same as current token's index.
         current_pos: start_pos % self.sliding_window
+        attn_masks: (seq_len, batch, n_heads, cache_len+seq_len)
         rot_mats: list of rotation matrices for each device
 
         Tensors are postfixed with 4 characters that represent their 4-D shape:
@@ -166,13 +161,13 @@ class TtMixtralAttention(torch.nn.Module):
         P : padded_layer_past_len
         """
         padded_layer_past_len = min(nearest_32(start_pos + 1), self.sliding_window)
-        layer_slice = min((start_pos + 1), self.sliding_window)
 
         x_11BH = xs
         wo = self.wo
         layer_past = self.layer_past
         rot_mat = rot_mats[start_pos]
-        head_dim_1B4D = self.head_dims
+        attn_mask_1B4P = attn_masks
+
         ###
         # QKV matmuls
         ###
@@ -218,7 +213,6 @@ class TtMixtralAttention(torch.nn.Module):
             output_mem_config=k_mem_config,
             compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
         )
-        q_heads_1B4D = ttnn.mul(q_heads_1B4D, head_dim_1B4D)  # Scale q_heads
 
         ###
         # KV update
@@ -234,7 +228,6 @@ class TtMixtralAttention(torch.nn.Module):
         keys_1BPD = ttnn.experimental.tensor.nlp_kv_cache_load_slice(
             keys_1BPD, seq_len_start=0, seq_len_end=padded_layer_past_len
         )
-        values_1BPD = values_1BPD[:, :, :layer_slice, :]
 
         ###
         # Attention
@@ -259,53 +252,35 @@ class TtMixtralAttention(torch.nn.Module):
         )
         q_heads_1B4D.deallocate(True)
         keys_1BDP.deallocate(True)
-        # TODO: remove after making rest of attention sharded
-        attn_1B4P = ttnn.experimental.tensor.sharded_to_interleaved(attn_1B4P, output_mem_config=ttnn.L1_MEMORY_CONFIG)
 
-        # scores slice and softmax
-        attn_1B4P = attn_1B4P[:, :, :, :layer_slice]
-        attn_1B4P = ttnn.softmax(attn_1B4P, dim=-1)  # , memory_config=attn_output_memcfg_post_sm)
+        # Softmax and scaling
+        attn_1B4P = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
+            attn_1B4P,
+            self.scale,
+            attn_mask_1B4P,
+            program_config=self.model_config["ATTN_BATCHED_SOFTMAX_PROGCFG"],
+            is_causal_mask=True,
+        )
+
         # values matmul
+        values_1BPD = ttnn.experimental.tensor.nlp_kv_cache_load_slice(
+            values_1BPD, seq_len_start=0, seq_len_end=padded_layer_past_len
+        )
         attn_output_1B4D = ttnn.matmul(
             attn_1B4P,
             values_1BPD,
             dtype=ttnn.bfloat16,
-            memory_config=self.model_config["QKV_MM_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
             core_grid=self.core_grid_attention,
             compute_kernel_config=self.compute_kernel_attn,
         )
 
-        # TODO: The output of attention should already be sharded like this. Remove after sharded attention bug is fixed
-        shard_spec_32_cores_grid = ttnn.experimental.tensor.CoreRangeSet(
-            {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(7, 3),
-                ),
-            }
-        )
-        QKV_MM_OUTPUT_MEMCFG = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.experimental.tensor.BufferType.L1,
-            ttnn.experimental.tensor.ShardSpec(
-                shard_spec_32_cores_grid,  # Volume must match # of users
-                [
-                    32,  # each core has padded to 32 heads
-                    128,  # head dim
-                ],
-                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
-        )
-        attn_output_1B4D = ttnn.experimental.tensor.interleaved_to_sharded(
-            attn_output_1B4D, sharded_mem_config=QKV_MM_OUTPUT_MEMCFG
-        )
         attn_output_11BH = ttnn.experimental.tensor.nlp_concat_heads_decode(
             attn_output_1B4D,
             num_heads=4,
         )
+        attn_output_1B4D.deallocate(True)
 
-        # TODO: Add sharded matmul for dense and all gather
         attn_output_11BH = ttnn.experimental.tensor.sharded_to_interleaved(
             attn_output_11BH, output_mem_config=ttnn.L1_MEMORY_CONFIG
         )
@@ -326,5 +301,4 @@ class TtMixtralAttention(torch.nn.Module):
 
         # return the sum of the outputs
         dense_outputs_11BH = ttnn.matmul(self.reduce_mask, dense_outputs_11BH)
-
         return dense_outputs_11BH

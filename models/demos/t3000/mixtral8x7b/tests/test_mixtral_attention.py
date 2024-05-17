@@ -56,16 +56,21 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
         pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
         tt_attention_input = pt_attention_input
         start_pos = generation_start_pos + i
-        attention_input = prepare_inputs_ttnn(
+        attention_input, attn_mask = prepare_inputs_ttnn(
             tt_attention_input,
-            tt_model.hidden_size,
+            # tt_model.hidden_size,
+            model_args.dim,
+            start_pos,
+            model_args.sliding_window,
             tt_model.device_mesh,
         )
+
         current_pos = start_pos % model_args.sliding_window
         tt_out = tt_model(
             attention_input,
             start_pos,
             current_pos,
+            attn_mask,
             rot_mat,
         )
         tt_output_torch = (

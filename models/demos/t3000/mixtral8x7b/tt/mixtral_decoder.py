@@ -75,6 +75,7 @@ class TtTransformerBlock(torch.nn.Module):
         xs_1SBH,
         start_pos,
         current_pos,
+        attn_masks,
         rot_mats,
     ) -> ttnn.Tensor:
         """
@@ -90,6 +91,7 @@ class TtTransformerBlock(torch.nn.Module):
             attn_norm_1SBH,
             start_pos,
             current_pos,
+            attn_masks,
             rot_mats,
         )
         hs_1SBH = ttnn.add(xs_1SBH, attn_1SBH)
