@@ -338,7 +338,7 @@ namespace tt::tt_metal::sliding_window {
             // Pad indices for last core if not equal to other cores
             uint32_t indices_length_per_core = sharded_input_top_left_indices[0].size();
             uint32_t indices_length_last_core = sharded_input_top_left_indices.back().size();
-            TT_ASSERT(indices_length_last_core <= indices_length_per_core);
+            TT_ASSERT(indices_length_last_core <= indices_length_per_core, "indices length for last core {} larger than indices length per core {}", indices_length_last_core, indices_length_per_core);
             if (indices_length_per_core - indices_length_last_core > 0) {
                 std::vector<uint16_t> extend_v(indices_length_per_core - indices_length_last_core, 0);
                 sharded_input_top_left_indices.back().insert(sharded_input_top_left_indices.back().end(), extend_v.begin(), extend_v.end());
