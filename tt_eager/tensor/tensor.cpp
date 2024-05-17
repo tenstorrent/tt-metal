@@ -795,38 +795,36 @@ uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->get_
 
 Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
     ZoneScoped;
-    uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
-    auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
-    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
-}
+    if (memory_config.is_sharded()) {
+        TT_ASSERT(memory_config.shard_spec.has_value());
+        TT_ASSERT(memory_config.is_l1());
 
-Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
-    ZoneScoped;
-    TT_ASSERT(memory_config.is_sharded());
-    TT_ASSERT(memory_config.shard_spec.has_value());
-    TT_ASSERT(memory_config.is_l1());
+        auto shard_spec = memory_config.shard_spec.value();
+        auto& shard_shape = shard_spec.shape;
 
-    auto shard_spec = memory_config.shard_spec.value();
-    auto& shard_shape = shard_spec.shape;
+        auto width = shape[-1];
+        auto other_dims = 1;
+        for (int i = 0; i < shape.rank() - 1; i++) {
+            other_dims *= shape[i];
+        }
 
-    auto width = shape[-1];
-    auto other_dims = 1;
-    for (int i = 0; i < shape.rank() - 1; i++) {
-        other_dims *= shape[i];
+        auto element_size = tensor_impl::element_size_bytes_wrapper(data_type);
+        auto page_shape = tensor_impl::get_sharded_page_shape(layout, data_type, shard_spec.shape);
+        std::array<uint32_t,2> tensor2d_size = {other_dims/page_shape[0], width/page_shape[1]};
+        ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
+        uint32_t packed_size_in_bytes;
+
+        packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
+        auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape,
+                                                                data_type, layout, memory_config,
+                                                                std::make_optional<ShardSpecBuffer>(shard_spec_buffer)
+                                                                );
+        return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
+    } else {
+        uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
+        auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
+        return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
     }
-
-    auto element_size = tensor_impl::element_size_bytes_wrapper(data_type);
-    auto page_shape = tensor_impl::get_sharded_page_shape(layout, data_type, shard_spec.shape);
-    std::array<uint32_t,2> tensor2d_size = {other_dims/page_shape[0], width/page_shape[1]};
-    ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
-    uint32_t packed_size_in_bytes;
-
-    packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
-    auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape,
-                                                            data_type, layout, memory_config,
-                                                            std::make_optional<ShardSpecBuffer>(shard_spec_buffer)
-                                                            );
-    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
 }
 
 void* get_raw_host_data_ptr(const Tensor& tensor) {
@@ -903,26 +901,21 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<std::size_t> tra
     }
 }
 
-Tensor allocate_tensor_on_device(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
+Tensor allocate_tensor_on_device(const ttnn::Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
     // Top level wrapper to asynchronously create a device tensor (single device)
     Tensor device_tensor = Tensor({device});
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
     device->push_work(
         [shape, data_type, layout, device, memory_config, device_tensor] () mutable {
-            if (memory_config.is_sharded()) {
-                auto local_tensor = create_sharded_device_tensor(shape, data_type, layout, device, memory_config);
-                device_tensor.populate_buffers_and_metadata(local_tensor);
-            } else {
-                auto local_tensor = create_device_tensor(shape, data_type, layout, device, memory_config);
-                device_tensor.populate_buffers_and_metadata(local_tensor);
-            }
+            auto local_tensor = create_device_tensor(shape.value(), data_type, layout, device, memory_config);
+            device_tensor.populate_buffers_and_metadata(local_tensor);
         }
     );
     device_tensor.tensor_attributes->update_main_thread_ref_count(device, device_tensor_ref_count);
     return device_tensor;
 }
 
-Tensor allocate_tensor_on_device(const Shape& shape, DataType data_type, Layout layout, DeviceMesh *device_mesh, const MemoryConfig& memory_config) {
+Tensor allocate_tensor_on_device(const ttnn::Shape& shape, DataType data_type, Layout layout, DeviceMesh *device_mesh, const MemoryConfig& memory_config) {
     // Top level wrapper to asynchronously create a device tensor (multi-device)
     Tensor device_tensor = Tensor(device_mesh->get_devices());
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
@@ -933,13 +926,8 @@ Tensor allocate_tensor_on_device(const Shape& shape, DataType data_type, Layout 
         auto& worker = workers[worker_index];
         worker->push_work(
             [shape, data_type, layout, worker, memory_config, device_tensor, worker_index] () mutable {
-                if (memory_config.is_sharded()) {
-                    auto local_tensor = create_sharded_device_tensor(shape, data_type, layout, worker, memory_config);
-                    insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
-                } else {
-                    auto local_tensor = create_device_tensor(shape, data_type, layout, worker, memory_config);
-                    insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
-                }
+                auto local_tensor = create_device_tensor(shape.value(), data_type, layout, worker, memory_config);
+                insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
                 if (not worker->id()) {
                     device_tensor.set_shape(ttnn::Shape(shape));
                     device_tensor.set_dtype(data_type);
@@ -983,10 +971,10 @@ void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id) {
                                 std::visit([&host_data] (auto&& b) { host_data = b.begin(); }, host_storage.get_buffer());
                             }
                             EnqueueWriteBuffer(worker->command_queue(cq_id), s.get_buffer(), host_data, false);
-                        } else if constexpr (std::is_same_v<DeviceStorage, StorageType>) {
+                        } else if constexpr (std::is_same_v<MultiDeviceStorage, StorageType>) {
                             auto host_storage = std::get<MultiDeviceHostStorage>(async_safe_tensor.get_storage());
                             std::visit([worker_index, &host_data] (auto&& b) { host_data = b.begin(); }, host_storage.get_buffer(worker_index));
-                            EnqueueWriteBuffer(worker->command_queue(cq_id), s.get_buffer(worker), host_data, false);
+                            EnqueueWriteBuffer(worker->command_queue(cq_id), s.get_buffer_for_device(worker), host_data, false);
                         }
                     }, device_tensor.get_storage());
             }

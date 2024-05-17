@@ -13,7 +13,7 @@ namespace tt_metal {
 
 // TODO: Accept parallelization
 enum class ConvOpParallelizationStrategy {
-    MULTI_CORE = 0, MULTI_CORE_REUSE = 1, MULTI_CORE_REUSE_MCAST = 2, SINGLE_CORE = 3
+    MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, SINGLE_CORE
 };
 
 struct Conv {

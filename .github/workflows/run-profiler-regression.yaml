@@ -18,8 +18,6 @@ jobs:
           {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"]},
           # N300
           {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"]},
-          # N300 2x4
-          {name: "n300-2x4", arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-4", "multi-chip-num-chips-8"]},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}

@@ -91,7 +91,7 @@ std::vector<Tensor> RotaryEmbedding::create_output_tensors(const std::vector<Ten
         }
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;
-        return {create_sharded_device_tensor(
+        return {create_device_tensor(
             output_shape,
             input_tensor.get_dtype(),
             input_tensor.get_layout(),

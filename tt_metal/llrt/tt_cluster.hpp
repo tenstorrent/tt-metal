@@ -29,7 +29,6 @@
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
 using tt_target_dram = std::tuple<int, int, int>;
-using tt::DEVICE;
 using tt::TargetDevice;
 
 enum EthRouterMode : uint32_t {
@@ -186,7 +185,6 @@ class Cluster {
     tt_device &get_driver(chip_id_t device_id) const;
     void get_metal_desc_from_tt_desc(const std::unordered_map<chip_id_t, tt_SocDescriptor> &input, const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks);
     tt_cxy_pair convert_physical_cxy_to_virtual(const tt_cxy_pair &physical_cxy) const;
-    void configure_static_tlbs(chip_id_t mmio_device_id) const;
 
     // Returns map of connected chip ids to active ethernet cores
     std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(

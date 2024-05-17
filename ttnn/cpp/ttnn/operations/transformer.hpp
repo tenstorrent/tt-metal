@@ -206,7 +206,7 @@ struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
             shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;
-            return {create_sharded_device_tensor(
+            return {create_device_tensor(
                 this->compute_output_shapes(input_tensors).at(0),
                 input_tensor.get_dtype(),
                 Layout::TILE,
@@ -260,7 +260,7 @@ struct AttentionSoftmax : public tt::operations::primary::Softmax {
             tt::operations::primary::transformers::SoftmaxDefaultProgramConfig{},
         const std::optional<bool> causal_mask = false,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
-        float head_size = head_size_arg.has_value() ? 1.0f / std::sqrt(head_size_arg.value()) : 1.0f;
+        float head_size = head_size_arg.has_value() ? 1.0f / ::sqrt(head_size_arg.value()) : 1.0f;
         if constexpr (in_place) {
             TT_FATAL(attention_mask.has_value(), "Cannot apply divide by sqrt(head_size) using in-place version!");
         } else {

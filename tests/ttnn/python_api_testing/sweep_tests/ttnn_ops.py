@@ -3207,3 +3207,99 @@ def repeat(
     t1 = ttnn.repeat(t0, ttnn.Shape(shape))
 
     return ttnn_tensor_to_torch(t1)
+
+
+def eltwise_subtract_and_apply_activation(
+    x,
+    y,
+    *args,
+    activation,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    if activation is not None:
+        activations = [activation]
+    else:
+        activations = None
+
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = ttnn.subtract(t0, t1, activations=activations, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def eltwise_subtract_and_apply_activation_(
+    x,
+    y,
+    *args,
+    activation,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    if activation is not None:
+        activations = [activation]
+    else:
+        activations = None
+
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = ttnn.subtract_(t0, t1, activations=activations, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def eltwise_multiply_and_apply_activation(
+    x,
+    y,
+    *args,
+    activation,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    if activation is not None:
+        activations = [activation]
+    else:
+        activations = None
+
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = ttnn.multiply(t0, t1, activations=activations, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)
+
+
+def eltwise_multiply_and_apply_activation_(
+    x,
+    y,
+    *args,
+    activation,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    if activation is not None:
+        activations = [activation]
+    else:
+        activations = None
+
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = ttnn.multiply_(t0, t1, activations=activations, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t2)

@@ -70,7 +70,7 @@ std::vector<Tensor> Downsample::create_output_tensors(const std::vector<Tensor> 
     uint32_t output_shard_width = round_up(output_shape[3], num_cores_width_sliced * TILE_WIDTH) / num_cores_width_sliced;
     auto mem_config = input_tensor.memory_config();
     mem_config.shard_spec =  ShardSpec {input_tensor.shard_spec().value().grid, std::array<uint32_t, 2>{{output_shard_height, output_shard_width}}, input_tensor.shard_spec().value().orientation};
-    return {create_sharded_device_tensor(output_shape, this->output_dtype, Layout::TILE, input_tensor.device(), mem_config)};
+    return {create_device_tensor(output_shape, this->output_dtype, Layout::TILE, input_tensor.device(), mem_config)};
 }
 
 operation::ProgramWithCallbacks Downsample::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -80,7 +80,12 @@ operation::ProgramWithCallbacks Downsample::create_program(const std::vector<Ten
 }
 
 Tensor downsample(const Tensor &input_tensor_a, std::array<uint32_t, 5> downsample_params, std::optional<DataType> output_dtype) {
-    return operation::run_without_autoformat(Downsample{downsample_params, output_dtype.value_or(input_tensor_a.get_dtype())}, {input_tensor_a}).at(0);
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
+    operation::launch_op(
+        [downsample_params, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run_without_autoformat(Downsample{downsample_params, output_dtype.value_or(input_tensors.at(0).get_dtype())}, input_tensors);
+        }, {input_tensor_a}, output_tensors);
+    return output_tensors.at(0);
 }
 
 struct DownsampleReadPatternParams {

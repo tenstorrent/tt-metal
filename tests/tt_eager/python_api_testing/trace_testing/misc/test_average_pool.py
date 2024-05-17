@@ -34,13 +34,24 @@ def shape_padded(shape):
         "BFLOAT16",
     ],
 )
-def test_run_average_pool(act_shape, dtype, device):
+@pytest.mark.parametrize("enable_async", [True, False])
+def test_run_average_pool(act_shape, dtype, device, use_program_cache, enable_async):
+    device.enable_async(enable_async)
+
     batch_size, _, _, channels = act_shape
 
     torch.manual_seed(0)
 
-    trace_captured = False
+    interleaved_mem_config_L1 = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
     trace_loops = 10
+
+    out_shape = [1] * len(act_shape)
+    out_shape[-1] = act_shape[-1]
+    out_shape_padded = shape_padded(out_shape)
 
     act = torch.randn(act_shape, dtype=torch.bfloat16).float()
     ttact = ttl.tensor.Tensor(act, ttl.tensor.DataType.BFLOAT16)
@@ -48,20 +59,32 @@ def test_run_average_pool(act_shape, dtype, device):
     if act_shape != act_shape_padded:
         ttact = ttact.pad_to_tile(0.0)
 
-    for iter in range(trace_loops):
-        ttact = ttact.to(device)
+    ttact_res = ttact.to(device)
 
-        if not trace_captured:
-            ttl.device.BeginTraceCapture(device)
-            out = ttl.tensor.average_pool_2d(ttact)
-            ttl.device.EndTraceCapture(device)
-            trace_captured = True
-            logger.info("Trace captured")
+    def run_ops(ttact_res):
+        return ttl.tensor.average_pool_2d(ttact_res)
+
+    # Compile
+    run_ops(ttact_res)
+    # Trace
+    logger.info("Start Trace capture")
+    tid = ttl.device.BeginTraceCapture(device, 0, 11264)
+    out_res = run_ops(ttact_res)
+    ttl.device.EndTraceCapture(device, 0, tid)
+    logger.info("Trace captured")
+
+    for iter in range(trace_loops):
+        act = torch.randn(act_shape, dtype=torch.bfloat16).float()
+        ttact_updated = ttl.tensor.Tensor(act, ttl.tensor.DataType.BFLOAT16)
+        act_shape_padded = shape_padded(act_shape)
+        if act_shape != act_shape_padded:
+            ttact_updated = ttact_updated.pad_to_tile(0.0)
+        ttl.tensor.write_tensor(ttact_updated, ttact_res)
 
         logger.info(f"Running iteration {iter}")
-        ttl.device.ExecuteLastTrace(device, True)
+        ttl.device.ReplayTrace(device, 0, tid, True)
 
-        out = out.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+        out = out_res.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
         out_shape = [batch_size, 1, 1, channels]
         out_shape_padded = shape_padded(out_shape)
         if out_shape != out_shape_padded:
@@ -76,10 +99,11 @@ def test_run_average_pool(act_shape, dtype, device):
 
         ## test for equivalance
         passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch)
-        print(f"Passing PCC = {passing_pcc}")
-        print(f"Output PCC = {output_pcc}")
+        logger.debug(f"Passing PCC = {passing_pcc}")
+        logger.debug(f"Output PCC = {output_pcc}")
 
         assert passing_pcc
 
     # Done with the trace, can deallocate the buffers now.
-    ttl.device.ReleaseLastTrace(device)
+    ttl.device.ReleaseTrace(device, tid)
+    device.enable_async(False)
