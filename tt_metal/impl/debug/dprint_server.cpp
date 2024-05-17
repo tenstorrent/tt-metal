@@ -569,7 +569,6 @@ void DebugPrintServerContext::DetachDevice(Device* device) {
                     uint32_t wpos = from_dev[0], rpos = from_dev[1];
                     if (rpos < wpos) {
                         outstanding_prints = true;
-                        log_warning("Phys core {} is still waiting!", core.str());
                         break;
                     }
                 }
@@ -584,7 +583,6 @@ void DebugPrintServerContext::DetachDevice(Device* device) {
     device_to_core_range_lock_.lock();
     TT_ASSERT(device_to_core_range_.count(device) > 0, "Device {} not present in DPRINT server but tried removing it!", device->id());
     device_to_core_range_.erase(device);
-    device_to_core_range_lock_.unlock();
     log_info(tt::LogMetal, "DPRINT Server dettached device {}", device->id());
 
     // When detaching a device, disable prints on it.
@@ -597,6 +595,7 @@ void DebugPrintServerContext::DetachDevice(Device* device) {
             }
         }
     }
+    device_to_core_range_lock_.unlock();
 } // DetachDevice
 
 void DebugPrintServerContext::ClearLogFile() {
@@ -892,7 +891,6 @@ void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
         std::map<Device*, vector<CoreCoord>> device_to_core_range_copy;
         device_to_core_range_lock_.lock();
         device_to_core_range_copy = device_to_core_range_;
-        device_to_core_range_lock_.unlock();
 
         // Flag for whether any new print data was found in this round of polling.
         bool new_data_this_iter = false;
@@ -917,6 +915,7 @@ void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
                             // re-throw the exception.
                             if (tt::llrt::OptionsG.get_test_mode_enabled()) {
                                 server_killed_due_to_hang_ = true;
+                                device_to_core_range_lock_.unlock();
                                 return; // Stop the print loop
                             } else {
                                 // Re-throw for instant exit
@@ -935,6 +934,7 @@ void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
 
         // Signal whether the print server is currently processing data.
         new_data_last_iter_ = new_data_this_iter;
+        device_to_core_range_lock_.unlock();
         // Sleep for a few ms if no data was processed.
         if (!new_data_last_iter_)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
