@@ -36,7 +36,11 @@
 #include "dprint_buffer.h"
 #include "status.h"
 
+#if defined(DEBUG_PRINT_ENABLED)
 #define DPRINT DebugPrinter()
+#else
+#define DPRINT if(0) DebugPrinter()
+#endif
 
 #ifdef UCK_CHLKC_UNPACK
 #define DPRINT_UNPACK(x) x
