@@ -10,7 +10,7 @@
 #include <fmt/format.h>
 
 // #include "tensor/tensor.hpp"
-#include "tensor/owned_buffer_functions.hpp"
+#include "tt_eager/tensor/host_buffer/functions.hpp"
 #include "utils.hpp"
 
 namespace tt::tt_metal {

@@ -1339,7 +1339,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
     uint32_t pad_h = (uint32_t) conv_params[4];
     uint32_t pad_w = (uint32_t) conv_params[5];
     SlidingWindowConfig sliding_window_config = SlidingWindowConfig(input_tensor_shape[0], input_tensor_shape[1], input_tensor_shape[2], weight_size_h, weight_size_w, stride_h, stride_w,
-        pad_h, pad_w, 1, 1, parallelization_config.num_cores_nhw, parallel_config.grid);
+        pad_h, pad_w, 1, 1, parallelization_config.num_cores_nhw, parallel_config.grid, true);
 
     // create conv config tensors
     auto pad_metadata = sliding_window::generate_pad_metadata(sliding_window_config);
