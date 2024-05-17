@@ -252,32 +252,42 @@ std::vector<Tensor> exp_bw(const Tensor& grad, const Tensor& input, const Memory
     return operation::decorate_as_composite(__func__, _exp_bw)(grad, input, output_mem_config);
 }
 
-std::vector<Tensor> _addcmul_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& tensor1,
-    const Tensor& tensor2,
-    float value,
-    const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
-    Tensor grad_a = mul_unary(ttnn::multiply(grad, tensor2, std::nullopt, output_mem_config), value, output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    Tensor grad_b = mul_unary(ttnn::multiply(grad, tensor1, std::nullopt, output_mem_config), value, output_mem_config);
-    grad_tensor.emplace_back(grad_b);
 
-    return grad_tensor;
+std::vector<std::optional<Tensor>> _addcmul_bw(const Tensor& grad, const Tensor& input, const Tensor& tensor1, const Tensor& tensor2, float value, const MemoryConfig& output_mem_config, const std::vector<bool> are_required_outputs, std::vector<std::optional<Tensor>> output_tensor) {
+    if(are_required_outputs.at(0)){
+        output_tensor.at(0) = grad;
+    }
+    else
+    {
+        output_tensor.at(0) = std::nullopt;
+    }
+    if(are_required_outputs.at(1)){
+        output_tensor.at(1) = mul_unary(mul(grad, tensor2, std::nullopt, output_mem_config), value, output_mem_config);
+    }
+    else
+    {
+        output_tensor.at(1) = std::nullopt;
+    }
+    if(are_required_outputs.at(2)){
+        output_tensor.at(2) = mul_unary(mul(grad, tensor1, std::nullopt, output_mem_config), value, output_mem_config);
+    }
+    else
+    {
+        output_tensor.at(2) = std::nullopt;
+    }
+
+    return output_tensor;
 }
-std::vector<Tensor> addcmul_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& tensor1,
-    const Tensor& tensor2,
-    float value,
-    const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _addcmul_bw)(
-        grad, input, tensor1, tensor2, value, output_mem_config);
+std::vector<std::optional<Tensor>> addcmul_bw(const Tensor& grad, const Tensor& input, const Tensor& tensor1, const Tensor& tensor2, float value, const MemoryConfig& output_mem_config, const std::vector<bool> are_required_outputs, std::vector<std::optional<Tensor>> output_tensor)
+{
+    return operation::decorate_as_composite(__func__, _addcmul_bw)(grad, input, tensor1, tensor2, value, output_mem_config, are_required_outputs, output_tensor);
 }
+
+    // std::vector<std::optional<Tensor>> grad_tensor;
+    // Tensor opt_tensor_a = output_tensor.value();
+
+    // std::vector<bool> are_required_outputs,
+    // grad_tensor.emplace_back(opt_tensor_a);
 
 std::vector<Tensor> _unary_assign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;

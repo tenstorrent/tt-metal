@@ -193,7 +193,7 @@ namespace tt::tt_metal::detail{
 
 
     m_tensor.def("addcmul_bw", &tt::tt_metal::addcmul_bw,
-            py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("tensor1").noconvert(), py::arg("tensor2").noconvert(), py::arg("value") = 1.0f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("tensor1").noconvert(), py::arg("tensor2").noconvert(), py::arg("value") = 1.0f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("are_required_outputs").noconvert() = std::vector<bool>{true, true, true}, py::arg("output_tensor").noconvert() = std::vector<std::optional<Tensor>>{std::nullopt, std::nullopt, std::nullopt}, R"doc(
             Performs backward operations for multiplication of ``tensor1``, ``tensor2`` and ``value`` tensors with given ``grad``.
 
             Input tensor must have BFLOAT16 data type.
@@ -209,6 +209,8 @@ namespace tt::tt_metal::detail{
                 "tensor2", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "value", "Value", "float", "default to 1.0f", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "are_required_outputs", "Are Required Outputs", "List of bool", "Default value is [True, True, True]", "No"
+                "output_tensor", "Optional Output Tensor", "List of tensor", "Default value is [None, None, None]", "No"
         )doc");
 
     m_tensor.def("unary_assign_bw", &tt::tt_metal::unary_assign_bw,
