@@ -12,19 +12,21 @@ from models.utility_functions import is_grayskull
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
+# @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize(
     "dtype",
-    [ttl.tensor.DataType.FLOAT32],
-    ids=["float32"],
+    [ttl.tensor.DataType.FLOAT32, ttl.tensor.DataType.BFLOAT16],
+    ids=["float32", "bfloat16"],
 )
 @pytest.mark.parametrize(
     "test_func_name, torch_func_name",
     [(ttl.tensor.add, torch.add), (ttl.tensor.sub, torch.sub), (ttl.tensor.mul, torch.mul)],
 )
-def test_run_elt_binary(dtype, test_func_name, torch_func_name, device):
-    shape = [2, 16, 256, 256]
-
+@pytest.mark.parametrize(
+    "shape",
+    [[1, 1, 256, 256]],
+)
+def test_run_elt_binary(dtype, test_func_name, torch_func_name, shape, device):
     torch.manual_seed(10)
 
     mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
@@ -36,6 +38,8 @@ def test_run_elt_binary(dtype, test_func_name, torch_func_name, device):
 
     out_t = test_func_name(in0_t, in1_t)
     out = tt2torch_tensor(out_t)
+    print(f"{torch_func_name(in0, in1)}")
+    print(f"{out}")
 
     passing, output = comp_pcc(out, torch_func_name(in0, in1), 0.9999)
     logger.info(output)
