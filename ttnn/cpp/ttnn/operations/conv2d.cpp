@@ -436,10 +436,10 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             {0, 0, 0, 0},
             0
         );
-        bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, const_cast<Device*>(&device), nullopt);
         bias_tensor_ = ttnn::operations::core::ToLayout::execute(bias_tensor_, Layout::TILE, weights_bias_dtype,{}, (Device *)nullptr);
+        bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, const_cast<Device*>(&device), nullopt);
     }
-    cout << "Done preparing weights" << endl;
+    cout << "Weights Prepared" << endl;
 
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
 }
