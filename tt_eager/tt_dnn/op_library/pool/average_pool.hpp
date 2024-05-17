@@ -13,7 +13,7 @@ namespace tt {
 namespace tt_metal {
 
 enum class PoolType {
-    AVG = 0
+    AVG
 };
 
 Tensor average_pool_2d(const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const std::optional<DataType>& output_dtype = std::nullopt);

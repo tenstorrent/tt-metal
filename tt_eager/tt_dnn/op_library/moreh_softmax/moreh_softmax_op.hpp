@@ -18,18 +18,18 @@ namespace primary {
 using namespace tt_metal;
 
 enum class MorehSoftmaxOpParallelizationStrategy {
-    NONE = 0,
-    SMALL_W = 1,
-    SMALL_H = 2,
-    LARGE_W = 3,
-    LARGE_H = 4,
-    LARGE_C = 5,
+    NONE,
+    SMALL_W,
+    SMALL_H,
+    LARGE_W,
+    LARGE_H,
+    LARGE_C,
 };
 
 enum class MorehSoftmaxOp {
-    SOFTMAX = 0,
-    SOFTMIN = 1,
-    LOGSOFTMAX = 2,
+    SOFTMAX,
+    SOFTMIN,
+    LOGSOFTMAX,
 };
 
 bool is_moreh_softmax_w_small_available(const Tensor &tensor);

@@ -11,7 +11,7 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class RepeatOpParallelizationStrategy { SINGLE_CORE = 0, MULTI_CORE = 1 };
+enum class RepeatOpParallelizationStrategy { SINGLE_CORE, MULTI_CORE };
 
 struct Repeat {
     const uint32_t repeat_dim;
