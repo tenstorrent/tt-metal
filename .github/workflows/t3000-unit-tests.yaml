@@ -6,7 +6,12 @@ on:
     - cron: "0 */3 * * *" # This cron schedule runs the workflow every 3 hours
 
 jobs:
+  build-docker-artifact:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
   build-artifact:
+    needs: build-docker-artifact
     uses: ./.github/workflows/build-artifact.yaml
     with:
       arch: '["wormhole_b0"]'
@@ -41,11 +46,11 @@ jobs:
           name: TTMetal_build_${{ matrix.test-group.arch }}
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
+      - uses: ./.github/actions/load-docker-image
       - name: Run unit regression tests
         shell: bash {0}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
+        run: |              
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME

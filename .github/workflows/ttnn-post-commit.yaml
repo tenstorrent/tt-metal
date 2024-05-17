@@ -24,7 +24,7 @@ jobs:
           - name: ttnn group 2
             cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 2 --group 2 -m "not disable_fast_runtime_mode" && ./tests/scripts/run_ttnn_examples.sh
           - name: ttnn group 3
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
+            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv -m "requires_fast_runtime_mode_off"
             fast_runtime_mode_off: true
           - name: ttnn cpp tests
             cmd: ./build/test/ttnn/unit_tests_ttnn
@@ -54,11 +54,23 @@ jobs:
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: 45
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ${{ matrix.test-group.cmd }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_username: ${{ github.actor }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e CONFIG=${{ env.CONFIG }} 
+            -e ARCH_NAME=${{ matrix.runner-info.arch }}
+            -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
+            -e LD_LIBRARY_PATH=${{ env.LD_LIBRARY_PATH }}
+            -e TT_METAL_ENV=${{ env.TT_METAL_ENV }}
+            --device /dev/tenstorrent
+            -v /dev/hugepages-1G:/dev/hugepages-1G
+          run_args: |
+            source ${{ github.workspace }}/python_env/bin/activate 
+            cd $TT_METAL_HOME
+            export PYTHONPATH=$TT_METAL_HOME
+            ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:

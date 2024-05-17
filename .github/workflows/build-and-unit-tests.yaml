@@ -36,12 +36,14 @@ jobs:
           name: TTMetal_build_${{ matrix.runner-info.arch }}
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
+      # - uses: ./.github/actions/install-python-deps
+      - uses: ./.github/actions/load-docker-image
       - name: Run pre/post regression tests
         timeout-minutes: 15
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode slow
+          ./scripts/docker/run_docker_cmd.sh \
+            -e TT_METAL_SLOW_DISPATCH_MODE=1 -- \
+            ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode slow
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
