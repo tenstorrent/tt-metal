@@ -114,14 +114,16 @@ def test_mixtral_model_inference(
         start_pos = generation_start_pos + i
         current_pos = start_pos % model_args.sliding_window
 
-        decode_input = prepare_inputs_ttnn(
+        decode_input, attn_mask = prepare_inputs_ttnn(
             tt_decode_input,
             model_args.dim,
+            start_pos,
+            model_args.sliding_window,
             tt_model.device_mesh,
         )
 
         # Run TT model
-        tt_out = tt_model(decode_input, start_pos, current_pos, rot_mat)
+        tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask, rot_mat)
 
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
