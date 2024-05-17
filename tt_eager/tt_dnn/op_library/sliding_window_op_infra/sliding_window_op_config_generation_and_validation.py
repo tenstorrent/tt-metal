@@ -26,7 +26,7 @@ def generate_sliding_window_op_sharded_input_top_left_indices(
             for index in data_top_left_indices[conv_output_shard_start : conv_output_shard_end + 1]
         ]
         conv_sharded_input_top_left_indices.append(local_top_left_indices)
-
+    # breakpoint()
     if pad_tile:
         # Pad indices for last core if not equal to other cores
         for i in range(len(conv_sharded_input_top_left_indices)):
@@ -34,14 +34,14 @@ def generate_sliding_window_op_sharded_input_top_left_indices(
             extend = len(conv_sharded_input_top_left_indices[i]) % tile_size
             if extend != 0:
                 conv_sharded_input_top_left_indices[i].extend([0] * (tile_size - extend))
-
+    # breakpoint()
     if pad_last_core:
         # Pad indices for last core if not equal to other cores
         indices_length_per_core = len(conv_sharded_input_top_left_indices[0])
         conv_sharded_input_top_left_indices[-1].extend(
             [0] * (indices_length_per_core - len(conv_sharded_input_top_left_indices[-1]))
         )
-
+    # breakpoint()
     return conv_sharded_input_top_left_indices
 
 

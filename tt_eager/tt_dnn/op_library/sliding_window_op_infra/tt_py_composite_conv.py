@@ -547,6 +547,7 @@ class TTPyCompositeConv(TTPyOp):
             )
             assert sliding_window_op_params_hash in reader_patterns_cache["conv"]
             conv_reader_indices = reader_patterns_cache["conv"][sliding_window_op_params_hash]
+            self.sliding_window_op_params_hash = sliding_window_op_params_hash
 
         self.set_op_weights_biases(
             weight,
@@ -673,6 +674,7 @@ class TTPyCompositeConv(TTPyOp):
             conv_reader_indices_torch_tensor = torch.tensor(
                 [[sliding_window_op_sharded_input_top_left_indices]], dtype=indices_torch_dtype
             )
+            breakpoint()
 
             conv_reader_indices_tt_tensor = ttl.tensor.Tensor(
                 conv_reader_indices_torch_tensor,
@@ -882,8 +884,8 @@ class TTPyCompositeConv(TTPyOp):
                 self.conv = composite_conv
 
     def __call__(self, activation):
-        # breakpoint()
-        # return self.reader_patterns_cache["halo"]["local_config"]
+        breakpoint()
+        return self.reader_patterns_cache["conv"][self.sliding_window_op_params_hash]
         # print("Going to run conv with input shape-", self.input_tensor_shape)
         # print("with output shape = ", self.conv_output_shape)
         if self.enable_auto_formatting and not activation.is_sharded():

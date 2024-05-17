@@ -579,18 +579,29 @@ inline std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<
         // call halo op
         SlidingWindowConfig sliding_window_config = SlidingWindowConfig(batch_size, input_height, input_width, kernel_size[0], kernel_size[1], stride[0], stride[1], padding[0], padding[1], dilation[0], dilation[1], opt_conv_op_parallel_config.num_cores_nhw, input_tensor_post_tm.memory_config().shard_spec.value().grid, true);
         auto halo_output = ttnn::operations::halo::halo_op(input_tensor_post_tm, sliding_window_config, 0, false, parallel_config.shard_orientation == ShardOrientation::COL_MAJOR, 0, input_tensor_post_tm.memory_config());
+        //return {halo_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        bool is_block_sharded = parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED;
+         // create conv config tensors
+        auto pad_metadata = sliding_window::generate_pad_metadata(sliding_window_config);
+        auto op_trace_metadata = sliding_window::generate_op_trace_metadata(sliding_window_config);
+        auto shard_boundaries = sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
+        auto conv_sharded_input_top_left_indices = sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, true, true);
+        auto conv_reader_indices_tensor = sliding_window::construct_on_host_config_tensor(conv_sharded_input_top_left_indices, sliding_window_config, parallel_config);
+        conv_reader_indices_tensor = sliding_window::move_config_tensor_to_device(conv_reader_indices_tensor, parallel_config, is_block_sharded, &device);
+        return {conv_reader_indices_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
         if (conv_config.deallocate_activation) {
             //input_tensor_post_tm.deallocate();
         }
         if (conv_config.reallocate_halo_output) {
-            halo_output = ttnn::operations::core::reallocate(halo_output, halo_output.memory_config());
+            //halo_output = ttnn::operations::core::reallocate(halo_output, halo_output.memory_config());
         }
         // call conv micro op
         std::vector<int> conv_params = {(int) kernel_size[0], (int) kernel_size[1], (int) stride[0], (int) stride[1], (int) padding[0], (int) padding[1]};
         auto conv_output = tt::tt_metal::optimized_conv_new(halo_output, weight_tensor_on_device, bias_tensor_on_device, conv_params, out_channels, conv_config.output_layout == Layout::ROW_MAJOR, conv_config.activation == "relu", conv_config.math_fidelity,
             opt_conv_op_parallel_config, opt_conv_op_block_config, 0, conv_out_memory_config, conv_config.dtype, {batch_size, input_height, input_width, in_channels}, conv_config.input_channels_alignment == 16, compute_kernel_config);
+       return {halo_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
        //halo_output.deallocate();
-        return {halo_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+
     } else {
         // run conv as matmul
         // TODO add support for running downsample here for stride 2

@@ -330,6 +330,7 @@ namespace tt::tt_metal::sliding_window {
             }
             sharded_input_top_left_indices.push_back(local_top_left_indices);
         }
+        cout << "size here " <<sharded_input_top_left_indices[0].size() << endl;
         if (pad_tile) {
             // Pad indices to tile-multiple
             for(size_t i = 0; i < sharded_input_top_left_indices.size(); i++) {
@@ -340,6 +341,7 @@ namespace tt::tt_metal::sliding_window {
                 }
             }
         }
+        cout << "size here " <<sharded_input_top_left_indices[0].size() << endl;
         if (pad_last_core) {
             // Pad indices for last core if not equal to other cores
             uint32_t indices_length_per_core = sharded_input_top_left_indices[0].size();
@@ -351,6 +353,7 @@ namespace tt::tt_metal::sliding_window {
             }
 
         }
+        cout << "size here " <<sharded_input_top_left_indices[0].size() << endl;
         return sharded_input_top_left_indices;
     }
 
