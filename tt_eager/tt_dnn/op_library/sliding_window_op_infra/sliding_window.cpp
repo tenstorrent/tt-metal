@@ -325,7 +325,7 @@ namespace tt::tt_metal::sliding_window {
             TT_ASSERT(output_shard_start < op_trace_metadata.size());
             TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
             std::vector<uint16_t> local_top_left_indices;
-            for(size_t i = output_shard_start; i < output_shard_end; i++) {
+            for(size_t i = output_shard_start; i < output_shard_end + 1; i++) {
                 local_top_left_indices.push_back(op_trace_metadata[i] - op_trace_metadata[output_shard_start]);
             }
             sharded_input_top_left_indices.push_back(local_top_left_indices);
