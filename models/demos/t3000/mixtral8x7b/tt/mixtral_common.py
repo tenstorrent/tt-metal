@@ -81,7 +81,7 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, sliding_window, device_
     current = current_pos % sliding_window
     n_local_heads = 4  # model_args.n_heads // 8 # num_devices TODO pass the arguments instead of hard coding
 
-    attn_mask = torch.zeros(seq_len, batch, 4, padded_layer_past_len)  # [SB4P]
+    attn_mask = torch.zeros(seq_len, 32, 32, padded_layer_past_len)  # [SB4P]
 
     # Fill mask with -inf outside the processed tokens
     if current_pos < sliding_window:
@@ -96,12 +96,21 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, sliding_window, device_
     attn_mask = ttnn.from_torch(
         attn_mask,
         device=device_mesh,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
     )
     attn_mask = ttnn.to_device(attn_mask, device_mesh)
+    ATTN_MASK_MEMCFG = ttnn.create_sharded_memory_config(
+        shape=(32, padded_layer_past_len),
+        core_grid=ttnn.CoreGrid(y=4, x=8),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    attn_mask = ttnn.experimental.tensor.interleaved_to_sharded(attn_mask, sharded_mem_config=ATTN_MASK_MEMCFG)
 
     return xs_1SBH, attn_mask
 
