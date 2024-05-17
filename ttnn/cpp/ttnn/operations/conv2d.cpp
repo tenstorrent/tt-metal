@@ -226,7 +226,9 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(cons
         TT_ASSERT(act_block_h_override % 32 == 0, "Config Error: act_block_h_override must be a multiple of 32 (tile height).");
     }
     auto grid_size = parallel_config.grid.bounding_box().grid_size();
+    cout << "act_block_h_override = " << act_block_h_override << endl;
     uint32_t act_block_h_ntiles = act_block_h_override > 0 ? act_block_h_override / 32 : conv_op_parallel_config.per_core_out_matrix_height_ntiles;
+    cout << "act_block_h_ntiles=" << act_block_h_ntiles << endl;
     uint32_t act_block_w = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? round_up(padded_in_channels * window_w, 32) : padded_in_channels;
     TT_ASSERT(act_block_w % 32 == 0);
     uint32_t act_block_w_ntiles = act_block_w / 32;
@@ -234,12 +236,12 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(cons
     uint32_t out_block_h_ntiles = conv_op_parallel_config.per_core_out_matrix_height_ntiles;
     uint32_t weight_block_w_ntiles = conv_op_parallel_config.per_core_out_matrix_width_ntiles;
     auto [out_subblock_h_ntiles, out_subblock_w_ntiles] = determine_largest_subblock_size(act_block_h_ntiles, weight_block_w_ntiles, fp32_accum);
-    if (use_shallow_conv_variant && (act_block_h_ntiles / out_subblock_h_ntiles % 2 != 0)) {
+    if (use_shallow_conv_variant && ((act_block_h_ntiles / out_subblock_h_ntiles) % 2 != 0)) {
         TT_ASSERT(parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED);
         // TODO: do a proper fix and remove this temporary hack for shallow conv
         TT_ASSERT(act_block_h_ntiles % 2 == 0);
         out_subblock_h_ntiles = act_block_h_ntiles / 2;
-        TT_ASSERT(out_subblock_h_ntiles * out_subblock_w_ntiles <= 8);
+        TT_ASSERT((out_subblock_h_ntiles * out_subblock_w_ntiles) <= 8);
     }
     return {
         .act_block_h_ntiles=act_block_h_ntiles,

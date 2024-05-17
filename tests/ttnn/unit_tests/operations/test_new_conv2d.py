@@ -53,6 +53,8 @@ def run_conv(
     fp32_accum=False,
     packer_l1_acc=False,
     output_layout=ttnn.TILE_LAYOUT,
+    deallocate_activation=False,
+    debug=False,
 ):
     # has_bias = False
     has_bias = True
@@ -98,6 +100,7 @@ def run_conv(
         activation=None,
         height_sharding=use_1d_systolic_array,
         input_channels_alignment=(16 if use_shallow_conv_variant else 32),
+        deallocate_activation=deallocate_activation,
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h = config_override["act_block_h"]
@@ -119,6 +122,7 @@ def run_conv(
         conv_config=conv_config,
         conv_op_cache=reader_patterns_cache,
         reshard_if_not_optimal=False,
+        debug=debug,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -367,6 +371,7 @@ def test_resnet50_conv_gs(
         config_override=None,
         use_shallow_conv_variant=input_channels == 16,
         padded_input_channels=16 if input_channels == 16 else None,
+        debug=not (batch_size == 20 and input_height == 115),
     )
 
 
