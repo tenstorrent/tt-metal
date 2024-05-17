@@ -157,6 +157,15 @@ class TtModelArgs:
             use_height_and_width_as_shard_shape=True,
         )
 
+        self.model_config[
+            "ATTN_BATCHED_SOFTMAX_PROGCFG"
+        ] = ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(8, 4),  # In-place softmax on 32 cores sharded on batch dim
+            subblock_w=1,
+            block_h=1,  # Shard_height // 32,
+            block_w=1,  # Dynamic
+        )
+
         self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
             shape=(32, 128),
             core_grid=ttnn.CoreGrid(y=4, x=8),
