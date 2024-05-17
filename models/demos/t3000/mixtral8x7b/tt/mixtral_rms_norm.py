@@ -95,4 +95,6 @@ class TtRMSNormSharded(torch.nn.Module):
         )
         if out_sharded:
             return x
-        return ttnn.experimental.tensor.sharded_to_interleaved(x)
+        x_interleaved = ttnn.experimental.tensor.sharded_to_interleaved(x)
+        x.deallocate(True)
+        return x_interleaved

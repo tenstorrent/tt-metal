@@ -84,7 +84,7 @@ def prepare_rotation_mat_ttnn(head_dim, max_seq_len, device_mesh):
     rot_mat = get_rotation_mat(dhead=head_dim, end=max_seq_len * 2)
     rot_mats = [
         ttnn.from_torch(
-            rot_mat_i,
+            rot_mat_i.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
             device=device_mesh,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
