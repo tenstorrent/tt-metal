@@ -34,6 +34,14 @@ function run_docker_common {
         fi
     done
 
+    # Check if /dev/tenstorrent exists and add it to the docker run command if it does
+    local tt_device=""
+    if [[ -e /dev/tenstorrent ]]; then
+        tt_device="--device /dev/tenstorrent"
+    fi
+
+
+
     docker run \
         --rm \
         -v ${TT_METAL_HOME}:/${TT_METAL_HOME} \
@@ -42,6 +50,7 @@ function run_docker_common {
         -v /etc/group:/etc/group:ro \
         -v /etc/passwd:/etc/passwd:ro \
         -v /etc/shadow:/etc/shadow:ro \
+        -v /mnt/MLPerf:/mnt/MLPerf \
         -w ${TT_METAL_HOME} \
         -e TT_METAL_HOME=${TT_METAL_HOME} \
         -e LOGURU_LEVEL=${LOGURU_LEVEL} \
@@ -50,9 +59,11 @@ function run_docker_common {
         -e PYTHONPATH=${TT_METAL_HOME} \
         -e XDG_CACHE_HOME=${TT_METAL_HOME}/.pipcache \
         -e SILENT=${SILENT} \
-		-e VERBOSE=${VERBOSE} \
+		    -e VERBOSE=${VERBOSE} \
         -u ${UID}:${GID} \
+        ${tt_device} \
         --net host \
+        --privileged \
         "${docker_opts[@]}" \
         ${TT_METAL_DOCKER_IMAGE_TAG} \
         "${cmd[@]}"
