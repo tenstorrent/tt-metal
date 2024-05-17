@@ -283,7 +283,7 @@ struct operation_without_validation_t {
     template <typename... args_t>
     static auto input_tensors_to_validate(args_t&&... args) {
         return std::make_tuple();
-    };
+    }
 
     template <typename... args_t>
     static auto execute_async(args_t&&... args) {
