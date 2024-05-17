@@ -1,6 +1,10 @@
 #!/bin/bash
 set -eo pipefail
 
+if [ -z "$PYTHON_ENV_DIR" ]; then
+    PYTHON_ENV_DIR=$(pwd)/python_env
+fi
+
 if [ -z "$CONFIG" ]; then
     echo "Build type defaulted to Release"
 else
@@ -23,6 +27,7 @@ if [ "$CONFIG" != "ci" ]; then
     echo "Building cpp tests"
     cmake --build build --target tests -- -j`nproc`
 
+    source $PYTHON_ENV_DIR/bin/activate
     echo "Generating stubs"
     stubgen -m tt_lib -m tt_lib.device -m tt_lib.profiler -m tt_lib.tensor -m tt_lib.operations -m tt_lib.operations.primary -m tt_lib.operations.primary.transformers -o tt_eager
     stubgen -p ttnn._ttnn -o ttnn
