@@ -47,16 +47,21 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         CoreCoord core = {0, 0};
         int num_devices = tt::tt_metal::GetNumAvailableDevices();
-        std::vector<Device*> devices;
+        std::vector<int> ids;
+        for (unsigned int id = 0; id < num_devices; id++) {
+            ids.push_back(id);
+        }
+        tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE);
+        std::vector<Device*> devices = tt::DevicePool::instance().get_all_active_devices();
         std::vector<Program> programs;
         std::set<uint32_t> build_keys;
         // kernel->binaries() returns 32B aligned binaries
         std::map<uint32_t, std::vector<ll_api::memory>> compute_binaries;
         std::map<uint32_t, std::vector<ll_api::memory>> brisc_binaries;
         std::map<uint32_t, std::vector<ll_api::memory>> ncrisc_binaries;
+
         for (int i = 0; i < num_devices; i++) {
-            auto* device = tt_metal::CreateDevice(i);
-            devices.emplace_back(device);
+            auto device = devices[i];
             build_keys.insert(device->build_key());
 
             ////////////////////////////////////////////////////////////////////////////

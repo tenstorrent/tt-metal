@@ -27,10 +27,10 @@ void DeviceModule(py::module &m_device) {
         .value("GRAYSKULL", tt::ARCH::GRAYSKULL)
         .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0);
 
-    auto pyDevice = py::class_<Device>(m_device, "Device", "Class describing a Tenstorrent accelerator device.");
+    auto pyDevice = py::class_<Device, std::unique_ptr<Device, py::nodelete>>(m_device, "Device", "Class describing a Tenstorrent accelerator device.");
     pyDevice
         .def(
-            py::init<>([](int device_id, size_t l1_small_size) { return Device(device_id, 1, l1_small_size); }),
+            py::init<>([](int device_id, size_t l1_small_size) { return CreateDevice(device_id, 1, l1_small_size); }),
             "Create device.",
             py::arg("device_id"),
             py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE)
