@@ -25,6 +25,9 @@ struct Halo {
     uint32_t reshard_num_cores_nhw_;
     uint32_t max_out_nsticks_per_core_;
     MemoryConfig output_memory_config_;
+    Tensor pad_config_tensor_;
+    Tensor local_config_tensor_;
+    Tensor remote_config_tensor_;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
