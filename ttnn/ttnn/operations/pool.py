@@ -6,12 +6,17 @@ from typing import Tuple, Union, Dict
 
 import tt_lib as ttl
 
+import sys
 import ttnn
 
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import (
     TTPyMaxPool,
     SlidingWindowOpParams,
 )
+
+THIS_MODULE = sys.modules[__name__]
+
+__all__ = []
 
 
 class MaxPool2d:
@@ -117,7 +122,7 @@ class MaxPool2d:
 ## Average Pooling
 
 
-def _torch_global_avg_pool2d(input_tensor: ttnn.Tensor):
+def _golden_function(input_tensor: ttnn.Tensor):
     import torch
 
     input_tensor = ttnn.from_device(input_tensor)
@@ -128,32 +133,8 @@ def _torch_global_avg_pool2d(input_tensor: ttnn.Tensor):
     return torch.nn.functional.global_avg_pool2d(input_tensor, output_size)
 
 
-def _global_avg_pool2d_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(4,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-
-
-@ttnn.register_operation(
-    name="ttnn.global_avg_pool2d",
-    validate_input_tensors=_global_avg_pool2d_validate_input_tensors,
-    golden_function=_torch_global_avg_pool2d,
+global_avg_pool2d = ttnn.register_operation(golden_function=_golden_function)(
+    ttnn._ttnn.operations.pool.global_avg_pool2d
 )
-def global_avg_pool2d(input_tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig = None) -> ttnn.Tensor:
-    r"""
-    Applies a 2D adaptive average pooling over an input signal composed of several input planes.
 
-    Arguments:
-        * :attr: input_tensor: the input tensor
-    """
-    if memory_config is None:
-        output = ttl.tensor.average_pool_2d(input_tensor)
-    else:
-        output = ttl.tensor.average_pool_2d(input_tensor, memory_config)
-    return output
+__all__ = []

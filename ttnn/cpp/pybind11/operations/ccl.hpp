@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "../decorators.hpp"
+#include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/ccl.hpp"
 #include "ttnn/types.hpp"
 
