@@ -822,7 +822,8 @@ Tensor _addcdiv(
     const Tensor& input_b,
     const Tensor& input_c,
     float value,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor) {
     Tensor t_value = mk_tiled_scalar(value);
     Tensor t_div = mul(input_b, recip(input_c, output_mem_config), std::nullopt, output_mem_config);
     Tensor t_factor = bcast(t_div, t_value, BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
@@ -831,19 +832,38 @@ Tensor _addcdiv(
     Tensor result = add(input_a, t_factor, std::nullopt, output_mem_config);
     Tensor t_inf = full_like(input_a, std::numeric_limits<float>::infinity(), output_mem_config);
     Tensor t_nan = full_like(input_a, std::nanf(""), output_mem_config);
-    return where(eqz(input_c, output_mem_config),
+
+    if(output_tensor.has_value())
+    {
+        output_tensor = where(eqz(input_c, output_mem_config),
                 ( value == 0 ) ? t_nan : where(eqz(input_b, output_mem_config),
                                             t_nan ,
                                             mul(t_inf, sign(input_b, output_mem_config), std::nullopt, output_mem_config), output_mem_config) ,
                 result, output_mem_config);
+        return output_tensor.value();
+    }
+    else{
+        return where(eqz(input_c, output_mem_config),
+                ( value == 0 ) ? t_nan : where(eqz(input_b, output_mem_config),
+                                            t_nan ,
+                                            mul(t_inf, sign(input_b, output_mem_config), std::nullopt, output_mem_config), output_mem_config) ,
+                result, output_mem_config);
+    }
 }
 Tensor addcdiv(
     const Tensor& input_a,
     const Tensor& input_b,
     const Tensor& input_c,
     float value,
-    const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _addcdiv)(input_a, input_b, input_c, value, output_mem_config);
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    if(output_tensor.has_value())
+    {
+        return operation::decorate_as_composite(__func__, _addcdiv)(input_a, input_b, input_c, value, output_mem_config, output_tensor);
+    }
+    else{
+        return operation::decorate_as_composite(__func__, _addcdiv)(input_a, input_b, input_c, value, output_mem_config, std::nullopt);
+    }
 }
 
 Tensor _div(
