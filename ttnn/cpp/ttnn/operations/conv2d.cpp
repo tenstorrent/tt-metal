@@ -234,12 +234,12 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(cons
     uint32_t out_block_h_ntiles = conv_op_parallel_config.per_core_out_matrix_height_ntiles;
     uint32_t weight_block_w_ntiles = conv_op_parallel_config.per_core_out_matrix_width_ntiles;
     auto [out_subblock_h_ntiles, out_subblock_w_ntiles] = determine_largest_subblock_size(act_block_h_ntiles, weight_block_w_ntiles, fp32_accum);
-    if (use_shallow_conv_variant && (act_block_h_ntiles / out_subblock_h_ntiles % 2 != 0)) {
+    if (use_shallow_conv_variant && ((act_block_h_ntiles / out_subblock_h_ntiles) % 2 != 0)) {
         TT_ASSERT(parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED);
         // TODO: do a proper fix and remove this temporary hack for shallow conv
         TT_ASSERT(act_block_h_ntiles % 2 == 0);
         out_subblock_h_ntiles = act_block_h_ntiles / 2;
-        TT_ASSERT(out_subblock_h_ntiles * out_subblock_w_ntiles <= 8);
+        TT_ASSERT((out_subblock_h_ntiles * out_subblock_w_ntiles) <= 8);
     }
     return {
         .act_block_h_ntiles=act_block_h_ntiles,
@@ -436,12 +436,12 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             {0, 0, 0, 0},
             0
         );
+        bias_tensor_ = ttnn::operations::core::ToLayout::execute(bias_tensor_, Layout::TILE, {}, {}, (Device *)nullptr);
         if(bias_tensor_.get_dtype()!=weights_bias_dtype) {
             bias_tensor_ = ttnn::operations::core::ToDtype::execute(bias_tensor_, weights_bias_dtype);
         }
         bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, const_cast<Device*>(&device), nullopt);
     }
-    std::cout<< "Weights Prepared" << endl;
 
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
 }

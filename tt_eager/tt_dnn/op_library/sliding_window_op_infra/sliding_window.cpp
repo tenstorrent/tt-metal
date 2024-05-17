@@ -58,9 +58,11 @@ namespace tt::tt_metal::sliding_window {
             shard_boundaries.push_back({{output_index_start, output_index_end}, {input_index_start, input_index_end}});
             output_index_start += output_shard_h;
         }
+        #if 0
         for (auto [output_shard, input_shard] : shard_boundaries) {
             log_debug(LogOp, "output_shard: ({}, {}), input_shard: ({}, {})", output_shard.first, output_shard.second, input_shard.first, input_shard.second);
         }
+        #endif
         return shard_boundaries;
     }
 
@@ -109,7 +111,6 @@ namespace tt::tt_metal::sliding_window {
         std::map<uint32_pair_t, std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>> per_core_gather_data;
 
         uint32_t num_cores_nhw = shard_boundaries.size();
-        // log_debug(LogOp, "num_cores_nhw: {}", num_cores_nhw);
 
         uint32_t core_id = 0;
         for (auto [output_boundary, input_boundary] : shard_boundaries) {
@@ -119,7 +120,6 @@ namespace tt::tt_metal::sliding_window {
                 uint32_t local_idx = global_idx - input_start;
                 auto [is_pad_stick, src_idx] = tensor_metadata[global_idx];
                 auto [src_core_id, src_local_idx] = src_idx;
-                // log_debug(LogOp,"src_core_id: {}, src_local_idx: {}, dst_core_id: {}, local_idx: {}", src_core_id, src_local_idx, dst_core_id, local_idx);
                 TT_ASSERT(local_idx < pad_local && src_local_idx < pad_local, "Index overflow");
                 if (is_pad_stick) {
                     TT_ASSERT(src_local_idx == 0);
@@ -183,7 +183,6 @@ namespace tt::tt_metal::sliding_window {
                     remote_config[dst_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
                 } else {
                     CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
-                    // log_debug(LogOp, "src_core_id: {}, dst_core_id: {}, noc_xy: ({}, {})", src_core_id, dst_core_id, noc_xy.x, noc_xy.y);
                     remote_config[src_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
                 }
             }
@@ -262,7 +261,6 @@ namespace tt::tt_metal::sliding_window {
                     flat_data[idx++] = nocx;
                     flat_data[idx++] = nocy;
                     flat_data[idx++] = len;
-                    // log_debug(LogOp, "nocx: {}, nocy: {}, len: {}", nocx, nocy, len);
                     for (size_t i = 0; i < key_data.second.size(); ++i) {
                         auto [src_start, dst_start, length] = key_data.second[i];
                         flat_data[idx++] = src_start;
@@ -305,10 +303,6 @@ namespace tt::tt_metal::sliding_window {
         align_config(flattened_pad_config, 2);
         align_config(flattened_local_config, 2);
         align_config(flattened_remote_config, 2);
-
-        log_debug(LogOp, "flattened_pad_config: {}", flattened_pad_config);
-        log_debug(LogOp, "flattened_local_config: {}", flattened_local_config);
-        log_debug(LogOp, "flattened_remote_config: {}", flattened_remote_config);
 
         return std::make_tuple(flattened_pad_config,
                                 flattened_local_config,
@@ -401,7 +395,6 @@ namespace tt::tt_metal::sliding_window {
         auto config_shard_orientation = is_block_sharded ? (p_config.shard_orientation == ShardOrientation::COL_MAJOR ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR) : ShardOrientation::ROW_MAJOR;
         ShardSpec shard_spec(p_config.grid, shard_shape, config_shard_orientation, false);
         MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, shard_spec};
-        log_debug(LogOp, "config_tensor shape: {}, shard shape: {}, orientation: {}", config_tensor.get_shape(), shard_shape, config_shard_orientation);
         return config_tensor.to(device, memory_config);
     }
 
