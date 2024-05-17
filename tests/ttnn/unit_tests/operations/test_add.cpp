@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
-#include "tests/ttnn/unit_tests/ttnn_test_fixtures.hpp"
+#include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/binary.hpp"
 #include "ttnn/operations/core.hpp"
