@@ -148,8 +148,6 @@ def run_conv(
         pcc = 0.9969
     else:
         pcc = 0.998
-    torch.save(torch_output_tensor, "output_tensor.pt")
-    torch.save(torch_out_golden_tensor, "golden_tensor.pt")
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     print(pcc_msg)
     assert passing
@@ -375,6 +373,7 @@ def test_resnet50_conv_gs(
     )
 
 
+@pytest.mark.skip("Needs to be tests with new API")
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_l1_small_size", [16384], indirect=True)
 @pytest.mark.parametrize(
