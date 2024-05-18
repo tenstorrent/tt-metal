@@ -530,6 +530,8 @@ void process_write_packed() {
     cq_noc_async_write_init_state<CQ_NOC_snDL, mcast>(0, dst_addr, xfer_size);
 
     DPRINT << "dispatch_write_packed: " << xfer_size << " " << stride << " " << data_ptr << " " << count << ENDL();
+    uint32_t writes = 0;
+    uint32_t mcasts = 0;
     while (count != 0) {
         uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
         uint32_t num_dests = mcast ?
@@ -548,12 +550,18 @@ void process_write_packed() {
                     orphan_size = cb_fence - data_ptr;
                     if (orphan_size != 0) {
                         cq_noc_async_write_with_state<CQ_NOC_SNdL>(data_ptr, dst, orphan_size, num_dests);
-                        block_noc_writes_to_clear[rd_block_idx]++;
+                        writes++;
+                        mcasts += num_dests;
                     }
                     cb_fence = dispatch_cb_base;
                     data_ptr = dispatch_cb_base;
                 }
 
+                block_noc_writes_to_clear[rd_block_idx] += writes;
+                noc_nonposted_writes_num_issued[noc_index] += writes;
+                noc_nonposted_writes_acked[noc_index] += mcasts;
+                writes = 0;
+                mcasts = 0;
                 move_rd_to_next_block<dispatch_cb_blocks>(block_noc_writes_to_clear,
                                                           rd_block_idx);
             }
@@ -574,7 +582,8 @@ void process_write_packed() {
                 cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, remainder_dst, remainder_xfer_size, num_dests);
                 // Reset values expected below
                 cq_noc_async_write_with_state<CQ_NOC_snDL, CQ_NOC_WAIT, CQ_NOC_send>(0, dst, xfer_size);
-                block_noc_writes_to_clear[rd_block_idx]++;
+                writes++;
+                mcasts += num_dests;
 
                 count--;
                 data_ptr += stride - orphan_size;
@@ -584,12 +593,16 @@ void process_write_packed() {
         }
 
         cq_noc_async_write_with_state<CQ_NOC_SNdl>(data_ptr, dst, xfer_size, num_dests);
-        block_noc_writes_to_clear[rd_block_idx]++;
+        writes++;
+        mcasts += num_dests;
 
         count--;
         data_ptr += stride;
     }
 
+    block_noc_writes_to_clear[rd_block_idx] += writes;
+    noc_nonposted_writes_num_issued[noc_index] += writes;
+    noc_nonposted_writes_acked[noc_index] += mcasts;
     // Release pages for prefetcher
     // packed_write releases pages at the end so the first page (w/ the sub_cmds) remains valid
     cb_block_release_pages<upstream_noc_xy,
