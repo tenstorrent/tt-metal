@@ -38,14 +38,8 @@ enum class BinaryOpType {
     DIV_FAST
 };
 
-enum class BinaryOpParallelizationStrategy { MULTI_CORE, SINGLE_CORE };
+enum class BinaryOpParallelizationStrategy { MULTI_CORE };
 
-operation::ProgramWithCallbacks eltwise_binary_single_core(
-    const Tensor &a,
-    const Tensor &b,
-    const Tensor &output_tensor,
-    BinaryOpType op_type,
-    const std::optional<std::vector<UnaryWithParam>> fused_activations);
 operation::ProgramWithCallbacks eltwise_binary_multi_core(
     const Tensor &a,
     const Tensor &b,

@@ -23,15 +23,13 @@ enum class MatmulParallelizationStrategy {
     MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED,
     MULTI_CORE_REUSE_MCAST_2D_TRANSPOSED_OPTIMIZED,
     MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED,
-    MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED,
-    SINGLE_CORE
+    MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED
 };
 
 
 /*
  * GENERAL MATMUL AND BMM
  */
-operation::ProgramWithCallbacks matmul_single_core  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 operation::ProgramWithCallbacks matmul_multi_core  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 operation::ProgramWithCallbacks matmul_multi_core_reuse  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);

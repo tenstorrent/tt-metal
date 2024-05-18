@@ -56,22 +56,13 @@ operation::ProgramWithCallbacks Copy::create_program(const std::vector<Tensor>& 
 
     switch (Copy::get_parallelization_strategy(input_tensors)){
         case CopyOpParallelizationStrategy::MULTI_CORE:
-            return copy_multi_core(input_tensor, output_tensor);
-        case CopyOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return copy_single_core(input_tensor, output_tensor);
+            return copy_multi_core(input_tensor, output_tensor);
     }
 }
 
 CopyOpParallelizationStrategy Copy::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    uint32_t num_units = input_tensor.get_layout() == Layout::TILE ? input_tensor.volume() / TILE_HW : input_tensor.volume() / input_tensor.get_legacy_shape()[-1];
-    if (num_units > 1) {
-        return CopyOpParallelizationStrategy::MULTI_CORE;
-    }
-    else{
-        return CopyOpParallelizationStrategy::SINGLE_CORE;
-    }
+    return CopyOpParallelizationStrategy::MULTI_CORE;
 }
 
 tt::stl::reflection::Attributes Copy::attributes() const {

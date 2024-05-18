@@ -47,8 +47,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
     uint32_t batch_step = CHtWt - HtWt;
     uint32_t channel_step = NCHtWt - HtWt;
 
-    std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > ret_val;
-    ret_val.reserve(num_cores_total);
+    std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > ret_val(num_cores_total);
 
     for(uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -62,7 +61,9 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
             num_tiles_per_core = 0;
         }
         uint32_t hw = num_tiles_read % HtWt;
-        uint32_t n = num_tiles_read / HtWt % N;
+        uint32_t curr_c = num_tiles_read / HtWt;
+        uint32_t n = curr_c % N;
+        uint32_t start_tile = num_tiles_read + curr_c * batch_step - curr_c / N * channel_step;
 
         std::vector<uint32_t> reader_runtime_args = {
             input_buffer->address(),
@@ -72,7 +73,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
             batch_step,
             channel_step,
             num_tiles_per_core,
-            num_tiles_read,
+            start_tile,
             hw,
             n
         };
@@ -90,7 +91,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
     return ret_val;
 }
 
-operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor &output) {
+operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor &a, Tensor &output) {
 
     TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to transpose_cn needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to transpose_cn needs to be allocated in a buffer on device!");
@@ -139,16 +140,16 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_cn_interleaved_start_id.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
+        total_cores,
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        all_cores,
-        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
+        total_cores,
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    auto all_runtime_args =  std::move(get_runtime_args_mc_cn(a, output, num_cores_total, num_cores, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2));
+    auto all_runtime_args = get_runtime_args_mc_cn(a, output, num_cores_total, num_cores, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2);
 
     for(uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

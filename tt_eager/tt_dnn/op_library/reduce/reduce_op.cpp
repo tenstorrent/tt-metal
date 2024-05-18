@@ -23,17 +23,6 @@ namespace reduce_op_utils {
 
 using namespace tt::tt_metal;
 
-string dim_to_kernel_name(ReduceOpDim reduce_dim, ReduceOpMath reduce_op){
-    string kernel_name;
-    switch(reduce_dim){
-        case ReduceOpDim::H: kernel_name = "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_h.cpp"; break;
-        case ReduceOpDim::W: kernel_name = "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_w.cpp"; break;
-        case ReduceOpDim::HW: kernel_name = "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_hw.cpp"; break;
-        default: TT_FATAL(false && "Undefined dim");
-    }
-    return kernel_name;
-}
-
 std::map<string, string> get_defines(ReduceOpMath reduce_op, ReduceOpDim reduce_dim){
     std::map<string, string> defines;
     // TOOD(AP): need a sync with Reduce::Max from HLK headers
@@ -118,12 +107,14 @@ operation::ProgramWithCallbacks Reduce::create_program(const std::vector<Tensor>
 
     switch (parallelization_strategy){
         case ReduceOpParallelizationStrategy::MULTI_CORE_H:
-            return {reduce_multi_core_h(input_tensor, output_tensor, this->math_op, this->dim, this->scaler)};
+            return reduce_multi_core_h(input_tensor, output_tensor, this->math_op, this->scaler);
         case ReduceOpParallelizationStrategy::MULTI_CORE_W:
-            return {reduce_multi_core_w(input_tensor, output_tensor, this->math_op, this->dim, this->scaler)};
-        case ReduceOpParallelizationStrategy::SINGLE_CORE:
+            return reduce_multi_core_w(input_tensor, output_tensor, this->math_op, this->scaler);
+        case ReduceOpParallelizationStrategy::MULTI_CORE_HW:
+        case ReduceOpParallelizationStrategy::SINGLE_CORE_HW:
+            return reduce_single_core_hw(input_tensor, output_tensor, this->math_op, this->scaler);
         default:
-            return {reduce_single_core(input_tensor, output_tensor, this->math_op, this->dim, this->scaler)};
+            TT_THROW("Unsupported parallelization strategy");
     }
 
 }
@@ -132,18 +123,18 @@ ReduceOpParallelizationStrategy Reduce::get_parallelization_strategy(const std::
     const auto& input_tensor = input_tensors.at(0);
 
     uint32_t num_tiles = input_tensor.volume() / TILE_HW;
-    auto shape = input_tensor.get_legacy_shape();
-    uint32_t Wt = shape[3]/TILE_WIDTH;
-    uint32_t Ht = shape[2]/TILE_HEIGHT;
-    uint32_t NC = shape[1]*shape[0];
-    if((NC * Wt > 1 || (input_tensor.storage_type() == StorageType::DEVICE && input_tensor.is_sharded())) and this->dim == ReduceOpDim::H){
+    if(this->dim == ReduceOpDim::H) {
         return ReduceOpParallelizationStrategy::MULTI_CORE_H;
-    }else if(NC * Ht > 1 and this->dim == ReduceOpDim::W){
+    } else if( this->dim == ReduceOpDim::W) {
         return ReduceOpParallelizationStrategy::MULTI_CORE_W;
-    }else if(num_tiles > 1 and this->dim == ReduceOpDim::HW){
-        return ReduceOpParallelizationStrategy::MULTI_CORE_HW;
-    }else{
-        return ReduceOpParallelizationStrategy::SINGLE_CORE;
+    } else if(this->dim == ReduceOpDim::HW) {
+        if (num_tiles > 1) {
+            return ReduceOpParallelizationStrategy::MULTI_CORE_HW;
+        } else {
+            return ReduceOpParallelizationStrategy::SINGLE_CORE_HW;
+        }
+    }else {
+        TT_THROW("Unsupported reduce dim");
     }
 }
 

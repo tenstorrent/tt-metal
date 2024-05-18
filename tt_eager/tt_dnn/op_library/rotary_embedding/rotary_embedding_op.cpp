@@ -112,22 +112,14 @@ operation::ProgramWithCallbacks RotaryEmbedding::create_program(
 
     switch (this->get_parallelization_strategy(input_tensors)) {
         case RotaryEmbeddingOpParallelizationStrategy::MULTI_CORE:
+        default:
             return rotary_embedding_multi_core(input_tensor, cos, sin, output_tensor, this->token_idx, this->compute_kernel_config);
-            break;
-        case RotaryEmbeddingOpParallelizationStrategy::SINGLE_CORE:
-        default: return rotary_embedding_single_core(input_tensor, cos, sin, output_tensor, this->token_idx, this->compute_kernel_config);
     }
 }
 
 RotaryEmbeddingOpParallelizationStrategy RotaryEmbedding::get_parallelization_strategy(
     const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    uint32_t num_rows = input_tensor.volume() / input_tensor.get_legacy_shape()[-1] / TILE_HEIGHT;
-    if (num_rows > 1 || input_tensor.is_sharded() || this->output_mem_config.is_sharded()) {
-        return RotaryEmbeddingOpParallelizationStrategy::MULTI_CORE;
-    } else {
-        return RotaryEmbeddingOpParallelizationStrategy::SINGLE_CORE;
-    }
+    return RotaryEmbeddingOpParallelizationStrategy::MULTI_CORE;
 }
 
 tt::stl::reflection::Attributes RotaryEmbedding::attributes() const {

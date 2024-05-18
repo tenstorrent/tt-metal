@@ -85,37 +85,18 @@ operation::ProgramWithCallbacks UpdateCache::create_program(const std::vector<Te
 
     switch(this->get_parallelization_strategy(input_tensors)) {
         case UpdateCacheOpParallelizationStrategy::MULTI_CORE:
+        default:
             if (this->op_type == UpdateCacheOpType::FILL) {
                 return fill_cache_multi_core(cache_tensor, input_tensor, this->batch_idx, this->update_idx);
             } else {
                 return update_cache_multi_core(cache_tensor, input_tensor, this->update_idx, this->batch_offset, this->compute_kernel_config);
             }
-        case UpdateCacheOpParallelizationStrategy::SINGLE_CORE:
-        default:
-            if (this->op_type == UpdateCacheOpType::FILL) {
-                return fill_cache_single_core(cache_tensor, input_tensor, this->batch_idx, this->update_idx);
-            } else {
-                return update_cache_single_core(cache_tensor, input_tensor, this->update_idx, this->batch_offset, this->compute_kernel_config);
-            }
     };
-    return {};
 }
 
 
 UpdateCacheOpParallelizationStrategy UpdateCache::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(1);
-    if (this->op_type == UpdateCacheOpType::FILL) {
-        // TODO: Deprecate SINGLE_CORE? Is there a reason to keep it around or can it just be handled by MULTI_CORE version
-        return UpdateCacheOpParallelizationStrategy::MULTI_CORE;
-    } else {
-        uint32_t num_batch_heads = input_tensor.get_legacy_shape()[1] * input_tensor.get_legacy_shape()[-2] / TILE_HEIGHT;
-        if (num_batch_heads > 1 || input_tensor.is_sharded()) {
-            return UpdateCacheOpParallelizationStrategy::MULTI_CORE;
-        }
-        else{
-            return UpdateCacheOpParallelizationStrategy::SINGLE_CORE;
-        }
-    }
+    return UpdateCacheOpParallelizationStrategy::MULTI_CORE;
 }
 
 tt::stl::reflection::Attributes UpdateCache::attributes() const {
