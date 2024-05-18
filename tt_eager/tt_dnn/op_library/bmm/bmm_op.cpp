@@ -286,11 +286,8 @@ MatmulParallelizationStrategy get_parallelization_strategy(const std::vector<Ten
             return MatmulParallelizationStrategy::MULTI_CORE;
         }
     }
-    else if (num_output_tiles > 1) {
-        return MatmulParallelizationStrategy::MULTI_CORE;
-    }
     else {
-        return MatmulParallelizationStrategy::SINGLE_CORE;
+        return MatmulParallelizationStrategy::MULTI_CORE;
     }
 }
 
@@ -654,7 +651,7 @@ void Matmul::validate(
     TT_FATAL((input_tensor_a.get_layout() == Layout::TILE && input_tensor_b.get_layout() == Layout::TILE), "Inputs to matmul must be tilized");
     TT_FATAL(input_tensor_a.get_legacy_shape()[3] == input_tensor_b.get_legacy_shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
 
-    TT_FATAL(input_tensor_a.get_dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B || input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT4_B, "Unsupported data format");
+    TT_FATAL(is_floating_point(input_tensor_a.get_dtype()), "Unsupported data format");
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
@@ -1018,9 +1015,6 @@ operation::ProgramWithCallbacks Matmul::create_program(
                 auto parallelization_strategy = bmm_op_utils::get_parallelization_strategy(input_tensors);
 		MatmulMultiCoreReuseMultiCast1DProgramConfig config{};
                 switch (parallelization_strategy){
-                    case MatmulParallelizationStrategy::MULTI_CORE:
-                        TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulParallelizationStrategy::MULTI_CORE!");
-                        return matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE:
                         TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulParallelizationStrategy::MULTI_CORE_REUSE!");
                         return matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
@@ -1061,10 +1055,10 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
                         TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulParallelizationStrategy::MULTI_CORE_REUSE_PADDING!");
                         return matmul_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
-                    case MatmulParallelizationStrategy::SINGLE_CORE:
+                    case MatmulParallelizationStrategy::MULTI_CORE:
                     default:
-                        TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulParallelizationStrategy::SINGLE_CORE!");
-                        return matmul_single_core(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
+                        TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulParallelizationStrategy::MULTI_CORE!");
+                        return matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
                 }
             }
             else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {

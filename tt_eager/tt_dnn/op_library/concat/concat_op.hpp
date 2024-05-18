@@ -11,7 +11,7 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class ConcatOpParallelizationStrategy { SINGLE_CORE, MULTI_CORE, SHARDED_MULTI_CORE };
+enum class ConcatOpParallelizationStrategy { MULTI_CORE, SHARDED_MULTI_CORE };
 
 struct Concat {
     uint32_t dim;
@@ -32,8 +32,6 @@ struct Concat {
 operation::ProgramWithCallbacks sharded_concat_multi_core(
     const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output);
 operation::ProgramWithCallbacks concat_multi_core(
-    const std::vector<Tensor> &input_tensors, const uint32_t dim, const Tensor &output);
-operation::ProgramWithCallbacks concat_single_core(
     const std::vector<Tensor> &input_tensors, const uint32_t dim, const Tensor &output);
 
 // Ref: https://pytorch.org/docs/stable/generated/torch.cat.html#torch.cat

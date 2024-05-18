@@ -26,7 +26,7 @@ namespace tt {
 namespace tt_metal {
 
 enum class MoveOpParallelizationStrategy {
-    MULTI_CORE, SINGLE_CORE, MULTI_CORE_OVERLAP, MULTI_CORE_SHARDED
+    MULTI_CORE, MULTI_CORE_OVERLAP, MULTI_CORE_SHARDED
 };
 
 struct Move {
@@ -44,7 +44,6 @@ struct Move {
 operation::ProgramWithCallbacks move_multi_core(const Tensor &input, Tensor &output);
 operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input, Tensor &output);
 operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor &input, Tensor &output);
-operation::ProgramWithCallbacks move_single_core(const Tensor &input, Tensor &output);
 
 inline Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
@@ -63,8 +62,6 @@ inline Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>
     bool tilized = input_tensor.get_layout() == Layout::TILE;
 
     // get_parallelization_strategy
-    uint32_t num_units = tilized ? input_tensor.volume() / TILE_HW : input_tensor.volume() / input_tensor.get_legacy_shape()[-1];
-
     bool move_within_same_mem_space = input_mem_config.buffer_type == output_mem_config.buffer_type;
 
     // A tensor moved within L1 it is meant to reallocate at higher addresses and a tensor moved within DRAM is meant to reallocate at lower addresses
@@ -102,10 +99,8 @@ inline Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>
 
     bool fits_in_cb = (L1_UNRESERVED_BASE + size_per_l1_bank) <= (output_mem_config.buffer_type == tt_metal::BufferType::L1 ? output_tensor.buffer()->address() : output_tensor.device()->l1_size_per_core());
 
-    MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::SINGLE_CORE;
-    if (num_units > 1 and non_overlap) {
-        move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE;
-    } else if (num_units > 1 and (not non_overlap) and fits_in_cb and compute_with_storage_grid_size.x > 1 and compute_with_storage_grid_size.y > 1) {
+    MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE;
+    if ((not non_overlap) and fits_in_cb and compute_with_storage_grid_size.x > 1 and compute_with_storage_grid_size.y > 1) {
         move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP;
     }
 

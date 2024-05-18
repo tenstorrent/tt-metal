@@ -225,7 +225,7 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<u
 
     // TODO (abhullar): If we don't include this check then user can write runtime args to a core that the kernel is not placed on.
     //                  Should this check only be enabled in debug mode?
-    // TT_FATAL(this->is_on_logical_core(logical_core), "Cannot set runtime args for core {} since kernel {} is not placed on it!", logical_core.str(), this->name());
+    TT_FATAL(this->is_on_logical_core(logical_core), "Cannot set runtime args for core {} since kernel {} is not placed on it!", logical_core.str(), this->name());
 
     // Keep state for validation, to be able to check from both set_runtime_args() and set_common_runtime_args() APIs.
 

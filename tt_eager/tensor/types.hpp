@@ -38,6 +38,18 @@ enum class DataType {
     INVALID = 8,
 };
 
+inline bool is_floating_point(DataType dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT16:
+        case DataType::FLOAT32:
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B:
+            return true;
+        default:
+            return false;
+    }
+}
+
 enum class StorageType {
     OWNED,
     DEVICE,
