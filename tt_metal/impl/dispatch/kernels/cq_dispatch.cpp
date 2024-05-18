@@ -134,7 +134,6 @@ void completion_queue_push_back(uint32_t num_pages) {
     notify_host_of_completion_queue_write_pointer();
 }
 
-FORCE_INLINE
 void process_write_host_h() {
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
 
@@ -205,7 +204,6 @@ void process_write_host_h() {
 }
 
 template<uint32_t preamble_size>
-FORCE_INLINE
 void relay_to_next_cb(uint32_t data_ptr,
                       uint32_t length) {
 
@@ -318,7 +316,6 @@ void relay_to_next_cb(uint32_t data_ptr,
     cmd_ptr = data_ptr;
 }
 
-FORCE_INLINE
 void process_write_host_d() {
 
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
@@ -329,7 +326,6 @@ void process_write_host_d() {
     relay_to_next_cb<split_dispatch_page_preamble_size>(data_ptr, length);
 }
 
-FORCE_INLINE
 void relay_write_h() {
 
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
@@ -342,7 +338,6 @@ void relay_write_h() {
 // Note that for non-paged writes, the number of writes per page is always 1
 // This means each noc_write frees up a page
 template<bool multicast>
-FORCE_INLINE
 void process_write_linear(uint32_t num_mcast_dests) {
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
 
@@ -413,7 +408,6 @@ void process_write_linear(uint32_t num_mcast_dests) {
     cmd_ptr = data_ptr;
 }
 
-FORCE_INLINE
 void process_write() {
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
     uint32_t num_mcast_dests = cmd->write_linear.num_mcast_dests;
@@ -425,7 +419,6 @@ void process_write() {
 }
 
 template<bool is_dram>
-FORCE_INLINE
 void process_write_paged() {
     volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
 
@@ -519,7 +512,6 @@ void process_write_paged() {
 // Since all subcmds all appear in the first page and given the size restrictions
 // this command can't be too many pages.  All pages are released at the end
 template<bool mcast, typename WritePackedSubCmd>
-FORCE_INLINE
 void process_write_packed() {
     volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
 
