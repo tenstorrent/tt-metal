@@ -128,26 +128,13 @@ operation::ProgramWithCallbacks Unpad::create_program(
     auto &output_tensor = output_tensors.at(0);
     switch (this->get_parallelization_strategy(input_tensors)) {
         case UnpadOpParallelizationStrategy::MULTI_CORE:
+        default:
             return unpad_multi_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
-        case UnpadOpParallelizationStrategy::SINGLE_CORE:
-        default: return unpad_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
     };
 }
 
 UnpadOpParallelizationStrategy Unpad::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
-    const auto &input_tensor_a = input_tensors.at(0);
-    uint32_t num_units;
-    auto shape = this->compute_output_shapes(input_tensors).at(0);
-    if (input_tensor_a.get_layout() == Layout::TILE) {
-        num_units = tt::tt_metal::compute_volume(shape) / TILE_HW;
-    } else {
-        num_units = tt::tt_metal::compute_volume(shape) / shape[-1];
-    }
-    if (num_units > 1) {
-        return UnpadOpParallelizationStrategy::MULTI_CORE;
-    } else {
-        return UnpadOpParallelizationStrategy::SINGLE_CORE;
-    }
+    return UnpadOpParallelizationStrategy::MULTI_CORE;
 }
 
 tt::stl::reflection::Attributes Unpad::attributes() const {

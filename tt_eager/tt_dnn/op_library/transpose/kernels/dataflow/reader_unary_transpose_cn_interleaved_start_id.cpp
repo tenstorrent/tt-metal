@@ -14,8 +14,8 @@ void kernel_main() {
     const uint32_t channel_step = get_arg_val<uint32_t>(5); // NCHtWt - HtWt
     const uint32_t num_tiles = get_arg_val<uint32_t>(6);
     const uint32_t start_id = get_arg_val<uint32_t>(7);
-    const uint32_t hw = get_arg_val<uint32_t>(8);
-    const uint32_t n = get_arg_val<uint32_t>(9);
+    uint32_t hw = get_arg_val<uint32_t>(8);
+    uint32_t n = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr bool src_is_dram = get_compile_time_arg_val(1) == 1;

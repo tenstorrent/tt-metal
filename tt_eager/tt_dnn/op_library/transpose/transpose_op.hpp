@@ -16,7 +16,7 @@ enum class TransposeOpDim {
 };
 
 enum class TransposeOpParallelizationStrategy {
-    MULTI_CORE_WH, MULTI_CORE_HC, MULTI_CORE_CN, SINGLE_CORE
+    MULTI_CORE_WH, MULTI_CORE_HC, MULTI_CORE_CN
 };
 
 struct Transpose {
@@ -39,7 +39,6 @@ Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const MemoryCon
 // transpose with tensor and dimensions
 Tensor transpose(const Tensor &a, std::int64_t dim1, std::int64_t dim2, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-operation::ProgramWithCallbacks transpose_single_core(const Tensor &a, Tensor &output, TransposeOpDim transpose_dim);
 operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor &output);
 operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a, Tensor &output);
 operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor &output);

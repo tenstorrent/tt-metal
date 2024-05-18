@@ -14,7 +14,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& output, ReduceOpMath reduce_op, ReduceOpDim reduce_dim, float scaler) {
+operation::ProgramWithCallbacks reduce_single_core_hw(const Tensor &a, Tensor& output, ReduceOpMath reduce_op, float scaler) {
 
     const auto shape = a.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0];
@@ -23,8 +23,7 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
     uint32_t HtWt = Ht * Wt;
-    if (reduce_dim == ReduceOpDim::HW)
-        scaler = sqrt(scaler);
+    scaler = sqrt(scaler);
 
     uint32_t num_tensor_tiles = NC*H*W / TILE_HW;
 
@@ -81,14 +80,10 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
         (std::uint32_t) dst_is_dram
     };
     std::map<string, string> reader_defines;
-    if (reduce_dim == ReduceOpDim::H) {
-        reader_defines["REDUCE_SCALER"] = "1";
-    }
+
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
-        reduce_dim == ReduceOpDim::H ?
-            "tt_eager/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp" :
-            "tt_eager/tt_dnn/op_library/reduce/kernels/dataflow/reader_unary_reduce_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/reduce/kernels/dataflow/reader_unary_reduce_interleaved_start_id.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
@@ -105,42 +100,23 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
     };
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
-    TT_ASSERT(int(reduce_dim) >= 0 && int(reduce_dim) <= magic_enum::enum_count<ReduceOpDim>());
-
-    string compute_kernel_name = reduce_op_utils::dim_to_kernel_name(reduce_dim, reduce_op);
 
     auto reduce_compute_kernel_id = tt_metal::CreateKernel(
         program,
-        compute_kernel_name,
+         "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_hw.cpp",
         core,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)}
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::HW)}
     );
 
-    if (reduce_dim == ReduceOpDim::H) {
-        tt_metal::SetRuntimeArgs(
-            program, reader_kernel_id, core,
-            {
-                a.buffer()->address(),
-                NC, Ht, Wt, HtWt
-            }
-        );
-    } else {
-        tt_metal::SetRuntimeArgs(
-            program, reader_kernel_id, core,
-            {
-                a.buffer()->address(),
-                num_tensor_tiles, 0
-            }
-        );
-    }
+    tt_metal::SetRuntimeArgs(
+        program, reader_kernel_id, core,
+        {
+            a.buffer()->address(),
+            num_tensor_tiles, 0
+        }
+    );
 
-    uint32_t out_dim_divider = 1;
-    switch (reduce_dim) {
-        case ReduceOpDim::H: out_dim_divider = Ht; break;
-        case ReduceOpDim::W: out_dim_divider = Wt; break;
-        case ReduceOpDim::HW: out_dim_divider = Ht*Wt; break;
-        default: TT_ASSERT(false && "Unsupported reduce_dim!");
-    }
+    uint32_t out_dim_divider = Ht*Wt;
 
     tt_metal::SetRuntimeArgs(
         program, writer_kernel_id, core,

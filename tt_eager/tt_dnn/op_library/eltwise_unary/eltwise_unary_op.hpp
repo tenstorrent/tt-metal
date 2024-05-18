@@ -157,7 +157,7 @@ inline UnaryWithParam string_to_unary_with_param(const std::string& name) {
     TT_THROW("Unknown unary op: " + name);
 }
 
-enum class UnaryOpParallelizationStrategy { SINGLE_CORE, MULTI_CORE, SHARDED_MULTI_CORE };
+enum class UnaryOpParallelizationStrategy { MULTI_CORE, SHARDED_MULTI_CORE };
 
 struct EltwiseUnary {
     const std::vector<UnaryWithParam> op_chain;
@@ -182,8 +182,6 @@ struct EltwiseUnary {
 operation::ProgramWithCallbacks eltwise_unary_sharded(
     const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en);
 operation::ProgramWithCallbacks eltwise_unary_multi_core(
-    const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en);
-operation::ProgramWithCallbacks eltwise_unary_single_core(
     const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en);
 
 inline Tensor run_eltwise_unary(

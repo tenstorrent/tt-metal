@@ -184,7 +184,7 @@ def test_transpose_wh_program_cache(dtype, device, use_program_cache):
     W = 32
     input_shape = (N, C, H, W)
     # CACHE MISS since its single core
-    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=2, input_dtype=dtype)
+    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=1, input_dtype=dtype)
 
 
 @pytest.mark.parametrize(

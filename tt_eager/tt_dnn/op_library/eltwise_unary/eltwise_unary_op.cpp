@@ -319,25 +319,19 @@ operation::ProgramWithCallbacks EltwiseUnary::create_program(
     switch (parallelization_strategy) {
         case UnaryOpParallelizationStrategy::SHARDED_MULTI_CORE:
             return eltwise_unary_sharded(input_tensor, output_tensor, this->op_chain, this->fp32_dest_acc_en);
-            break;
         case UnaryOpParallelizationStrategy::MULTI_CORE:
+        default:
             return eltwise_unary_multi_core(input_tensor, output_tensor, this->op_chain, this->fp32_dest_acc_en);
-            break;
-        case UnaryOpParallelizationStrategy::SINGLE_CORE:
-        default: return eltwise_unary_single_core(input_tensor, output_tensor, this->op_chain, this->fp32_dest_acc_en);
     }
 }
 
 UnaryOpParallelizationStrategy EltwiseUnary::get_parallelization_strategy(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    uint32_t num_tiles = input_tensor.volume() / TILE_HW;
     if (input_tensor.is_sharded())
         return UnaryOpParallelizationStrategy::SHARDED_MULTI_CORE;
-    else if (num_tiles > 1) {
+    else {
         return UnaryOpParallelizationStrategy::MULTI_CORE;
-    } else {
-        return UnaryOpParallelizationStrategy::SINGLE_CORE;
     }
 }
 

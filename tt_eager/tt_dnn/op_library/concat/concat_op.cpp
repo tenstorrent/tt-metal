@@ -20,17 +20,7 @@ ConcatOpParallelizationStrategy Concat::get_parallelization_strategy(const std::
     if (input_tensors[0].is_sharded()) {
         return ConcatOpParallelizationStrategy::SHARDED_MULTI_CORE;
     } else {
-        uint32_t num_pages = tt_metal::compute_volume(this->compute_output_shapes(input_tensors).at(0));
-        if (input_tensors[0].get_layout() == Layout::ROW_MAJOR) {
-            num_pages /= input_tensors[0].get_legacy_shape()[-1];
-        } else {
-            num_pages /= TILE_HW;
-        }
-        if (num_pages > 1) {
-            return ConcatOpParallelizationStrategy::MULTI_CORE;
-        } else {
-            return ConcatOpParallelizationStrategy::SINGLE_CORE;
-        }
+        return ConcatOpParallelizationStrategy::MULTI_CORE;
     }
 }
 
@@ -99,9 +89,8 @@ operation::ProgramWithCallbacks Concat::create_program(
         case ConcatOpParallelizationStrategy::SHARDED_MULTI_CORE:
             return sharded_concat_multi_core(input_tensors, this->dim, output_tensors[0]);
         case ConcatOpParallelizationStrategy::MULTI_CORE:
+        default:
             return concat_multi_core(input_tensors, this->dim, output_tensors[0]);
-        case ConcatOpParallelizationStrategy::SINGLE_CORE:
-        default: return concat_single_core(input_tensors, this->dim, output_tensors[0]);
     };
 }
 

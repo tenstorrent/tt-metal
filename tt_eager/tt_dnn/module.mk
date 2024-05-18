@@ -10,24 +10,18 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/sharded_partial/sharded_op_partial.cpp \
 	tt_eager/tt_dnn/op_library/sharded_partial/multi_core/sharded_op_partial_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/copy/copy_op.cpp \
-	tt_eager/tt_dnn/op_library/copy/single_core/copy_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/copy/multi_core/copy_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/move/move_op.cpp \
-	tt_eager/tt_dnn/op_library/move/single_core/move_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/move/multi_core/move_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/move/multi_core/move_op_multi_core_overlap.cpp \
 	tt_eager/tt_dnn/op_library/move/multi_core/move_op_multi_core_sharded.cpp \
-	tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_binary/eltwise_binary_op.cpp \
-	tt_eager/tt_dnn/op_library/eltwise_binary/single_core/eltwise_binary_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_binary/multi_core/eltwise_binary_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.cpp \
-	tt_eager/tt_dnn/op_library/eltwise_unary/single_core/eltwise_unary_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_unary/multi_core/eltwise_unary_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/eltwise_unary/multi_core/eltwise_unary_op_sharded.cpp \
 	tt_eager/tt_dnn/op_library/pad/pad_op.cpp \
 	tt_eager/tt_dnn/op_library/pad/pad_op_multi_core.cpp \
-	tt_eager/tt_dnn/op_library/unpad/single_core/unpad_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/unpad/multi_core/unpad_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/unpad/unpad_op.cpp \
 	tt_eager/tt_dnn/op_library/indexed_fill/multi_core/indexed_fill_op_multi_core.cpp \
@@ -43,19 +37,17 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/transpose/transpose_op.cpp \
 	tt_eager/tt_dnn/op_library/transpose/wh_multi_core/transpose_wh_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/transpose/hc_multi_core/transpose_hc_op_multi_core.cpp \
-	tt_eager/tt_dnn/op_library/transpose/single_core/transpose_op_single_core.cpp \
+	tt_eager/tt_dnn/op_library/transpose/cn_multi_core/transpose_cn_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/reduce/reduce_op.cpp \
-	tt_eager/tt_dnn/op_library/reduce/single_core/reduce_op_single_core.cpp \
+	tt_eager/tt_dnn/op_library/reduce/single_core_hw/reduce_op_single_core_hw.cpp \
 	tt_eager/tt_dnn/op_library/reduce/multi_core_h/reduce_op_multi_core_h.cpp \
 	tt_eager/tt_dnn/op_library/reduce/multi_core_w/reduce_op_multi_core_w.cpp \
 	tt_eager/tt_dnn/op_library/bcast/bcast_op.cpp \
-	tt_eager/tt_dnn/op_library/bcast/single_core/bcast_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/bcast/multi_core_h/bcast_op_multi_core_h.cpp \
 	tt_eager/tt_dnn/op_library/bcast/multi_core_w/bcast_op_multi_core_w.cpp \
 	tt_eager/tt_dnn/op_library/bcast/multi_core_hw/bcast_op_multi_core_hw.cpp \
 	tt_eager/tt_dnn/op_library/bmm/bmm_op.cpp \
 	tt_eager/tt_dnn/op_library/bmm/single_core/bmm_op_single_core_tilize_untilize.cpp \
-	tt_eager/tt_dnn/op_library/bmm/single_core/bmm_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core/bmm_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse/bmm_op_multi_core_reuse.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_padding/bmm_op_multi_core_reuse_padding.cpp \
@@ -90,11 +82,11 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/moreh_clip_grad_norm_step1.cpp \
 	tt_eager/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/moreh_clip_grad_norm_step2.cpp \
 	tt_eager/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/moreh_clip_grad_norm_step3.cpp \
-  tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.cpp \
-  tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step1/moreh_nll_loss_step1.cpp \
-  tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/moreh_nll_loss_step2.cpp \
-  tt_eager/tt_dnn/op_library/moreh_nll_loss_backward/moreh_nll_loss_backward_op.cpp \
-  tt_eager/tt_dnn/op_library/moreh_nll_loss_backward/moreh_nll_loss_backward/moreh_nll_loss_backward.cpp \
+	tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step1/moreh_nll_loss_step1.cpp \
+	tt_eager/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step2/moreh_nll_loss_step2.cpp \
+	tt_eager/tt_dnn/op_library/moreh_nll_loss_backward/moreh_nll_loss_backward_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_nll_loss_backward/moreh_nll_loss_backward/moreh_nll_loss_backward.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_w_small/softmax_w_small.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_h_small/softmax_h_small.cpp \
@@ -177,10 +169,8 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.cpp \
 	tt_eager/tt_dnn/op_library/operation_history.cpp \
 	tt_eager/tt_dnn/op_library/concat/multi_core/concat_op_multi_core.cpp \
-	tt_eager/tt_dnn/op_library/concat/single_core/concat_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/concat/concat_op.cpp \
 	tt_eager/tt_dnn/op_library/repeat/multi_core/repeat_op_multi_core.cpp \
-	tt_eager/tt_dnn/op_library/repeat/single_core/repeat_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/repeat/repeat_op.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_tms.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads_falcon7b.cpp \
@@ -194,11 +184,9 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/rotate_half/single_core/rotate_half_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/rotate_half/rotate_half_op.cpp \
 	tt_eager/tt_dnn/op_library/rotary_embedding/multi_core/rotary_embedding_op_multi_core.cpp \
-	tt_eager/tt_dnn/op_library/rotary_embedding/single_core/rotary_embedding_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/rotary_embedding/rotary_embedding_op.cpp \
 	tt_eager/tt_dnn/op_library/embeddings/embeddings_op.cpp \
 	tt_eager/tt_dnn/op_library/update_cache/multi_core/update_cache_op_multi_core.cpp \
-	tt_eager/tt_dnn/op_library/update_cache/single_core/update_cache_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/update_cache/update_cache_op.cpp \
 	tt_eager/tt_dnn/op_library/upsample/multi_core/upsample_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/upsample/single_core/upsample_op_single_core.cpp \

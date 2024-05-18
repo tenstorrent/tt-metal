@@ -19,8 +19,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks bcast_multi_core_h(const Tensor &a, const Tensor &b, const Tensor& output, BcastOpMath bcast_math, BcastOpDim bcast_dim) {
-    TT_ASSERT(bcast_dim == BcastOpDim::H);
+operation::ProgramWithCallbacks bcast_multi_core_h(const Tensor &a, const Tensor &b, const Tensor& output, BcastOpMath bcast_math) {
 
     const auto ashape = a.get_legacy_shape();
     const auto bshape = b.get_legacy_shape();
@@ -67,9 +66,6 @@ operation::ProgramWithCallbacks bcast_multi_core_h(const Tensor &a, const Tensor
 	auto dst_buffer = output.buffer();
 	TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    const char* reader_name = bcast_op_utils::get_reader_name(bcast_dim, BcastOpParallelizationStrategy::MULTI_CORE_H);
-    const char* compute_name = bcast_op_utils::get_compute_name(bcast_dim);
-
 	uint32_t src0_cb_index = 0;
 	uint32_t num_input_tiles = 2;
 
@@ -97,7 +93,7 @@ operation::ProgramWithCallbacks bcast_multi_core_h(const Tensor &a, const Tensor
 
 	KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
 		program,
-		reader_name,
+		"tt_eager/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_h_interleaved_input_rows_partitioned.cpp",
 		all_device_cores,
 		tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -107,10 +103,10 @@ operation::ProgramWithCallbacks bcast_multi_core_h(const Tensor &a, const Tensor
 		all_device_cores,
 		tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-	std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(bcast_dim, bcast_math);
+	std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(BcastOpDim::H, bcast_math);
 	auto bcast_kernel_id = tt_metal::CreateKernel(
 		program,
-		compute_name,
+		"tt_eager/tt_dnn/op_library/bcast/kernels/compute/bcast_h.cpp",
 		all_device_cores,
 		tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines}
 	);

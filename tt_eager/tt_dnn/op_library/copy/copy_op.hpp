@@ -19,7 +19,7 @@ namespace tt {
 namespace tt_metal {
 
 enum class CopyOpParallelizationStrategy {
-    MULTI_CORE, SINGLE_CORE
+    MULTI_CORE
 };
 
 struct Copy {
@@ -35,7 +35,6 @@ struct Copy {
 };
 
 operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tensor &output, bool backwards = false);
-operation::ProgramWithCallbacks copy_single_core(const Tensor &input, const Tensor &output, bool backwards = false);
 
 Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor);
 

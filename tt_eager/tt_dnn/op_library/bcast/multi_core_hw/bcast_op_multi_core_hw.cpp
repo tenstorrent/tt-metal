@@ -21,8 +21,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tensor &b, const Tensor& output, BcastOpMath bcast_math, BcastOpDim bcast_dim) {
-    TT_ASSERT(bcast_dim == BcastOpDim::HW);
+operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tensor &b, const Tensor& output, BcastOpMath bcast_math) {
 
     const auto ashape = a.get_legacy_shape();
     const auto bshape = b.get_legacy_shape();
@@ -78,9 +77,6 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
     auto dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    const char* reader_name = bcast_op_utils::get_reader_name(bcast_dim, BcastOpParallelizationStrategy::MULTI_CORE_HW);
-    const char* compute_name = bcast_op_utils::get_compute_name(bcast_dim);
-
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
     uint32_t num_tiles_per_shard = 0;
@@ -127,7 +123,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
     };
 
     std::map<string, string> reader_defines;
-    std::map<string, string> bcast_compute_defines = bcast_op_utils::get_defines(bcast_dim, bcast_math);
+    std::map<string, string> bcast_compute_defines = bcast_op_utils::get_defines(BcastOpDim::HW, bcast_math);
     if(bnc1) {
         reader_defines["BCAST_SCALAR"] = "1";
         bcast_compute_defines["BCAST_SCALAR"] = "1";
@@ -137,7 +133,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
     }
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        reader_name,
+        "tt_eager/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_hw_interleaved_partitioned.cpp",
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
@@ -153,7 +149,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
-        compute_name,
+        "tt_eager/tt_dnn/op_library/bcast/kernels/compute/bcast_hw.cpp",
         all_device_cores,
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_compute_defines}
     );

@@ -48,8 +48,6 @@ operation::ProgramWithCallbacks RotateHalf::create_program(const std::vector<Ten
 
 
 RotateHalfOpParallelizationStrategy RotateHalf::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    uint32_t num_rows = input_tensor.volume() / input_tensor.get_legacy_shape()[-1] / TILE_HEIGHT;
     return RotateHalfOpParallelizationStrategy::SINGLE_CORE;
 }
 

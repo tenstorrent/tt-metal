@@ -9,7 +9,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
-using uint32_t = std::uint32_t;
 using namespace tt::constants;
 
 namespace tt {
@@ -129,24 +128,22 @@ operation::ProgramWithCallbacks Transpose::create_program(const std::vector<Tens
             break;
         case TransposeOpParallelizationStrategy::MULTI_CORE_HC:
             return transpose_hc_multi_core(input_tensor, output_tensor);
-            break;
+        case TransposeOpParallelizationStrategy::MULTI_CORE_CN:
+            return transpose_cn_multi_core(input_tensor, output_tensor);
         default:
-            return transpose_single_core(input_tensor, output_tensor, this->dim);
+            TT_THROW("Unsupported parallelization strategy");
     }
 }
 
 TransposeOpParallelizationStrategy Transpose::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    auto ashape = input_tensor.get_legacy_shape();
-    uint32_t num_tiles = input_tensor.volume() / TILE_HW;
-    if (this->dim == TransposeOpDim::WH && (num_tiles > 1 || input_tensor.is_sharded())) {
+    if (this->dim == TransposeOpDim::WH) {
         return TransposeOpParallelizationStrategy::MULTI_CORE_WH;
-    } else if (this->dim == TransposeOpDim::HC && num_tiles > 1) { // Always true for legal shape until requirement on tile size IO is no longer required
+    } else if (this->dim == TransposeOpDim::HC) { // Always true for legal shape until requirement on tile size IO is no longer required
         return TransposeOpParallelizationStrategy::MULTI_CORE_HC;
-    } else if (this->dim == TransposeOpDim::CN && num_tiles > 1) {
+    } else if (this->dim == TransposeOpDim::CN) {
         return TransposeOpParallelizationStrategy::MULTI_CORE_CN;
     } else {
-        return TransposeOpParallelizationStrategy::SINGLE_CORE;
+        TT_THROW("Unsupported Transpose Dim");
     }
 }
 
