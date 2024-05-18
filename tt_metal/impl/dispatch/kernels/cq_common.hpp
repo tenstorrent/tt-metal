@@ -144,7 +144,6 @@ void cb_acquire_pages(uint32_t n) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
 
     // Ensure last sem_inc has landed
-    noc_async_write_barrier(); // XXXX TODO(pgk) can we do better on wormhole?
     noc_async_atomic_barrier();
 
     DEBUG_STATUS("DAPW");
@@ -174,7 +173,6 @@ uint32_t cb_acquire_pages(uint32_t cb_fence,
 
     if (available == 0) {
         // Ensure last sem_inc has landed
-        noc_async_write_barrier(); // XXXX TODO(pgk) can we do better on wormhole?
         noc_async_atomic_barrier();
 
         DEBUG_STATUS("UAPW");
