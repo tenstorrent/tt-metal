@@ -260,7 +260,7 @@ struct AttentionSoftmax : public tt::operations::primary::Softmax {
             tt::operations::primary::transformers::SoftmaxDefaultProgramConfig{},
         const std::optional<bool> causal_mask = false,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
-        float head_size = head_size_arg.has_value() ? 1.0f / ::sqrt(head_size_arg.value()) : 1.0f;
+        float head_size = head_size_arg.has_value() ? 1.0f / std::sqrt(head_size_arg.value()) : 1.0f;
         if constexpr (in_place) {
             TT_FATAL(attention_mask.has_value(), "Cannot apply divide by sqrt(head_size) using in-place version!");
         } else {

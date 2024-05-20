@@ -286,7 +286,7 @@ struct operation_without_validation_t {
     };
 
     template <typename... args_t>
-    static auto execute(args_t&&... args) {
+    static auto execute_async(args_t&&... args) {
         return function(std::forward<args_t>(args)...);
     }
 };

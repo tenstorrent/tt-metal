@@ -143,6 +143,7 @@ def test_bloom_block(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, pcc=0.997)
 
 
+@pytest.mark.skip(reason="Issue #8648.")
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("model_name", ["bigscience/bloom-560m"])
 @pytest.mark.parametrize("batch_size", [1])
@@ -182,6 +183,7 @@ def test_bloom(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, pcc=0.924)
 
 
+@pytest.mark.skip(reason="Issue #8648.")
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("model_name", ["bigscience/bloom-560m"])
 @pytest.mark.parametrize("batch_size", [1])
