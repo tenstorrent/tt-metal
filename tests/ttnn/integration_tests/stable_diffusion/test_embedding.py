@@ -17,7 +17,6 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_embeddi
 import pytest
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
 def test_embeddings(
     device,
@@ -41,8 +40,6 @@ def test_embeddings(
     input = ttnn.to_device(input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     ttnn_output = model(input)
-    ttnn_output = ttnn.to_layout(ttnn_output, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn_output = ttnn.from_device(ttnn_output)
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.squeeze(0).squeeze(0)
 
