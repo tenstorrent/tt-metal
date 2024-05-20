@@ -8,6 +8,7 @@
 platformdirs<4.0.0
 pre-commit==3.0.4
 black==23.10.1
+clang-format==18.1.5
 build==0.10.0
 twine==4.0.2
 yamllint==1.32.0
