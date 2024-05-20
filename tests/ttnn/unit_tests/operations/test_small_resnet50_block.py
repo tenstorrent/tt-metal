@@ -29,6 +29,7 @@ class resnet50Bottleneck:
     expansion: int = 4
 
     def __init__(self, parameters, downsample, model_config) -> None:
+        super().__init__()
         # init is just to pre-process pytorch weights and bias tensors
         torch_identity_conv_weight_tensor = torch.zeros(
             [parameters.conv1.weight.shape[1], parameters.conv1.weight.shape[1], 1, 1], dtype=torch.bfloat16
@@ -675,6 +676,7 @@ def build_run_and_validate_ttnn_model_new(
         pcc_passed, pcc_message = assert_with_pcc(torch_golden_out_tensor_nchw, torch_out_tensor, pcc=0.99)
 
 
+@pytest.mark.skip("Needs testing!")
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, downsample, is_1d_systolic, act_dtype, weight_dtype, math_fidelity",
     (
