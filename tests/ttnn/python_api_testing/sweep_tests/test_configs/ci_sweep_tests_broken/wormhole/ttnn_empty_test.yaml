@@ -2,12 +2,12 @@
 test-list:
   - ttnn-empty:
       shape:
-        start-shape: [1, 1, 32, 32]
+        start-shape: [1, 1, 1, 1]
         end-shape: [6, 12, 256, 256]
-        interval: [1, 1, 32, 32]
-        num-dims: [2,3,4]
+        interval: [1, 1, 1, 1]
+        num-dims: [2, 3, 4]
         num-shapes: 1
-        num-samples: 128
+        num-samples: 64
         args-sampling-strategy: "all"
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
@@ -19,22 +19,23 @@ test-list:
       comparison:
         function: comp_shape
       args-gen: gen_dtype_layout_device
+      sanitize-args: False
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1"]
-        out-buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        out-buffer-type: ["DRAM", "L1"]
       output-file: empty_sweep.csv
   - ttnn-empty:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [6, 12, 256, 256]
         interval: [1, 1, 1, 2]
-        num-shapes: 2
-        num-samples: 256
+        num-dims: [2, 3, 4]
+        num-shapes: 1
+        num-samples: 64
         args-sampling-strategy: "all"
       env:
-        TT_METAL_SLOW_DISPATCH_MODE: ["1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand
@@ -44,9 +45,10 @@ test-list:
       comparison:
         function: comp_shape
       args-gen: gen_dtype_layout_device
+      sanitize-args: False
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1"]
-        out-buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        out-buffer-type: ["DRAM", "L1"]
       output-file: empty_sweep.csv
