@@ -124,8 +124,11 @@ uint32_t get_num_cores_nhw_from_parallel_config(const ParallelConfig& pconfig) {
     uint32_t num_cores_nhw = 0;
     if (pconfig.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         num_cores_nhw = num_cores;
-    } else {
+    } else if (pconfig.shard_orientation == ShardOrientation::COL_MAJOR) {
         num_cores_nhw = grid_size.x;
+    } else {
+        TT_ASSERT(pconfig.shard_orientation == ShardOrientation::ROW_MAJOR);
+        num_cores_nhw = grid_size.y;
     }
     TT_ASSERT(num_cores_nhw > 0);
     return num_cores_nhw;
@@ -341,8 +344,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_requi
                 );
             }
         }
-
-        auto input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(input_tensor.get_shape(), parallel_config, 32);
+        auto input_padded_shape = input_tensor.get_legacy_shape(); // TODO: resolve ttnn::types::Shape and tt::tt_metal::Shape issue to clean up next line
+        auto input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(Shape({input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}), parallel_config, 32);
 
         if (input_is_on_device) {
             input_tensor = ttnn::operations::core::ToMemoryConfig::execute(input_tensor, input_tensor_sharded_memory_config,{});
@@ -462,7 +465,6 @@ MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
             .mcast_in0=false
         };
         if (activation != "") {
-            cout << "activation = " << activation << endl;
             matmul_config.fused_activation = string_to_unary_with_param(activation);
         }
         return matmul_config;
@@ -478,7 +480,6 @@ MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
             .transpose_mcast=transpose_mcast
         };
         if (activation != "") {
-            cout << "activation = " << activation << endl;
             matmul_config.fused_activation = string_to_unary_with_param(activation);
         }
         return matmul_config;
@@ -561,9 +562,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         // run conv as matmul
         uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
         auto matmul_program_config = determine_matmul_op_config_from_conv_op_config(opt_conv_op_parallel_config, opt_conv_op_block_config, parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED, conv_config.activation, parallel_config.shard_orientation == ShardOrientation::COL_MAJOR, num_cores_c);
-        cout << "Matmul" << endl;
-        cout << "activation = " << conv_config.activation  << endl;
-        auto matmul_input = input_tensor_post_tm;
+        Tensor matmul_input = input_tensor_post_tm;
         if (stride[0] > 1) {
             // run downsample
             matmul_input = tt::tt_metal::downsample(input_tensor_post_tm, {batch_size, input_height, input_width, stride[0], stride[1]});
@@ -571,7 +570,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
                 input_tensor_post_tm.deallocate();
             }
         }
-        auto matmul_output = ttnn::operations::matmul::linear(matmul_input, weight_tensor_on_device, bias_tensor_on_device, matmul_program_config, input_tensor_post_tm.memory_config(), conv_config.dtype, conv_config.activation == "" ? std::nullopt : std::optional<std::string>{conv_config.activation}, compute_kernel_config);
+        auto matmul_output = ttnn::operations::matmul::linear(matmul_input, weight_tensor_on_device, bias_tensor_on_device, matmul_program_config, matmul_input.memory_config(), conv_config.dtype, conv_config.activation == "" ? std::nullopt : std::optional<std::string>{conv_config.activation}, compute_kernel_config);
         if (conv_config.deallocate_activation) {
             matmul_input.deallocate();
         }
