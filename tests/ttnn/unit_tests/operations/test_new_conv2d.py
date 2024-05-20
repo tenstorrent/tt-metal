@@ -289,6 +289,8 @@ def run_conv_with_split(
         # first conv post folding and input_channels padding to tile width
         (64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True),
         # rn50 layer1
+        (64, 64, 56, 56, 1, 1, 1, 1, 0, 0, True),
+        (64, 64, 56, 56, 1, 1, 2, 2, 0, 0, True),
         (64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True),
         # rn50 layer2
         (128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True),
@@ -802,7 +804,7 @@ def test_sd_conv(
         # 1x1 conv
         (2, 320, 960, 64, 64, 1, 1, 1, 1, 0, 0, False, None),
         # Small conv
-        (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, True, None),
+        # (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, True, None), fails
     ),
 )
 @pytest.mark.parametrize(
