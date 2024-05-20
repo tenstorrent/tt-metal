@@ -32,82 +32,58 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(9);
 
     mm_init();
+    binary_op_init_common(rotated_in_interm_cb, cos_cb); // General Init for all binary ops
 
+    // Get the trans_mat
+    cb_wait_front(trans_mat_cb, onetile);
 
     uint32_t in0_index = 0;
     uint32_t in1_index = 0;
     uint32_t interm_index = 0;
 
-    DPRINT << "Start of loop" << ENDL();
-    DPRINT << "Num rows:  " << num_rows << ENDL();
-    DPRINT << "Wt:    " << Wt << ENDL();
-
     for (uint32_t i = 0; i < num_rows; ++i) {
         for (uint32_t j = 0; j < Wt; ++j) {
 
-            DPRINT << "Index:" << i << j << ENDL();
-            // Transmation Matrix
-            ACQ();
+            // rotated = x @ trans_mat
             mm_init_short(in_cb, trans_mat_cb);
             cb_wait_front(in_cb, onetile);
-            cb_wait_front(trans_mat_cb, onetile);
             cb_reserve_back(rotated_in_interm_cb, onetile);
-
-            DPRINT << "Hang 1" << ENDL();
-
+            ACQ();
             matmul_tiles(in_cb, trans_mat_cb, in0_index, in1_index, interm_index, false);
             pack_tile(0, rotated_in_interm_cb);
             REL();
-
-            DPRINT << "Hang 2" << ENDL();
             cb_push_back(rotated_in_interm_cb, onetile);
-            cb_pop_front(in_cb, onetile);
-            cb_pop_front(trans_mat_cb, onetile);
 
-            DPRINT << "Hang 3" << ENDL();
-
+            // sin_interim = rotated * sin
             cb_wait_front(rotated_in_interm_cb, onetile);
-            // Multiply interim_transformation by sin
             cb_wait_front(sin_cb, onetile);
             cb_reserve_back(sin_interm_cb, onetile);
-
-            binary_op_init_common(rotated_in_interm_cb, cos_cb);
-
-            DPRINT << "Hang 4" << ENDL();
-            ACQ();
             mul_tiles_init();
-            DPRINT << "Hang 4.25" << ENDL();
+            ACQ();
             mul_tiles(rotated_in_interm_cb, sin_cb, 0, 0, 0);
-            DPRINT << "Hang 4.5" << ENDL();
             pack_tile(0, sin_interm_cb);
             REL();
-
-            DPRINT << "Hang 5" << ENDL();
             cb_push_back(sin_interm_cb, onetile);
             cb_pop_front(sin_cb, onetile);
+            cb_pop_front(rotated_in_interm_cb, onetile);
 
-            // Multiply interim_transformation by cos
+            // cos_interim = x * cos
             cb_wait_front(cos_cb, onetile);
             cb_reserve_back(cos_interm_cb, onetile);
-            binary_op_init_common(rotated_in_interm_cb, sin_cb);
-
-            DPRINT << "Hang 6" << ENDL();
             ACQ();
-            mul_tiles_init();
-            mul_tiles(rotated_in_interm_cb, cos_cb, 0, 0, 0);
+            mul_tiles(in_cb, cos_cb, 0, 0, 0);
             pack_tile(0, cos_interm_cb);
             REL();
             cb_push_back(cos_interm_cb, onetile);
             cb_pop_front(cos_cb, onetile);
+            cb_pop_front(in_cb, onetile); // Done with input
 
-            cb_pop_front(rotated_in_interm_cb, onetile);
-
-            // Add applied sin/cos tensors
+            // out = cos_interim + sin_interim
             cb_wait_front(cos_interm_cb, onetile);
             cb_wait_front(sin_interm_cb, onetile);
             cb_reserve_back(out_cb, onetile);
-            ACQ();
             add_tiles_init();
+            ACQ();
             add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
             pack_tile(0, out_cb);
             REL();
@@ -116,5 +92,8 @@ void MAIN {
             cb_pop_front(sin_interm_cb, onetile);
         }
     }
+
+    // Done with the transformation matrix, so remove from CB
+    cb_pop_front(trans_mat_cb, onetile);
 }
 } // NAMESPACE

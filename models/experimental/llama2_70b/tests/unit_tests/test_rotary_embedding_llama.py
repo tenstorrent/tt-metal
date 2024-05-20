@@ -90,8 +90,6 @@ class TtLlamaRotary(torch.nn.Module):
         # sin = ttnn.repeat(sin, ttnn.Shape([batch, n_heads, 1, 1]))
         rotary_output = tt_lib.tensor.rotary_embedding_llama(x, cos, sin, self.transformation_mat)
 
-        breakpoint()
-
         return rotary_output
 
     # def apply_rotary(self, x, cos, sin):
@@ -312,10 +310,10 @@ def run_test_LlamaReshape(
 @pytest.mark.parametrize(
     "n_devices, emulated, implementation",
     (
-        (8, False, "tt"),
-        (8, True, "tt"),
-        (32, True, "tt"),
-        (8, True, "pytorch"),
+        (1, False, "tt"),
+        (1, True, "tt"),
+        (1, True, "tt"),
+        (1, True, "pytorch"),
     ),
     ids=("8chip-T3000", "8chip-emulated", "32chip-emulated", "pytorch"),
 )
@@ -349,8 +347,9 @@ def test_LlamaAttention_inference(
     emulated,
     implementation,
 ):
-    devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
-    model_config = get_model_config(model_config_str, num_devices=n_devices, seq_len=seq_len)
+    # devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
+    devices = all_devices
+    model_config = get_model_config(model_config_str, num_devices=8, seq_len=seq_len)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if len(devices) < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")
