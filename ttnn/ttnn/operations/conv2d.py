@@ -474,65 +474,68 @@ def conv2d(
     reshard_if_not_optimal=False,  # default
     conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
     debug=False,
+    run_new_conv=True,
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
-    conv_config_ = ttnn._ttnn.operations.conv2d.ConvConfig(
-        math_fidelity=conv_config.math_fidelity,
-        dtype=conv_config.dtype,
-        weights_dtype=conv_config.weights_dtype,
-        math_approx_mode_enabled=conv_config.math_approx_mode,
-        fp32_dest_acc_enabled=conv_config.fp32_dest_acc_en,
-        activation=conv_config.activation if conv_config.activation is not None else "",
-        input_channels_alignment=conv_config.input_channels_alignment,
-        deallocate_activation=conv_config.deallocate_activation,
-        reallocate_halo_output=conv_config.reallocate_halo_output,
-        act_block_h_override=conv_config.act_block_h if conv_config.act_block_h is not None else 0,
-        reshard_if_not_optimal=reshard_if_not_optimal,
-        override_sharding_config=False,  # TODO: pass in config
-        height_sharding=conv_config.height_sharding,
-        transpose_shards=True,  # TODO: pass in config
-        output_layout=ttnn.TILE_LAYOUT,  # TODO: pass in config
-    )
-    if conv_config.core_grid:
-        conv_config_.core_grid = conv_config.core_grid
-    (
-        output_tensor_new,
-        output_height_new,
-        output_width_new,
-        weight_tensor_on_dev_new,
-        bias_tensor_on_dev_new,
-    ) = ttnn._ttnn.operations.conv2d.conv2d(
-        input_tensor=input_tensor,
-        weight_tensor=weight_tensor,
-        device=device,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        batch_size=batch_size,
-        input_height=input_height,
-        input_width=input_width,
-        kernel_size=kernel_size,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        groups=groups,
-        bias_tensor=bias_tensor,
-        conv_config=conv_config_,
-    )
-    if not debug:
-        return (
+    run_new_conv = True
+    if run_new_conv:
+        conv_config_ = ttnn._ttnn.operations.conv2d.ConvConfig(
+            math_fidelity=conv_config.math_fidelity,
+            dtype=conv_config.dtype,
+            weights_dtype=conv_config.weights_dtype,
+            math_approx_mode_enabled=conv_config.math_approx_mode,
+            fp32_dest_acc_enabled=conv_config.fp32_dest_acc_en,
+            activation=conv_config.activation if conv_config.activation is not None else "",
+            input_channels_alignment=conv_config.input_channels_alignment,
+            deallocate_activation=conv_config.deallocate_activation,
+            reallocate_halo_output=conv_config.reallocate_halo_output,
+            act_block_h_override=conv_config.act_block_h if conv_config.act_block_h is not None else 0,
+            reshard_if_not_optimal=reshard_if_not_optimal,
+            override_sharding_config=False,  # TODO: pass in config
+            height_sharding=conv_config.height_sharding if conv_config.height_sharding is not None else True,
+            transpose_shards=True,  # TODO: pass in config
+            output_layout=ttnn.TILE_LAYOUT,  # TODO: pass in config
+        )
+        if conv_config.core_grid:
+            conv_config_.core_grid = conv_config.core_grid
+        (
             output_tensor_new,
             output_height_new,
             output_width_new,
             weight_tensor_on_dev_new,
             bias_tensor_on_dev_new,
+        ) = ttnn._ttnn.operations.conv2d.conv2d(
+            input_tensor=input_tensor,
+            weight_tensor=weight_tensor,
+            device=device,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=input_width,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            groups=groups,
+            bias_tensor=bias_tensor,
+            conv_config=conv_config_,
         )
-    print("DEBUG MODE ENABLED. WILL RUN OLD PATH AND COMPARE WEIGHT, BIAS & OUTPUT TENSORS.")
+        if not debug:
+            return (
+                output_tensor_new,
+                output_height_new,
+                output_width_new,
+                weight_tensor_on_dev_new,
+                bias_tensor_on_dev_new,
+            )
+    if run_new_conv:
+        print("DEBUG MODE ENABLED. WILL RUN OLD PATH AND COMPARE WEIGHT, BIAS & OUTPUT TENSORS.")
     assert (
         not conv_config.deallocate_activation
     )  # cannot run old path if activation was deallocated in the new path above
     output_height = ((int)((input_height - kernel_size[0] + 2 * padding[0]) / stride[0])) + 1
     output_width = ((int)((input_width - kernel_size[1] + 2 * padding[1]) / stride[1])) + 1
-    assert output_height == output_height_new
-    assert output_width == output_width_new
+
     if "reader_patterns_cache" not in conv_op_cache:
         conv_op_cache["reader_patterns_cache"] = {}
     weight_is_on_device = ttnn.is_tensor_storage_on_device(weight_tensor)
@@ -685,7 +688,7 @@ def conv2d(
             input_tensor = ttnn.to_device(input_tensor, device=device, memory_config=input_tensor_sharded_memory_config)
         # since we resharded/moved the input tensor, we can deallocate it after halo op within composite conv
         conv_config.deallocate_activation = True
-    is_1x1_conv = kernel_size == (1, 1) and stride == (1, 1) and padding == (0, 0)
+    is_1x1_conv = kernel_size == (1, 1) and stride[0] == stride[1] and padding == (0, 0)
     if is_1x1_conv and input_tensor.layout != ttnn.TILE_LAYOUT:
         input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, dtype=conv_config.dtype)
     input_is_on_device = ttnn.is_tensor_storage_on_device(input_tensor)
@@ -749,21 +752,26 @@ def conv2d(
         conv_op_cache[conv.conv.weight] = conv
     # Run conv
     output_tensor = conv(input_tensor)
-    assert conv.conv.weight.layout == weight_tensor_on_dev_new.layout
-    assert conv.conv.bias.layout == bias_tensor_on_dev_new.layout
-    weight_t_cpu_golden = ttnn.to_torch(conv.conv.weight)
-    bias_t_cpu_golden = ttnn.to_torch(conv.conv.bias)
-    bias_t_cpu_golden = bias_t_cpu_golden[:, :, 0:1, :]
-    weight_t_cpu = ttnn.to_torch(weight_tensor_on_dev_new)
-    bias_t_cpu = ttnn.to_torch(bias_tensor_on_dev_new)
-    output_t_cpu_golden = ttnn.to_torch(output_tensor)
-    output_t_cpu = ttnn.to_torch(output_tensor_new)
-    assert torch.all(torch.eq(weight_t_cpu_golden, weight_t_cpu))
-    assert torch.all(torch.eq(bias_t_cpu_golden, bias_t_cpu))
-    # breakpoint()
-    # assert torch.all(torch.eq(output_t_cpu_golden, output_t_cpu))
-    # breakpoint()
-    return (output_tensor_new, output_height, output_width, weight_tensor_on_dev_new, bias_tensor_on_dev_new)
+    if run_new_conv:
+        assert output_height == output_height_new
+        assert output_width == output_width_new
+        assert conv.conv.weight.layout == weight_tensor_on_dev_new.layout
+        assert conv.conv.bias.layout == bias_tensor_on_dev_new.layout
+        weight_t_cpu_golden = ttnn.to_torch(conv.conv.weight)
+        bias_t_cpu_golden = ttnn.to_torch(conv.conv.bias)
+        bias_t_cpu_golden = bias_t_cpu_golden[:, :, 0:1, :]
+        weight_t_cpu = ttnn.to_torch(weight_tensor_on_dev_new)
+        bias_t_cpu = ttnn.to_torch(bias_tensor_on_dev_new)
+        output_t_cpu_golden = ttnn.to_torch(output_tensor)
+        output_t_cpu = ttnn.to_torch(output_tensor_new)
+        assert torch.all(torch.eq(weight_t_cpu_golden, weight_t_cpu))
+        assert torch.all(torch.eq(bias_t_cpu_golden, bias_t_cpu))
+        # breakpoint()
+        # assert torch.all(torch.eq(output_t_cpu_golden, output_t_cpu))
+        # breakpoint()
+        print("Returning output tensor from new path")
+        return (output_tensor_new, output_height, output_width, weight_tensor_on_dev_new, bias_tensor_on_dev_new)
+    return (output_tensor, output_height, output_width, conv.conv.weight, conv.conv.bias)
 
 
 __all__ = []
