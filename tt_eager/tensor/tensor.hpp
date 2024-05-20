@@ -344,13 +344,13 @@ Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, D
 void *get_raw_host_data_ptr(const Tensor &tensor);
 
 void memcpy(
-    CommandQueue &queue, void *dst, const Tensor &src, const std::optional<std::size_t> transfer_size = std::nullopt);
+    CommandQueue &queue, void *dst, const Tensor &src, const std::optional<std::size_t> transfer_size = std::nullopt, bool blocking = true);
 void memcpy(
     CommandQueue &queue, Tensor &dst, const void *src, const std::optional<std::size_t> transfer_size = std::nullopt);
 void memcpy(
     CommandQueue &queue, Tensor &dst, const Tensor &src, const std::optional<std::size_t> transfer_size = std::nullopt);
 
-void memcpy(void *dst, const Tensor &src, const std::optional<std::size_t> transfer_size = std::nullopt);
+void memcpy(void *dst, const Tensor &src, const std::optional<std::size_t> transfer_size = std::nullopt, bool blocking = true);
 void memcpy(Tensor &dst, const void *src, const std::optional<std::size_t> transfer_size = std::nullopt);
 void memcpy(Tensor &dst, const Tensor &src, const std::optional<std::size_t> transfer_size = std::nullopt);
 

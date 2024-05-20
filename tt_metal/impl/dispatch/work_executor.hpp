@@ -105,9 +105,11 @@ class WorkExecutor {
 
     inline void push_work(const std::function<void()>& work_executor, bool blocking = false) {
         ZoneScopedN("PushWork");
-        if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.parent_thread_id.load()) {
-            // Parent thread id is non-zero (using async mode) and parent is calling push_work.
-            // Push function executor to worker queue
+        if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == this->worker_queue.worker_thread_id.load() or not (this->worker_state == WorkerState::RUNNING)) {
+            // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current thread.
+            work_executor();
+        } else {
+            // Push to worker queue.
             this->worker_queue.push(work_executor);
             {
                 std::lock_guard lock(this->cv_mutex);
@@ -116,18 +118,17 @@ class WorkExecutor {
             if (blocking) {
                 this->synchronize();
             }
-        } else {
-            // Either push work is called from worker itself or async mode is not being used.
-            work_executor();
         }
     }
 
     inline void push_work(std::shared_ptr<std::function<void()>> work_executor, bool blocking = false) {
         // Latest push API, passing ptrs around for work container. Usually faster, since no data-copies.
         ZoneScopedN("PushWork");
-        if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.parent_thread_id.load()) {
-            // Parent thread id is non-zero (using async mode) and parent is calling push_work.
-            // Push function executor to worker queue
+        if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == this->worker_queue.worker_thread_id.load() or not (this->worker_state == WorkerState::RUNNING)) {
+            // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current thread.
+            (*work_executor)();
+        } else {
+            // Push to worker queue.
             this->worker_queue.push(work_executor);
             {
                 std::lock_guard lock(this->cv_mutex);
@@ -136,15 +137,12 @@ class WorkExecutor {
             if (blocking) {
                 this->synchronize();
             }
-        } else {
-            // Either push work is called from worker itself or async mode is not being used.
-            (*work_executor)();
         }
     }
 
     inline void synchronize() {
-        if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS and std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.parent_thread_id.load()) {
-            // Blocking = wait for queue flushed. Only main thread can explcitly insert a synchronize, otherwise we have a deadlock.
+        if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS and not(std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.worker_thread_id.load())) {
+            // Blocking = wait for queue flushed. Worker thread cannot explcitly insert a synchronize, otherwise we have a deadlock.
             this->worker_queue.push([](){}); // Send flush command (i.e. empty function)
             {
                 std::lock_guard lock(this->cv_mutex);

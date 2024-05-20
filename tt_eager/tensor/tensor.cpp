@@ -840,7 +840,7 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
     return dispatch_map.at(tensor.get_dtype())(tensor);
 }
 
-void memcpy(CommandQueue& queue, void* dst, const Tensor& src, const std::optional<std::size_t> transfer_size) {
+void memcpy(CommandQueue& queue, void* dst, const Tensor& src, const std::optional<std::size_t> transfer_size, bool blocking) {
     TT_ASSERT(not transfer_size.has_value(), "transfer_size is not supported for memcpy right now!");
     if (not is_device_tensor(src)) {
         TT_THROW("memcpy: src tensor must be on device");
@@ -850,11 +850,11 @@ void memcpy(CommandQueue& queue, void* dst, const Tensor& src, const std::option
     if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
         TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
     }
-    EnqueueReadBuffer(queue, src.device_buffer(), dst, true);
+    EnqueueReadBuffer(queue, src.device_buffer(), dst, blocking);
 }
 
-void memcpy(void* dst, const Tensor& src, const std::optional<std::size_t> transfer_size) {
-    memcpy(src.device()->command_queue(), dst, src, transfer_size);
+void memcpy(void* dst, const Tensor& src, const std::optional<std::size_t> transfer_size, bool blocking) {
+    memcpy(src.device()->command_queue(), dst, src, transfer_size, blocking);
 }
 
 void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const std::optional<std::size_t> transfer_size) {
