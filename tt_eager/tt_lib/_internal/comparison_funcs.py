@@ -71,9 +71,9 @@ def get_atol_rtol_pcc(golden, calculated):
             if golden.numel() == 1:
                 return float(torch.equal(golden, calculated))
 
-            # one tensor is constant
-            if torch.max(golden) == torch.min(golden) or torch.max(calculated) == torch.min(calculated):
-                return float(torch.equal(golden, calculated))
+            # If both tensors are contant
+            if torch.max(golden) == torch.min(golden) and torch.max(calculated) == torch.min(calculated):
+                return torch.isclose(torch.max(golden), torch.max(calculated)).item()
 
             cal_pcc = np.ma.corrcoef(
                 np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),

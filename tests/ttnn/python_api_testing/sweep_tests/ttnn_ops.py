@@ -957,7 +957,7 @@ def eltwise_tanh(x, *args, device, dtype, layout, input_mem_config, output_mem_c
     return ttnn_tensor_to_torch(t1)
 
 
-def eltwise_softmax(
+def softmax(
     x,
     *args,
     device,
@@ -972,7 +972,7 @@ def eltwise_softmax(
     return ttnn_tensor_to_torch(t1)
 
 
-def eltwise_softplus(
+def softplus(
     x,
     *args,
     beta,

@@ -52,8 +52,8 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_square,
         "pytorch_op": pytorch_ops.square,
     },
-    "ttnn-eltwise-softplus": {
-        "tt_op": ttnn_ops.eltwise_softplus,
+    "ttnn-softplus": {
+        "tt_op": ttnn_ops.softplus,
         "pytorch_op": pytorch_ops.softplus,
     },
     "ttnn-eltwise-swish": {
@@ -380,8 +380,8 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_tanh,
         "pytorch_op": pytorch_ops.tanh,
     },
-    "ttnn-eltwise-softmax": {
-        "tt_op": ttnn_ops.eltwise_softmax,
+    "ttnn-softmax": {
+        "tt_op": ttnn_ops.softmax,
         "pytorch_op": pytorch_ops.softmax_in_place,
     },
     "ttnn-mul": {
