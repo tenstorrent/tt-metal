@@ -272,6 +272,10 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_unary_div_no_nan,
         "pytorch_op": pytorch_ops.unary_div_no_nan,
     },
+    "eltwise-left-shift": {
+        "tt_op": tt_lib_ops.eltwise_left_shift,
+        "pytorch_op": pytorch_ops.left_shift,
+    },
     "eltwise-square": {
         "tt_op": tt_lib_ops.eltwise_square,
         "pytorch_op": pytorch_ops.square,

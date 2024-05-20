@@ -659,6 +659,11 @@ def silu(x, *args, **kwargs):
     return torch.nn.functional.silu(x)
 
 
+def left_shift(x, y, *args, **kwargs):
+    result = torch.bitwise_left_shift(x, y)
+    return result
+
+
 def div(x, y, *args, accurate_mode, **kwargs):
     result = torch.div(x, y)
     return result

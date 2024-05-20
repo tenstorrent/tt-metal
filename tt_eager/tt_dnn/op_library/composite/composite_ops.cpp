@@ -613,6 +613,57 @@ Tensor atan2(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& o
     return operation::decorate_as_composite(__func__, _atan2)(input_a, input_b, output_mem_config);
 }
 
+Tensor _left_shift(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+    Tensor number = input_a;
+    Tensor shift_amount = input_b;
+
+    Tensor two = full_like(input_a, 2.0);
+    Tensor one = full_like(input_a, 1.0);
+    Tensor result = one;
+    Tensor two_pow_2 = full_like(input_a, 4.0);
+    Tensor two_pow_5 = full_like(input_a, 32.0);
+    Tensor two_pow_10 = full_like(input_a, 1024.0);
+    Tensor two_pow_25 = full_like(input_a, 33554432.0);
+    Tensor two_pow_50 = full_like(input_a, 1125899906842624.0);
+
+    result = where(gte_unary(shift_amount, 50), mul(result, two_pow_50), result);
+    shift_amount = where(gte_unary(shift_amount, 50), sub_unary(shift_amount, 50.0), shift_amount);
+
+    result = where(gte_unary(shift_amount, 25), mul(result, two_pow_25), result);
+    shift_amount = where(gte_unary(shift_amount, 25), sub_unary(shift_amount, 25.0), shift_amount);
+
+    result = where(gte_unary(shift_amount, 10), mul(result, two_pow_10), result);
+    shift_amount = where(gte_unary(shift_amount, 10), sub_unary(shift_amount, 10.0), shift_amount);
+
+    result = where(gte_unary(shift_amount, 5), mul(result, two_pow_5), result);
+    shift_amount = where(gte_unary(shift_amount, 5), sub_unary(shift_amount, 5.0), shift_amount);
+
+    result = where(gte_unary(shift_amount, 5), mul(result, two_pow_5), result);
+    shift_amount = where(gte_unary(shift_amount, 5), sub_unary(shift_amount, 5.0), shift_amount);
+
+    result = where(gte_unary(shift_amount, 2), mul(result, two_pow_2), result);
+    shift_amount = where(gte_unary(shift_amount, 2), sub_unary(shift_amount, 2.0), shift_amount);
+
+    result = where(gtz(shift_amount), mul(result, two), result);
+    shift_amount = where(gtz(shift_amount), sub_unary(shift_amount, 1.0), shift_amount);
+
+    result = where(gtz(shift_amount), mul(result, two), result);
+    shift_amount = where(gtz(shift_amount), sub_unary(shift_amount, 1.0), shift_amount);
+
+    Tensor mul_result = mul(number, result);
+    one.deallocate();
+    two.deallocate();
+    two_pow_2.deallocate();
+    two_pow_5.deallocate();
+    two_pow_10.deallocate();
+    two_pow_25.deallocate();
+    two_pow_50.deallocate();
+    return mul_result;
+}
+Tensor left_shift(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _left_shift)(input_a, input_b, output_mem_config);
+}
+
 // lerp(input, end, weight) = start + weight * (end - start)
 Tensor _lerp_overload(
     const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, const MemoryConfig& output_mem_config) {
