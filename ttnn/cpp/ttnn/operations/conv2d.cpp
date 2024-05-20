@@ -4,6 +4,7 @@
 
 #include "conv2d.hpp"
 #include "ttnn/cpp/ttnn/op_library/to_dtype/to_dtype_op.hpp"
+#include "tt_eager/tt_dnn/op_library/downsample/downsample_op.hpp"
 using namespace tt;
 namespace ttnn {
 
@@ -445,6 +446,44 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
 }
+
+MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
+    tt::tt_metal::OptimizedConvParallelizationConfig conv_parallelization_config, tt::tt_metal::OptimizedConvBlockConfig conv_blocking_config, bool height_sharded, string activation, bool transpose_mcast, uint32_t grid_size_along_c
+) {
+    if(height_sharded) {
+        MatmulMultiCoreReuseMultiCast1DProgramConfig matmul_config = {
+            .compute_with_storage_grid_size=conv_parallelization_config.grid_size,
+            .in0_block_w=conv_blocking_config.act_block_w_ntiles,
+            .out_subblock_h=conv_blocking_config.out_subblock_h_ntiles,
+            .out_subblock_w=conv_blocking_config.out_subblock_w_ntiles,
+            .per_core_M=conv_parallelization_config.per_core_out_matrix_height_ntiles,
+            .per_core_N=conv_parallelization_config.per_core_out_matrix_width_ntiles,
+            .fuse_batch=true,
+            .mcast_in0=false
+        };
+        if (activation != "") {
+            cout << "activation = " << activation << endl;
+            matmul_config.fused_activation = string_to_unary_with_param(activation);
+        }
+        return matmul_config;
+    } else {
+        TT_ASSERT(conv_blocking_config.act_block_w_ntiles % grid_size_along_c == 0);
+        MatmulMultiCoreReuseMultiCastProgramConfig matmul_config = {
+            .compute_with_storage_grid_size=conv_parallelization_config.grid_size,
+            .in0_block_w=conv_blocking_config.act_block_w_ntiles / grid_size_along_c,
+            .out_subblock_h=conv_blocking_config.out_subblock_h_ntiles,
+            .out_subblock_w=conv_blocking_config.out_subblock_w_ntiles,
+            .per_core_M=conv_parallelization_config.per_core_out_matrix_height_ntiles,
+            .per_core_N=conv_parallelization_config.per_core_out_matrix_width_ntiles,
+            .transpose_mcast=transpose_mcast
+        };
+        if (activation != "") {
+            cout << "activation = " << activation << endl;
+            matmul_config.fused_activation = string_to_unary_with_param(activation);
+        }
+        return matmul_config;
+    }
+}
 std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
@@ -488,8 +527,8 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(weight_tensor, bias_tensor, conv_config.input_channels_alignment, conv_config.weights_dtype, opt_conv_op_block_config.act_block_w_ntiles, opt_conv_op_block_config.out_subblock_w_ntiles, parallel_config, device);
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
-    bool is_1x1_s1_p0_conv = kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == 1 && stride[1] == 1 && padding[0] == 1 && padding[1] == 1 && dilation[0] == 1 && dilation[1] == 1 && groups == 1;
-    if (is_1x1_s1_p0_conv) {
+    bool use_matmul_for_1x1_conv = kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == stride[1] && padding[0] == 0 && padding[1] == 0 && dilation[0] == 1 && dilation[1] == 1 && groups == 1;
+    if (use_matmul_for_1x1_conv) {
         input_tensor_post_tm = ttnn::operations::core::ToLayout::execute(input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config(),&device);
     }
     // call optimized conv op or matmul micro op
@@ -502,7 +541,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         TT_ASSERT(device.arch() == ARCH::GRAYSKULL);
         compute_kernel_config = GrayskullComputeKernelConfig({.math_fidelity = conv_config.math_fidelity, .math_approx_mode = conv_config.math_approx_mode_enabled});
     }
-    if (!is_1x1_s1_p0_conv) {
+    if (!use_matmul_for_1x1_conv) {
         // call halo op
         SlidingWindowConfig sliding_window_config = SlidingWindowConfig(batch_size, input_height, input_width, kernel_size[0], kernel_size[1], stride[0], stride[1], padding[0], padding[1], dilation[0], dilation[1], opt_conv_op_parallel_config.num_cores_nhw, input_tensor_post_tm.memory_config().shard_spec.value().grid,true);
         auto halo_output = ttnn::operations::halo::halo_op(input_tensor_post_tm, sliding_window_config, 0, false, parallel_config.shard_orientation == ShardOrientation::COL_MAJOR, 0, input_tensor_post_tm.memory_config());
@@ -520,10 +559,21 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
         // run conv as matmul
-        // TODO add support for running downsample here for stride 2
-        auto matmul_output = ttnn::operations::matmul::linear(input_tensor_post_tm, weight_tensor_on_device, bias_tensor_on_device, {}, input_tensor_post_tm.memory_config(), conv_config.dtype, conv_config.activation, compute_kernel_config);
+        uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
+        auto matmul_program_config = determine_matmul_op_config_from_conv_op_config(opt_conv_op_parallel_config, opt_conv_op_block_config, parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED, conv_config.activation, parallel_config.shard_orientation == ShardOrientation::COL_MAJOR, num_cores_c);
+        cout << "Matmul" << endl;
+        cout << "activation = " << conv_config.activation  << endl;
+        auto matmul_input = input_tensor_post_tm;
+        if (stride[0] > 1) {
+            // run downsample
+            matmul_input = tt::tt_metal::downsample(input_tensor_post_tm, {batch_size, input_height, input_width, stride[0], stride[1]});
+            if (conv_config.deallocate_activation) {
+                input_tensor_post_tm.deallocate();
+            }
+        }
+        auto matmul_output = ttnn::operations::matmul::linear(matmul_input, weight_tensor_on_device, bias_tensor_on_device, matmul_program_config, input_tensor_post_tm.memory_config(), conv_config.dtype, conv_config.activation == "" ? std::nullopt : std::optional<std::string>{conv_config.activation}, compute_kernel_config);
         if (conv_config.deallocate_activation) {
-            input_tensor_post_tm.deallocate();
+            matmul_input.deallocate();
         }
         return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
