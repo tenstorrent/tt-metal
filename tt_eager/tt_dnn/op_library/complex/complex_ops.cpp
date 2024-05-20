@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/complex/complex_ops.hpp"
-#include "tt_dnn/op_library/concat/concat_op.hpp"
+
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "tt_dnn/op_library/concat/concat_op.hpp"
+#include "tt_dnn/op_library/numpy/functions.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
-#include "tt_numpy/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 
 namespace tt {

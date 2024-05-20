@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/bmm/bmm_op.hpp"
-#include "common/constants.hpp"
-#include "tt_numpy/functions.hpp"
-
 #include <algorithm>
 #include <functional>
 #include <random>
+
+#include "common/constants.hpp"
+#include "tensor/tensor.hpp"
+#include "tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "tt_dnn/op_library/numpy/functions.hpp"
+#include "tt_metal/host_api.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -46,9 +46,9 @@ int main(int argc, char **argv) {
         Shape shapeb1 = {1, 1, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
 
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = tt::numpy::random::random(shapea).to(Layout::TILE).to(device);
-        Tensor b = tt::numpy::zeros(shapeb, DataType::BFLOAT16).to(Layout::TILE).to(device);
-        Tensor b1 = tt::numpy::zeros(shapeb1, DataType::BFLOAT16).to(Layout::TILE).to(device);
+        Tensor a = tt::tt_metal::random::random(shapea).to(Layout::TILE).to(device);
+        Tensor b = tt::tt_metal::zeros(shapeb, DataType::BFLOAT16).to(Layout::TILE).to(device);
+        Tensor b1 = tt::tt_metal::zeros(shapeb1, DataType::BFLOAT16).to(Layout::TILE).to(device);
 
         Tensor mm = tt::operations::primary::matmul(a, b, /*bias=*/std::nullopt, tt::operations::primary::MatmulDefaultProgramConfig{}, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, /*output_dtype=*/std::nullopt, /*compute_kernel_config=*/std::nullopt, /*untilize_out=*/false, /*user_core_coord=*/std::nullopt, /*user_fused_activation=*/std::nullopt, /*input_b_is_batched=*/true).cpu();
         Tensor mm1 = tt::operations::primary::matmul(a, b1).cpu();

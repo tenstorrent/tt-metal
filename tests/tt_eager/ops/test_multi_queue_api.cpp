@@ -10,9 +10,9 @@
 #include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "tt_dnn/op_library/numpy/functions.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_numpy/functions.hpp"
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::Device;
@@ -58,7 +58,7 @@ void test_multi_queue_api() {
     // auto& command_queue_1 = device->command_queue(1);
 
     auto host_input_tensor =
-        tt::numpy::random::uniform(bfloat16(0.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}).to(Layout::TILE);
+        tt::tt_metal::random::uniform(bfloat16(0.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}).to(Layout::TILE);
 
     // Base API
     /*
@@ -101,8 +101,8 @@ void test_multi_queue_api() {
     tt::tt_metal::QueueSynchronize(command_queue_0);
     // tt::tt_metal::QueueSynchronize(command_queue_1);
 
-    TT_FATAL(tt::numpy::allclose<bfloat16>(golden_output_tensor, cq0_output_tensor, 1e-3f, 1e-2f));
-    TT_FATAL(tt::numpy::allclose<bfloat16>(golden_output_tensor, cq1_output_tensor, 1e-3f, 1e-2f));
+    TT_FATAL(tt::tt_metal::allclose<bfloat16>(golden_output_tensor, cq0_output_tensor, 1e-3f, 1e-2f));
+    TT_FATAL(tt::tt_metal::allclose<bfloat16>(golden_output_tensor, cq1_output_tensor, 1e-3f, 1e-2f));
 
     TT_FATAL(tt::tt_metal::CloseDevice(device));
 }

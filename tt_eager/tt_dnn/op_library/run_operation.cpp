@@ -10,11 +10,11 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
+#include "tt_dnn/op_library/numpy/functions.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
-#include "tt_numpy/functions.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 
 namespace tt::tt_metal::operation {

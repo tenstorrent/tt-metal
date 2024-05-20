@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/transpose/transpose_op.hpp"
-#include <tt_numpy/functions.hpp>
-
 #include <algorithm>
 #include <functional>
 #include <random>
+#include <tt_dnn/op_library/numpy/functions.hpp>
+
+#include "tensor/tensor.hpp"
+#include "tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "tt_metal/host_api.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -36,7 +36,8 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         Shape shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);;
+        Tensor a = tt::tt_metal::random::random(shape).to(Layout::TILE).to(device);
+        ;
 
         tt_metal::Tensor c = tt_metal::transpose(a, -2, -1);
 

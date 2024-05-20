@@ -7,7 +7,7 @@
 #include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
-#include "tt_numpy/functions.hpp"
+#include "tt_dnn/op_library/numpy/functions.hpp"
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::Device;
@@ -32,13 +32,13 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
 
 template <auto HostFunction, typename DeviceFunction, typename... Args>
 bool run_test(const Shape& shape, const DeviceFunction& device_function, Device* device, Args... args) {
-    auto input_tensor_a = tt::numpy::random::random(shape, DataType::BFLOAT16);
-    auto input_tensor_b = tt::numpy::random::random(shape, DataType::BFLOAT16);
+    auto input_tensor_a = tt::tt_metal::random::random(shape, DataType::BFLOAT16);
+    auto input_tensor_b = tt::tt_metal::random::random(shape, DataType::BFLOAT16);
 
     auto host_output = HostFunction(input_tensor_a, input_tensor_b);
     auto device_output = device_function(input_tensor_a.to(Layout::TILE).to(device), input_tensor_b.to(Layout::TILE).to(device)).cpu().to(Layout::ROW_MAJOR);
 
-    return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+    return tt::tt_metal::allclose<bfloat16>(host_output, device_output, args...);
 }
 
 int main() {
@@ -108,7 +108,7 @@ int main() {
 
     // Allocate a tensor to show that the addresses aren't cached
     auto input_tensor =
-        tt::numpy::random::uniform(bfloat16(0.0f), bfloat16(0.0f), {1, 1, 32, 32}).to(Layout::TILE).to(device);
+        tt::tt_metal::random::uniform(bfloat16(0.0f), bfloat16(0.0f), {1, 1, 32, 32}).to(Layout::TILE).to(device);
 
     run_binary_ops();
 

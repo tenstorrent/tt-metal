@@ -5,9 +5,9 @@
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "tt_eager/tt_numpy/functions.hpp"
-#include "tt_metal/common/constants.hpp"
+#include "tt_eager/tt_dnn/op_library/numpy/functions.hpp"
 #include "tt_metal/common/bfloat16.hpp"
+#include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 

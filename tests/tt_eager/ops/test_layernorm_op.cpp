@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tt_dnn/op_library/layernorm/layernorm_op.hpp"
-#include <tt_numpy/functions.hpp>
-
 #include <algorithm>
 #include <functional>
-#include <random>
 #include <optional>
+#include <random>
+#include <tt_dnn/op_library/numpy/functions.hpp>
+
+#include "tt_eager/tensor/tensor.hpp"
+#include "tt_eager/tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "tt_metal/host_api.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -30,7 +30,8 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
         Shape shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
-        Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);;
+        Tensor a = tt::tt_metal::random::random(shape).to(Layout::TILE).to(device);
+        ;
         Tensor c = layernorm(a, 1e-4f);
         Tensor d = c.cpu();
         Tensor host_a = a.cpu(); // Move tensor a to host to validate

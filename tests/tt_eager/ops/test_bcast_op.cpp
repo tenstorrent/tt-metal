@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "common/constants.hpp"
-#include "third_party/magic_enum/magic_enum.hpp"
-#include <tt_numpy/functions.hpp>
-
 #include <algorithm>
 #include <functional>
 #include <random>
+#include <tt_dnn/op_library/numpy/functions.hpp>
+
+#include "common/constants.hpp"
+#include "tensor/tensor.hpp"
+#include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "tt_metal/host_api.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -54,8 +54,10 @@ int main(int argc, char **argv) {
                         throw std::runtime_error("Unsupported Dim!");
                     }
 
-                    Tensor a = tt::numpy::random::random(input_shape_a).to(Layout::TILE).to(device);
-                    Tensor b = tt::numpy::zeros({1, 1, TILE_HEIGHT, TILE_WIDTH}, DataType::BFLOAT16).to(Layout::TILE).to(device);
+                    Tensor a = tt::tt_metal::random::random(input_shape_a).to(Layout::TILE).to(device);
+                    Tensor b = tt::tt_metal::zeros({1, 1, TILE_HEIGHT, TILE_WIDTH}, DataType::BFLOAT16)
+                                   .to(Layout::TILE)
+                                   .to(device);
 
                     for (auto bcast_math: magic_enum::enum_values<BcastOpMath>()) {
                         Tensor c = bcast(a, b, bcast_math, bcast_dim);
@@ -71,29 +73,29 @@ int main(int argc, char **argv) {
             }
 
             {
-                Tensor a = tt::numpy::random::random({1, 1, 32, 4544}).to(Layout::TILE).to(device);
-                Tensor b = tt::numpy::zeros({1, 1, 32, 4544}, DataType::BFLOAT16).to(Layout::TILE).to(device);
+                Tensor a = tt::tt_metal::random::random({1, 1, 32, 4544}).to(Layout::TILE).to(device);
+                Tensor b = tt::tt_metal::zeros({1, 1, 32, 4544}, DataType::BFLOAT16).to(Layout::TILE).to(device);
                 Tensor c = bcast(a, b, BcastOpMath::MUL, BcastOpDim::H);
                 Tensor d = c.cpu();
             }
 
             {
-                Tensor a = tt::numpy::random::random({1, 1, 32, 4544}).to(Layout::TILE).to(device);
-                Tensor b = tt::numpy::zeros({1, 1, 32, 4544}, DataType::BFLOAT16).to(Layout::TILE).to(device);
+                Tensor a = tt::tt_metal::random::random({1, 1, 32, 4544}).to(Layout::TILE).to(device);
+                Tensor b = tt::tt_metal::zeros({1, 1, 32, 4544}, DataType::BFLOAT16).to(Layout::TILE).to(device);
                 Tensor c = bcast(a, b, BcastOpMath::ADD, BcastOpDim::H);
                 Tensor d = c.cpu();
             }
 
             {
-                Tensor a = tt::numpy::random::random({1, 71, 32, 32}).to(Layout::TILE).to(device);
-                Tensor b = tt::numpy::zeros({1, 1, 32, 32}, DataType::BFLOAT16).to(Layout::TILE).to(device);
+                Tensor a = tt::tt_metal::random::random({1, 71, 32, 32}).to(Layout::TILE).to(device);
+                Tensor b = tt::tt_metal::zeros({1, 1, 32, 32}, DataType::BFLOAT16).to(Layout::TILE).to(device);
                 Tensor c = bcast(a, b, BcastOpMath::MUL, BcastOpDim::HW);
                 Tensor d = c.cpu();
             }
 
             {
-                Tensor a = tt::numpy::random::random({1, 71, 32, 64}).to(Layout::TILE).to(device);
-                Tensor b = tt::numpy::zeros({1, 1, 32, 32}, DataType::BFLOAT16).to(Layout::TILE).to(device);
+                Tensor a = tt::tt_metal::random::random({1, 71, 32, 64}).to(Layout::TILE).to(device);
+                Tensor b = tt::tt_metal::zeros({1, 1, 32, 32}, DataType::BFLOAT16).to(Layout::TILE).to(device);
                 Tensor c = bcast(a, b, BcastOpMath::MUL, BcastOpDim::HW);
                 Tensor d = c.cpu();
             }

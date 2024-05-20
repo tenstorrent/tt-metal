@@ -2,12 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/pool/average_pool.hpp"
-#include "tt_dnn/op_library/auto_format.hpp"
-#include "tt_numpy/functions.hpp"
-
-#include "tensor/tensor.hpp"
 #include "common/constants.hpp"
+#include "tensor/tensor.hpp"
+#include "tt_dnn/op_library/auto_format.hpp"
+#include "tt_dnn/op_library/numpy/functions.hpp"
+#include "tt_dnn/op_library/pool/average_pool.hpp"
 
 using tt::tt_metal::Host;
 using tt::tt_metal::Device;
@@ -18,7 +17,7 @@ using tt::tt_metal::Shape;
 using tt::tt_metal::AutoFormat;
 
 Tensor run_avg_pool_2d_resnet(Shape& tensor_shape, Device* device) {
-    auto input_tensor = tt::numpy::random::random(tensor_shape, DataType::BFLOAT16);
+    auto input_tensor = tt::tt_metal::random::random(tensor_shape, DataType::BFLOAT16);
     auto padded_input_shape = AutoFormat::pad_to_tile_shape(tensor_shape, false, false);
     Tensor padded_input_tensor = input_tensor;
     if (!AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape)) {

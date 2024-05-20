@@ -8,17 +8,16 @@
 #include "tt_dnn/op_library/concat/concat_op.hpp"
 #include "tt_dnn/op_library/copy/copy_op.hpp"
 #include "tt_dnn/op_library/math.hpp"
+#include "tt_dnn/op_library/numpy/functions.hpp"
 #include "tt_dnn/op_library/optimizer/optimizer_ops.hpp"
 #include "tt_dnn/op_library/permute/permute_op.hpp"
+#include "tt_dnn/op_library/prod/prod_nc_op.hpp"
+#include "tt_dnn/op_library/prod/prod_op_all.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
-#include "tt_numpy/functions.hpp"
-#include "tt_dnn/op_library/prod/prod_nc_op.hpp"
-#include "tt_dnn/op_library/prod/prod_op_all.hpp"
-#include "tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_eager/tt_dnn/op_library/unpad/unpad_op.hpp"
 
 namespace tt {
@@ -1325,7 +1324,7 @@ Tensor clamp(const Tensor& a, float low, float high, const MemoryConfig& output_
 // on-device tensor creation 0s with shape
 Tensor zeros(
     const Shape shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& output_mem_config) {
-    return tt::numpy::zeros(shape, data_type, layout, device, output_mem_config);
+    return tt::tt_metal::zeros(shape, data_type, layout, device, output_mem_config);
 }
 
 Tensor empty(
@@ -1336,7 +1335,7 @@ Tensor empty(
 // on-device tensor creation 1s with shape
 Tensor ones(
     const Shape shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& output_mem_config) {
-    return tt::numpy::ones(shape, data_type, layout, device, output_mem_config);
+    return tt::tt_metal::ones(shape, data_type, layout, device, output_mem_config);
 }
 
 // on-device tensor creation with shape and filled with value
@@ -1347,12 +1346,12 @@ Tensor full(
     Layout layout,
     Device* device,
     const MemoryConfig& output_mem_config) {
-    return tt::numpy::full(shape, value, data_type, layout, device, output_mem_config);
+    return tt::tt_metal::full(shape, value, data_type, layout, device, output_mem_config);
 }
 
 // on-device with increment
 Tensor arange(int32_t start, int32_t end, int32_t step, Device* device, const MemoryConfig& output_mem_config) {
-    return tt::numpy::arange<bfloat16>(start, end, step, Layout::ROW_MAJOR, device, output_mem_config);
+    return tt::tt_metal::arange<bfloat16>(start, end, step, Layout::ROW_MAJOR, device, output_mem_config);
 }
 
 /**
@@ -1504,7 +1503,7 @@ Tensor swiglu(
 // on-device tensor creation with shape and filled with value
 Tensor _sfpu_eps(const Shape shape, Layout layout, Device* device, const MemoryConfig& output_mem_config) {
     float value = device->sfpu_eps();
-    return tt::numpy::full(shape, value, DataType::BFLOAT16, layout, device, output_mem_config);
+    return tt::tt_metal::full(shape, value, DataType::BFLOAT16, layout, device, output_mem_config);
 }
 Tensor sfpu_eps(const Shape shape, Layout layout, Device* device, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _sfpu_eps)(shape, layout, device, output_mem_config);
@@ -1512,7 +1511,7 @@ Tensor sfpu_eps(const Shape shape, Layout layout, Device* device, const MemoryCo
 
 // tril : select lower triangular region of input matrix
 Tensor _tril(const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_config) {
-    Tensor index_l = tt::numpy::index_tril<bfloat16>(input_a.get_legacy_shape(), diag, DataType::BFLOAT16);
+    Tensor index_l = tt::tt_metal::index_tril<bfloat16>(input_a.get_legacy_shape(), diag, DataType::BFLOAT16);
     return mul(input_a, index_l, std::nullopt, output_mem_config);
 }
 Tensor tril(
@@ -1524,7 +1523,7 @@ Tensor tril(
 
 // triu : select upper triangular region of input matrix
 Tensor _triu(const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_config) {
-    Tensor index_u = tt::numpy::index_triu<bfloat16>(input_a.get_legacy_shape(), diag, DataType::BFLOAT16);
+    Tensor index_u = tt::tt_metal::index_triu<bfloat16>(input_a.get_legacy_shape(), diag, DataType::BFLOAT16);
     return mul(input_a, index_u, std::nullopt, output_mem_config);
 }
 Tensor triu(
@@ -1573,7 +1572,7 @@ Tensor create_mask(const Tensor& input_a, const MemoryConfig& output_mem_config)
     if (padded_shape == unpadded_shape)
         return input_a;
     float t_inf = -std::numeric_limits<float>::infinity();
-    Tensor masked_input = tt::numpy::mask_padded_input<bfloat16>(padded_shape, unpadded_shape, DataType::BFLOAT16);
+    Tensor masked_input = tt::tt_metal::mask_padded_input<bfloat16>(padded_shape, unpadded_shape, DataType::BFLOAT16);
     masked_input = where(masked_input, input_a, t_inf, output_mem_config);
     return masked_input;
 }
@@ -1598,14 +1597,14 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig
                     bool is_width = (dim == (input_shape.rank() - 1));
                     Tensor max_val = max(input_a, dim, output_mem_config);
                     Tensor max_tensor = zeros_like(input_a, output_mem_config);
-                    Tensor tindex = tt::numpy::index_width<bfloat16>(input_shape, DataType::BFLOAT16);
+                    Tensor tindex = tt::tt_metal::index_width<bfloat16>(input_shape, DataType::BFLOAT16);
                     if (is_width)
                     {
                         max_tensor = bcast(max_tensor, max_val, BcastOpMath::ADD, BcastOpDim::W, output_mem_config);
                     }
                     else
                     {
-                        tindex = tt::numpy::index_height<bfloat16>(input_shape, DataType::BFLOAT16);
+                        tindex = tt::tt_metal::index_height<bfloat16>(input_shape, DataType::BFLOAT16);
                         max_tensor = bcast(max_tensor, max_val, BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
                     }
                     max_val.deallocate();
@@ -1645,10 +1644,10 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig
                     Tensor concat_out = concat(combined_tensors, dim, output_mem_config);
                     Tensor cmp_results = eq(input_a, concat_out, std::nullopt, output_mem_config);
                     concat_out.deallocate();
-                    Tensor tindex = tt::numpy::index_channel<bfloat16>(input_shape, DataType::BFLOAT16);
+                    Tensor tindex = tt::tt_metal::index_channel<bfloat16>(input_shape, DataType::BFLOAT16);
                     if (!is_channel)
                     {
-                        tindex = tt::numpy::index_batch<bfloat16>(input_shape, DataType::BFLOAT16);
+                        tindex = tt::tt_metal::index_batch<bfloat16>(input_shape, DataType::BFLOAT16);
                     }
                     Tensor max_indices =  mul(cmp_results, tindex, std::nullopt, output_mem_config);
                     cmp_results.deallocate();
@@ -1672,7 +1671,7 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig
                 }
             }
             //TODO: Fix the index generation code. With the fix the code will work for argmax that return entire maximum value index
-            Tensor tindex = tt::numpy::index_all<bfloat16>(input_shape, DataType::BFLOAT16);
+            Tensor tindex = tt::tt_metal::index_all<bfloat16>(input_shape, DataType::BFLOAT16);
             Tensor max_val = global_max(input_a, output_mem_config);
             Tensor max_tensor = zeros_like(input_a, output_mem_config);
             max_tensor = bcast(max_tensor, max_val, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);

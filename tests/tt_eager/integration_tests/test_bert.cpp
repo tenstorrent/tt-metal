@@ -9,12 +9,12 @@
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "tt_dnn/op_library/numpy/functions.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_numpy/functions.hpp"
 
 using Parameters = std::map<std::string, Tensor>;
 
@@ -205,30 +205,90 @@ void test_bert() {
     std::uint32_t hidden_size = num_heads * head_size;
     std::uint32_t intermediate_size = hidden_size * 4;
 
-    auto attention_mask = tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {batch_size, 1, TILE_HEIGHT, sequence_size}, Layout::TILE).to(device, l1_memory_config);
+    auto attention_mask =
+        tt::tt_metal::random::uniform(
+            bfloat16(-1.0f), bfloat16(1.0f), {batch_size, 1, TILE_HEIGHT, sequence_size}, Layout::TILE)
+            .to(device, l1_memory_config);
 
     auto parameters = Parameters{};
     for (auto encoder_index = 0; encoder_index < num_encoders; encoder_index++) {
-        parameters.emplace(fmt::format("fused_qkv_weight_{}", encoder_index), tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, hidden_size, hidden_size * 3}, Layout::TILE).to(device, dram_memory_config));
-        parameters.emplace(fmt::format("fused_qkv_bias_{}", encoder_index), tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, hidden_size * 3}, Layout::TILE).to(device, dram_memory_config));
-        parameters.emplace(fmt::format("selfout_weight_{}", encoder_index), tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, hidden_size, hidden_size}, Layout::TILE).to(device, dram_memory_config));
-        parameters.emplace(fmt::format("selfout_bias_{}", encoder_index), tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, hidden_size}, Layout::TILE).to(device, dram_memory_config));
-        parameters.emplace(fmt::format("attention_layernorm_weight_{}", encoder_index), tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::ROW_MAJOR).to(device, dram_memory_config));
-        parameters.emplace(fmt::format("attention_layernorm_bias_{}", encoder_index), tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::ROW_MAJOR).to(device, dram_memory_config));
-        parameters.emplace(fmt::format("ff1_weight_{}", encoder_index), tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, hidden_size, intermediate_size}, Layout::TILE).to(device, dram_memory_config));
-        parameters.emplace(fmt::format("ff1_bias_{}", encoder_index), tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, intermediate_size}, Layout::TILE).to(device, dram_memory_config));
-        parameters.emplace(fmt::format("ff2_weight_{}", encoder_index), tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, intermediate_size, hidden_size}, Layout::TILE).to(device, dram_memory_config));
-        parameters.emplace(fmt::format("ff2_bias_{}", encoder_index), tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, hidden_size}, Layout::TILE).to(device, dram_memory_config));
-        parameters.emplace(fmt::format("feedforward_layernorm_weight_{}", encoder_index), tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::ROW_MAJOR).to(device, dram_memory_config));
-        parameters.emplace(fmt::format("feedforward_layernorm_bias_{}", encoder_index), tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::ROW_MAJOR).to(device, dram_memory_config));
+        parameters.emplace(
+            fmt::format("fused_qkv_weight_{}", encoder_index),
+            tt::tt_metal::random::uniform(
+                bfloat16(-1.0f), bfloat16(1.0f), {1, 1, hidden_size, hidden_size * 3}, Layout::TILE)
+                .to(device, dram_memory_config));
+        parameters.emplace(
+            fmt::format("fused_qkv_bias_{}", encoder_index),
+            tt::tt_metal::random::uniform(
+                bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, hidden_size * 3}, Layout::TILE)
+                .to(device, dram_memory_config));
+        parameters.emplace(
+            fmt::format("selfout_weight_{}", encoder_index),
+            tt::tt_metal::random::uniform(
+                bfloat16(-1.0f), bfloat16(1.0f), {1, 1, hidden_size, hidden_size}, Layout::TILE)
+                .to(device, dram_memory_config));
+        parameters.emplace(
+            fmt::format("selfout_bias_{}", encoder_index),
+            tt::tt_metal::random::uniform(
+                bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, hidden_size}, Layout::TILE)
+                .to(device, dram_memory_config));
+        parameters.emplace(
+            fmt::format("attention_layernorm_weight_{}", encoder_index),
+            tt::tt_metal::random::uniform(
+                bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::ROW_MAJOR)
+                .to(device, dram_memory_config));
+        parameters.emplace(
+            fmt::format("attention_layernorm_bias_{}", encoder_index),
+            tt::tt_metal::random::uniform(
+                bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::ROW_MAJOR)
+                .to(device, dram_memory_config));
+        parameters.emplace(
+            fmt::format("ff1_weight_{}", encoder_index),
+            tt::tt_metal::random::uniform(
+                bfloat16(-1.0f), bfloat16(1.0f), {1, 1, hidden_size, intermediate_size}, Layout::TILE)
+                .to(device, dram_memory_config));
+        parameters.emplace(
+            fmt::format("ff1_bias_{}", encoder_index),
+            tt::tt_metal::random::uniform(
+                bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, intermediate_size}, Layout::TILE)
+                .to(device, dram_memory_config));
+        parameters.emplace(
+            fmt::format("ff2_weight_{}", encoder_index),
+            tt::tt_metal::random::uniform(
+                bfloat16(-1.0f), bfloat16(1.0f), {1, 1, intermediate_size, hidden_size}, Layout::TILE)
+                .to(device, dram_memory_config));
+        parameters.emplace(
+            fmt::format("ff2_bias_{}", encoder_index),
+            tt::tt_metal::random::uniform(
+                bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, hidden_size}, Layout::TILE)
+                .to(device, dram_memory_config));
+        parameters.emplace(
+            fmt::format("feedforward_layernorm_weight_{}", encoder_index),
+            tt::tt_metal::random::uniform(
+                bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::ROW_MAJOR)
+                .to(device, dram_memory_config));
+        parameters.emplace(
+            fmt::format("feedforward_layernorm_bias_{}", encoder_index),
+            tt::tt_metal::random::uniform(
+                bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::ROW_MAJOR)
+                .to(device, dram_memory_config));
     };
-    parameters.emplace("qa_head_weight", tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, hidden_size, TILE_WIDTH}, Layout::TILE).to(device, dram_memory_config));
-    parameters.emplace("qa_head_bias", tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::TILE).to(device, dram_memory_config));
+    parameters.emplace(
+        "qa_head_weight",
+        tt::tt_metal::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, hidden_size, TILE_WIDTH}, Layout::TILE)
+            .to(device, dram_memory_config));
+    parameters.emplace(
+        "qa_head_bias",
+        tt::tt_metal::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::TILE)
+            .to(device, dram_memory_config));
 
     auto run_bert = [&]() {
         tt::log_debug(tt::LogTest, "run_bert started");
         auto begin = std::chrono::steady_clock::now();
-        auto hidden_states = tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {batch_size, 1, sequence_size, hidden_size}, Layout::TILE).to(device, l1_memory_config);
+        auto hidden_states =
+            tt::tt_metal::random::uniform(
+                bfloat16(-1.0f), bfloat16(1.0f), {batch_size, 1, sequence_size, hidden_size}, Layout::TILE)
+                .to(device, l1_memory_config);
         for (auto encoder_index = 0; encoder_index < num_encoders; encoder_index++) {
             hidden_states = encoder(std::move(hidden_states), attention_mask, parameters, encoder_index, head_size);
         }

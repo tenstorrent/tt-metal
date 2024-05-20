@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "tt_numpy/functions.hpp"
-
-#include "tensor/tensor.hpp"
 #include "common/constants.hpp"
+#include "tensor/tensor.hpp"
+#include "tt_dnn/op_library/numpy/functions.hpp"
+#include "tt_dnn/op_library/reduce/reduce_op.hpp"
 
 using tt::tt_metal::Device;
 using tt::tt_metal::Tensor;
@@ -25,7 +24,7 @@ Tensor device_function(const Tensor& input_tensor, Device* device) {
 template<auto DeviceFunction, typename ... Args>
 void run_test(Device* device, Args ...  args) {
     Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
-    auto input_tensor = tt::numpy::random::random(shape, DataType::BFLOAT16).to(Layout::TILE);
+    auto input_tensor = tt::tt_metal::random::random(shape, DataType::BFLOAT16).to(Layout::TILE);
     auto device_output = DeviceFunction(input_tensor, device);
     // What should be validated? allclose against host implementation?
 }
@@ -95,7 +94,8 @@ int main () {
     run_reduce_ops();
 
     // Allocate a tensor to show that the addresses aren't cached
-    auto some_tensor = tt::numpy::random::uniform(bfloat16(0.0f), bfloat16(0.0f), {1, 1, 32, 32}).to(Layout::TILE).to(device);
+    auto some_tensor =
+        tt::tt_metal::random::uniform(bfloat16(0.0f), bfloat16(0.0f), {1, 1, 32, 32}).to(Layout::TILE).to(device);
 
     run_reduce_ops();
 

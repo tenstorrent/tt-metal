@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <functional>
 #include <random>
-#include <tt_numpy/functions.hpp>
+#include <tt_dnn/op_library/numpy/functions.hpp>
 
 #include "common/constants.hpp"
 #include "tensor/host_buffer/functions.hpp"
@@ -41,7 +41,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         Shape shape = {1, 64, 32, 64};
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a =  tt::numpy::random::random(shape).to(device);
+        Tensor a = tt::tt_metal::random::random(shape).to(device);
         Tensor b = tilize(a);
 
         Tensor c = b.cpu();

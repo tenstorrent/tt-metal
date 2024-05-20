@@ -10,9 +10,9 @@
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
+#include "tt_dnn/op_library/numpy/functions.hpp"
 #include "tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_numpy/functions.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -41,7 +41,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         Shape shape = {1, 32, 61, 32};
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = tt::numpy::arange<bfloat16>(0, tt_metal::compute_volume(shape), 1).reshape(shape).to(device);
+        Tensor a = tt::tt_metal::arange<bfloat16>(0, tt_metal::compute_volume(shape), 1).reshape(shape).to(device);
         Tensor b = tilize_with_zero_padding(a);
         Tensor c =  b.cpu();
         ////////////////////////////////////////////////////////////////////////////

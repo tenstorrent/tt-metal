@@ -2,19 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/backward/backward_ops.hpp"
+
+#include "tt_dnn/op_library/complex/complex_ops.hpp"
+#include "tt_dnn/op_library/composite/composite_ops.hpp"
+#include "tt_dnn/op_library/embeddings/embeddings_op.hpp"
+#include "tt_dnn/op_library/math.hpp"
+#include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
+#include "tt_dnn/op_library/numpy/functions.hpp"
+#include "tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
-#include "tt_dnn/op_library/embeddings/embeddings_op.hpp"
-#include "tt_numpy/functions.hpp"
-#include "tt_eager/tensor/tensor_utils.hpp"
-#include "tt_dnn/op_library/math.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
-#include "tt_dnn/op_library/complex/complex_ops.hpp"
+#include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
-#include "tt_dnn/op_library/permute/permute_op.hpp"
 
 namespace tt {
 
@@ -1540,7 +1541,8 @@ std::vector<Tensor> _prod_bw(
     Tensor prod_result = prod(input, all_dimensions, dim, output_mem_config);
     if (all_dimensions == true) {
         Tensor temp = mul(prod_result, grad, std::nullopt, output_mem_config);  // result is stored in the first position
-        Tensor fill_tensor = tt::numpy::fill_first_val_into_tensor<bfloat16>( temp, temp.get_dtype(), temp.get_layout(), temp.device(), output_mem_config);
+        Tensor fill_tensor = tt::tt_metal::fill_first_val_into_tensor<bfloat16>(
+            temp, temp.get_dtype(), temp.get_layout(), temp.device(), output_mem_config);
         Tensor all_dimension_result = mul(recip(input, output_mem_config), fill_tensor, std::nullopt, output_mem_config);
         grad_tensor.emplace_back(all_dimension_result);
         return grad_tensor;

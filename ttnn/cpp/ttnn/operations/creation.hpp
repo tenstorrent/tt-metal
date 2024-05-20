@@ -7,7 +7,7 @@
 #include "tt_eager/tensor/tensor.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_eager/tensor/types.hpp"
-#include "tt_eager/tt_numpy/functions.hpp"
+#include "tt_eager/tt_dnn/op_library/numpy/functions.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/validation.hpp"
@@ -24,7 +24,7 @@ inline ttnn::Tensor full(
     const Layout layout,
     Device& device,
     const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
-    return tt::numpy::full(shape.with_tile_padding().value(), value, data_type, layout, &device, memory_config);
+    return tt::tt_metal::full(shape.with_tile_padding().value(), value, data_type, layout, &device, memory_config);
 }
 
 inline ttnn::Tensor zeros(

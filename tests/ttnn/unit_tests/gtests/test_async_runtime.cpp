@@ -2,14 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cmath>
+
+#include "common/bfloat16.hpp"
 #include "tensor/tensor.hpp"
-#include "ttnn_multi_command_queue_fixture.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
-#include "common/bfloat16.hpp"
+#include "tt_dnn/op_library/numpy/functions.hpp"
 #include "ttnn/cpp/ttnn/async_runtime.hpp"
-#include "tt_numpy/functions.hpp"
-#include <cmath>
+#include "ttnn_multi_command_queue_fixture.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -38,7 +39,9 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
         host_data[i] = bfloat16(static_cast<float>(1));
     }
     // Create golden data using tt_eager APIs
-    Tensor np_tensor = tt::numpy::full<float>(input_shape.value(), static_cast<float>(1), DataType::BFLOAT16).to(Layout::TILE).to(device);
+    Tensor np_tensor = tt::tt_metal::full<float>(input_shape.value(), static_cast<float>(1), DataType::BFLOAT16)
+                           .to(Layout::TILE)
+                           .to(device);
     std::vector<int64_t> reduce_dims = {3};
     Tensor np_out = tt::operations::primary::moreh_sum(np_tensor, reduce_dims);
     Tensor np_out_host = np_out.cpu();

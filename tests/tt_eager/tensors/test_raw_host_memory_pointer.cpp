@@ -14,8 +14,8 @@
 #include "tensor/tensor_impl.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "tt_dnn/op_library/numpy/functions.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_numpy/functions.hpp"
 
 /*
 

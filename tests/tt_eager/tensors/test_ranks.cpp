@@ -12,8 +12,8 @@
 #include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
 #include "tensor/tensor_impl.hpp"
+#include "tt_dnn/op_library/numpy/functions.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_numpy/functions.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -24,7 +24,7 @@ bool test_2d_tensor(Device *device) {
     bool pass = true;
 
     Shape shape = {30, 30};
-    Tensor tensor = tt::numpy::random::random(shape);
+    Tensor tensor = tt::tt_metal::random::random(shape);
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to(Layout::TILE);
     tensor = tensor.to(device);
@@ -37,7 +37,7 @@ bool test_3d_tensor(Device *device) {
     bool pass = true;
 
     Shape shape = {3, 30, 30};
-    Tensor tensor = tt::numpy::random::random(shape);
+    Tensor tensor = tt::tt_metal::random::random(shape);
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to(Layout::TILE);
     tensor = tensor.to(device);
@@ -50,7 +50,7 @@ bool test_4d_tensor(Device *device) {
     bool pass = true;
 
     Shape shape = {2, 3, 30, 30};
-    Tensor tensor = tt::numpy::random::random(shape);
+    Tensor tensor = tt::tt_metal::random::random(shape);
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to(Layout::TILE);
     tensor = tensor.to(device);
@@ -63,7 +63,7 @@ bool test_5d_tensor(Device *device) {
     bool pass = true;
 
     Shape shape = {2, 2, 3, 30, 30};
-    Tensor tensor = tt::numpy::random::random(shape);
+    Tensor tensor = tt::tt_metal::random::random(shape);
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to(Layout::TILE);
     tensor = tensor.to(device);
@@ -76,7 +76,7 @@ bool test_6d_tensor(Device *device) {
     bool pass = true;
 
     Shape shape = {2, 2, 2, 3, 30, 30};
-    Tensor tensor = tt::numpy::random::random(shape);
+    Tensor tensor = tt::tt_metal::random::random(shape);
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to(Layout::TILE);
     tensor = tensor.to(device);
@@ -89,7 +89,7 @@ bool test_7d_tensor(Device *device) {
     bool pass = true;
 
     Shape shape = {2, 2, 2, 2, 3, 30, 30};
-    Tensor tensor = tt::numpy::random::random(shape);
+    Tensor tensor = tt::tt_metal::random::random(shape);
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to(Layout::TILE);
     tensor = tensor.to(device);
@@ -102,7 +102,7 @@ bool test_8d_tensor(Device *device) {
     bool pass = true;
 
     Shape shape = {2, 2, 2, 2, 2, 3, 30, 30};
-    Tensor tensor = tt::numpy::random::random(shape);
+    Tensor tensor = tt::tt_metal::random::random(shape);
     tensor = tensor.pad_to_tile(0.0f);
     tensor = tensor.to(Layout::TILE);
     tensor = tensor.to(device);

@@ -3,17 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "tt_dnn/op_library/copy/copy_op.hpp"
-#include "tt_dnn/op_library/math.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include <tt_eager/tt_numpy/functions.hpp>
-#include <tt_eager/tensor/tensor_impl.hpp>
-
-#include "tensor/tensor_utils.hpp"
 
 #include <algorithm>
+#include <tt_eager/tensor/tensor_impl.hpp>
+#include <tt_eager/tt_dnn/op_library/numpy/functions.hpp>
+
+#include "tensor/tensor_utils.hpp"
+#include "tt_dnn/op_library/copy/copy_op.hpp"
+#include "tt_dnn/op_library/math.hpp"
+#include "tt_metal/common/constants.hpp"
+#include "tt_metal/detail/util.hpp"
+#include "tt_metal/host_api.hpp"
 
 using namespace tt::constants;
 
@@ -340,7 +340,13 @@ Tensor reshape (const Tensor &input_tensor_a, int N, int C, int H, int W, const 
     }
     if (input_tensor_a.get_layout() == Layout::ROW_MAJOR && ((compute_volume(output_shape) / output_shape[-1]) % TILE_HEIGHT != 0 || output_shape[-1] % TILE_WIDTH != 0 || input_tensor_a.get_legacy_shape()[-1] % TILE_WIDTH != 0 || (input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1]) % TILE_HEIGHT != 0)) {
         TT_FATAL(input_tensor_a.get_dtype()==DataType::BFLOAT16);
-        return tt::numpy::manual_insertion<bfloat16>(input_tensor_a, output_shape, DataType::BFLOAT16, Layout::ROW_MAJOR, input_tensor_a.device(), output_mem_config);
+        return tt::tt_metal::manual_insertion<bfloat16>(
+            input_tensor_a,
+            output_shape,
+            DataType::BFLOAT16,
+            Layout::ROW_MAJOR,
+            input_tensor_a.device(),
+            output_mem_config);
     }
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
     operation::launch_op(
