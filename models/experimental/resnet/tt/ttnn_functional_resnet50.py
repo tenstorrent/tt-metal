@@ -725,7 +725,7 @@ class resnet50:
             output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
-        x = self.avgpool(x, ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+        x = self.avgpool(x, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
 
         unpadded_shape_end = [
             x.get_legacy_shape()[0] - 1,
