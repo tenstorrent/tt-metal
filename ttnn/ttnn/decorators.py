@@ -729,13 +729,6 @@ def query_registered_operations(include_experimental=False):
         return ttnn_operations
 
 
-OPERATION_TO_GOLDEN_FUNCTION = {}
-
-
-def get_golden_function(operation):
-    return OPERATION_TO_GOLDEN_FUNCTION[operation]
-
-
 def register_operation(
     *,
     name=None,
@@ -750,10 +743,8 @@ def register_operation(
 ):
     def operation_decorator(function: callable):
         global REGISTERED_APIS
-        global OPERATION_TO_GOLDEN_FUNCTION
 
         if ttnn.CONFIG.enable_fast_runtime_mode:
-            OPERATION_TO_GOLDEN_FUNCTION[function] = golden_function
             return function
 
         is_cpp_function = hasattr(function, "__ttnn__")
@@ -791,19 +782,17 @@ def register_operation(
             allow_to_fallback_to_golden_function_on_failure=allow_to_fallback_to_golden_function_on_failure,
         )
 
+        if api in REGISTERED_APIS:
+            raise RuntimeError(f"{api} is already registered")
+        REGISTERED_APIS.add(api)
+
         if is_method:
 
             @wraps(api)
             def method_call(self, *function_args, **function_kwargs):
                 return api(self, *function_args, **function_kwargs)
 
-            api = method_call
-
-        if api in REGISTERED_APIS:
-            raise RuntimeError(f"{api} is already registered")
-        REGISTERED_APIS.add(api)
-
-        OPERATION_TO_GOLDEN_FUNCTION[api] = golden_function
+            return method_call
 
         return api
 
