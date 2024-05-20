@@ -64,6 +64,7 @@ bool use_coherent_data_g;
 bool send_to_all_g;
 bool perf_test_g;
 uint32_t hugepage_issue_buffer_size_g;
+uint32_t seed_g;
 
 CoreCoord first_worker_g = { 0, 1 };
 CoreRange all_workers_g = {
@@ -93,6 +94,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "    -d: wrap all commands in debug commands and clear DRAM to known state (default disabled)");
         log_info(LogTest, "    -c: use coherent data as payload (default false)");
         log_info(LogTest, "   -np: paged-write number of pages (default {})", num_pages_g);
+        log_info(LogTest, "    -s: seed for randomized testing");
 
         log_info(LogTest, "Random Test args:");
         log_info(LogTest, "  -max: max transfer size bytes (default {})", max_xfer_size_bytes_g);
@@ -147,6 +149,8 @@ void init(int argc, char **argv) {
 
     debug_g = test_args::has_command_option(input_args, "-d");
     num_pages_g = test_args::get_command_option_uint32(input_args, "-np", num_pages_g);
+
+    seed_g = test_args::get_command_option_uint32(input_args, "-s", 0);
 
     perf_test_g = (send_to_all_g && iterations_g == 1); // XXXX find a better way?
 }
@@ -336,8 +340,13 @@ void initialize_dram_banks(Device *device)
 
 int main(int argc, char **argv) {
     log_info(tt::LogTest, "test_dispatcher.cpp - Test Start");
+
     init(argc, argv);
-    std::srand(std::time(nullptr)); // Seed the RNG
+    if (seed_g == 0) {
+        seed_g = std::time(nullptr);
+    }
+    std::srand(seed_g); // Seed the RNG
+    log_info(LogTest, "Random seed: {}", seed_g);
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");

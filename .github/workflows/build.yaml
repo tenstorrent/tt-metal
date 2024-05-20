@@ -13,7 +13,7 @@ jobs:
           { type: Release, runs-on: ubuntu-20.04 },
           { type: RelWithDebInfo, runs-on: build },
         ]
-        arch: [grayskull, wormhole_b0]
+        arch: [grayskull, wormhole_b0, blackhole]
         os: [ubuntu-20.04]
     env:
       ARCH_NAME: ${{ matrix.arch }}
@@ -54,7 +54,7 @@ jobs:
     strategy:
       matrix:
         config: [Debug, Release, RelWithDebInfo]
-        arch: [grayskull, wormhole_b0]
+        arch: [grayskull, wormhole_b0, blackhole]
         os: [ubuntu-20.04]
     needs: build-lib
     name: cmake build cpptest ${{ matrix.config }} ${{ matrix.arch }}

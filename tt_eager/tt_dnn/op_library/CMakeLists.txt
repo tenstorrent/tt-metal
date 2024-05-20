@@ -12,24 +12,18 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded_partial/sharded_op_partial.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded_partial/multi_core/sharded_op_partial_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/copy/copy_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/copy/single_core/copy_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/copy/multi_core/copy_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/move_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/move/single_core/move_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core_overlap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core_sharded.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_unary/eltwise_unary_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_binary/eltwise_binary_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_binary/single_core/eltwise_binary_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_binary/multi_core/eltwise_binary_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_unary/eltwise_unary_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_unary/single_core/eltwise_unary_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_unary/multi_core/eltwise_unary_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_unary/multi_core/eltwise_unary_op_sharded.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pad/pad_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pad/pad_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/unpad/single_core/unpad_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/unpad/multi_core/unpad_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/unpad/unpad_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/indexed_fill/multi_core/indexed_fill_op_multi_core.cpp
@@ -45,19 +39,17 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/transpose/transpose_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transpose/wh_multi_core/transpose_wh_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transpose/hc_multi_core/transpose_hc_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/transpose/single_core/transpose_op_single_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/transpose/cn_multi_core/transpose_cn_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce/reduce_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/reduce/single_core/reduce_op_single_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/reduce/single_core_hw/reduce_op_single_core_hw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce/multi_core_h/reduce_op_multi_core_h.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce/multi_core_w/reduce_op_multi_core_w.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/bcast_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/bcast/single_core/bcast_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_multi_core_h.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_w/bcast_op_multi_core_w.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_hw/bcast_op_multi_core_hw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bmm/bmm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bmm/single_core/bmm_op_single_core_tilize_untilize.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/bmm/single_core/bmm_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core/bmm_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse/bmm_op_multi_core_reuse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse_padding/bmm_op_multi_core_reuse_padding.cpp
@@ -179,10 +171,8 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/split/split_last_dim_two_chunks_tiled.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/operation_history.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/concat/multi_core/concat_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/concat/single_core/concat_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/concat/concat_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/repeat/multi_core/repeat_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/repeat/single_core/repeat_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/repeat/repeat_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_tms.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_create_qkv_heads_falcon7b.cpp
@@ -196,11 +186,9 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/rotate_half/single_core/rotate_half_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/rotate_half/rotate_half_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/multi_core/rotary_embedding_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/single_core/rotary_embedding_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/rotary_embedding_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/embeddings/embeddings_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/multi_core/update_cache_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/single_core/update_cache_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/update_cache_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/upsample/multi_core/upsample_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/upsample/single_core/upsample_op_single_core.cpp

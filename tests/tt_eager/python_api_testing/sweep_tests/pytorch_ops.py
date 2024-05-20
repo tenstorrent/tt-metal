@@ -1872,3 +1872,27 @@ def power_2(x, y, *args, exponent=None, **kwargs):
     else:
         result = x**exponent
     return result
+
+
+def subtract_and_apply_activation(x, y, *args, **kwargs):
+    activation = kwargs.pop("activation")
+    output = torch.sub(x, y)
+
+    if activation == "relu":
+        output = torch.relu(output)
+    elif activation == "gelu":
+        output = torch.gelu(output)
+
+    return output
+
+
+def multiply_and_apply_activation(x, y, *args, **kwargs):
+    activation = kwargs.pop("activation")
+    output = torch.mul(x, y)
+
+    if activation == "relu":
+        output = torch.relu(output)
+    elif activation == "gelu":
+        output = torch.gelu(output)
+
+    return output

@@ -114,7 +114,7 @@ void test_operation_infrastructure() {
         profiler_info.preferred_name.value() == "tt::tt_metal::EltwiseUnary",
         fmt::format("Actual value is {}", profiler_info.preferred_name.value()));
     TT_FATAL(
-        profiler_info.parallelization_strategy.value() == "UnaryOpParallelizationStrategy::SINGLE_CORE",
+        profiler_info.parallelization_strategy.value() == "UnaryOpParallelizationStrategy::MULTI_CORE",
         fmt::format("Actual value is {}", profiler_info.parallelization_strategy.value()));
 
     TT_FATAL(tt::tt_metal::CloseDevice(device));

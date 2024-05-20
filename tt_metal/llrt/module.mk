@@ -8,7 +8,8 @@ LLRT_SRCS_RELATIVE = \
 	llrt/llrt.cpp \
 	llrt/rtoptions.cpp \
 	llrt/tt_memory.cpp \
-	llrt/tt_hexfile.cpp
+	llrt/tt_hexfile.cpp \
+	llrt/tlb_config.cpp
 
 LLRT_SRCS = $(addprefix tt_metal/, $(LLRT_SRCS_RELATIVE))
 

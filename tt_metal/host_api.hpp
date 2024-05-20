@@ -465,40 +465,62 @@ void Finish(CommandQueue& cq);
 
 /**
  * Begins capture on a trace, when the trace is in capture mode all programs pushed into the trace queue will have their execution delayed until the trace is instantiated and enqueued.
- * The capture must be later ended via EndTrace, and can be instantiated via InstantiateTrace on a device command queue, and finally scheduled to be executed via EnqueueTrace.
+ * The capture must be later ended via EndTraceCapture, and finally scheduled to be executed via ReplayTrace.
+ * Beginning a trace capture enabled buffer allocations until capture has ended.
  *
- * Return value: CommandQueue&
+ * Return value: Trace ID
  *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | trace        | Trace in which to initiate the capture                                 | Trace &                       |                                    | Yes      |
+ * | Argument        | Description                                                            | Type                          | Valid Range                        | Required |
+ * |-----------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | device          | The device holding being traced.                                       | Device *                      |                                    | Yes      |
+ * | cq_id           | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
+ * | trace_buff_size | The size of the trace buffer to pre-allocate.                          | uint32_t                      |                                    | Yes      |
 */
-CommandQueue& BeginTrace(Trace &trace);
+uint32_t BeginTraceCapture(Device *device, const uint8_t cq_id, const uint32_t trace_buff_size);
 
 /**
  * Completes capture on a trace, if captured commands do not conform to the rules of the trace, the trace will be invalidated.
- * This trace can later be instantiated via InstantiateTrace on a device command queue, and enqueued for execution via EnqueueTrace on the same device command queue.
+ * This trace can be enqueued for execution via ReplayTrace on the same device command queue.
+ * After ending a trace capture, buffer allocations on device are disabled until either a new trace begins capture,
+ * or all traces on the device are released
  *
  * Return value: void
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | trace        | Trace in which to end the capture                                      | Trace &                       |                                    | Yes      |
+ * | device       | The device holding being traced.                                       | Device *                      |                                    | Yes      |
+ * | cq_id        | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
+ * | tid          | A unique id from BeginTraceCapture for the trace being captured        | uint32_t                      |                                    | Yes      |
  */
-void EndTrace(Trace &trace);
+void EndTraceCapture(Device *device, const uint8_t cq_id, const uint32_t tid);
 
 /**
- * Instantiates a trace on a device command queue, triggering the staging of traced commands and data to the device.
- * Staging is a blocking operation and must be completed before the trace can be enqueued for exeuction. A unique trace instance id is returned
+ * Replay a trace of previously generated commands and data.
  *
- * Return value: uint32_t
+ * Return value: void
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | trace        | The trace object to instantiate                                        | Trace &                       |                                    | Yes      |
- * | cq           | The device command queue on which to instantiate the trace             | CommandQueue &                |                                    | Yes      |
-*/
-uint32_t InstantiateTrace(Trace &trace, CommandQueue &cq);
+ * | device       | The device holding the trace.                                          | Device *                      |                                    | Yes      |
+ * | cq_id        | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
+ * | trace_id     | A unique id representing an existing captured trace.                   | uint32_t                      |                                    | Yes      |
+ * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
+ */
+void ReplayTrace(Device *device, const uint8_t cq_id, const uint32_t tid, const bool blocking);
+
+/**
+ * Release a previously instantiated trace, deallocating the associated trace buffers on device
+ * This operation is not thread-safe, user must ensure that the trace being released is no longer needed by device threads
+ * If this releases the last trace on a device, then buffer allocations are re-enabled
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | device       | The device holding the trace.                                          | Device *                      |                                    | Yes      |
+ * | trace_id     | A unique id representing an existing captured trace.                   | uint32_t                      |                                    | Yes      |
+ */
+void ReleaseTrace(Device *device, const uint32_t tid);
 
 /**
  * Enqueues a trace of previously generated commands and data.
@@ -513,20 +535,6 @@ uint32_t InstantiateTrace(Trace &trace, CommandQueue &cq);
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
  */
 void EnqueueTrace(CommandQueue &cq, uint32_t trace_id, bool blocking);
-
-
-/**
- * Release a previously instantiated trace, deallocating the associated trace buffers on device
- * This operation is not thread-safe, user must ensure that the trace being released is no longer needed by device threads
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | trace_id     | A unique id representing an existing on-device trace, which has been   | uint32_t                      |                                    | Yes      |
- * |              | instantiated via InstantiateTrace where the trace_id is returned       |                               |                                    |          |
- */
-void ReleaseTrace(uint32_t trace_id);
 
 /**
  * Read device side profiler data and dump results into device side CSV log

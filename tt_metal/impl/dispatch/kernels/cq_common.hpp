@@ -26,6 +26,103 @@ uint32_t wrap_ge(uint32_t a, uint32_t b) {
     return diff >= 0;
 }
 
+// The fast CQ noc commands write a subset of the NOC registers for each transaction
+// leveraging the fact that many transactions re-use certain values (eg, length)
+// Since there are a variety of dispatch paradigms, which values get reused
+// depend on the fn
+// Making template fns w/ a long list of booleans makes understanding what
+// is/not sent tedious
+// This is an attempt to pack that data in a way thats ~easy to visually parse
+// S/s: send, do not send src address
+// N/n: send, do not send noc address
+// D/d: send, do not send dst address
+// L/l: send, do not send length
+constexpr uint32_t CQ_NOC_FLAG_SRC = 0x01;
+constexpr uint32_t CQ_NOC_FLAG_NOC = 0x02;
+constexpr uint32_t CQ_NOC_FLAG_DST = 0x04;
+constexpr uint32_t CQ_NOC_FLAG_LEN = 0x08;
+enum CQNocFlags {
+    CQ_NOC_sndl = 0,
+    CQ_NOC_sndL =                                                       CQ_NOC_FLAG_LEN,
+    CQ_NOC_snDl =                                     CQ_NOC_FLAG_DST,
+    CQ_NOC_snDL =                                     CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+    CQ_NOC_sNdl =                   CQ_NOC_FLAG_NOC,
+    CQ_NOC_sNdL =                   CQ_NOC_FLAG_NOC                   | CQ_NOC_FLAG_LEN,
+    CQ_NOC_sNDl =                   CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
+    CQ_NOC_sNDL =                   CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+    CQ_NOC_Sndl = CQ_NOC_FLAG_SRC,
+    CQ_NOC_SndL = CQ_NOC_FLAG_SRC                                     | CQ_NOC_FLAG_LEN,
+    CQ_NOC_SnDl = CQ_NOC_FLAG_SRC                   | CQ_NOC_FLAG_DST,
+    CQ_NOC_SnDL = CQ_NOC_FLAG_SRC                   | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+    CQ_NOC_SNdl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC,
+    CQ_NOC_SNdL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC                   | CQ_NOC_FLAG_LEN,
+    CQ_NOC_SNDl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
+    CQ_NOC_SNDL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+};
+enum CQNocWait {
+    CQ_NOC_wait = 0,
+    CQ_NOC_WAIT = 1,
+};
+enum CQNocSend {
+    CQ_NOC_send = 0,
+    CQ_NOC_SEND = 1,
+};
+
+template<enum CQNocFlags flags, enum CQNocWait wait = CQ_NOC_WAIT, enum CQNocSend send = CQ_NOC_SEND>
+FORCE_INLINE
+void cq_noc_async_write_with_state(uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
+
+    if constexpr (wait) {
+        DEBUG_STATUS("NSSW");
+        while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
+        DEBUG_STATUS("NSSD");
+    }
+
+    if constexpr (flags & CQ_NOC_FLAG_SRC) {
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_LO, src_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_DST) {
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_LO, (uint32_t)dst_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID, dst_addr >> 32);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_LEN) {
+        ASSERT(size <= NOC_MAX_BURST_SIZE);
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE, size);
+     }
+    if constexpr (send) {
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc_index);
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    }
+}
+
+template<enum CQNocFlags flags, bool mcast = false>
+FORCE_INLINE
+void cq_noc_async_write_init_state(uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0) {
+
+    DEBUG_STATUS("NSIW");
+    while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
+    DEBUG_STATUS("NSID");
+
+    constexpr bool multicast_path_reserve = false;
+    constexpr bool posted = false;
+    constexpr bool linked = false;
+    constexpr uint32_t vc = mcast ? NOC_MULTICAST_WRITE_VC : NOC_UNICAST_WRITE_VC;
+
+    constexpr uint32_t noc_cmd_field =
+        NOC_CMD_CPY | NOC_CMD_WR |
+        NOC_CMD_VC_STATIC  |
+        NOC_CMD_STATIC_VC(vc) |
+        (linked ? NOC_CMD_VC_LINKED : 0x0) |
+        (mcast ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) : 0x0) |
+        (posted ? 0 : NOC_CMD_RESP_MARKED);
+
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_CTRL, noc_cmd_field);
+
+    cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send>(src_addr, dst_addr, size);
+}
+
 template<uint32_t sem_id>
 FORCE_INLINE
 void cb_wait_all_pages(uint32_t n) {
@@ -45,7 +142,6 @@ void cb_acquire_pages(uint32_t n) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
 
     // Ensure last sem_inc has landed
-    noc_async_write_barrier(); // XXXX TODO(pgk) can we do better on wormhole?
     noc_async_atomic_barrier();
 
     DEBUG_STATUS("DAPW");
@@ -75,7 +171,6 @@ uint32_t cb_acquire_pages(uint32_t cb_fence,
 
     if (available == 0) {
         // Ensure last sem_inc has landed
-        noc_async_write_barrier(); // XXXX TODO(pgk) can we do better on wormhole?
         noc_async_atomic_barrier();
 
         DEBUG_STATUS("UAPW");

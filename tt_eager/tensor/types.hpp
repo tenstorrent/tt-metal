@@ -17,6 +17,7 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
+#include "tt_metal/common/core_coord.h"
 
 namespace tt {
 
@@ -36,6 +37,18 @@ enum class DataType {
     INT32 = 7,
     INVALID = 8,
 };
+
+inline bool is_floating_point(DataType dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT16:
+        case DataType::FLOAT32:
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B:
+            return true;
+        default:
+            return false;
+    }
+}
 
 enum class StorageType {
     OWNED,
@@ -426,7 +439,7 @@ struct MultiDeviceHostStorage {
             return shapes[shape_index];
         }
 
-        uint32_t num_buffers() {
+        uint32_t num_buffers() const {
             std::lock_guard<std::mutex> lock(mtx);
             return buffers.size();
         }
@@ -524,7 +537,7 @@ struct MultiDeviceHostStorage {
             return shapes.at(device->id());
         }
 
-        uint32_t num_buffers() {
+        uint32_t num_buffers() const {
             std::lock_guard<std::mutex> lock(mtx);
             return buffers.size();
         }

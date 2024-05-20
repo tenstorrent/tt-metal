@@ -1359,7 +1359,7 @@ std::vector<Tensor> UntilizeWithHalo::create_output_tensors(const std::vector<Te
     // log_debug(LogOp, "derived ncores: {}", ncores);
     auto mem_config = this->output_mem_config;
     mem_config.shard_spec = shard_spec;
-    return {create_sharded_device_tensor(output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), mem_config)};
+    return {create_device_tensor(output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), mem_config)};
 }
 
 operation::ProgramWithCallbacks UntilizeWithHalo::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {

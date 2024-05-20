@@ -132,9 +132,9 @@ std::vector<Tensor> NlpCreateHeadsDecode::create_output_tensors(const std::vecto
     kv_mem_config.shard_spec = kv_shard_spec;
     auto output_shapes = this->compute_output_shapes(input_tensors);
     return {
-        create_sharded_device_tensor(output_shapes[0], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), q_mem_config),
-        create_sharded_device_tensor(output_shapes[1], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), kv_mem_config),
-        create_sharded_device_tensor(output_shapes[2], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), kv_mem_config)
+        create_device_tensor(output_shapes[0], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), q_mem_config),
+        create_device_tensor(output_shapes[1], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), kv_mem_config),
+        create_device_tensor(output_shapes[2], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), kv_mem_config)
     };
 }
 
@@ -253,9 +253,9 @@ std::vector<Tensor> NlpCreateHeads::create_output_tensors(const std::vector<Tens
         kv_mem_config.shard_spec = kv_shard_spec;
         auto output_shapes = this->compute_output_shapes(input_tensors);
         return {
-            create_sharded_device_tensor(output_shapes[0], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), q_mem_config),
-            create_sharded_device_tensor(output_shapes[1], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), kv_mem_config),
-            create_sharded_device_tensor(output_shapes[2], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), kv_mem_config)
+            create_device_tensor(output_shapes[0], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), q_mem_config),
+            create_device_tensor(output_shapes[1], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), kv_mem_config),
+            create_device_tensor(output_shapes[2], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), kv_mem_config)
         };
 
     } else {
@@ -333,7 +333,7 @@ std::vector<Tensor> NlpConcatHeads::create_output_tensors(const std::vector<Tens
         shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;
-        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
+        return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
     } else {
         return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
     }
@@ -409,7 +409,7 @@ std::vector<Tensor> NlpConcatHeadsDecode::create_output_tensors(const std::vecto
     auto mem_config = tt::tt_metal::MemoryConfig{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1};
     mem_config.shard_spec = shard_spec;
 
-    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
+    return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
 }
 
 operation::ProgramWithCallbacks NlpConcatHeadsDecode::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -485,7 +485,7 @@ std::vector<Tensor> NlpKVCacheLoadSlice::create_output_tensors(const std::vector
     auto mem_config = tt::tt_metal::MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1};
     mem_config.shard_spec = shard_spec;
 
-    return {create_sharded_device_tensor(
+    return {create_device_tensor(
         this->compute_output_shapes(input_tensors).at(0),
         input_tensor_a.get_dtype(),
         input_tensor_a.get_layout(),
@@ -592,9 +592,9 @@ std::vector<Tensor> CreateQKVHeads::create_output_tensors(const std::vector<Tens
     auto mem_config_v = this->output_mem_config;
     mem_config_v.shard_spec = v_spec;
 
-    auto out_tensor_q = create_sharded_device_tensor(q_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_q);
-    auto out_tensor_k = create_sharded_device_tensor(k_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_k);
-    auto out_tensor_v = create_sharded_device_tensor(v_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_v);
+    auto out_tensor_q = create_device_tensor(q_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_q);
+    auto out_tensor_k = create_device_tensor(k_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_k);
+    auto out_tensor_v = create_device_tensor(v_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_v);
     return {out_tensor_q, out_tensor_k, out_tensor_v};
 }
 
@@ -731,9 +731,9 @@ std::vector<Tensor> CreateQKVHeadsSeparateTensors::create_output_tensors(const s
     auto mem_config_v = this->output_mem_config;
     mem_config_v.shard_spec = v_spec;
 
-    auto out_tensor_q = create_sharded_device_tensor(q_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_q);
-    auto out_tensor_k = create_sharded_device_tensor(k_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_k);
-    auto out_tensor_v = create_sharded_device_tensor(v_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_v);
+    auto out_tensor_q = create_device_tensor(q_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_q);
+    auto out_tensor_k = create_device_tensor(k_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_k);
+    auto out_tensor_v = create_device_tensor(v_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_v);
     return {out_tensor_q, out_tensor_k, out_tensor_v};
 }
 

@@ -58,7 +58,7 @@ std::vector<Tensor> Tilize::create_output_tensors(const std::vector<Tensor>& inp
     if (input_tensor.memory_config().is_sharded()) {
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = input_tensor.memory_config().shard_spec;
-        return {create_sharded_device_tensor(
+        return {create_device_tensor(
             this->compute_output_shapes(input_tensors).at(0),
             this->output_dtype,
             Layout::TILE,
@@ -157,7 +157,7 @@ std::vector<Tensor> TilizeWithValPadding::create_output_tensors(const std::vecto
         shard_spec.shape[0] = tt_metal::compute_volume(output_shape) / output_shape[-1];
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;
-        return {create_sharded_device_tensor(
+        return {create_device_tensor(
             output_shape, this->output_dtype, Layout::TILE, input_tensor_a.device(), mem_config)};
     } else {
         return operation::generic_create_output_tensors(
@@ -197,30 +197,28 @@ Tensor tilize_with_val_padding(
     bool use_multicore) {
     // No-op (Will do a tensor copy)
     // TODO: We need to run asserts before this
-    if (input_tensor_a.get_layout() == Layout::TILE) {
-        if (output_tensor_shape == input_tensor_a.get_legacy_shape()) {
-            log_warning("Perf warning: tilize with padding called on already tilized tensor of target shape.");
-            return input_tensor_a;
-        } else {
-            TT_FATAL(false, "Cannot tilize and pad tensor that is already tilized");
-        }
-    }
-    if (is_multi_device_tensor(input_tensor_a)) {
-        return transform(input_tensor_a, [&](const Tensor& tensor) {
-            return tilize_with_val_padding(
-                tensor, output_tensor_shape, pad_value, output_mem_config, output_dtype, use_multicore);
-        });
-    }
-
-    return operation::run_without_autoformat(
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
+    operation::launch_op(
+        [output_tensor_shape, pad_value, output_mem_config, output_dtype, use_multicore] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            auto& input_tensor_a = input_tensors.at(0);
+            if (input_tensor_a.get_layout() == Layout::TILE) {
+                if (output_tensor_shape == input_tensor_a.get_legacy_shape()) {
+                    log_warning("Perf warning: tilize with padding called on already tilized tensor of target shape.");
+                    return {input_tensor_a};
+                } else {
+                    TT_FATAL(false, "Cannot tilize and pad tensor that is already tilized");
+                }
+            }
+            return operation::run_without_autoformat(
                TilizeWithValPadding{
                    output_tensor_shape,
                    pad_value,
                    output_mem_config,
                    output_dtype.value_or(input_tensor_a.get_dtype()),
                    use_multicore},
-               {input_tensor_a})
-        .at(0);
+               {input_tensor_a});
+        }, {input_tensor_a}, output_tensors);
+    return output_tensors.at(0);
 }
 
 Tensor tilize_with_zero_padding(

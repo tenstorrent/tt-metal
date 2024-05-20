@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "../decorators.hpp"
+#include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/core.hpp"
 
 namespace py = pybind11;
@@ -129,6 +129,106 @@ Deallocates device tensor and returns a reallocated tensor
 Args:
     * :attr:`input_tensor`: Input Tensor
     )doc");
+
+    module.def(
+        "allocate_tensor_on_device",
+        py::overload_cast<const ttnn::Shape&, ttnn::DataType, ttnn::Layout, Device*, const std::optional<ttnn::MemoryConfig>&>(
+            &ttnn::operations::core::allocate_tensor_on_device),
+        py::arg("shape"),
+        py::arg("dtype"),
+        py::arg("layout"),
+        py::arg("device"),
+        py::arg("memory_config") = std::nullopt);
+
+    module.def(
+        "allocate_tensor_on_device",
+        py::overload_cast<const ttnn::Shape&, ttnn::DataType, ttnn::Layout, DeviceMesh*, const std::optional<ttnn::MemoryConfig>&>(
+            &ttnn::operations::core::allocate_tensor_on_device),
+        py::arg("shape"),
+        py::arg("dtype"),
+        py::arg("layout"),
+        py::arg("device_mesh"),
+        py::arg("memory_config") = std::nullopt);
+
+    module.def("copy_host_to_device_tensor", &ttnn::operations::core::copy_host_to_device_tensor, py::arg("host_tensor"), py::arg("device_tensor"), py::arg("cq_id") = 0);
+
+    module.def(
+        "begin_trace_capture",
+        py::overload_cast<Device*, const uint32_t, const uint8_t>(
+            &ttnn::operations::core::begin_trace_capture
+        ),
+        py::arg("device"),
+        py::kw_only(),
+        py::arg("trace_buffer_size"),
+        py::arg("cq_id") = 0);
+
+    module.def(
+        "end_trace_capture",
+        py::overload_cast<Device*, const uint32_t, const uint8_t>(
+            &ttnn::operations::core::end_trace_capture
+        ),
+        py::arg("device"),
+        py::arg("trace_id"),
+        py::kw_only(),
+        py::arg("cq_id") = 0);
+
+    module.def(
+        "execute_trace",
+        py::overload_cast<Device*, const uint32_t, const uint8_t, bool>(
+            &ttnn::operations::core::execute_trace
+        ),
+        py::arg("device"),
+        py::arg("trace_id"),
+        py::kw_only(),
+        py::arg("cq_id") = 0,
+        py::arg("blocking") = true);
+
+    module.def(
+        "release_trace",
+        py::overload_cast<Device*, const uint32_t>(
+            &ttnn::operations::core::release_trace
+        ),
+        py::arg("device"),
+        py::arg("trace_id"));
+
+    module.def(
+        "begin_trace_capture",
+        py::overload_cast<DeviceMesh*, const uint32_t, const uint8_t>(
+            &ttnn::operations::core::begin_trace_capture
+        ),
+        py::arg("device_mesh"),
+        py::kw_only(),
+        py::arg("trace_buffer_size"),
+        py::arg("cq_id") = 0);
+
+    module.def(
+        "end_trace_capture",
+        py::overload_cast<DeviceMesh*, const uint32_t, const uint8_t>(
+            &ttnn::operations::core::end_trace_capture
+        ),
+        py::arg("device_mesh"),
+        py::arg("trace_id"),
+        py::kw_only(),
+        py::arg("cq_id") = 0);
+
+    module.def(
+        "execute_trace",
+        py::overload_cast<DeviceMesh*, const uint32_t, const uint8_t, bool>(
+            &ttnn::operations::core::execute_trace
+        ),
+        py::arg("device_mesh"),
+        py::arg("trace_id"),
+        py::kw_only(),
+        py::arg("cq_id") = 0,
+        py::arg("blocking") = true);
+
+    module.def(
+        "release_trace",
+        py::overload_cast<DeviceMesh*, const uint32_t>(
+            &ttnn::operations::core::release_trace
+        ),
+        py::arg("device_mesh"),
+        py::arg("trace_id"));
 
     bind_registered_operation(
         module,

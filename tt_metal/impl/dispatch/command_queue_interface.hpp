@@ -590,7 +590,7 @@ class SystemMemoryManager {
         }
     }
 
-    void fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id) {
+    void fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id, bool stall_prefetcher = false) {
         CoreType dispatch_core_type = dispatch_core_manager::get(this->num_hw_cqs).get_dispatch_core_type(this->device_id);
         uint32_t max_command_size_B = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
         TT_ASSERT(command_size_B <= max_command_size_B, "Generated prefetcher command of size {} B exceeds max command size {} B", command_size_B, max_command_size_B);
@@ -598,6 +598,15 @@ class SystemMemoryManager {
         if (this->bypass_enable) return;
         tt_driver_atomics::sfence();
         uint32_t command_size_16B = command_size_B >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE;
+
+        // stall_prefetcher is used for enqueuing traces, as replaying a trace will hijack the cmd_data_q
+        // so prefetcher fetches multiple cmds that include the trace cmd, they will be corrupted by trace pulling data from DRAM
+        // stall flag prevents pulling prefetch q entries that occur after the stall entry
+        // Stall flag for prefetcher is MSB of FetchQ entry.
+        if (stall_prefetcher) {
+            command_size_16B |= (1 << ((sizeof(dispatch_constants::prefetch_q_entry_type) * 8) - 1));
+        }
+
         tt::Cluster::instance().write_reg(&command_size_16B, this->prefetcher_cores[cq_id], this->prefetch_q_dev_ptrs[cq_id]);
         this->prefetch_q_dev_ptrs[cq_id] += sizeof(dispatch_constants::prefetch_q_entry_type);
     }

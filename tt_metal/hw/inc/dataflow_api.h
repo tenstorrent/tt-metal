@@ -687,7 +687,40 @@ void noc_async_write_one_packet(std::uint32_t src_local_l1_addr, std::uint64_t d
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     noc_nonposted_writes_num_issued[noc_index] += 1;
     noc_nonposted_writes_acked[noc_index] += 1;  // num_dests
- }
+}
+
+// TODO: write docs
+// this issues only a single packet with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
+FORCE_INLINE
+void noc_async_write_multicast_one_packet(
+    std::uint32_t src_local_l1_addr,
+    std::uint64_t dst_noc_addr_multicast,
+    std::uint32_t size,
+    std::uint32_t num_dests,
+    bool linked = false,
+    bool multicast_path_reserve = true) {
+    DEBUG_STATUS("NMPW");
+    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(dst_noc_addr_multicast, src_local_l1_addr, size);
+    while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
+    DEBUG_STATUS("NWPD");
+
+    uint32_t noc_cmd_field =
+                            NOC_CMD_CPY | NOC_CMD_WR |
+                            NOC_CMD_VC_STATIC |
+                            NOC_CMD_STATIC_VC(NOC_MULTICAST_WRITE_VC) |
+                            (linked ? NOC_CMD_VC_LINKED : 0x0) |
+                            ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) |
+                            NOC_CMD_RESP_MARKED;
+
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_LO, src_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr_multicast);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID, dst_noc_addr_multicast >> 32);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE,  size);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    noc_nonposted_writes_num_issued[noc_index] += 1;
+    noc_nonposted_writes_acked[noc_index] += num_dests;
+}
 
 // TODO: write docs
 // this sets the state for issuing a single packet with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
@@ -707,7 +740,7 @@ void noc_async_write_one_packet_set_state(std::uint64_t dst_noc_addr, std::uint3
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_CTRL, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID, dst_noc_addr >> 32);
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE,  size);
- }
+}
 
 // TODO: write docs
 // this issues only a single packet with cmd buf state with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
@@ -730,7 +763,7 @@ void noc_async_write_one_packet_with_state(std::uint32_t src_local_l1_addr, std:
         noc_nonposted_writes_num_issued[noc_index] += 1;
         noc_nonposted_writes_acked[noc_index] += 1;  // num_dests
     }
- }
+}
 
 template <bool DRAM>
 struct InterleavedAddrGen {
@@ -1187,22 +1220,27 @@ FORCE_INLINE void noc_async_read_tile(
  * | dst_noc_addr      | Encoding of the destination DRAM location (x,y)+address | uint64_t | DOX-TODO(insert a reference  to what constitutes valid coords) | True     |
  * | size              | Size of data transfer in bytes | uint32_t | 0..1MB                                                    | True     |
  */
+template<uint32_t max_page_size=NOC_MAX_BURST_SIZE + 1>
 inline
 void noc_async_write(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size) {
-    DEBUG_STATUS("NAWW");
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(dst_noc_addr, src_local_l1_addr,size);
-    ncrisc_noc_fast_write_any_len(
-        noc_index,
-        NCRISC_WR_CMD_BUF,
-        src_local_l1_addr,
-        dst_noc_addr,
-        size,
-        NOC_UNICAST_WRITE_VC,
-        false,
-        false,
-        1,
-        true);
-    DEBUG_STATUS("NAWD");
+    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+        noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size);
+    } else {
+        DEBUG_STATUS("NAWW");
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(dst_noc_addr, src_local_l1_addr,size);
+        ncrisc_noc_fast_write_any_len(
+            noc_index,
+            NCRISC_WR_CMD_BUF,
+            src_local_l1_addr,
+            dst_noc_addr,
+            size,
+            NOC_UNICAST_WRITE_VC,
+            false,
+            false,
+            1,
+            true);
+        DEBUG_STATUS("NAWD");
+    }
 }
 
 template <bool DRAM>
@@ -1270,6 +1308,7 @@ void noc_semaphore_set_remote(std::uint32_t src_local_l1_addr, std::uint64_t dst
  * | size                   | Size of data transfer in bytes | uint32_t | 0..1MB | True     |
  * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..119                                                        | True     |
  */
+template<uint32_t max_page_size=NOC_MAX_BURST_SIZE + 1>
 inline
 void noc_async_write_multicast(
     std::uint32_t src_local_l1_addr,
@@ -1278,20 +1317,24 @@ void noc_async_write_multicast(
     std::uint32_t num_dests,
     bool linked = false,
     bool multicast_path_reserve = true) {
-    DEBUG_STATUS("NMWW");
-    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(dst_noc_addr_multicast, src_local_l1_addr,size);
-    ncrisc_noc_fast_write_any_len(
-        noc_index,
-        NCRISC_WR_CMD_BUF,
-        src_local_l1_addr,
-        dst_noc_addr_multicast,
-        size,
-        NOC_MULTICAST_WRITE_VC,
-        true,
-        linked,
-        num_dests,
-        multicast_path_reserve);
-    DEBUG_STATUS("NMWD");
+    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+        noc_async_write_multicast_one_packet(src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked, multicast_path_reserve);
+    } else {
+        DEBUG_STATUS("NMWW");
+        DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(dst_noc_addr_multicast, src_local_l1_addr,size);
+        ncrisc_noc_fast_write_any_len(
+            noc_index,
+            NCRISC_WR_CMD_BUF,
+            src_local_l1_addr,
+            dst_noc_addr_multicast,
+            size,
+            NOC_MULTICAST_WRITE_VC,
+            true,
+            linked,
+            num_dests,
+            multicast_path_reserve);
+        DEBUG_STATUS("NMWD");
+    }
 }
 
 /**

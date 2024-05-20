@@ -112,7 +112,7 @@ int main() {
 
     run_binary_ops();
 
-    TT_FATAL(device->num_program_cache_entries() == 4,
+    TT_FATAL(device->num_program_cache_entries() == 3,
         "There are {} entries",
         device->num_program_cache_entries());
 

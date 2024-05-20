@@ -673,4 +673,20 @@ op_map = {
         "tt_op": ttnn_ops.repeat,
         "pytorch_op": pytorch_ops.repeat_2,
     },
+    "ttnn-eltwise-subtract_and_apply_activation": {
+        "tt_op": ttnn_ops.eltwise_subtract_and_apply_activation,
+        "pytorch_op": pytorch_ops.subtract_and_apply_activation,
+    },
+    "ttnn-eltwise-subtract_and_apply_activation_": {
+        "tt_op": ttnn_ops.eltwise_subtract_and_apply_activation_,
+        "pytorch_op": pytorch_ops.subtract_and_apply_activation,
+    },
+    "ttnn-eltwise-multiply_and_apply_activation": {
+        "tt_op": ttnn_ops.eltwise_multiply_and_apply_activation,
+        "pytorch_op": pytorch_ops.multiply_and_apply_activation,
+    },
+    "ttnn-eltwise-multiply_and_apply_activation_": {
+        "tt_op": ttnn_ops.eltwise_multiply_and_apply_activation_,
+        "pytorch_op": pytorch_ops.multiply_and_apply_activation,
+    },
 }

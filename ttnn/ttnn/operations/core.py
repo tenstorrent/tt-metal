@@ -454,6 +454,13 @@ from_device = ttnn.register_operation(
     doc=doc,
 )(ttnn._ttnn.operations.core.from_device)
 
+allocate_tensor_on_device = ttnn.register_operation(
+    name="ttnn.allocate_tensor_on_device",
+)(ttnn._ttnn.operations.core.allocate_tensor_on_device)
+
+copy_host_to_device_tensor = ttnn.register_operation(
+    name="ttnn.copy_host_to_device_tensor",
+)(ttnn._ttnn.operations.core.copy_host_to_device_tensor)
 
 doc = """
 deallocate(tensor: ttnn.Tensor, force: bool = True) -> None
