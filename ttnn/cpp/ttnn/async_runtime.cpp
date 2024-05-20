@@ -62,19 +62,21 @@ namespace ttnn {
         dst.tensor_attributes->update_main_thread_ref_count(dst.workers.at(0), dst_ref_count);
     }
 
-    void read_buffer(queue_id cq_id, Tensor& src, std::vector<std::shared_ptr<void>> dst, const std::optional<std::size_t> transfer_size, size_t src_offset) {
+    void read_buffer(queue_id cq_id, Tensor& src, std::vector<std::shared_ptr<void>> dst, const std::optional<std::size_t> transfer_size, size_t src_offset, bool blocking) {
         TT_ASSERT(src_offset == 0, "src_offset is not supported");
         uint32_t src_ref_count = src.tensor_attributes->record_main_thread_ref_count();
         for (const auto worker : src.get_workers()) {
             auto dst_for_device = dst.at(worker->id());
             worker->push_work(
-                [worker, dst_for_device, src, cq_id, transfer_size, src_offset] () {
+                [worker, dst_for_device, src, cq_id, transfer_size, src_offset, blocking] () {
                     const auto& shard = tt::tt_metal::get_shard_for_device(src, worker);
-                    tt::tt_metal::memcpy(worker->command_queue(cq_id), dst_for_device.get(), shard, transfer_size);
+                    tt::tt_metal::memcpy(worker->command_queue(cq_id), dst_for_device.get(), shard, transfer_size, blocking);
                 });
         }
-        for (auto worker : src.get_workers()) {
-            worker->synchronize();
+        if (blocking) {
+            for (auto worker : src.get_workers()) {
+                worker->synchronize();
+            }
         }
         src.tensor_attributes->update_main_thread_ref_count(src.workers.at(0), src_ref_count);
     }
