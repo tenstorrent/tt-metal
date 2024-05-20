@@ -31,10 +31,22 @@ def prelu(x, *args, **kwargs):
     return result
 
 
+def max(x, *args, **kwargs):
+    dim = kwargs.pop("dim")
+    return torch.max(x, dim=dim[0], keepdim=True).values
+
+
 def min(x, *args, **kwargs):
     dim = kwargs.pop("dim")
-    print(f"PT: {dim[0]}")
     return torch.min(x, dim=dim[0], keepdim=True).values
+
+
+def eltwise_max(x, y, *args, **kwargs):
+    return torch.maximum(x, y)
+
+
+def eltwise_min(x, y, *args, **kwargs):
+    return torch.minimum(x, y)
 
 
 def embeddings(x, y, *args, **kwargs):

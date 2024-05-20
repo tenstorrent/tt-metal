@@ -985,10 +985,6 @@ def max_bw(x, y, z, *args, **kwargs):
     return [in_data.grad, other_data.grad]
 
 
-def minimum(x, y, *args, **kwargs):
-    return torch.minimum(x, y)
-
-
 def min(x, y, *args, **kwargs):
     return torch.min(x, y)
 
