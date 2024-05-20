@@ -179,7 +179,6 @@ class TtMixtralAttention(torch.nn.Module):
             core_grid=self.core_grid_attention,
             compute_kernel_config=self.compute_kernel,
         )
-        x_11BH.deallocate(True)
 
         # split qkv into heads
         (
@@ -262,7 +261,6 @@ class TtMixtralAttention(torch.nn.Module):
             program_config=self.model_config["ATTN_BATCHED_SOFTMAX_PROGCFG"](padded_layer_past_len),
             is_causal_mask=True,
         )
-        attn_mask_1B4P.deallocate(True)
 
         # values matmul
         values_1BPD = ttnn.experimental.tensor.nlp_kv_cache_load_slice(
