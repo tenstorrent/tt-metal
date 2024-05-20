@@ -239,6 +239,7 @@ from ttnn.decorators import (
     query_registered_operations,
     register_pre_operation_hook,
     register_post_operation_hook,
+    get_golden_function,
 )
 
 import ttnn.experimental
