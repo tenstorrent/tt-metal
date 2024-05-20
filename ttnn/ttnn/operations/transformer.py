@@ -95,57 +95,27 @@ concatenate_heads = ttnn.register_operation(golden_function=_golden_function)(
 )
 
 
-def _rotary_embedding_validate_input_tensors(operation_name, input_tensor, cos_cache, sin_cache, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(4,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        cos_cache,
-        ranks=(4,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-    ttnn.validate_input_tensor(
-        operation_name,
-        sin_cache,
-        ranks=(4,),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
+def _golden_function(x, cos_cached, sin_cached, token_idx, **_):
+    import torch
+
+    def rotate_half(x):
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
+    def apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx=0):
+        cos = cos_cached[:, :, token_idx : token_idx + 1, ...]
+        sin = sin_cached[:, :, token_idx : token_idx + 1, ...]
+        x_embed = (x * cos) + (rotate_half(x) * sin)
+        return x_embed
+
+    pt_out = apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx)
+    return pt_out
 
 
-@ttnn.register_operation(
-    name="ttnn.transformer.rotary_embedding",
-    validate_input_tensors=_rotary_embedding_validate_input_tensors,
+rotary_embedding = ttnn.register_operation(golden_function=_golden_function)(
+    ttnn._ttnn.operations.transformer.rotary_embedding
 )
-def rotary_embedding(
-    input_tensor: ttnn.Tensor,
-    cos_cache: ttnn.Tensor,
-    sin_cache: ttnn.Tensor,
-    token_index: int,
-    memory_config: ttnn.MemoryConfig,
-) -> ttnn.Tensor:
-    """
-
-    rotary_embedding(input_tensor: ttnn.Tensor, cos_cache: ttnn.Tensor, sin_cache: ttnn.Tensor, token_index: int, memory_config: MemoryConfig) -> ttnn.Tensor
-
-    Applies the rotary embedding to the input_tensor tensor using the cos_cache and sin_cache tensors.
-
-    """
-    return ttnn.experimental.tensor.rotary_embedding(
-        input_tensor, cos_cache, sin_cache, token_index, output_mem_config=memory_config
-    )
 
 
 __all__ = []

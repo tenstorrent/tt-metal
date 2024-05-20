@@ -47,8 +47,8 @@ using DeviceComputeKernelConfig = std::variant<GrayskullComputeKernelConfig, Wor
 
 inline DeviceComputeKernelConfig init_device_compute_kernel_config(
     ARCH arch,
-    std::optional<const DeviceComputeKernelConfig>& device_kernel_config,
-    MathFidelity default_fidelity=MathFidelity::LoFi,
+    const std::optional<const DeviceComputeKernelConfig>& device_kernel_config,
+    const MathFidelity default_fidelity=MathFidelity::LoFi,
     bool default_approx_mode=true,
     bool default_fp32_acc=false,
     bool default_l1_acc=false)
