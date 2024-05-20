@@ -596,6 +596,7 @@ def as_tensor(
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
     mesh_mapper: Optional[ttnn.TensorToMesh] = None,
+    use_device_tilizer: bool = False,
 ) -> ttnn.Tensor:
     """
     as_tensor(tensor: Union[torch.Tensor], dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = ROW_MAJOR_LAYOUT, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None, cache_file_name: Optional[str | pathlib.Path] = None) -> ttnn.Tensor
@@ -611,6 +612,7 @@ def as_tensor(
         * :attr:`cache_file_name`: the optional cache file name.
         * :attr:`preprocess`: the optional function to preprocess the tensor before serializing/converting to ttnn.
         * :attr:`mesh_mapper`: the optional TensorToMesh to define the mapping from torch to multi-device.
+        * :attr:`use_device_tilizer`: the optional flag to use device tilizer instead of host-tilizer.
 
     Example::
 
@@ -636,7 +638,19 @@ def as_tensor(
         def from_torch_and_dump(tensor, dtype, layout, cache_file_name):
             if preprocess:
                 tensor = preprocess(tensor)
-            tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+            if use_device_tilizer and device and layout == ttnn.TILE_LAYOUT:
+                # To use the device tilizer, we're going to first move the tensor
+                # to the device because the on-device tilizer works on bfloat16, on-device tensor.
+                tensor = ttnn.from_torch(
+                    tensor,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=mesh_mapper,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                tensor = ttnn.to_layout(tensor, layout, dtype=dtype, memory_config=memory_config, device=device)
+            else:
+                tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
             logger.debug(
                 f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
             )
