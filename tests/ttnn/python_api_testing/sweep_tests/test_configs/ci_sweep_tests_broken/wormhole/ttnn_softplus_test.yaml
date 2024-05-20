@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-eltwise-softplus:
+  - ttnn-softplus:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -22,4 +22,4 @@ test-list:
         data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: eltwise_softplus_sweep.csv
+      output-file: softplus_sweep.csv
