@@ -369,7 +369,7 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;
-            return {create_sharded_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), mem_config)};
+            return {create_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), mem_config)};
         } else {
             auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(this->input_tensor_shape, conv_params, this->parallelization_config.per_core_out_matrix_height_ntiles, extra_padding_for_32B_alignment);
             uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
@@ -384,7 +384,7 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             auto shard_spec = ShardSpec{shard_grid, shard_shape, this->output_mem_config.shard_spec.value().orientation};
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;
-            return {create_sharded_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), mem_config)};
+            return {create_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), mem_config)};
         }
 
     }
