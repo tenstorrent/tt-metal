@@ -16,6 +16,24 @@ namespace operations {
 namespace core {
 
 namespace detail {
+
+// Issue #8617: Limitations on tensor width for multicore device tilize
+inline bool use_multicore_device_tilize(
+    const Tensor& input, const std::optional<tt::tt_metal::DataType>& output_dtype) {
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+
+    uint32_t output_single_tile_size =
+        output_dtype.has_value() ? tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
+                                 : input_single_tile_size;
+
+    uint32_t num_tiles_in_row = input.get_shape()[-1] / TILE_WIDTH;
+    uint32_t max_l1_size = input.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
+    uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
+
+    return num_tiles_in_row <= max_tiles;
+}
+
 template <typename T>
 Tensor execute(
     const ttnn::Tensor& tensor_arg,
@@ -85,12 +103,13 @@ Tensor execute(
         memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
 
     if (ttnn::is_tensor_on_device_or_multidevice(tensor_arg)) {
-        bool use_multicore = true;
+        bool use_multicore_untilize = true;
+        bool use_multicore_tilize = use_multicore_device_tilize(tensor, dtype);
 
         if (not requires_padding_change(layout, tensor.get_shape())) {
             if (layout == ttnn::ROW_MAJOR_LAYOUT) {
                 TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
-                return tt::tt_metal::untilize(tensor, output_memory_config, use_multicore);
+                return tt::tt_metal::untilize(tensor, output_memory_config, use_multicore_untilize);
             } else if (layout == ttnn::TILE_LAYOUT) {
                 if (tensor.is_sharded()) {
                     const auto shard_shape = get_memory_config(tensor).value().shard_spec.value().shape;
@@ -100,7 +119,7 @@ Tensor execute(
                             "TILE_SIZE!");
                     }
                 }
-                return tt::tt_metal::tilize(tensor, output_memory_config, dtype, use_multicore);
+                return tt::tt_metal::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
             } else {
                 throw runtime_error("ttnn::to_layout: Unsupported layout!");
             }
@@ -130,7 +149,7 @@ Tensor execute(
             padded_4D_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[-2]));
             padded_4D_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[-1]));
             tensor = tt::tt_metal::tilize_with_val_padding(
-                tensor, padded_4D_output_shape, 0, output_memory_config, dtype, use_multicore);
+                tensor, padded_4D_output_shape, 0, output_memory_config, dtype, use_multicore_tilize);
             return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape, padded_output_shape}));
 
         } else {
