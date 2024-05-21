@@ -305,11 +305,9 @@ class resnet50Bottleneck:
         assert ttnn.get_memory_config(out) == ttnn.get_memory_config(ds_out)
         if eltwise_binary_out_in_place:
             # underscore version is in_place = True
-            out = ttnn.add_and_apply_activation_(
-                out, ds_out, activation="relu", memory_config=ttnn.get_memory_config(out)
-            )
+            out = ttnn.add_(out, ds_out, activations=["relu"], memory_config=ttnn.get_memory_config(out))
         else:
-            out = ttnn.add_and_apply_activation(out, ds_out, activation="relu", memory_config=ttnn.L1_MEMORY_CONFIG)
+            out = ttnn.add(out, ds_out, activations=["relu"], memory_config=ttnn.L1_MEMORY_CONFIG)
 
         ttnn.deallocate(ds_out)
         if batch_size == 20 and module_input_height == 56 and self.conv1_input_channels == 64:

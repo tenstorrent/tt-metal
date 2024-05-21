@@ -5,15 +5,16 @@
 #include "conv2d.hpp"
 #include "ttnn/cpp/ttnn/op_library/to_dtype/to_dtype_op.hpp"
 #include "tt_eager/tt_dnn/op_library/downsample/downsample_op.hpp"
+#include "tt_metal/detail/reports/memory_reporter.hpp"
+
+
 using namespace tt;
 namespace ttnn {
-
 namespace operations {
+
 namespace conv2d {
 
-
-
- const std::array<ttnn::TensorSchema, 3> input_schemas{
+const std::array<ttnn::TensorSchema, 3> input_schemas{
     ttnn::TensorSchema{
         4, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::float32}, {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT}, true, true, false},
     ttnn::TensorSchema{
@@ -523,14 +524,28 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     bool weight_is_on_device = ttnn::has_storage_type_of(weight_tensor, ttnn::DEVICE_STORAGE_TYPE);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
-    if(!weight_is_on_device) {
+    if (!weight_is_on_device) {
         // prepare weights in desired layout and move to device
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(weight_tensor, bias_tensor, conv_config.input_channels_alignment, conv_config.weights_dtype, opt_conv_op_block_config.act_block_w_ntiles, opt_conv_op_block_config.out_subblock_w_ntiles, parallel_config, device);
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
     bool use_matmul_for_1x1_conv = kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == stride[1] && padding[0] == 0 && padding[1] == 0 && dilation[0] == 1 && dilation[1] == 1 && groups == 1;
+    Tensor input_tensor_post_tm_out;
     if (use_matmul_for_1x1_conv) {
-        input_tensor_post_tm = ttnn::operations::core::ToLayout::execute(input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config(),&device);
+        device.synchronize();
+        tt::tt_metal::detail::DumpDeviceMemoryState(&device, "conv2d_1_");
+        input_tensor_post_tm_out = ttnn::operations::core::ToLayout::execute(input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config(), &device);
+        device.synchronize();
+        tt::tt_metal::detail::DumpDeviceMemoryState(&device, "conv2d_2_");
+        if (conv_config.deallocate_activation) {
+            input_tensor_post_tm.deallocate();
+        }
+        device.synchronize();
+        tt::tt_metal::detail::DumpDeviceMemoryState(&device, "conv2d_3_");
+        // input_tensor_post_tm_out = ttnn::operations::core::reallocate(input_tensor_post_tm_out, input_tensor_post_tm_out.memory_config());
+        device.synchronize();
+        tt::tt_metal::detail::DumpDeviceMemoryState(&device, "conv2d_4_");
+        input_tensor_post_tm = input_tensor_post_tm_out;
     }
     // call optimized conv op or matmul micro op
     bool input_is_on_device = ttnn::has_storage_type_of(input_tensor_post_tm, ttnn::DEVICE_STORAGE_TYPE);
@@ -570,7 +585,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
                 input_tensor_post_tm.deallocate();
             }
         }
-        auto matmul_output = ttnn::operations::matmul::linear(matmul_input, weight_tensor_on_device, bias_tensor_on_device, matmul_program_config, matmul_input.memory_config(), conv_config.dtype, conv_config.activation == "" ? std::nullopt : std::optional<std::string>{conv_config.activation}, compute_kernel_config);
+        auto matmul_output = ttnn::operations::matmul::linear(matmul_input, weight_tensor_on_device, bias_tensor_on_device, matmul_program_config, conv_out_memory_config, conv_config.dtype, conv_config.activation == "" ? std::nullopt : std::optional<std::string>{conv_config.activation}, compute_kernel_config);
         if (conv_config.deallocate_activation) {
             matmul_input.deallocate();
         }
