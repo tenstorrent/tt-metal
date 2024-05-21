@@ -7,17 +7,18 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "unary.hpp"
-#include "binary.hpp"
 #include "ccl.hpp"
 #include "core.hpp"
-#include "matmul.hpp"
 #include "data_movement.hpp"
-#include "transformer.hpp"
-#include "normalization.hpp"
-#include "kv_cache.hpp"
-#include "pool.hpp"
 #include "embedding.hpp"
+#include "kv_cache.hpp"
+#include "matmul.hpp"
+#include "normalization.hpp"
+#include "pool.hpp"
+#include "pybind11/operations/binary.hpp"
+#include "reduction.hpp"
+#include "transformer.hpp"
+#include "unary.hpp"
 
 namespace py = pybind11;
 
@@ -49,6 +50,9 @@ void py_module(py::module& module) {
 
     auto m_normalization = module.def_submodule("normalization", "normalization operations");
     normalization::py_module(m_normalization);
+
+    auto m_reduction = module.def_submodule("reduction", "reduction operations");
+    reduction::py_module(m_reduction);
 
     auto m_ccl = module.def_submodule("ccl", "collective communication operations");
     ccl::py_module(m_ccl);
