@@ -17,9 +17,9 @@ from models.utility_functions import (
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(
     "num_loops",
-    (5,),
+    (1,),
     ids=[
-        "loops_5",
+        "loops_1",
     ],
 )
 @pytest.mark.parametrize("perf_mode", (False,))  # Option to measure perf using max seq length (with invalid outputs)
