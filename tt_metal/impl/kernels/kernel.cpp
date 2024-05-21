@@ -169,7 +169,7 @@ std::vector<uint32_t>& Kernel::common_runtime_args() {
     return this->common_runtime_args_;
 }
 
-std::vector<RuntimeArgsData> & Kernel::common_runtime_args_data() {
+RuntimeArgsData & Kernel::common_runtime_args_data() {
     return this->common_runtime_args_data_;
 }
 
@@ -248,31 +248,11 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<u
 }
 
 void Kernel::set_common_runtime_args(const std::vector<uint32_t> &common_runtime_args) {
-
-    // TODO (abhullar): If we don't include this check then user can write runtime args to a core that the kernel is not placed on.
-    //                  Should this check only be enabled in debug mode?
-    // TT_FATAL(this->is_on_logical_core(logical_core), "Cannot set runtime args for core {} since kernel {} is not placed on it!", logical_core.str(), this->name());
-
     auto &set_rt_args = this->common_runtime_args_;
     TT_FATAL(set_rt_args.empty(), "Illegal Common Runtime Args: Can only set common runtime args once. Get and modify args in place instead.");
     this->validate_runtime_args_size(max_runtime_args_per_core_, common_runtime_args.size(), core_with_max_runtime_args_);
     set_rt_args = common_runtime_args;
-    this->common_runtime_args_data_ = std::vector<RuntimeArgsData>(this->core_range_set_.ranges().size(), RuntimeArgsData{set_rt_args.data(), set_rt_args.size()});
-}
-
-void Kernel::set_common_runtime_args(const RuntimeArgsData& common_runtime_args) {
-
-    // TODO (abhullar): If we don't include this check then user can write runtime args to a core that the kernel is not placed on.
-    //                  Should this check only be enabled in debug mode?
-    // TT_FATAL(this->is_on_logical_core(logical_core), "Cannot set runtime args for core {} since kernel {} is not placed on it!", logical_core.str(), this->name());
-
-    auto &set_rt_args = this->common_runtime_args_;
-    TT_FATAL(!set_rt_args.empty() and set_rt_args.size() == common_runtime_args.size(), "Illegal Common Runtime Args: Number of common runtime args cannot be modified!");
-    for (auto& rt_args_data : this->common_runtime_args_data_) {
-        if (common_runtime_args.data() != rt_args_data.data()) {
-            std::memcpy((void *)rt_args_data.data(),(void *) common_runtime_args.data(), common_runtime_args.size() * sizeof(uint32_t));
-        }
-    }
+    this->common_runtime_args_data_ = RuntimeArgsData{set_rt_args.data(), set_rt_args.size()};
 }
 
 void DataMovementKernel::set_build_options(JitBuildOptions& build_options) const {
