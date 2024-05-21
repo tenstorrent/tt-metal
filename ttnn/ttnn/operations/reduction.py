@@ -171,121 +171,12 @@ def reduce(
     return output_tensor
 
 
-@ttnn.register_operation(
-    name="ttnn.std",
-    validate_input_tensors=_validate_input_tensors,
-    golden_function=_create_golden_function("std"),
-)
-def std(
-    input_tensor: ttnn.Tensor,
-    dim: Optional[Union[int, Tuple[int]]],
-    keepdim: bool = True,
-    memory_config: Optional[ttnn.MemoryConfig] = None,
-) -> ttnn.Tensor:
-    """
-    std(input_tensor: ttnn.Tensor, dim: Optional[Union[int, Tuple[int]]]) -> ttnn.Tensor
-    """
-    return reduce(input_tensor, "std", dim, keepdim, memory_config)
-
-
-@ttnn.register_operation(
-    name="ttnn.var",
-    validate_input_tensors=_validate_input_tensors,
-    golden_function=_create_golden_function("var"),
-)
-def var(
-    input_tensor: ttnn.Tensor,
-    dim: Optional[Union[int, Tuple[int]]],
-    keepdim: bool = True,
-    memory_config: Optional[ttnn.MemoryConfig] = None,
-) -> ttnn.Tensor:
-    """
-    var(input_tensor: ttnn.Tensor, dim: Optional[Union[int, Tuple[int]]]) -> ttnn.Tensor
-    """
-    return reduce(input_tensor, "var", dim, keepdim, memory_config)
-
-
-def _golden_function(input_tensor: ttnn.Tensor, dim: Union[int, None], keepdim=False, **_):
-    import torch
-
-    if dim == None:
-        return torch.max(input_tensor)
-    else:
-        return torch.max(input_tensor, dim=dim, keepdim=keepdim)
-
-
-@ttnn.register_operation(
-    name="ttnn.max",
-    validate_input_tensors=_validate_input_tensors,
-    golden_function=_create_golden_function("max"),
-)
-def max(
-    input_tensor: ttnn.Tensor,
-    dim: Optional[Union[int, Tuple[int]]] = None,
-    keepdim: bool = True,
-    memory_config: Optional[ttnn.MemoryConfig] = None,
-) -> ttnn.Tensor:
-    """
-    max(input_tensor: ttnn.Tensor, dim: Optional[Union[int, Tuple[int]]]) -> ttnn.Tensor
-    """
-    return reduce(input_tensor, "max", dim, keepdim, memory_config)
-
-
-@ttnn.register_operation(
-    name="ttnn.min",
-    validate_input_tensors=_validate_input_tensors,
-    golden_function=_create_golden_function("min"),
-)
-def min(
-    input_tensor: ttnn.Tensor,
-    dim: Optional[Union[int, Tuple[int]]] = None,
-    keepdim: bool = True,
-    memory_config: Optional[ttnn.MemoryConfig] = None,
-) -> ttnn.Tensor:
-    """
-    min(input_tensor: ttnn.Tensor, dim: Optional[Union[int, Tuple[int]]]) -> ttnn.Tensor
-    """
-    return reduce(input_tensor, "min", dim, keepdim, memory_config)
-
-
-@ttnn.register_operation(
-    name="ttnn.sum",
-    validate_input_tensors=_validate_input_tensors,
-    golden_function=_create_golden_function("sum"),
-)
-def sum(
-    input_tensor: ttnn.Tensor,
-    dim: Optional[Union[int, Tuple[int]]] = None,
-    keepdim: bool = True,
-    memory_config: Optional[ttnn.MemoryConfig] = None,
-) -> ttnn.Tensor:
-    """
-    sum(input_tensor: ttnn.Tensor, dim: Optional[Union[int, Tuple[int]]]) -> ttnn.Tensor
-    """
-    return reduce(input_tensor, "sum", dim, keepdim, memory_config)
-
-
-def _golden_function(input_tensor: ttnn.Tensor, dim: int, keepdim=False, **_):
-    import torch
-
-    return torch.mean(input_tensor, dim=dim, keepdim=keepdim)
-
-
-@ttnn.register_operation(
-    name="ttnn.mean",
-    validate_input_tensors=_validate_input_tensors,
-    golden_function=_create_golden_function("mean"),
-)
-def mean(
-    input_tensor: ttnn.Tensor,
-    dim: Optional[Union[int, Tuple[int]]] = None,
-    keepdim: bool = True,
-    memory_config: Optional[ttnn.MemoryConfig] = None,
-) -> ttnn.Tensor:
-    """
-    mean(input_tensor: ttnn.Tensor, dim: Optional[Union[int, Tuple[int]]] = None, keepdim: bool = True, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-    """
-    return reduce(input_tensor, "mean", dim, keepdim, memory_config)
+mean = ttnn.register_operation(golden_function=_create_golden_function("mean"))(ttnn._ttnn.operations.reduction.mean)
+sum = ttnn.register_operation(golden_function=_create_golden_function("sum"))(ttnn._ttnn.operations.reduction.sum)
+max = ttnn.register_operation(golden_function=_create_golden_function("max"))(ttnn._ttnn.operations.reduction.max)
+min = ttnn.register_operation(golden_function=_create_golden_function("min"))(ttnn._ttnn.operations.reduction.min)
+var = ttnn.register_operation(golden_function=_create_golden_function("var"))(ttnn._ttnn.operations.reduction.var)
+std = ttnn.register_operation(golden_function=_create_golden_function("std"))(ttnn._ttnn.operations.reduction.std)
 
 
 __all__ = []
