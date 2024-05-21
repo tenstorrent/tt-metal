@@ -5,24 +5,26 @@ import os
 import torch
 import pytest
 from loguru import logger
-import ttnn
-from models.demos.t3000.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
-from models.demos.t3000.mixtral8x7b.tt.mixtral_moe import TtMoeLayer
-from models.demos.t3000.mixtral8x7b.reference.moe import MoeLayer
-from models.demos.t3000.mixtral8x7b.reference.model import FeedForward
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
 # Set Mixtral flags for CI, if CI environment is setup
 if os.getenv("CI") == "true":
     os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
+    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
 
+import ttnn
+from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+
+from models.demos.t3000.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
+from models.demos.t3000.mixtral8x7b.tt.mixtral_moe import TtMoeLayer
+from models.demos.t3000.mixtral8x7b.reference.moe import MoeLayer
+from models.demos.t3000.mixtral8x7b.reference.model import FeedForward
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
+from models.utility_functions import (
+    comp_pcc,
+    comp_allclose,
+)
 
 
 def test_mixtral_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds):

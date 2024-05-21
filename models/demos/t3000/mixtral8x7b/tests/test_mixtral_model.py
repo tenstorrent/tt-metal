@@ -7,6 +7,14 @@ import pytest
 import numpy as np
 from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
+
+# Set Mixtral flags for CI, if CI environment is setup
+if os.getenv("CI") == "true":
+    os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
+    os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
+    os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
+    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
+
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
@@ -14,15 +22,8 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.reference.model import Transformer
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
-from models.utility_functions import comp_pcc, comp_allclose
-
-# Set Mixtral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
+from models.utility_functions import comp_pcc, comp_allclose
 
 
 class Emb(torch.nn.Module):
@@ -34,20 +35,20 @@ class Emb(torch.nn.Module):
         return self.emb(x)
 
 
-# @pytest.mark.parametrize(
-#     "validation_type",
-#     ("pcc", "output"),
-# )
-# @pytest.mark.parametrize(
-#     "n_layers",
-#     (1, 32),
-# )
-# @pytest.mark.parametrize(
-#     "iterations",
-#     (1, 10, 127),
-# )
+@pytest.mark.parametrize(
+    "validation_type",
+    ("pcc", "output"),
+)
+@pytest.mark.parametrize(
+    "n_layers",
+    (1, 32),
+)
+@pytest.mark.parametrize(
+    "iterations",
+    (1, 10),
+)
 def test_mixtral_model_inference(
-    t3k_device_mesh, use_program_cache, reset_seeds, iterations=1, n_layers=32, validation_type="output"
+    t3k_device_mesh, use_program_cache, reset_seeds, iterations, n_layers, validation_type
 ):
     pcc = 0.97
     dtype = ttnn.bfloat8_b

@@ -5,23 +5,24 @@ import os
 import torch
 import pytest
 from loguru import logger
-import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
-
-from models.demos.t3000.mixtral8x7b.tt.mixtral_rms_norm import TtRMSNormSharded
-from models.demos.t3000.mixtral8x7b.reference.model import RMSNorm
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
 
 # Set Mixtral flags for CI, if CI environment is setup
 if os.getenv("CI") == "true":
     os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
+    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
 
+import ttnn
+from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+
+from models.demos.t3000.mixtral8x7b.tt.mixtral_rms_norm import TtRMSNormSharded
+from models.demos.t3000.mixtral8x7b.reference.model import RMSNorm
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
+from models.utility_functions import (
+    comp_pcc,
+    comp_allclose,
+)
 
 
 def test_mistral_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_seeds):
@@ -31,7 +32,7 @@ def test_mistral_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_se
     state_dict = torch.load(model_args.state_dict_path)
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    partial_state_dict = {k[24:]: v for k, v in state_dict.items() if (k.startswith("layers.7.attention_norm."))}
+    partial_state_dict = {k[24:]: v for k, v in state_dict.items() if (k.startswith("layers.0.attention_norm."))}
     reference_model = RMSNorm(dim=model_args.dim)
     reference_model.load_state_dict(partial_state_dict)
 
@@ -40,7 +41,7 @@ def test_mistral_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_se
         state_dict=state_dict,
         args=model_args,
         dtype=dtype,
-        layer_num=7,
+        layer_num=0,
         weight_key="attention_norm",
     )
     input = torch.rand(1, 1, 32, 4096)
@@ -56,7 +57,6 @@ def test_mistral_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_se
     tt_input = ttnn.to_device(tt_input, t3k_device_mesh)
     tt_output = tt_model(tt_input)
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
-    print(tt_output_torch.shape, reference_output.shape)
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))

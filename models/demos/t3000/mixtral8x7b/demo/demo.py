@@ -1,13 +1,23 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import os
 import torch
 import json
 import tt_lib as ttl
 import pytest
 from loguru import logger
 from time import time
+
+# Set Mixtral flags for CI, if CI environment is setup
+if os.getenv("CI") == "true":
+    os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
+    os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
+    os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
+    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
+
 import ttnn
+from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     prepare_inputs_ttnn,
     prepare_rotation_mat_ttnn,
@@ -16,9 +26,10 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
 )
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
-from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+
+
+from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 
 
 class Emb(torch.nn.Module):
@@ -178,7 +189,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
     )
 
     generation_start_pos = 0
-    max_generated_tokens = 200  # TODO Increase to around 100 tokens
+    max_generated_tokens = 50
 
     cache_attention(device_mesh, state_dict, model_args, rot_mats, generation_start_pos, max_generated_tokens, dtype)
 
@@ -254,15 +265,25 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
         iteration_time = time() - iteration_time_start
         tokens_per_second_per_user = 1 / iteration_time
         # Print out generated outputs for each user at the end of every iteration
+        if os.getenv("CI") != "true":  # Avoid printing every iteration in CI
+            if len(user_input) == 1:
+                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+            else:
+                for user in range(batch_size):
+                    logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
+
+        # Always print iteration perf
+        logger.info(
+            f"Iteration {iteration}: {1000*iteration_time:.2f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+        )
+
+    # In CI only print the final generated output to avoid spamming the logs
+    if os.getenv("CI") == "true":
         if len(user_input) == 1:
             logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
         else:
             for user in range(batch_size):
                 logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
-
-        logger.info(
-            f"Iteration {iteration}: {1000*iteration_time:.2f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-        )
 
 
 @pytest.mark.timeout(10000)
