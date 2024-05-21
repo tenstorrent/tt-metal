@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 cmake_policy(VERSION 3.16)
 
+if(${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_BINARY_DIR})
+    message(FATAL_ERROR "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!")
+endif()
+
 project(tt-metal
         VERSION 1.0
         DESCRIPTION "Tenstorrent Metallium"
@@ -8,17 +12,17 @@ project(tt-metal
         LANGUAGES CXX
 )
 
-############################################
+############################################################################################################################
 # Find all required libraries to build
-############################################
+############################################################################################################################
 find_package(Boost REQUIRED COMPONENTS thread filesystem system regex)
 find_package(GTest REQUIRED)
 find_package (Python3 COMPONENTS Interpreter Development)
 
-############################################
+############################################################################################################################
 # Setting build type flags
 #   Will default to assert build, unless CONFIG env variable is set or manually set -DCMAKE_BUILD_TYPE
-############################################
+############################################################################################################################
 if(DEFINED ENV{CONFIG})
     message(STATUS "CONFIG is set, CMAKE_BUILD_TYPE being set to $ENV{CONFIG}")
     set(CMAKE_BUILD_TYPE $ENV{CONFIG})
@@ -57,11 +61,11 @@ set(CMAKE_INSTALL_BINDIR "${CMAKE_BINARY_DIR}/tmp/bin")
 set(CMAKE_INSTALL_INCLUDEDIR "${CMAKE_BINARY_DIR}/tmp/include")
 set(CMAKE_INSTALL_DATAROOTDIR "${CMAKE_BINARY_DIR}/tmp/share")
 
-############################################
+############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
 #   in order to propogate to the rest of tt_metal, tt_eager, etc.
-############################################
+############################################################################################################################
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(metal_common_libs INTERFACE
     dl z pthread atomic stdc++  # system libraries
@@ -119,9 +123,9 @@ target_precompile_headers(pch_pybinds INTERFACE
     ${CMAKE_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/stl.h
 )
 
-############################################
+############################################################################################################################
 # Build subdirectories
-############################################
+############################################################################################################################
 if($ENV{ENABLE_TRACY})
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/tracy.cmake)
 endif()
@@ -137,11 +141,11 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ttnn)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tests EXCLUDE_FROM_ALL)
 
 
-############################################
+############################################################################################################################
 # Install targets for build artifacts and pybinds
 #   If built with Tracy, cannot install 'all' since it will pick up install targets from Tracy
-# For top level install: cmake --build build --target metal-install
-############################################
+# For top level install: cmake --build build --target install  or  make/ninja install -C build
+############################################################################################################################
 # Install for build artifacts that will upload build/lib
 install(TARGETS tt_metal
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

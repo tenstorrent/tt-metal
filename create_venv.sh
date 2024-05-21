@@ -21,3 +21,9 @@ python3 -m pip install -r $(pwd)/tt_metal/python_env/requirements-dev.txt
 echo "Installing tt-metal"
 pip install -e .
 pip install -e ttnn
+
+echo "Generating git hooks"
+pre-commit install
+pre-commit install --hook-type commit-msg
+
+echo "If you want stubs, run ./scripts/build_scripts/create_stubs.sh"
