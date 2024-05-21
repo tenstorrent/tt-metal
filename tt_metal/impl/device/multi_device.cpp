@@ -40,11 +40,11 @@ DeviceMesh::~DeviceMesh() {
 }
 
 
-Device &DeviceMesh::get_device(int queried_device_id)
+Device* DeviceMesh::get_device(int queried_device_id)
 {
     for (const auto& [device_id, device] : mesh_devices) {
         if (device_id == queried_device_id) {
-            return *device;
+            return device.get();
         }
     }
     TT_THROW("User has provided an invalid device index");
