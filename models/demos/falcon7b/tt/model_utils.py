@@ -5,7 +5,7 @@
 import torch
 import ttnn
 
-from models.utility_functions import torch2tt_tensor, pad_by_zero
+from models.utility_functions import is_wormhole_b0, torch2tt_tensor, pad_by_zero
 
 
 def get_weights_cached(
@@ -80,3 +80,11 @@ def get_weights_cached(
         ttnn.experimental.tensor.dump_tensor(str(path), weights_host)
 
     return weights
+
+
+# TODO: Remove this once there are no more hangs on 8x8 (Issue #6795)
+def get_falcon_default_core_grid(device):
+    grid_size = device.compute_with_storage_grid_size()
+    if is_wormhole_b0() and grid_size.y >= 8:
+        return ttnn.CoreGrid(y=7, x=grid_size.x)
+    return ttnn.CoreGrid(y=grid_size.y, x=grid_size.x)

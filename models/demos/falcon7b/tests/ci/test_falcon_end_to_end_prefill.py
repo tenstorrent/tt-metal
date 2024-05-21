@@ -13,9 +13,9 @@ from models.utility_functions import disable_compilation_reports, disable_persis
     "llm_mode, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc",
     (
         ("prefill", 32, 1, 32, 0, "BFLOAT16-DRAM", 0.97, 0.95, 0.95),
-        ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.97, 0.99, 0.96),
-        ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96),
-        # ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96), # CI machines don't have enough RAM memory to run this test atm; to reduce memory usage (#8349)
+        ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.97, 0.99, 0.97),
+        ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.98),
+        # ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.98), # CI machines don't have enough RAM memory to run this test atm; to reduce memory usage (#8349)
     ),
     ids=[
         "prefill_seq32",
