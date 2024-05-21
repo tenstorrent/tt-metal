@@ -11,6 +11,6 @@ echo "Running model nightly tests for GS only"
 
 env pytest models/demos/metal_BERT_large_11/tests/test_demo.py
 
-# why is this not in test_perf_device_resnet.py, also these parameters are specifically skipped inside the test
-# env pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_inference[HiFi4-activations_BFLOAT16-weights_BFLOAT16-batch_1]
-# env pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_inference[HiFi4-activations_BFLOAT16-weights_BFLOAT16-batch_2]
+env pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_inference[HiFi2-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_20-24576]
+
+env pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_trace_inference -k "HiFi2-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_20-24576"

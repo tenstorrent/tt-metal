@@ -15,7 +15,7 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class ShardedOpParallelizationStrategy { MULTI_CORE = 0 };
+enum class ShardedOpParallelizationStrategy { MULTI_CORE };
 
 enum class ShardedOpType { InterleavedToSharded, ShardedToInterleaved };
 

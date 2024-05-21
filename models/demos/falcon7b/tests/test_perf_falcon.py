@@ -584,7 +584,7 @@ class TestParametrized:
             async_mode,
         )
 
-    @pytest.mark.models_performance_bare_metal_multi_device
+    @pytest.mark.model_perf_t3000
     @pytest.mark.parametrize(
         "llm_mode, num_devices, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc, expected_inference_time, async_mode",
         (

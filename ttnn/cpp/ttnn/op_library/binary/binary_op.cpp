@@ -20,7 +20,6 @@ namespace operations {
 namespace binary {
 
 enum class BinaryProgramType {
-    ElementWiseSingleCore,
     ElementWiseMultiCore,
     BroadcastWidthMultiCore,
     BroadcastHeightMultiCore,
@@ -64,15 +63,7 @@ inline BinaryProgramType get_program_type(
 
     if (batch_size_0_a == batch_size_0_b and batch_size_1_a == batch_size_1_b and height_a == height_b and
         width_a == width_b) {
-        uint32_t num_tiles = input_tensor_a.volume() / tt::constants::TILE_HW;
-        if (num_tiles > 1 or input_tensor_a.memory_config().is_sharded() or
-            input_tensor_b.memory_config().is_sharded() or operation.program_config.memory_config.is_sharded()) {
-            // fmt::print("BinaryProgramType::ElementWiseMultiCore\n");
-            return BinaryProgramType::ElementWiseMultiCore;
-        } else {
-            // fmt::print("BinaryProgramType::ElementWiseSingleCore\n");
-            return BinaryProgramType::ElementWiseSingleCore;
-        }
+        return BinaryProgramType::ElementWiseMultiCore;
     } else if (height_b == 1 or width_b == 1) {
         if (operation.program_config.dtype != input_tensor_a.get_dtype()) {
             TT_THROW("ttnn::operations::binary::Binary: cannot change dtype when broadcasting");
@@ -179,8 +170,7 @@ void Binary<binary_op_type, in_place>::validate(const std::vector<Tensor>& input
         }
     }
 
-    if (program_type != BinaryProgramType::ElementWiseMultiCore and
-        program_type != BinaryProgramType::ElementWiseSingleCore) {
+    if (program_type != BinaryProgramType::ElementWiseMultiCore) {
         TT_FATAL(not this->program_config.activations.has_value());
     }
 }
@@ -189,7 +179,11 @@ template <BinaryOpType binary_op_type, bool in_place>
 std::vector<tt::tt_metal::Shape> Binary<binary_op_type, in_place>::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    return {input_tensor_a.get_legacy_shape()};
+    const auto& input_tensor_b = input_tensors.at(1);
+    if (input_tensor_a.get_shape().rank() >= input_tensor_b.get_shape().rank()) {
+        return {input_tensor_a.get_legacy_shape()};
+    }
+    return {input_tensor_b.get_legacy_shape()};
 }
 
 template <BinaryOpType binary_op_type, bool in_place>
@@ -202,8 +196,7 @@ std::vector<Tensor> Binary<binary_op_type, in_place>::create_output_tensors(
     } else {
         auto program_type = get_program_type(*this, input_tensors);
 
-        if (program_type == BinaryProgramType::ElementWiseSingleCore or
-            program_type == BinaryProgramType::ElementWiseMultiCore) {
+        if (program_type == BinaryProgramType::ElementWiseMultiCore) {
             if (this->program_config.memory_config.is_sharded()) {
                 ShardSpec shard_spec{CoreRangeSet({}), {0, 0}};
                 if (input_tensor_a.memory_config().is_sharded()) {
@@ -222,7 +215,7 @@ std::vector<Tensor> Binary<binary_op_type, in_place>::create_output_tensors(
                 }
                 auto memory_config = this->program_config.memory_config;
                 memory_config.shard_spec = shard_spec;
-                return {create_sharded_device_tensor(
+                return {create_device_tensor(
                     this->compute_output_shapes(input_tensors).at(0),
                     this->program_config.dtype,
                     Layout::TILE,
@@ -238,7 +231,7 @@ std::vector<Tensor> Binary<binary_op_type, in_place>::create_output_tensors(
                 }
                 auto memory_config = this->program_config.memory_config;
                 memory_config.shard_spec = shard_spec;
-                return {create_sharded_device_tensor(
+                return {create_device_tensor(
                     this->compute_output_shapes(input_tensors).at(0),
                     this->program_config.dtype,
                     Layout::TILE,
@@ -282,35 +275,40 @@ operation::ProgramWithCallbacks Binary<binary_op_type, in_place>::create_program
     }
 
     auto program_type = get_program_type(*this, input_tensors);
-    switch (program_type) {
-        case BinaryProgramType::ElementWiseMultiCore:
-            return eltwise_binary_multi_core(
-                input_tensor_a, input_tensor_b, output_tensor, binary_op_type, activations);
-        case BinaryProgramType::ElementWiseSingleCore:
-            return eltwise_binary_single_core(
-                input_tensor_a, input_tensor_b, output_tensor, binary_op_type, activations);
-        case BinaryProgramType::BroadcastHeightAndWidthMultiCore:
-            return bcast_multi_core_hw(
-                input_tensor_a,
-                input_tensor_b,
-                output_tensor,
-                binary_op_type_to_bcast_op_math<binary_op_type>(),
-                tt::tt_metal::BcastOpDim::HW);
-        case BinaryProgramType::BroadcastHeightMultiCore:
-            return bcast_multi_core_h(
-                input_tensor_a,
-                input_tensor_b,
-                output_tensor,
-                binary_op_type_to_bcast_op_math<binary_op_type>(),
-                tt::tt_metal::BcastOpDim::H);
-        case BinaryProgramType::BroadcastWidthMultiCore:
-            return bcast_multi_core_w(
-                input_tensor_a,
-                input_tensor_b,
-                output_tensor,
-                binary_op_type_to_bcast_op_math<binary_op_type>(),
-                tt::tt_metal::BcastOpDim::W);
-        default: TT_THROW("Invalid program type");
+    if constexpr (std::is_same_v<
+                      decltype(binary_op_type_to_bcast_op_math<binary_op_type>()),
+                      tt::tt_metal::BcastOpMath>) {
+        switch (program_type) {
+            case BinaryProgramType::ElementWiseMultiCore:
+                return eltwise_binary_multi_core(
+                    input_tensor_a, input_tensor_b, output_tensor, binary_op_type, activations);
+            case BinaryProgramType::BroadcastHeightAndWidthMultiCore:
+                return bcast_multi_core_hw(
+                    input_tensor_a,
+                    input_tensor_b,
+                    output_tensor,
+                    binary_op_type_to_bcast_op_math<binary_op_type>());
+            case BinaryProgramType::BroadcastHeightMultiCore:
+                return bcast_multi_core_h(
+                    input_tensor_a,
+                    input_tensor_b,
+                    output_tensor,
+                    binary_op_type_to_bcast_op_math<binary_op_type>());
+            case BinaryProgramType::BroadcastWidthMultiCore:
+                return bcast_multi_core_w(
+                    input_tensor_a,
+                    input_tensor_b,
+                    output_tensor,
+                    binary_op_type_to_bcast_op_math<binary_op_type>());
+            default: TT_THROW("Invalid program type");
+        }
+    } else {
+        switch (program_type) {
+            case BinaryProgramType::ElementWiseMultiCore:
+                return eltwise_binary_multi_core(
+                    input_tensor_a, input_tensor_b, output_tensor, binary_op_type, activations);
+            default: TT_THROW("Invalid program type");
+        }
     }
 }
 
@@ -362,6 +360,14 @@ template class Binary<BinaryOpType::SUB, false>;
 template class Binary<BinaryOpType::SUB, true>;
 template class Binary<BinaryOpType::MUL, false>;
 template class Binary<BinaryOpType::MUL, true>;
+template class Binary<BinaryOpType::EQ, false>;
+template class Binary<BinaryOpType::NE, false>;
+template class Binary<BinaryOpType::LT, false>;
+template class Binary<BinaryOpType::LTE, false>;
+template class Binary<BinaryOpType::GT, false>;
+template class Binary<BinaryOpType::GTE, false>;
+template class Binary<BinaryOpType::LOGICAL_AND, false>;
+template class Binary<BinaryOpType::LOGICAL_OR, false>;
 
 }  // namespace binary
 

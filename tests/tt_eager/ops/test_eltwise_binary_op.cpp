@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/constants.hpp"
-#include "tensor/owned_buffer.hpp"
-#include "tensor/owned_buffer_functions.hpp"
+#include "tensor/host_buffer/functions.hpp"
+#include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_numpy/functions.hpp"
@@ -112,7 +112,7 @@ int main() {
 
     run_binary_ops();
 
-    TT_FATAL(device->num_program_cache_entries() == 4,
+    TT_FATAL(device->num_program_cache_entries() == 3,
         "There are {} entries",
         device->num_program_cache_entries());
 

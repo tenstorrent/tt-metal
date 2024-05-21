@@ -14,37 +14,28 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class BcastOpMath { ADD = 0, SUB = 1, MUL = 2 };
+enum class BcastOpMath { ADD, SUB, MUL };
 
-enum class BcastOpDim { H = 0, W = 1, HW = 2 };
+enum class BcastOpDim { H, W, HW };
 
 // TODO: Accept parallelization
-enum class BcastOpParallelizationStrategy { MULTI_CORE_H = 0, MULTI_CORE_W = 1, MULTI_CORE_HW = 2, SINGLE_CORE = 3 };
+enum class BcastOpParallelizationStrategy { MULTI_CORE_H, MULTI_CORE_W, MULTI_CORE_HW };
 
-operation::ProgramWithCallbacks bcast_single_core(
-    const Tensor &input_tensor_a,
-    const Tensor &input_tensor_b,
-    const Tensor &output_tensor,
-    BcastOpMath bcast_op,
-    BcastOpDim bcast_dim);
 operation::ProgramWithCallbacks bcast_multi_core_h(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     const Tensor &output_tensor,
-    BcastOpMath bcast_op,
-    BcastOpDim bcast_dim);
+    BcastOpMath bcast_op);
 operation::ProgramWithCallbacks bcast_multi_core_w(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     const Tensor &output_tensor,
-    BcastOpMath bcast_op,
-    BcastOpDim bcast_dim);
+    BcastOpMath bcast_op);
 operation::ProgramWithCallbacks bcast_multi_core_hw(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     const Tensor &output_tensor,
-    BcastOpMath bcast_op,
-    BcastOpDim bcast_dim);
+    BcastOpMath bcast_op);
 
 struct EltwiseBinaryBroadcast {
     const BcastOpMath math_op;
@@ -146,14 +137,6 @@ inline Tensor bcast(
 }  // namespace tt
 
 namespace bcast_op_utils {
-
-using namespace tt::tt_metal;
-
-const char *get_reader_name(BcastOpDim bcast_dim, BcastOpParallelizationStrategy bcast_parallelization_strategy);
-
-const char *get_compute_name(BcastOpDim bcast_dim);
-
-const char *get_math_to_op_define(BcastOpMath bcast_math);
 
 std::map<std::string, std::string> get_defines(BcastOpDim bcast_dim, BcastOpMath bcast_math);
 

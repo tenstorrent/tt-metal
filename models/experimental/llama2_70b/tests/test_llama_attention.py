@@ -8,6 +8,7 @@ import torch
 from torch import nn
 import tt_lib
 import ttnn
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
 
 from models.experimental.llama2_70b.reference.llama.llama import Llama
 from models.experimental.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
@@ -17,10 +18,6 @@ from models.experimental.llama2_70b.tt.model_config import (
     get_model_config,
 )
 
-# from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-#     comp_allclose,
-#     comp_pcc,
-# )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
 from models.experimental.llama2_70b.tt.llama_common import (
     get_llama_path,
@@ -33,6 +30,8 @@ from models.experimental.llama2_70b.tt.llama_common import (
     UNIT_TEST_GENERATION_LENGTH,
     comp_pcc,
     get_rot_transformation_mat,
+    should_skip_model_load,
+    check_kv_cache,
 )
 
 
@@ -100,7 +99,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
 
 
 def run_test_LlamaAttention_inference(
-    devices,
+    t3k_device_mesh,
     batch,
     seq_len,
     pcc,
@@ -109,7 +108,10 @@ def run_test_LlamaAttention_inference(
     emulated=False,
 ):
     # Prepare paths and devices
-    devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config, n_devices, emulated)
+    t3k_device_mesh, ckpt_dir, tokenizer_path, cache_path = get_llama_path(
+        t3k_device_mesh, model_config, n_devices, emulated
+    )
+    skip_model_load = should_skip_model_load()
 
     # Prepare configs
     hugging_face_reference_model = Llama.build(
@@ -118,7 +120,7 @@ def run_test_LlamaAttention_inference(
         max_seq_len=MAX_SEQ_LEN,
         max_batch_size=batch,
         n_layers=UNIT_TEST_N_LAYER,
-        skip_model_load=False,
+        skip_model_load=skip_model_load,
     ).model
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
@@ -132,35 +134,28 @@ def run_test_LlamaAttention_inference(
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, UNIT_TEST_LAYER_NUM)
     # TT model -------------------------------------------------------------------------
     transformation_mat_torch = get_rot_transformation_mat(head_dim)
-    transformation_mats = [torch2tt_tensor(transformation_mat_torch.clone(), device) for device in devices]
-    if n_devices == 32:
-        tt_LlamaAttention_model = TtLlamaAttention_galaxy(
-            devices,
-            state_dict,
-            BASE_URL,
-            UNIT_TEST_LAYER_NUM,
-            model_config,
-            configuration,
-            transformation_mats,
-            emulated=emulated,
-            cache_path=cache_path,
-        )
-    else:
-        tt_LlamaAttention_model = TtLlamaAttention_optimized(
-            devices,
-            state_dict,
-            BASE_URL,
-            UNIT_TEST_LAYER_NUM,
-            model_config,
-            configuration,
-            transformation_mats,
-            emulated=emulated,
-            cache_path=cache_path,
-        )
 
-    if not emulated:
-        for device in devices:
-            tt_lib.device.Synchronize(device)
+    transformation_mats = ttnn.as_tensor(
+        transformation_mat_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=t3k_device_mesh,
+        memory_config=model_config["DRAM_MEMCFG"],
+        mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
+    )
+    transformation_mats = ttnn.to_device(transformation_mats, t3k_device_mesh)
+
+    tt_LlamaAttention_model = TtLlamaAttention_optimized(
+        t3k_device_mesh,
+        state_dict,
+        BASE_URL,
+        UNIT_TEST_LAYER_NUM,
+        model_config,
+        configuration,
+        transformation_mats,
+        emulated=emulated,
+        cache_path=cache_path,
+    )
 
     all_tests_pass, all_pccs = True, []
     if model_config["LLM_MODE"] == "prefill":
@@ -169,6 +164,7 @@ def run_test_LlamaAttention_inference(
     else:
         generation_start_pos = UNIT_TEST_START_POS
         generation_length = UNIT_TEST_GENERATION_LENGTH
+
     for i in range(generation_length):
         # Prepare input
         pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
@@ -203,13 +199,8 @@ def run_test_LlamaAttention_inference(
             attn_mask,
         )
 
-        assert isinstance(tt_out, list)  # tt_out should be fractured or replicated on N devices
-        assert len(tt_out) == len(devices)
-        if n_devices == 32:
-            tt_out = tt2torch_tensor(tt_out[0])
-        else:
-            tt_outs = [tt2torch_tensor(o) for o in tt_out]
-            tt_out = torch.cat(tt_outs, dim=-1)
+        tt_out = ttnn.from_device(tt_out)
+        tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=3))
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
         # check outputs ----------------------------------------------------------------------
@@ -238,47 +229,25 @@ def run_test_LlamaAttention_inference(
         ),  # [batch, n_kv_heads, seq, head_dim]
     ]
     # TT hardware output ----------------------------------------------------------------
-    if n_devices == 32:
-        all_k, all_v = [], []
-        for i in range(4):  # 4 device groups
-            tt_layer_present = []
-            for layer_past in tt_LlamaAttention_model.attentions[i].layer_past_list:
-                tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
-            # concat the pasts by heads
-            tt_layer_present = [
-                torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
-            ]
-            all_k.append(tt_layer_present[0])
-            all_v.append(tt_layer_present[1])
-        # Concat across device groups
-        all_k = torch.cat(all_k, dim=0)
-        all_v = torch.cat(all_v, dim=0)
-        tt_layer_present_all = [all_k, all_v]
-    else:
-        tt_layer_present = []
-        for layer_past in tt_LlamaAttention_model.layer_past_list:
-            tt_layer_present.append([tt2torch_tensor(cache) for cache in layer_past])
-        # concat the pasts by heads
-        tt_layer_present_all = [
-            torch.cat([tt_cache for tt_cache in tt_cache_head], dim=1) for tt_cache_head in zip(*tt_layer_present)
-        ]
 
-    for cache_pt, cache_tt in zip(pytorch_layer_present, tt_layer_present_all):
-        cache_length_to_check = generation_start_pos + generation_length
-        if model_config["LLM_MODE"] == "prefill":
-            cache_pt = cache_pt[:, :, :seq_len, :]
-            cache_tt = cache_tt[:, :, :seq_len, :]
-        else:
-            cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-            cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
-        does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
-        logger.info(f"Output: {output_pcc}")
+    # concat the pasts by heads
+    tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_LlamaAttention_model.layer_past]
+    tt_layer_present_all = [
+        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)
+        for lp in tt_layer_present_all
+    ]
 
-        if does_pass:
-            logger.info(f"KV Cache Passed!")
-        else:
-            logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
-            all_tests_pass = False
+    cache_test_pass = check_kv_cache(
+        pytorch_layer_present,
+        tt_layer_present_all,
+        generation_start_pos,
+        generation_length,
+        seq_len,
+        model_config["LLM_MODE"] == "prefill",
+        pcc,
+    )
+
+    all_test_pass = all_tests_pass and cache_test_pass
 
     if all_tests_pass:
         logger.info(f"{model_name} Attention output Passed!")
@@ -293,12 +262,10 @@ def run_test_LlamaAttention_inference(
     (
         (8, False),
         (8, True),
-        (32, True),
     ),
     ids=(
         "8chip-T3000",
         "8chip-emulated",
-        "32chip-emulated",
     ),
 )
 @pytest.mark.parametrize(
@@ -311,19 +278,20 @@ def test_LlamaAttention_inference(
     seq_len,
     pcc,
     n_devices,
-    all_devices,
+    t3k_device_mesh,
     emulated,
 ):
-    devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
     model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
-    if len(devices) < n_devices and not emulated:
+
+    if t3k_device_mesh.get_num_devices() < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")
+
+    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     run_test_LlamaAttention_inference(
-        devices,
+        t3k_device_mesh,
         batch,
         seq_len,
         pcc,

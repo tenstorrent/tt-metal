@@ -677,7 +677,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     (std::uint32_t)  in0_mcast_sender.y // in0_mcast_sender_noc_y
                 };
                 // left half
-                if (core_idx_x <= half_core) {
+                if (core_idx_x <= half_core || (!transpose_mcast and core_idx_y == 0)) {
                     tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);
                     reader_kernel_ids.push_back(mm_kernel_in0_receiver_id);
                 }
@@ -793,7 +793,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 }
 
                 // left half
-                if (core_idx_x <= half_core) {
+                if (core_idx_x <= half_core || (transpose_mcast and core_idx_y == 0)) {
                     tt_metal::SetRuntimeArgs(program, mm_kernel_in1_receiver_writer_id, core, mm_in1_receiver_writer_args);
                     writer_kernel_ids.push_back(mm_kernel_in1_receiver_writer_id);
                 }

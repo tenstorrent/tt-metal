@@ -168,67 +168,29 @@ def _permute_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
     )
 
 
-@ttnn.register_operation(
+doc = r"""
+permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor
+
+Permutes :attr:`input_tensor` using :attr:`order`.
+
+Args:
+    * :attr:`input_tensor`: the input tensor
+    * :attr:`order`: the desired ordering of dimensions.
+
+Example::
+
+    >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
+    >>> output = ttnn.permute(tensor, (0, 1, 3, 2))
+    >>> print(output.shape)
+    [1, 1, 32, 64]
+
+"""
+permute = ttnn.register_operation(
     name="ttnn.permute",
     validate_input_tensors=_permute_validate_input_tensors,
     golden_function=_golden_function,
-    allow_to_fallback_to_golden_function_on_failure=True,
-)
-def permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor:
-    r"""
-    permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor
-
-    Permutes :attr:`input_tensor` using :attr:`order`.
-
-    Args:
-        * :attr:`input_tensor`: the input tensor
-        * :attr:`order`: the desired ordering of dimensions.
-
-    Example::
-
-        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
-        >>> output = ttnn.permute(tensor, (0, 1, 3, 2))
-        >>> print(output.shape)
-        [1, 1, 32, 64]
-
-    """
-    if not isinstance(order, tuple):
-        raise RuntimeError("order must be a tuple")
-
-    if len(input_tensor.shape) != len(order):
-        raise RuntimeError(
-            "The number of dimensions in the tensor input does not match the length of the desired ordering"
-        )
-
-    on_device = ttnn.is_tensor_storage_on_device(input_tensor)
-    layout = input_tensor.layout
-    rank = len(input_tensor.shape)
-
-    if len(input_tensor.shape) < 4:
-        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        adjusted_order_for_4D_tensor = order
-        while len(adjusted_order_for_4D_tensor) < 4:
-            adjusted_order_for_4D_tensor = (0,) + tuple(x + 1 for x in adjusted_order_for_4D_tensor)
-        order = adjusted_order_for_4D_tensor
-
-    if ttnn.has_tile_padding(input_tensor):
-        input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-
-    if ttnn.is_tensor_storage_on_device(input_tensor) and len(input_tensor.shape) == 4:
-        output_tensor = ttl.tensor.permute(input_tensor, order)
-        output_tensor = ttnn.to_layout(output_tensor, layout)
-        rank_should_be_updated = len(output_tensor.shape) > rank
-        while rank_should_be_updated:
-            prior_rank = len(output_tensor.shape)
-            output_tensor = ttnn.squeeze(output_tensor, dim=0)
-            rank_should_be_updated = prior_rank != len(output_tensor.shape) and len(output_tensor.shape) > rank
-
-        if on_device and not ttnn.is_tensor_storage_on_device(output_tensor):
-            device = input_tensor.device()
-            output_tensor = ttnn.to_device(output_tensor, device)
-        return output_tensor
-    else:
-        raise NotImplementedError
+    doc=doc,
+)(ttnn._ttnn.operations.data_movement.permute)
 
 
 def _golden_function(tensors, dim=0, **_):
@@ -250,88 +212,35 @@ def _concat_validate_input_tensors(operation_name, tensors, dim, *args, **kwargs
         )
 
 
-@ttnn.register_operation(
+doc = r"""
+concat(tensors: List[ttnn.Tensor], dim: int = 0, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+
+Concats :attr:`tensors` in the given :attr:`dim`.
+
+Args:
+    * :attr:`tensors`: the tensors to be concatenated.
+    * :attr:`dim`: the concatenating dimension.
+
+Keyword Args:
+    * :attr:`memory_config`: the memory configuration to use for the operation
+
+Example::
+
+    >>> tensor = ttnn.concat(ttnn.from_torch(torch.zeros((1, 1, 64, 32), ttnn.from_torch(torch.zeros((1, 1, 64, 32), dim=3)), device)
+
+    >>> tensor1 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
+    >>> tensor2 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
+    >>> output = ttnn.concat([tensor1, tensor2], dim=4)
+    >>> print(output.shape)
+    [1, 1, 32, 64]
+
+"""
+concat = ttnn.register_operation(
     name="ttnn.concat",
     validate_input_tensors=_concat_validate_input_tensors,
     golden_function=_golden_function,
-    allow_to_fallback_to_golden_function_on_failure=True,
-)
-def concat(
-    tensors: List[ttnn.Tensor],
-    dim: int = 0,
-    *,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    r"""
-    concat(tensors: List[ttnn.Tensor], dim: int = 0, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-    Concats :attr:`tensors` in the given :attr:`dim`.
-
-    Args:
-        * :attr:`tensors`: the tensors to be concatenated.
-        * :attr:`dim`: the concatenating dimension.
-
-    Keyword Args:
-        * :attr:`memory_config`: the memory configuration to use for the operation
-
-    Example::
-
-        >>> tensor = ttnn.concat(ttnn.from_torch(torch.zeros((1, 1, 64, 32), ttnn.from_torch(torch.zeros((1, 1, 64, 32), dim=3)), device)
-
-        >>> tensor1 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
-        >>> tensor2 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
-        >>> output = ttnn.concat([tensor1, tensor2], dim=4)
-        >>> print(output.shape)
-        [1, 1, 32, 64]
-
-    """
-    if len(tensors) < 1:
-        raise RuntimeError("ttnn.concat: expected a non-empty list of Tensors!")
-
-    if len(tensors) == 1:
-        return ttnn.to_memory_config(tensors[0], memory_config)
-
-    first_tensor = tensors[0]
-    first_tensor_shape = first_tensor.shape
-    for tensor in tensors:
-        shape = tensor.shape
-        if (
-            len(shape) != len(first_tensor_shape)
-            or any(shape[i] != first_tensor_shape[i] for i in range(len(shape)) if i != dim)
-            or any(
-                shape.with_tile_padding()[i] != first_tensor_shape.with_tile_padding()[i]
-                for i in range(len(shape))
-                if i != dim
-            )
-        ):
-            raise ValueError(
-                "All dimensions must be the same size except for the dimension along which the contenation is taking place."
-            )
-
-    rank = len(tensors[0].shape)
-    original_dim = dim
-    if dim < 0:
-        dim = rank + dim
-    if dim < 0 or dim >= rank:
-        raise RuntimeError(
-            f"ttnn: Dimension out of range: dim {original_dim} cannot be used for tensors of rank {rank}"
-        )
-
-    rank = len(tensors[0].shape)
-
-    all_tensors_are_tile_layout_without_padding = all(
-        tensor.layout == ttnn.TILE_LAYOUT and not ttnn.has_tile_padding(tensor) for tensor in tensors
-    )
-
-    if rank <= 4 and all_tensors_are_tile_layout_without_padding:
-        tensors_4d = [ttnn.unsqueeze_to_4D(tensor) for tensor in tensors]
-        dim = dim + 4 - rank
-        output_tensor = ttl.tensor.concat(tensors_4d, dim=dim, output_mem_config=memory_config)
-        while len(output_tensor.shape) > rank:
-            output_tensor = ttnn.squeeze(output_tensor, dim=0)
-        return output_tensor
-    else:
-        raise NotImplementedError
+    doc=doc,
+)(ttnn._ttnn.operations.data_movement.concat)
 
 
 def _golden_function(input_tensor, split_size, dim):

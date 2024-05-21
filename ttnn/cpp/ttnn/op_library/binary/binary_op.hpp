@@ -9,7 +9,7 @@
 
 #include "tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "tt_eager/tensor/owned_buffer_functions.hpp"
+#include "tt_eager/tensor/host_buffer/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_eager/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "tt_eager/tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
@@ -69,7 +69,7 @@ struct Binary {
             ttnn::TensorSchema{
                 2,
                 4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
+                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16},
                 {ttnn::TILE_LAYOUT},
                 true,
                 false,
@@ -78,7 +78,7 @@ struct Binary {
             ttnn::TensorSchema{
                 2,
                 4,
-                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b},
+                {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::uint16},
                 {ttnn::TILE_LAYOUT},
                 true,
                 false,
@@ -97,11 +97,11 @@ struct Binary {
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::optional<const DataType> &dtype = std::nullopt,
         std::optional<std::vector<std::string>> activations = std::nullopt) {
-        auto &&[input_tensor_a, input_tensor_b] = [](const auto &input_tensor_a_arg,
-                                                        const auto &input_tensor_b_arg) {
+        auto &&[input_tensor_a, input_tensor_b] = [](const auto &input_tensor_a_arg, const auto &input_tensor_b_arg) {
+            const auto input_shape_a = input_tensor_a_arg.get_shape();
+            const auto input_shape_b = input_tensor_b_arg.get_shape();
             // Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
-            if (tt::tt_metal::compute_volume(input_tensor_a_arg.get_shape()) <
-                tt::tt_metal::compute_volume(input_tensor_b_arg.get_shape())) {
+            if (tt::tt_metal::compute_volume(input_shape_a) < tt::tt_metal::compute_volume(input_shape_b)) {
                 return std::make_tuple(input_tensor_b_arg, input_tensor_a_arg);
             }
             return std::make_tuple(input_tensor_a_arg, input_tensor_b_arg);

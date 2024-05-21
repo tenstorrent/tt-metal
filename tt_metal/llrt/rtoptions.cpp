@@ -121,6 +121,10 @@ void RunTimeOptions::ParseDPrintEnv() {
     for (auto &core_type_and_cores : dprint_cores)
         if (core_type_and_cores.second.size() > 0)
             dprint_enabled = true;
+
+    const char *print_noc_xfers = std::getenv("TT_METAL_DPRINT_NOC_TRANSFER_DATA");
+    if (print_noc_xfers != nullptr)
+        dprint_noc_transfer_data = true;
 };
 
 void RunTimeOptions::ParseDPrintCoreRange(const char* env_var, CoreType core_type) {

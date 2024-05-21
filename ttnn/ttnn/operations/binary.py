@@ -140,6 +140,92 @@ ttnn.Tensor.__mul__ = lambda self, *args, **kwargs: mul(self, *args, **kwargs)
 ttnn.Tensor.__rmul__ = lambda self, *args, **kwargs: mul(self, *args, **kwargs)
 
 
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.eq(input_tensor_a, input_tensor_b)
+
+
+eq = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.eq)
+
+
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.ne(input_tensor_a, input_tensor_b)
+
+
+ne = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.ne)
+
+
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.gt(input_tensor_a, input_tensor_b)
+
+
+gt = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.gt)
+
+
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.ge(input_tensor_a, input_tensor_b)
+
+
+ge = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.ge)
+
+
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.lt(input_tensor_a, input_tensor_b)
+
+
+lt = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.lt)
+
+
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.le(input_tensor_a, input_tensor_b)
+
+
+le = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.le)
+
+
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.logical_and(input_tensor_a, input_tensor_b)
+
+
+logical_and = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.logical_and)
+
+
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.logical_or(input_tensor_a, input_tensor_b)
+
+
+logical_or = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.logical_or)
+
+
+ttnn.Tensor.__eq__ = lambda self, *args, **kwargs: eq(self, *args, **kwargs)
+ttnn.Tensor.__ne__ = lambda self, *args, **kwargs: ne(self, *args, **kwargs)
+ttnn.Tensor.__gt__ = lambda self, *args, **kwargs: gt(self, *args, **kwargs)
+ttnn.Tensor.__ge__ = lambda self, *args, **kwargs: ge(self, *args, **kwargs)
+ttnn.Tensor.__lt__ = lambda self, *args, **kwargs: lte(self, *args, **kwargs)
+ttnn.Tensor.__le__ = lambda self, *args, **kwargs: le(self, *args, **kwargs)
+
+
+def torch_squared_difference(x, y, *args, **kwargs):
+    import torch
+
+    return torch.square(torch.sub(x, y))
+
+
 def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
     def _golden_function(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, **_):
         import torch
@@ -148,12 +234,13 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
             "ldexp": torch.ldexp,
             "logaddexp": torch.logaddexp,
             "logaddexp2": torch.logaddexp2,
-            "logical_and": torch.logical_and,
-            "logical_or": torch.logical_or,
             "logical_xor": torch.logical_xor,
             "xlogy": torch.xlogy,
             "maximum": torch.maximum,
             "minimum": torch.minimum,
+            "atan2": torch.atan2,
+            "hypot": torch.hypot,
+            "squared_difference": torch_squared_difference,
         }
         torch_function = name_to_torch_function[name]
         return torch_function(input_tensor_a, input_tensor_b)
@@ -234,12 +321,13 @@ TTL_BINARY_ELTWISE_FUNCTIONS = [
     ("ldexp", ttl.tensor.ldexp, "ldexp (input_a * 2**input_b)"),
     ("logaddexp", ttl.tensor.logaddexp, "logaddexp (log(exp(input_a) + exp(input_b)))"),
     ("logaddexp2", ttl.tensor.logaddexp2, "logaddexp2 (log2(2^(input_a) + 2^(input_b)))"),
-    ("logical_and", ttl.tensor.logical_and, "logical AND (input_a && input_b) "),
-    ("logical_or", ttl.tensor.logical_or, "logical OR (input_a || input_b)"),
     ("logical_xor", ttl.tensor.logical_xor, "logical XOR (input_a ^ input_b) "),
     ("xlogy", ttl.tensor.xlogy, "xlogy (input_a * log( input_b ))"),
     ("maximum", ttl.tensor.max, "maximum "),
     ("minimum", ttl.tensor.min, "minimum "),
+    ("atan2", ttl.tensor.atan2, "atan2"),
+    ("hypot", ttl.tensor.hypot, "hypotenuse"),
+    ("squared_difference", ttl.tensor.squared_difference, "squared_difference (input_a - input_b)^2"),
 ]
 
 
@@ -374,6 +462,55 @@ def polyval(
         output_mem_config=memory_config,
     )
     return output
+
+
+def _golden_function(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: ttnn.Tensor,
+    param1: float = 1e-05,
+    param2: float = 1e-08,
+    equal_nan: bool = False,
+    **_,
+):
+    import torch
+
+    return torch.isclose(input_tensor_a, input_tensor_b, rtol=param1, atol=param2, equal_nan=equal_nan)
+
+
+@ttnn.register_operation(
+    name=f"ttnn.isclose",
+    golden_function=_golden_function,
+)
+def isclose(
+    input_tensor_a: ttnn.Tensor,
+    input_tensor_b: ttnn.Tensor,
+    *,
+    rtol: float = 1e-05,
+    atol: float = 1e-08,
+    equal_nan: bool = False,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    """isclose(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, rtol: float = 1e-05, atol: float = 1e-08, equal_nan: bool = False, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+
+    Applies the isclose function to the elements of the input tensor :attr:`input_a` and :attr:`input_b`.
+
+    isclose(input_a, input_b, rtol, atol) = ∣input_a−input_B∣ ≤ atol+rtol×∣input_b∣.
+
+    .. math::
+        ttnn.isclose(\\mathrm{{input\\_tensor\\_a}}_i \\; , \\; \\mathrm{{input\\_tensor\\_b}}_i  \\; , \\; \\mathrm{{atol}}\\; , \\; \\mathrm{{rtol}})
+
+    Args:
+        * :attr:`input_tensor_a`
+        * :attr:`input_tensor_b`
+
+
+
+    Example::
+        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
+        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1 + 1e-10, 1], [4, 4 + 1e-10]]), dtype=torch.bfloat16)), device)
+        >>> output = ttnn.isclose(tensor1, tensor2, rtol, atol)
+    """
+    return ttl.tensor.isclose(input_tensor_a, input_tensor_b, rtol, atol, equal_nan, output_mem_config=memory_config)
 
 
 __all__ = []

@@ -206,7 +206,7 @@ struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
             shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;
-            return {create_sharded_device_tensor(
+            return {create_device_tensor(
                 this->compute_output_shapes(input_tensors).at(0),
                 input_tensor.get_dtype(),
                 Layout::TILE,
@@ -236,7 +236,7 @@ struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
 };
 
 template <bool in_place>
-struct AttentionSoftmax : public tt::operations::primary::Softmax {
+struct ExecuteAttentionSoftmax {
     static inline const std::array<TensorSchema, 2> input_tensor_schemas() {
         return {
             ttnn::TensorSchema{4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false},
@@ -260,7 +260,7 @@ struct AttentionSoftmax : public tt::operations::primary::Softmax {
             tt::operations::primary::transformers::SoftmaxDefaultProgramConfig{},
         const std::optional<bool> causal_mask = false,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
-        float head_size = head_size_arg.has_value() ? 1.0f / sqrt(head_size_arg.value()) : 1.0f;
+        float head_size = head_size_arg.has_value() ? 1.0f / std::sqrt(head_size_arg.value()) : 1.0f;
         if constexpr (in_place) {
             TT_FATAL(attention_mask.has_value(), "Cannot apply divide by sqrt(head_size) using in-place version!");
         } else {
@@ -274,7 +274,7 @@ struct AttentionSoftmax : public tt::operations::primary::Softmax {
         auto kernel_config_val = init_device_compute_kernel_config(
             input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
         auto output_tensor = operation::run(
-                                 AttentionSoftmax{
+                                 tt::operations::primary::Softmax{
                                      head_size,
                                      in_place,
                                      memory_config.value_or(input_tensor.memory_config()),
@@ -293,13 +293,20 @@ struct AttentionSoftmax : public tt::operations::primary::Softmax {
 }  // namespace operations
 
 namespace transformer {
+
+constexpr auto split_query_key_value_and_split_heads =
+    ttnn::register_operation<ttnn::operations::transformer::split_query_key_value_and_split_heads>(
+        "ttnn::transfomer::split_query_key_value_and_split_heads");
+
 constexpr auto concatenate_heads =
     ttnn::register_operation<ttnn::operations::transformer::ConcatenateHeads>("ttnn::transfomer::concatenate_heads");
 
-constexpr auto attention_softmax = ttnn::register_operation<ttnn::operations::transformer::AttentionSoftmax<false>>(
-    "ttnn::transfomer::attention_softmax");
-constexpr auto attention_softmax_ = ttnn::register_operation<ttnn::operations::transformer::AttentionSoftmax<true>>(
-    "ttnn::transfomer::attention_softmax_");
+constexpr auto attention_softmax =
+    ttnn::register_operation<ttnn::operations::transformer::ExecuteAttentionSoftmax<false>>(
+        "ttnn::transfomer::attention_softmax");
+constexpr auto attention_softmax_ =
+    ttnn::register_operation<ttnn::operations::transformer::ExecuteAttentionSoftmax<true>>(
+        "ttnn::transfomer::attention_softmax_");
 }  // namespace transformer
 
 }  // namespace ttnn

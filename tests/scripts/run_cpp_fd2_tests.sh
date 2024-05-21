@@ -78,31 +78,31 @@ fi
 echo "Running test_dispatcher tests now...";
 
 # Linear Write (Unicast)
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 0 -min 256 -max 256
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 0 -min 1024 -max 1024
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 0 -min 256 -max 256 -wx 0 -wy 1"
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 0 -min 1024 -max 1024 -wx 0 -wy 1"
 
 # Linear Write (Multicast)
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 1 -min 256 -max 256
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 1 -min 1024 -max 1024
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 1 -min 256 -max 256"
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 1 -min 1024 -max 1024"
 
 # Paged Write CMD (L1/DRAM)
 # Testcase: 512 page, CQDispatchWritePagedCmd.page_size is 16B, same as dispatch buffer.
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 2 -min 16 -max 16 -lps 4 -pbs 1 -np 512
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 3 -min 16 -max 16 -lps 4 -pbs 1 -np 512
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 2 -min 16 -max 16 -lps 4 -pbs 1 -np 512"
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 3 -min 16 -max 16 -lps 4 -pbs 1 -np 512"
 # Testcase: 256 Pages, Bigger CQDispatchWritePagedCmd.page_size than dispatch buffer page size. Write page size is 2048 Bytes dispatch buffer is 1024 Bytes
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 2 -min 2048 -max 2048 -lps 10 -pbs 1 -np 128
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 3 -min 2048 -max 2048 -lps 10 -pbs 1 -np 128
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 2 -min 2048 -max 2048 -lps 10 -pbs 1 -np 128"
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 3 -min 2048 -max 2048 -lps 10 -pbs 1 -np 128"
 # Testcase: 4128 page size (not aligned to 4KB transfer page size)
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 2 -wx 0 -wy 1 -min 4128 -max 4128 -lps 12 -pbs 1 -np 10 -c
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 2 -wx 0 -wy 1 -min 4128 -max 4128 -lps 12 -pbs 1 -np 10 -c"
 # Testcase: Arbitrary non-even numbers. This caught some test issues with overflowing start_page one test implementation.
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 2 -min 16 -max 16 -lps 5 -pbs 275 -np 13
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 3 -min 16 -max 16 -lps 5 -pbs 275 -np 13
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 2 -min 16 -max 16 -lps 5 -pbs 275 -np 13"
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 1 -w 0 -t 3 -min 16 -max 16 -lps 5 -pbs 275 -np 13"
 # 11.885 GB/s whb0 - DRAM.   Have to reduce number of pages to not exceed 1MB L1 for GS. Also, number of pages per block.
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 10 -t 2 -min 8192 -max 8192 -lps 13 -pbs 2 -np 100 -i 1 -pi 5000 -bs 24
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -w 10 -t 2 -min 8192 -max 8192 -lps 13 -pbs 2 -np 100 -i 1 -pi 5000 -bs 24"
 
 # Packed Write
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 4 -min 256 -max 256
-./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 4 -min 1024 -max 1024
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 4 -min 256 -max 256"
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher -i 3 -w 5 -t 4 -min 1024 -max 1024"
 
 if [[ $ARCH_NAME == "wormhole_b0" ]]; then
     #############################################
@@ -110,7 +110,7 @@ if [[ $ARCH_NAME == "wormhole_b0" ]]; then
     #############################################
     echo "Running packetized path tests now...";
     # 4 TX -> 4:1 Mux -> 1:4 Demux -> 4 RX
-    ./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux
+    run_test "./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux"
 
     # 16 TX -> 4 x 4:1 Mux -> 4:1 Mux -> 1:4 Demux -> 4 x 1:4 Demux -> 16 RX
     TT_METAL_THREADCOUNT=64 ./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux_2level

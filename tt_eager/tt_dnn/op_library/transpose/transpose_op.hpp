@@ -12,11 +12,11 @@ namespace tt {
 namespace tt_metal {
 
 enum class TransposeOpDim {
-    WH = 0, HC = 1, CN = 2, NH = 3, NW = 4, CW = 5
+    WH, HC, CN, NH, NW, CW
 };
 
 enum class TransposeOpParallelizationStrategy {
-    MULTI_CORE_WH = 0, MULTI_CORE_HC = 1, MULTI_CORE_CN = 2, SINGLE_CORE = 3
+    MULTI_CORE_WH, MULTI_CORE_HC, MULTI_CORE_CN
 };
 
 struct Transpose {
@@ -39,7 +39,6 @@ Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const MemoryCon
 // transpose with tensor and dimensions
 Tensor transpose(const Tensor &a, std::int64_t dim1, std::int64_t dim2, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-operation::ProgramWithCallbacks transpose_single_core(const Tensor &a, Tensor &output, TransposeOpDim transpose_dim);
 operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor &output);
 operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a, Tensor &output);
 operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor &output);

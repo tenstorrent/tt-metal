@@ -13,7 +13,7 @@ run_ttnn_sweeps() {
   fi
 
   export PYTHONPATH=$TT_METAL_HOME
-  source build/python_env/bin/activate
+  source python_env/bin/activate
 
   python tests/ttnn/sweep_tests/run_sweeps.py
 }

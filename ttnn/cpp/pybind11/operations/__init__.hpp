@@ -12,8 +12,11 @@
 #include "ccl.hpp"
 #include "core.hpp"
 #include "matmul.hpp"
+#include "data_movement.hpp"
 #include "transformer.hpp"
 #include "normalization.hpp"
+#include "kv_cache.hpp"
+#include "pool.hpp"
 
 namespace py = pybind11;
 
@@ -34,6 +37,9 @@ void py_module(py::module& module) {
     auto m_matmul = module.def_submodule("matmul", "matmul operations");
     matmul::py_module(m_matmul);
 
+    auto m_data_movement = module.def_submodule("data_movement", "data_movement operations");
+    data_movement::py_module(m_data_movement);
+
     auto m_transformer = module.def_submodule("transformer", "transformer operations");
     transformer::py_module(m_transformer);
 
@@ -42,6 +48,12 @@ void py_module(py::module& module) {
 
     auto m_ccl = module.def_submodule("ccl", "collective communication operations");
     ccl::py_module(m_ccl);
+
+    auto m_kv_cache = module.def_submodule("kv_cache", "KV cache operations");
+    kv_cache::py_module(m_kv_cache);
+
+    auto m_pool = module.def_submodule("pool", "pool operations");
+    pool::py_module(m_pool);
 }
 
 }  // namespace operations

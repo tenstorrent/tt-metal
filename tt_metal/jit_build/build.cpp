@@ -31,6 +31,7 @@ static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
         case tt::ARCH::GRAYSKULL: return "grayskull"; break;
         case tt::ARCH::WORMHOLE: return "wormhole"; break;
         case tt::ARCH::WORMHOLE_B0: return "wormhole"; break;
+        case tt::ARCH::BLACKHOLE: return "blackhole"; break;
         default: return "invalid"; break;
     }
 }
@@ -39,7 +40,7 @@ JitBuildEnv::JitBuildEnv()
 {
 }
 
-void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
+void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch)
 {
     // Paths
     this->root_ = llrt::OptionsG.get_root_dir();
@@ -48,8 +49,8 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
     this->arch_name_ = get_string_lowercase(arch);
     this->aliased_arch_name_ = get_string_aliased_arch_lowercase(arch);
 
-    this->out_firmware_root_ = this->out_root_ + to_string(device_id) + "/firmware/";
-    this->out_kernel_root_ = this->out_root_ + to_string(device_id) + "/kernels/";
+    this->out_firmware_root_ = this->out_root_ + to_string(build_key) + "/firmware/";
+    this->out_kernel_root_ = this->out_root_ + to_string(build_key) + "/kernels/";
 
     // Tools
     this->gpp_ = this->root_ + "tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";
@@ -63,6 +64,9 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
         break;
     case ARCH::WORMHOLE_B0:
         common_flags = "-mwormhole -march=rv32imw -mtune=rvtt-b1 -mabi=ilp32 ";
+        break;
+    case ARCH::BLACKHOLE:
+        common_flags = "-mblackhole -march=rv32iml -mtune=rvtt-b1 -mabi=ilp32 ";
         break;
     default:
         TT_ASSERT(false, "Invalid arch");
@@ -88,6 +92,9 @@ void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
         break;
     case ARCH::WORMHOLE_B0:
         this->defines_ = "-DARCH_WORMHOLE ";
+        break;
+    case ARCH::BLACKHOLE:
+        this->defines_ = "-DARCH_BLACKHOLE ";
         break;
     default:
         break;

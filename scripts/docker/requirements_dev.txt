@@ -1,0 +1,6 @@
+sudo
+nano
+acl
+jq
+openssh-server
+vim

@@ -2,17 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_dnn/op_library/upsample/upsample_op.hpp"
+
 #include <algorithm>
 #include <cmath>
 
-#include "tt_dnn/op_library/upsample/upsample_op.hpp"
+#include "detail/util.hpp"
+#include "tensor/host_buffer/functions.hpp"
+#include "tensor/tensor_utils.hpp"
 #include "tt_dnn/op_library/pool/max_pool.hpp"
-#include "tt_dnn/op_library/reduce/reduce_op.hpp"   // for reduce_op_utils
+#include "tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tensor/tensor_utils.hpp"
-#include "tensor/owned_buffer_functions.hpp"
-#include "detail/util.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -63,7 +64,7 @@ std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor> &i
                 mem_config.shard_spec = output_shard_spec;
                 log_debug(LogOp, "output_shard_shape: {}", output_shard_shape);
                 log_debug(LogOp, "output_shard_spec: {}", output_shard_spec);
-                return {create_sharded_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
+                return {create_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
             } else if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
                 auto shard_grid = input_shard_spec.grid.ranges();
                 TT_FATAL(shard_grid.size() == 1, "Block sharded input should have only one CoreRange");
@@ -78,7 +79,7 @@ std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor> &i
                 auto output_shard_shape = output_shard_spec.shape;
                 log_debug(LogOp, "ncores_w, ncores_h: {} {}", ncores_w, ncores_h);
                 log_debug(LogOp, "output_shard_shape: {}", output_shard_shape);
-                return {create_sharded_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
+                return {create_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
             } else {
                 TT_FATAL(false, "input memory config is not HEIGHT or BLOCK sharded");
             }

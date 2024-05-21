@@ -11,7 +11,7 @@
 
 namespace tt::tt_metal {
 
-enum class ScanOpParallelizationStrategy { SHARDED_MULTI_CORE = 0 };
+enum class ScanOpParallelizationStrategy { SHARDED_MULTI_CORE };
 
 enum class ScanOpDirection { ROWS, COLS, ROWS_REVERSED, COLS_REVERSED };
 

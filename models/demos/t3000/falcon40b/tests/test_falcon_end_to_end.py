@@ -88,35 +88,6 @@ def run_test_FalconCausalLM_end_to_end(
         assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
 
         past_key_values = None
-        tt_layer_past = ()
-        tt_k_cache_host = torch.zeros(batch, num_kv_heads, max_position_embeddings, head_dim)
-        tt_v_cache_host = torch.zeros(batch, num_kv_heads, max_position_embeddings, head_dim)
-        tt_k_cache_host = torch.chunk(tt_k_cache_host, len(devices), 1)
-        tt_v_cache_host = torch.chunk(tt_v_cache_host, len(devices), 1)
-
-        for _ in range(num_layers):
-            tt_k_cache = []
-            tt_v_cache = []
-            for j in range(len(devices)):
-                tt_k_cache.append(
-                    torch2tt_tensor(
-                        tt_k_cache_host[j],
-                        devices[j],
-                        tt_lib.tensor.Layout.TILE,
-                        model_config["KV_CACHE_MEMCFG"],
-                        model_config["KV_CACHE_DTYPE"],
-                    )
-                )
-                tt_v_cache.append(
-                    torch2tt_tensor(
-                        tt_v_cache_host[j],
-                        devices[j],
-                        tt_lib.tensor.Layout.TILE,
-                        model_config["KV_CACHE_MEMCFG"],
-                        model_config["KV_CACHE_DTYPE"],
-                    )
-                )
-            tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
     elif llm_mode == "decode":
         q_len, kv_len = seq_len, kv_cache_len + 1
@@ -124,46 +95,15 @@ def run_test_FalconCausalLM_end_to_end(
         assert q_len == 1, "For decode, q_len must be 1!"
 
         past_key_values = ()
-        tt_layer_past = ()
         for i in range(num_layers):
-            k_cache = torch.rand(batch, num_kv_heads, kv_cache_len, head_dim)
-            v_cache = torch.rand(batch, num_kv_heads, kv_cache_len, head_dim)
+            k_cache = torch.zeros(batch, num_kv_heads, kv_cache_len, head_dim)
+            v_cache = torch.zeros(batch, num_kv_heads, kv_cache_len, head_dim)
             past_key_values += (
                 (
                     torch.repeat_interleave(k_cache, num_attention_heads // num_kv_heads, 1),
                     (torch.repeat_interleave(v_cache, num_attention_heads // num_kv_heads, 1)),
                 ),
             )
-
-            tt_k_cache_host = torch.zeros(batch, num_kv_heads, max_position_embeddings, head_dim)
-            tt_v_cache_host = torch.zeros(batch, num_kv_heads, max_position_embeddings, head_dim)
-            tt_k_cache_host[:, :, :kv_cache_len, :] = k_cache
-            tt_v_cache_host[:, :, :kv_cache_len, :] = v_cache
-            tt_k_cache_host = torch.chunk(tt_k_cache_host, len(devices), 1)
-            tt_v_cache_host = torch.chunk(tt_v_cache_host, len(devices), 1)
-
-            tt_k_cache = []
-            tt_v_cache = []
-            for j in range(len(devices)):
-                tt_k_cache.append(
-                    torch2tt_tensor(
-                        tt_k_cache_host[j],
-                        devices[j],
-                        tt_lib.tensor.Layout.TILE,
-                        model_config["KV_CACHE_MEMCFG"],
-                        model_config["KV_CACHE_DTYPE"],
-                    )
-                )
-                tt_v_cache.append(
-                    torch2tt_tensor(
-                        tt_v_cache_host[j],
-                        devices[j],
-                        tt_lib.tensor.Layout.TILE,
-                        model_config["KV_CACHE_MEMCFG"],
-                        model_config["KV_CACHE_DTYPE"],
-                    )
-                )
-            tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
     else:
         raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
@@ -197,6 +137,9 @@ def run_test_FalconCausalLM_end_to_end(
         tt_lib.device.Synchronize(device)
     profiler.end("TtFalcon_model_setup")
     logger.info("Done loading TT Falcon Model")
+
+    # Initialize past layer values
+    tt_layer_past = tt_FalconCausalLM.initialize_kv_cache()
 
     profiler.start("processing_of_input")
     if llm_mode == "prefill":
@@ -381,12 +324,12 @@ def run_test_FalconCausalLM_end_to_end(
         )
         tt_layer_pres = (
             torch.repeat_interleave(
-                tt_layer_pres[0][:, :, :kv_len, :],
+                tt_layer_pres[0][:batch, :, :kv_len, :],
                 configuration.num_attention_heads // configuration.num_kv_heads,
                 1,
             ),
             torch.repeat_interleave(
-                tt_layer_pres[1][:, :, :kv_len, :],
+                tt_layer_pres[1][:batch, :, :kv_len, :],
                 configuration.num_attention_heads // configuration.num_kv_heads,
                 1,
             ),

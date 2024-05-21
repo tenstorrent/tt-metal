@@ -4,15 +4,14 @@
 
 #include <math.h>
 
-
+#include "tensor/host_buffer/functions.hpp"
+#include "tt_dnn/op_library/math.hpp"
+#include "tt_dnn/op_library/sharding_utilities.hpp"
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
-#include "tt_dnn/op_library/sharding_utilities.hpp"
-#include "tt_dnn/op_library/math.hpp"
-#include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
-#include "tensor/owned_buffer_functions.hpp"
+#include "tt_metal/host_api.hpp"
 
 using namespace tt::constants;
 
@@ -1359,7 +1358,7 @@ std::vector<Tensor> UntilizeWithHalo::create_output_tensors(const std::vector<Te
     // log_debug(LogOp, "derived ncores: {}", ncores);
     auto mem_config = this->output_mem_config;
     mem_config.shard_spec = shard_spec;
-    return {create_sharded_device_tensor(output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), mem_config)};
+    return {create_device_tensor(output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), mem_config)};
 }
 
 operation::ProgramWithCallbacks UntilizeWithHalo::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {

@@ -2017,7 +2017,6 @@ def tilize_with_val_padding(
     input_mem_config,
     output_mem_config,
     output_tensor_shape,
-    input_tensor_start,
     pad_value,
     **kwargs,
 ):
@@ -2025,7 +2024,6 @@ def tilize_with_val_padding(
     t1 = ttl.tensor.tilize_with_val_padding(
         t0,
         output_tensor_shape,
-        input_tensor_start,
         pad_value,
         output_mem_config=output_mem_config,
     )
@@ -2065,7 +2063,6 @@ def untilize_with_unpadding(
     layout,
     input_mem_config,
     output_mem_config,
-    output_tensor_start,
     output_tensor_end,
     **kwargs,
 ):
@@ -2086,9 +2083,7 @@ def untilize_with_unpadding(
             input_mem_config[0],
         )
 
-    t1 = ttl.tensor.untilize_with_unpadding(
-        t0, output_tensor_start, output_tensor_end, output_mem_config=output_mem_config
-    )
+    t1 = ttl.tensor.untilize_with_unpadding(t0, output_tensor_end, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 

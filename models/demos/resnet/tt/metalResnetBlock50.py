@@ -2127,6 +2127,20 @@ class ResNet(nn.Module):
                 tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, shard_spec
             )
             x = x.to(self.device, mem_config)
+        else:
+            shard_spec = tt_lib.tensor.ShardSpec(
+                self.shard_grid,
+                [
+                    x.get_legacy_shape()[2] // self.first_conv_num_cores_nhw,
+                    x.get_legacy_shape()[3],
+                ],
+                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            )
+            mem_config = tt_lib.tensor.MemoryConfig(
+                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, shard_spec
+            )
+            x = tt_lib.tensor.interleaved_to_sharded(x, mem_config)
 
         x = self.conv1(x)
         # Relu is fused with conv1
@@ -2203,7 +2217,6 @@ class ResNet(nn.Module):
         unpadded_shape = x.shape_without_padding()
         x = tt_lib.tensor.untilize_with_unpadding(
             x,
-            (0, 0, 0, 0),
             (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
             self.memory_config,
         )
@@ -2235,7 +2248,6 @@ class ResNet(nn.Module):
             x = tt_lib.tensor.tilize_with_val_padding(
                 x,
                 padded_shape,
-                [0, 0, 0, 0],
                 0,
                 output_mem_config=self.width_sharded_memory_config,
                 output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
@@ -2261,7 +2273,7 @@ class ResNet(nn.Module):
         ]
         if self.sharded:
             x = tt_lib.tensor.untilize_with_unpadding(
-                x, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=self.width_sharded_memory_config
+                x, unpadded_shape_end, output_mem_config=self.width_sharded_memory_config
             )
         else:
             x = tt_lib.tensor.untilize(x, self.memory_config, use_multicore=True)
@@ -2280,7 +2292,6 @@ class ResNet(nn.Module):
             x = tt_lib.tensor.tilize_with_val_padding(
                 x,
                 padded_shape,
-                [0, 0, 0, 0],
                 0,
                 output_mem_config=self.width_sharded_memory_config,
                 output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
@@ -2301,7 +2312,6 @@ class ResNet(nn.Module):
         desired_shape[-1] = 1000
         x = tt_lib.tensor.untilize_with_unpadding(
             x,
-            [0, 0, 0, 0],
             (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
             self.memory_config,
         )

@@ -73,7 +73,7 @@ std::vector<Tensor> ShardedPartial::create_output_tensors(const std::vector<Tens
     if (this->sharded_op_type == ShardedOpPartialType::InterleavedToShardedPartial) {
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = this->shard_spec;
-        return {create_sharded_device_tensor(
+        return {create_device_tensor(
             this->compute_output_shapes(input_tensors).at(0),
             this->output_dtype,
             input_tensor.get_layout(),

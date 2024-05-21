@@ -26,15 +26,26 @@ namespace tt::tt_metal::detail
         return ret;
     }
 
+    bool is_bin_generated(size_t khash) {
+        unique_lock<mutex> lock(mutex_);
+        return generated_bins_.find(khash) != generated_bins_.end();
+    }
+
+    void add_generated_bin(size_t khash) {
+        unique_lock<mutex> lock(mutex_);
+        generated_bins_.insert(khash);
+    }
+
     void clear() {
         unique_lock<mutex> lock(mutex_);
         hashes_.clear();
+        generated_bins_.clear();
     }
-
 
     private:
         std::mutex mutex_;
         std::unordered_set<size_t > hashes_;
+        std::unordered_set<size_t > generated_bins_;
     };
 
 

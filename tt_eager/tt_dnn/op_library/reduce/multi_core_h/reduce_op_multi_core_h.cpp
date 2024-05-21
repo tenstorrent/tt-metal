@@ -17,9 +17,8 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& output, ReduceOpMath reduce_op, ReduceOpDim reduce_dim, float scaler) {
+operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& output, ReduceOpMath reduce_op, float scaler) {
 
-    TT_ASSERT(reduce_dim == ReduceOpDim::H);
     const auto shape = a.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0];
 
@@ -57,7 +56,6 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         num_cols_per_core_group_1 = NC * (a.shard_spec().value().shape[1] / TILE_WIDTH);
         num_cols_per_core_group_2 = 0;
     }
-    string compute_kernel_name = reduce_op_utils::dim_to_kernel_name(reduce_dim, reduce_op);
 
     uint32_t src0_cb_index = CB::c_in0;
     CBHandle cb_src0;
@@ -159,7 +157,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
             all_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
-    std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
+    std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::H);
     vector<uint32_t> compute_kernel_args_group_1 = {
         Ht, // Ht
         num_cols_per_core_group_1, // Wt
@@ -168,7 +166,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
 
     auto reduce_compute_kernel_group_1_id = tt_metal::CreateKernel(
         program,
-        compute_kernel_name,
+        "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_h.cpp",
         core_group_1,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_1, .defines = reduce_defines}
     );
@@ -182,7 +180,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
 
         auto reduce_compute_kernel_group_2_id = tt_metal::CreateKernel(
             program,
-            compute_kernel_name,
+            "tt_eager/tt_dnn/op_library/reduce/kernels/compute/reduce_h.cpp",
             core_group_2,
             tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_2, .defines = reduce_defines}
         );

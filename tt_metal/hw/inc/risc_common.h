@@ -17,8 +17,8 @@
 #include "limits.h"
 #include "mod_div_lib.h"
 
-#define NOC_X(x) (noc_index == 0 ? (x) : (noc_size_x-1-(x)))
-#define NOC_Y(y) (noc_index == 0 ? (y) : (noc_size_y-1-(y)))
+#define NOC_X(x) NOC_0_X(noc_index, noc_size_x, (x))
+#define NOC_Y(y) NOC_0_Y(noc_index, noc_size_y, (y))
 
 #define TILE_WORD_2_BIT ((256 + 64 + 32) >> 4)
 #define TILE_WORD_4_BIT ((512 + 64 + 32) >> 4)

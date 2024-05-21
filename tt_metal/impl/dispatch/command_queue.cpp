@@ -38,6 +38,7 @@ std::condition_variable finish_cv;
 
 namespace tt::tt_metal {
 
+// TODO: Delete entries when programs are deleted to save memory
 thread_local std::unordered_map<uint64_t, std::vector<HostMemDeviceCommand>> EnqueueProgramCommand::runtime_args_command_sequences = {};
 
 uint32_t get_noc_unicast_encoding(const CoreCoord &coord) { return NOC_XY_ENCODING(NOC_X(coord.x), NOC_Y(coord.y)); }
@@ -307,11 +308,11 @@ void EnqueueProgramCommand::assemble_preamble_commands() {
 template <typename PackedSubCmd>
 void generate_dispatch_write_packed(
     std::vector<HostMemDeviceCommand>& runtime_args_command_sequences,
-    std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>>& cmd_mapping,
     const uint32_t& l1_arg_base_addr,
     const std::vector<PackedSubCmd>& sub_cmds,
     const std::vector<std::pair<const void*, uint32_t>>& rt_data_and_sizes,
     const uint32_t& max_runtime_args_len,
+    std::vector<std::reference_wrapper<RuntimeArgsData>>& rt_args_data,
     const uint32_t max_prefetch_command_size,
     const uint32_t id) {
     static_assert(
@@ -352,8 +353,8 @@ void generate_dispatch_write_packed(
         uint32_t num_packed_cmds = std::min(num_packed_cmds_in_seq, max_packed_cmds);
         uint32_t rt_payload_sizeB = get_runtime_payload_sizeB(num_packed_cmds, max_runtime_args_len, unicast);
         uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + rt_payload_sizeB, PCIE_ALIGNMENT);
-        HostMemDeviceCommand command_sequence(cmd_sequence_sizeB);
-        command_sequence.add_dispatch_write_packed<PackedSubCmd>(
+        runtime_args_command_sequences.emplace_back(cmd_sequence_sizeB);
+        runtime_args_command_sequences.back().add_dispatch_write_packed<PackedSubCmd>(
             num_packed_cmds,
             l1_arg_base_addr,
             max_runtime_args_len * sizeof(uint32_t),
@@ -361,12 +362,10 @@ void generate_dispatch_write_packed(
             sub_cmds,
             rt_data_and_sizes,
             offset_idx);
-        runtime_args_command_sequences.emplace_back(command_sequence);
         uint32_t data_offset = (uint32_t)get_runtime_args_data_offset(num_packed_cmds, max_runtime_args_len, unicast);
         const uint32_t data_inc = align(max_runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT);
         for (uint32_t i = offset_idx; i < offset_idx + num_packed_cmds; ++i) {
-            cmd_mapping[(uint64_t)id << 32 | sub_cmds[i].noc_xy_addr] = {
-                runtime_args_command_sequences.size() - 1, data_offset};
+            rt_args_data[i].get().rt_args_data = (uint32_t *)((char *)runtime_args_command_sequences.back().data() + data_offset);
             data_offset += data_inc;
         }
         num_packed_cmds_in_seq -= num_packed_cmds;
@@ -419,6 +418,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
         uint32_t num_dsts = unique_processor_to_l1_arg_base_addr.size();
         std::vector<std::vector<CQDispatchWritePackedUnicastSubCmd>> unique_sub_cmds(num_dsts);
         std::vector<std::vector<std::pair<const void*, uint32_t>>> unique_rt_data_and_sizes(num_dsts);
+        std::vector<std::vector<std::reference_wrapper<RuntimeArgsData>>> unique_rt_args_data(num_dsts);
         std::vector<uint32_t> unique_max_runtime_args_len(num_dsts, 0);
 
         std::vector<std::variant<
@@ -426,6 +426,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
             std::vector<CQDispatchWritePackedUnicastSubCmd>>>
             common_sub_cmds(program.num_kernels());
         std::vector<std::vector<std::pair<const void*, uint32_t>>> common_rt_data_and_sizes(program.num_kernels());
+        std::vector<std::vector<std::reference_wrapper<RuntimeArgsData>>> common_rt_args_data(program.num_kernels());
         std::vector<uint32_t> common_max_runtime_args_len(program.num_kernels(), 0);
         std::vector<uint32_t> common_processor_to_l1_arg_base_addr(program.num_kernels());
 
@@ -445,12 +446,14 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                 unique_processors.insert(processor_idx);
                 unique_sub_cmds[processor_idx].reserve(kernel->cores_with_runtime_args().size());
                 unique_rt_data_and_sizes[processor_idx].reserve(kernel->cores_with_runtime_args().size());
+                unique_rt_args_data[processor_idx].reserve(kernel->cores_with_runtime_args().size());
                 for (const auto& core_coord : kernel->cores_with_runtime_args()) {
                     // can make a vector of unicast encodings here
                     CoreCoord physical_core =
                         device->physical_core_from_logical_core(core_coord, kernel->get_kernel_core_type());
                     uint32_t unicast_noc_encoding = get_noc_unicast_encoding(physical_core);
                     const auto& runtime_args_data = kernel->runtime_args(core_coord);
+                    unique_rt_args_data[processor_idx].emplace_back(kernel->runtime_args_data(core_coord));
                     // 2, 17, could be differnet len here
 
                     unique_sub_cmds[processor_idx].emplace_back(
@@ -475,6 +478,9 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                     auto& unicast_sub_cmd =
                         std::get<std::vector<CQDispatchWritePackedUnicastSubCmd>>(common_sub_cmds[kernel_id]);
                     unicast_sub_cmd.reserve(kernel->logical_cores().size());
+                    common_rt_data_and_sizes[kernel_id].reserve(kernel->logical_cores().size());
+                    common_rt_args_data[kernel_id].reserve(kernel->logical_cores().size());
+                    uint32_t i = 0;
                     for (auto& core_coord : kernel->logical_cores()) {
                         // can make a vector of unicast encodings here
                         CoreCoord physical_core = device->ethernet_core_from_logical_core(core_coord);
@@ -483,6 +489,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                             CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = unicast_noc_encoding});
                         common_rt_data_and_sizes[kernel_id].emplace_back(
                             common_rt_args.data(), common_rt_args.size() * sizeof(uint32_t));
+                        common_rt_args_data[kernel_id].emplace_back(kernel->common_runtime_args_data()[i++]);
                     }
                 } else {
                     vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
@@ -493,11 +500,14 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                     auto& multicast_sub_cmd =
                         std::get<std::vector<CQDispatchWritePackedMulticastSubCmd>>(common_sub_cmds[kernel_id]);
                     multicast_sub_cmd.reserve(dst_noc_multicast_info.size());
+                    common_rt_data_and_sizes[kernel_id].reserve(dst_noc_multicast_info.size());
+                    uint32_t i = 0;
                     for (const auto& mcast_dests : dst_noc_multicast_info) {
                         multicast_sub_cmd.emplace_back(CQDispatchWritePackedMulticastSubCmd{
                             .noc_xy_addr = mcast_dests.first, .num_mcast_dests = mcast_dests.second});
                         common_rt_data_and_sizes[kernel_id].emplace_back(
                             common_rt_args.data(), common_rt_args.size() * sizeof(uint32_t));
+                        common_rt_args_data[kernel_id].emplace_back(kernel->common_runtime_args_data()[i++]);
                     }
                 }
                 common_max_runtime_args_len[kernel_id] =
@@ -516,11 +526,11 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
         for (const uint32_t& processor_idx : unique_processors) {
             generate_dispatch_write_packed(
                 this->runtime_args_command_sequences[program.id],
-                program.command_indices.processor_to_cmd_mapping,
                 unique_processor_to_l1_arg_base_addr[processor_idx],
                 unique_sub_cmds[processor_idx],
                 unique_rt_data_and_sizes[processor_idx],
                 unique_max_runtime_args_len[processor_idx],
+                unique_rt_args_data[processor_idx],
                 max_prefetch_command_size,
                 processor_idx);
         }
@@ -529,61 +539,15 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                 [&](auto&& sub_cmds) {
                     generate_dispatch_write_packed(
                         this->runtime_args_command_sequences[program.id],
-                        program.command_indices.kernel_to_cmd_mapping,
                         common_processor_to_l1_arg_base_addr[kernel_id],
                         sub_cmds,
                         common_rt_data_and_sizes[kernel_id],
                         common_max_runtime_args_len[kernel_id],
+                        common_rt_args_data[kernel_id],
                         max_prefetch_command_size,
                         kernel_id);
                 },
                 common_sub_cmds[kernel_id]);
-        }
-    } else {
-        for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-            auto kernel = detail::GetKernel(program, kernel_id);
-
-            if (!kernel->cores_with_runtime_args().empty()) {
-                uint32_t processor_idx =
-                    static_cast<typename std::underlying_type<tt::RISCV>::type>(kernel->processor());
-                for (const auto& core_coord : kernel->cores_with_runtime_args()) {
-                    uint32_t noc_xy_encoding = get_noc_unicast_encoding(
-                        this->device->physical_core_from_logical_core(core_coord, kernel->get_kernel_core_type()));
-                    const auto& data_loc =
-                        program.command_indices
-                            .processor_to_cmd_mapping[(uint64_t)processor_idx << 32 | noc_xy_encoding];
-                    const auto& runtime_args_data = kernel->runtime_args(core_coord);
-                    this->runtime_args_command_sequences[program.id][data_loc.first].update_cmd_sequence(
-                        data_loc.second, runtime_args_data.data(), runtime_args_data.size() * sizeof(uint32_t));
-                }
-            }
-
-            const auto& common_rt_args = kernel->common_runtime_args();
-            if (common_rt_args.size() > 0) {
-                if (kernel->get_kernel_core_type() == CoreType::ETH) {
-                    for (const auto& core_coord : kernel->logical_cores()) {
-                        uint32_t noc_xy_encoding =
-                            get_noc_unicast_encoding(this->device->ethernet_core_from_logical_core(core_coord));
-                        const auto& data_loc =
-                            program.command_indices.kernel_to_cmd_mapping[(uint64_t)kernel_id << 32 | noc_xy_encoding];
-                        const auto& runtime_args_data = kernel->runtime_args(core_coord);
-                        this->runtime_args_command_sequences[program.id][data_loc.first].update_cmd_sequence(
-                            data_loc.second, runtime_args_data.data(), runtime_args_data.size() * sizeof(uint32_t));
-                    }
-                } else {
-                    for (const auto& core_range : kernel->logical_coreranges()) {
-                        CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
-                        CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
-
-                        uint32_t noc_multicast_encoding = get_noc_multcast_encoding(physical_start, physical_end);
-                        const auto& data_loc =
-                            program.command_indices
-                                .kernel_to_cmd_mapping[(uint64_t)kernel_id << 32 | noc_multicast_encoding];
-                        this->runtime_args_command_sequences[program.id][data_loc.first].update_cmd_sequence(
-                            data_loc.second, common_rt_args.data(), common_rt_args.size() * sizeof(uint32_t));
-                    }
-                }
-            }
         }
     }
 }
@@ -1151,8 +1115,8 @@ void EnqueueTraceCommand::process() {
 
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
 
-    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
-    // log_trace(LogDispatch, "EnqueueTraceCommand issued write_ptr={}, fetch_size={}, commands={}", write_ptr, fetch_size_bytes, this->commands);
+    const bool stall_prefetcher = true;
+    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id, stall_prefetcher);
 }
 
 EnqueueTerminateCommand::EnqueueTerminateCommand(
@@ -1204,6 +1168,8 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id) :
     this->exit_condition = false;
     std::thread completion_queue_thread = std::thread(&HWCommandQueue::read_completion_queue, this);
     this->completion_queue_thread = std::move(completion_queue_thread);
+    // Set the affinity of the completion queue reader.
+    set_device_thread_affinity(this->completion_queue_thread, device->id());
     this->expected_num_workers_completed = 0;
 }
 
@@ -1218,8 +1184,26 @@ HWCommandQueue::~HWCommandQueue() {
         TT_ASSERT(
             this->num_entries_in_completion_q == this->num_completed_completion_q_reads,
             "There shouldn't be any commands in flight after closing our completion queue thread. Num uncompleted commands: {}", this->num_entries_in_completion_q - this->num_completed_completion_q_reads);
-        this->exit_condition = true;
+        this->set_exit_condition();
         this->completion_queue_thread.join();
+    }
+}
+
+void HWCommandQueue::increment_num_entries_in_completion_q() {
+    // Increment num_entries_in_completion_q and inform reader thread
+    // that there is work in the completion queue to process
+    this->num_entries_in_completion_q++;
+    {
+        std::lock_guard lock(this->reader_thread_cv_mutex);
+        this->reader_thread_cv.notify_one();
+    }
+}
+
+void HWCommandQueue::set_exit_condition() {
+    this->exit_condition = true;
+    {
+        std::lock_guard lock(this->reader_thread_cv_mutex);
+        this->reader_thread_cv.notify_one();
     }
 }
 
@@ -1238,6 +1222,7 @@ void HWCommandQueue::enqueue_read_buffer(std::shared_ptr<Buffer> buffer, void* d
 // Read buffer command is enqueued in the issue region and device writes requested buffer data into the completion region
 void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking) {
     ZoneScopedN("HWCommandQueue_read_buffer");
+    TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Read Buffer cannot be used with tracing");
 
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
@@ -1268,9 +1253,8 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                 this->issued_completion_q_reads.push(
                     detail::ReadBufferDescriptor(buffer, padded_page_size, dst, unpadded_dst_offset, num_pages_to_read, src_page_index, linear_page_copy)
                 );
-                this->num_entries_in_completion_q++;
-
                 this->enqueue_command(command, false);
+                this->increment_num_entries_in_completion_q();
             }
         }
         if (blocking) {
@@ -1287,9 +1271,8 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
         this->issued_completion_q_reads.push(
             detail::ReadBufferDescriptor(buffer, padded_page_size, dst, unpadded_dst_offset, pages_to_read, src_page_index)
         );
-        this->num_entries_in_completion_q++;
-
         this->enqueue_command(command, blocking);
+        this->increment_num_entries_in_completion_q();
         if (not blocking) { // should this be unconditional?
             std::shared_ptr<Event> event = std::make_shared<Event>();
             this->enqueue_record_event(event);
@@ -1327,6 +1310,7 @@ CoreType HWCommandQueue::get_dispatch_core_type() {
 
 void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src, bool blocking) {
     ZoneScopedN("HWCommandQueue_write_buffer");
+    TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Write Buffer cannot be used with tracing");
 
     uint32_t padded_page_size = align(buffer.page_size(), ADDRESS_ALIGNMENT);
 
@@ -1458,15 +1442,14 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
 void HWCommandQueue::enqueue_program(
     Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
-
-    this->force_commands([&]() {
-        if (not program.loaded_onto_device) {
-            TT_ASSERT(program.program_transfer_info.kernel_bins.size() == program.kg_buffers.size());
-            for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
-                this->enqueue_write_buffer(*program.kg_buffers[buffer_idx], program.program_transfer_info.kernel_bins[buffer_idx].data.data(), false);
-            }
+    if (not program.loaded_onto_device) {
+        TT_FATAL(!this->manager.get_bypass_mode(), "Tracing should only be used when programs have been cached");
+        TT_ASSERT(program.program_transfer_info.kernel_bins.size() == program.kg_buffers.size());
+        for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
+            this->enqueue_write_buffer(*program.kg_buffers[buffer_idx], program.program_transfer_info.kernel_bins[buffer_idx].data.data(), false);
         }
-    });
+    }
+
 
     // Snapshot of expected workers from previous programs, used for dispatch_wait cmd generation.
     uint32_t expected_workers_completed = this->manager.get_bypass_mode() ? this->trace_ctx->num_completion_worker_cores : this->expected_num_workers_completed;
@@ -1478,8 +1461,6 @@ void HWCommandQueue::enqueue_program(
 
     if (this->manager.get_bypass_mode()) {
         this->trace_ctx->num_completion_worker_cores += program.program_transfer_info.num_active_cores;
-        this->trace_ctx->owned_buffer_pool.insert(this->trace_ctx->owned_buffer_pool.end(), program.kg_buffers.begin(), program.kg_buffers.end());
-        this->trace_ctx->owned_buffer_pool.insert(this->trace_ctx->owned_buffer_pool.end(), program.owned_buffer_pool.begin(), program.owned_buffer_pool.end());
     } else {
         this->expected_num_workers_completed += program.program_transfer_info.num_active_cores;
     }
@@ -1487,6 +1468,8 @@ void HWCommandQueue::enqueue_program(
 
 void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event, bool clear_count) {
     ZoneScopedN("HWCommandQueue_enqueue_record_event");
+
+    TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Record Event cannot be used with tracing");
 
     // Populate event struct for caller. When async queues are enabled, this is in child thread, so consumers
     // of the event must wait for it to be ready (ie. populated) here. Set ready flag last. This couldn't be
@@ -1496,23 +1479,14 @@ void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event, bool cle
     event->device = this->device;
     event->ready = true; // what does this mean???
 
-    if (this->manager.get_bypass_mode()) {
-        TT_FATAL(this->trace_ctx != nullptr, "A trace context must be present in bypass mode!");
-        event->event_id = this->trace_ctx->relative_event_id(event->event_id);
-    }
     auto command = EnqueueRecordEventCommand(this->id, this->device, this->manager, event->event_id, this->expected_num_workers_completed, clear_count);
     this->enqueue_command(command, false);
 
     if (clear_count) {
         this->expected_num_workers_completed = 0;
     }
-    if (this->manager.get_bypass_mode()) {
-        this->trace_ctx->traced_completion_q_reads.push(detail::ReadEventDescriptor(event->event_id));
-        this->trace_ctx->num_completion_q_reads++;
-    } else {
-        this->issued_completion_q_reads.push(detail::ReadEventDescriptor(event->event_id));
-        this->num_entries_in_completion_q++;
-    }
+    this->issued_completion_q_reads.push(detail::ReadEventDescriptor(event->event_id));
+    this->increment_num_entries_in_completion_q();
 }
 
 void HWCommandQueue::enqueue_wait_for_event(std::shared_ptr<Event> sync_event, bool clear_count) {
@@ -1531,36 +1505,13 @@ void HWCommandQueue::enqueue_wait_for_event(std::shared_ptr<Event> sync_event, b
 void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_trace");
 
-    auto trace_inst = Trace::get_instance(trace_id);
-    auto command = EnqueueTraceCommand(this->id, this->device, this->manager, *trace_inst.buffer, this->expected_num_workers_completed);
+    auto trace_inst = this->device->get_trace(trace_id);
+    auto command = EnqueueTraceCommand(this->id, this->device, this->manager, *trace_inst->buffer, this->expected_num_workers_completed);
 
-    // Emit the completion queue entries from the trace
-    auto& cmpl_q = trace_inst.desc->traced_completion_q_reads;
-    uint32_t num_events = 0;
-    uint32_t event_id = this->manager.get_next_event(this->id);
-    for (auto read_descriptor : cmpl_q) {
-        std::visit(
-            [&](auto&& read_descriptor) {
-                using T = std::decay_t<decltype(read_descriptor)>;
-                if constexpr (std::is_same_v<T, detail::ReadBufferDescriptor>) {
-                    TT_THROW("Device trace does not support ReadBuffer commands, please perform on Host instead!");
-                } else if constexpr (std::is_same_v<T, detail::ReadEventDescriptor>) {
-                    read_descriptor.set_global_offset(event_id);
-                    this->issued_completion_q_reads.push(read_descriptor);
-                    this->num_entries_in_completion_q++;
-                    num_events++;
-                }
-            },
-            read_descriptor);
-
-    }
     this->enqueue_command(command, false);
 
-    // Increment the global event counter due to trace emitting events in a batch
-    this->manager.increment_event_id(this->id, num_events);
-
     // Increment the exepected worker cores counter due to trace programs completions
-    this->expected_num_workers_completed += trace_inst.desc->num_completion_worker_cores;
+    this->expected_num_workers_completed += trace_inst->desc->num_completion_worker_cores;
 
     if (blocking) {
         this->finish();
@@ -1744,6 +1695,10 @@ void HWCommandQueue::read_completion_queue() {
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
     while (true) {
+        {
+            std::unique_lock<std::mutex> lock(this->reader_thread_cv_mutex);
+            this->reader_thread_cv.wait(lock, [this] {return this->num_entries_in_completion_q > this->num_completed_completion_q_reads or this->exit_condition;});
+        }
         if (this->num_entries_in_completion_q > this->num_completed_completion_q_reads) {
             uint32_t num_events_to_read = this->num_entries_in_completion_q - this->num_completed_completion_q_reads;
             for (uint32_t i = 0; i < num_events_to_read; i++) {
@@ -1782,7 +1737,6 @@ void HWCommandQueue::read_completion_queue() {
         } else if (this->exit_condition) {
             return;
         }
-        std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
 }
 
@@ -1791,18 +1745,17 @@ void HWCommandQueue::finish() {
     tt::log_debug(tt::LogDispatch, "Finish for command queue {}", this->id);
     std::shared_ptr<Event> event = std::make_shared<Event>();
     this->enqueue_record_event(event);
-
     if (tt::llrt::OptionsG.get_test_mode_enabled()) {
         while (this->num_entries_in_completion_q > this->num_completed_completion_q_reads) {
             if (DPrintServerHangDetected()) {
                 // DPrint Server hang. Mark state and early exit. Assert in main thread.
-                this->exit_condition = true;
                 this->dprint_server_hang = true;
+                this->set_exit_condition();
                 return;
             } else if (tt::watcher_server_killed_due_to_error()) {
                 // Illegal NOC txn killed watcher. Mark state and early exit. Assert in main thread.
-                this->exit_condition = true;
                 this->illegal_noc_txn_hang = true;
+                this->set_exit_condition();
                 return;
             }
         }
@@ -1819,22 +1772,25 @@ volatile bool HWCommandQueue::is_noc_hung() {
     return illegal_noc_txn_hang;
 }
 
-void HWCommandQueue::record_begin(std::shared_ptr<detail::TraceDescriptor> ctx) {
+void HWCommandQueue::record_begin(const uint32_t tid, std::shared_ptr<detail::TraceDescriptor> ctx) {
     // Issue event as a barrier and a counter reset
     std::shared_ptr<Event> event = std::make_shared<Event>();
     this->enqueue_record_event(event, true);
     // Record commands using bypass mode
+    this->tid = tid;
     this->trace_ctx = ctx;
     this->manager.set_bypass_mode(true, true);  // start
 }
 
 void HWCommandQueue::record_end() {
+    this->tid = std::nullopt;
     this->trace_ctx = nullptr;
     this->manager.set_bypass_mode(false, false);  // stop
 }
 
 void HWCommandQueue::terminate() {
     ZoneScopedN("HWCommandQueue_terminate");
+    TT_FATAL(!this->manager.get_bypass_mode(), "Terminate cannot be used with tracing");
     tt::log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id);
     auto command = EnqueueTerminateCommand(this->id, this->device, this->manager);
     this->enqueue_command(command, false);
@@ -1865,40 +1821,6 @@ void EnqueueAddBufferToProgram(CommandQueue& cq, std::variant<std::reference_wra
     //     .buffer = buffer,
     //     .program = program,
     // });
-}
-
-void EnqueueUpdateRuntimeArgsImpl (const RuntimeArgsMetadata& runtime_args_md) {
-    std::vector<uint32_t> resolved_runtime_args = {};
-    resolved_runtime_args.reserve((*runtime_args_md.runtime_args_ptr).size());
-
-    for (const auto& arg : *(runtime_args_md.runtime_args_ptr)) {
-        std::visit([&resolved_runtime_args] (auto&& a) {
-            using T = std::decay_t<decltype(a)>;
-            if constexpr (std::is_same_v<T, Buffer*>) {
-                resolved_runtime_args.push_back(a -> address());
-            } else {
-                resolved_runtime_args.push_back(a);
-            }
-        }, arg);
-    }
-    auto& kernel_runtime_args = runtime_args_md.kernel->runtime_args(runtime_args_md.core_coord);
-    for (const auto& idx : runtime_args_md.update_idx) {
-        kernel_runtime_args[idx] = resolved_runtime_args[idx];
-    }
-}
-
-void EnqueueUpdateRuntimeArgs(CommandQueue& cq, const std::shared_ptr<Kernel> kernel, const CoreCoord &core_coord, std::vector<uint32_t> &update_idx, std::shared_ptr<RuntimeArgs> runtime_args_ptr, bool blocking) {
-    auto runtime_args_md = RuntimeArgsMetadata {
-            .core_coord = core_coord,
-            .runtime_args_ptr = runtime_args_ptr,
-            .kernel = kernel,
-            .update_idx = update_idx,
-    };
-    cq.run_command(CommandInterface {
-        .type = EnqueueCommandType::UPDATE_RUNTIME_ARGS,
-        .blocking = blocking,
-        .runtime_args_md = runtime_args_md,
-    });
 }
 
 void EnqueueSetRuntimeArgsImpl(const RuntimeArgsMetadata& runtime_args_md) {
@@ -2162,33 +2084,10 @@ void FinishImpl(CommandQueue& cq) {
     cq.hw_command_queue().finish();
 }
 
-CommandQueue& BeginTrace(Trace& trace) {
-    log_debug(LogMetalTrace, "Begin trace capture");
-    trace.begin_capture();
-    return trace.queue();
-}
-
-void EndTrace(Trace& trace) {
-    trace.end_capture();
-    log_debug(LogMetalTrace, "End trace capture");
-}
-
-uint32_t InstantiateTrace(Trace& trace, CommandQueue& cq) {
-    uint32_t trace_id = trace.instantiate(cq);
-    return trace_id;
-}
-
-void ReleaseTrace(uint32_t trace_id) {
-    if (trace_id == -1) {
-        Trace::release_all();
-    } else if (Trace::has_instance(trace_id)) {
-        Trace::remove_instance(trace_id);
-    }
-}
 
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     detail::DispatchStateCheck(true);
-    TT_FATAL(Trace::has_instance(trace_id), "Trace instance " + std::to_string(trace_id) + " must exist on device");
+    TT_FATAL(cq.device()->get_trace(trace_id) != nullptr, "Trace instance " + std::to_string(trace_id) + " must exist on device");
     cq.run_command(CommandInterface{
         .type = EnqueueCommandType::ENQUEUE_TRACE,
         .blocking = blocking,
@@ -2384,10 +2283,6 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
         case EnqueueCommandType::SET_RUNTIME_ARGS:
             TT_ASSERT(command.runtime_args_md.has_value(), "Must provide RuntimeArgs Metdata!");
             EnqueueSetRuntimeArgsImpl(command.runtime_args_md.value());
-            break;
-        case EnqueueCommandType::UPDATE_RUNTIME_ARGS:
-            TT_ASSERT(command.runtime_args_md.has_value(), "Must provide RuntimeArgs Metdata!");
-            EnqueueUpdateRuntimeArgsImpl(command.runtime_args_md.value());
             break;
         case EnqueueCommandType::ADD_BUFFER_TO_PROGRAM:
             TT_ASSERT(command.buffer.has_value(), "Must provide a buffer!");

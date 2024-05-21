@@ -18,15 +18,7 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-bool test_compile_args(std::vector<uint32_t> compile_args_vec, int device_id) {
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Grayskull Device Setup
-    ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Device *device =
-        tt_metal::CreateDevice(device_id);
-
-
-
+bool test_compile_args(std::vector<uint32_t> compile_args_vec, tt_metal::Device *device) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -59,8 +51,6 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec, int device_id) {
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::detail::CompileProgram(device, program);
 
-    CloseDevice(device);
-
     return true;
 }
 
@@ -70,13 +60,14 @@ int main(int argc, char **argv) {
     try {
         int device_id = 0;
 
+        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
         // Remove old compiled kernels
         static const std::string kernel_name = "test_compile_args";
-        auto binary_path_str = jit_build_get_kernel_compile_outpath(device_id) + kernel_name;
+        auto binary_path_str = jit_build_get_kernel_compile_outpath(device->build_key()) + kernel_name;
         std::filesystem::remove_all(binary_path_str);
 
-        pass &= test_compile_args({0, 68, 0, 124}, device_id);
-        pass &= test_compile_args({1, 5, 0, 124}, device_id);
+        pass &= test_compile_args({0, 68, 0, 124}, device);
+        pass &= test_compile_args({1, 5, 0, 124}, device);
 
         TT_FATAL(std::filesystem::exists(binary_path_str), "Expected kernel to be compiled!");
 
@@ -106,6 +97,8 @@ int main(int argc, char **argv) {
             }
             TT_ASSERT(num_found == 2, "Expected kernel_args.csv to contain the compile args for both kernels. Instead, found {} entries", num_found);
         }
+
+        CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

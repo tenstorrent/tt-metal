@@ -324,7 +324,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
                 runtime_args[0] = output_grad_buffer->address();
                 runtime_args[1] = input_buffer->address();
                 runtime_args[2] = mean_buffer->address();
@@ -332,13 +332,11 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
                 if (gamma_buffer != nullptr) {
                     runtime_args[4] = gamma_buffer->address();
                 }
-                SetRuntimeArgs(program, reader_kernels_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
                 runtime_args[0] = input_grad_buffer->address();
-                SetRuntimeArgs(program, writer_kernels_id, core, runtime_args);
             }
         }
     };

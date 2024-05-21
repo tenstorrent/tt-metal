@@ -2,6 +2,7 @@
 set(LLRT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/llrt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/rtoptions.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tlb_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_cluster.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_hexfile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_memory.cpp)

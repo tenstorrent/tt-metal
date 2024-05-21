@@ -5,8 +5,8 @@
 #include <cmath>
 
 #include "common/constants.hpp"
-#include "tensor/owned_buffer.hpp"
-#include "tensor/owned_buffer_functions.hpp"
+#include "tensor/host_buffer/functions.hpp"
+#include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/operation.hpp"
@@ -114,7 +114,7 @@ void test_operation_infrastructure() {
         profiler_info.preferred_name.value() == "tt::tt_metal::EltwiseUnary",
         fmt::format("Actual value is {}", profiler_info.preferred_name.value()));
     TT_FATAL(
-        profiler_info.parallelization_strategy.value() == "UnaryOpParallelizationStrategy::SINGLE_CORE",
+        profiler_info.parallelization_strategy.value() == "UnaryOpParallelizationStrategy::MULTI_CORE",
         fmt::format("Actual value is {}", profiler_info.parallelization_strategy.value()));
 
     TT_FATAL(tt::tt_metal::CloseDevice(device));

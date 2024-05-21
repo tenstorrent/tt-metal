@@ -48,6 +48,7 @@ inline std::string get_core_descriptor_file(const tt::ARCH &arch) {
             case tt::ARCH::GRAYSKULL: return tt_metal_home + "tt_metal/core_descriptors/grayskull_versim_1x1_arch.yaml";
             case tt::ARCH::WORMHOLE: throw std::runtime_error("WORMHOLE arch not supported");
             case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/core_descriptors/wormhole_b0_versim_1x1_arch.yaml";
+            case tt::ARCH::BLACKHOLE: return tt_metal_home + "tt_metal/core_descriptors/blackhole_versim_1x1_arch.yaml";
             default: throw std::runtime_error("Unsupported device arch");
         };
     } else {
@@ -57,6 +58,7 @@ inline std::string get_core_descriptor_file(const tt::ARCH &arch) {
             case tt::ARCH::GRAYSKULL: return tt_metal_home + "tt_metal/core_descriptors/grayskull_120_arch.yaml";
             case tt::ARCH::WORMHOLE: throw std::runtime_error("WORMHOLE arch not supported");
             case tt::ARCH::WORMHOLE_B0: return tt_metal_home + wh_arch;
+            case tt::ARCH::BLACKHOLE: return tt_metal_home + "tt_metal/core_descriptors/blackhole_140_arch.yaml";
             default: throw std::runtime_error("Unsupported device arch");
         };
     }
@@ -66,7 +68,9 @@ inline std::string get_core_descriptor_file(const tt::ARCH &arch) {
 inline const std::string get_product_name(tt::ARCH arch, uint32_t num_harvested_rows) {
     const static std::map<tt::ARCH, std::map<uint32_t, std::string>> product_name = {
         {tt::ARCH::GRAYSKULL, {{0, "E150"}, {2, "E75"}}},
-        {tt::ARCH::WORMHOLE_B0, {{0, "galaxy"}, {1, "nebula_x1"}, {2, "nebula_x2"}}}};
+        {tt::ARCH::WORMHOLE_B0, {{0, "galaxy"}, {1, "nebula_x1"}, {2, "nebula_x2"}}},
+        {tt::ARCH::BLACKHOLE, {{0, "blackhole"}}} // TODO (abhullar): revisit blackhole product names
+    };
 
     return product_name.at(arch).at(num_harvested_rows);
 }

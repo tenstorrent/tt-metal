@@ -78,15 +78,15 @@ std::vector<Tensor> SplitFusedQKVAndSplitHeads::create_output_tensors(const std:
         mem_config_qv.shard_spec = shard_spec_qv;
         auto mem_config_k = this->output_mem_config;
         mem_config_k.shard_spec = shard_spec_k;
-        auto out_tensor_q = create_sharded_device_tensor(
+        auto out_tensor_q = create_device_tensor(
             Shape{batch, num_heads, M, K},
             input_tensor.get_dtype(),
             Layout::TILE,
             input_tensor.device(),
             mem_config_qv);
-        auto out_tensor_k = create_sharded_device_tensor(
+        auto out_tensor_k = create_device_tensor(
             Shape{batch, num_heads, K, M}, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_k);
-        auto out_tensor_v = create_sharded_device_tensor(
+        auto out_tensor_v = create_device_tensor(
             Shape{batch, num_heads, M, K},
             input_tensor.get_dtype(),
             Layout::TILE,
@@ -443,7 +443,7 @@ std::vector<Tensor> GroupAttnMatmul::create_output_tensors(const std::vector<Ten
             ShardSpec shard_spec = ShardSpec{all_cores, {output_shape[2], output_shape[3]}, shard_orientation};
             output_mem_config.shard_spec = shard_spec;
         }
-        return {create_sharded_device_tensor(
+        return {create_device_tensor(
             this->compute_output_shapes(input_tensors).at(0),
             this->output_dtype,
             Layout::TILE,

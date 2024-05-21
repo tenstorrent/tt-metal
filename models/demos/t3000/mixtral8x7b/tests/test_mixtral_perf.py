@@ -35,14 +35,14 @@ class Emb(torch.nn.Module):
         return self.emb(x)
 
 
-@pytest.mark.models_performance_bare_metal_multi_device
+@pytest.mark.model_perf_t3000
 @pytest.mark.parametrize(
     "generation_start_pos, expected_compile_time, expected_inference_time",
     (
-        (32, 200, 8.5),
-        (128, 200, 8.5),
-        (1024, 200, 8.5),
-        (2048, 200, 8.5),
+        (32, 150, 7.5),
+        (128, 150, 7.5),
+        (1024, 150, 7.5),
+        (2048, 150, 7.5),
     ),
 )
 def test_mixtral_model_perf(
@@ -55,7 +55,7 @@ def test_mixtral_model_perf(
 ):
     dtype = ttnn.bfloat8_b
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
-    model_args.n_layers = 1
+    model_args.n_layers = 32
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     # Clear global profiler state before starting measurements
@@ -113,10 +113,17 @@ def test_mixtral_model_perf(
     profiler.print()
     iter_time = profiler.get("model_run_for_inference_0")
 
-    comment = f"num_layers={model_args.n_layers}"
+    comment = f"kv_cache_len={generation_start_pos}_num_layers={model_args.n_layers}"
 
+    "generation_start_pos, expected_compile_time, expected_inference_time",
+    (
+        (32, 30, 8.5),
+        (128, 30, 8.5),
+        (1024, 30, 8.5),
+        (2048, 30, 8.5),
+    ),
     prep_perf_report(
-        model_name=f"Mixtral8x7B",
+        model_name=f"Mixtral8x7B_{comment}",
         batch_size=model_args.max_batch_size,
         inference_and_compile_time=compile_and_iter_time,
         inference_time=iter_time,

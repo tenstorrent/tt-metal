@@ -17,17 +17,15 @@ namespace tt {
 namespace tt_metal {
 
 enum class UpdateCacheOpParallelizationStrategy {
-    MULTI_CORE = 0, SINGLE_CORE = 1
+    MULTI_CORE
 };
 
 enum class UpdateCacheOpType {
-    FILL = 0, UPDATE = 1
+    FILL, UPDATE
 };
 
 operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx, const uint32_t batch_offset, DeviceComputeKernelConfig compute_kernel_config);
-operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx, const uint32_t batch_offset, DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t batch_idx, const uint32_t update_idx);
-operation::ProgramWithCallbacks fill_cache_single_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t batch_idx, const uint32_t update_idx);
 
 struct UpdateCache {
     const uint32_t batch_idx;

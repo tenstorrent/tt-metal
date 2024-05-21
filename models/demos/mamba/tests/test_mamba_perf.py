@@ -15,15 +15,16 @@ from models.demos.mamba.demo.demo import (
 
 from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import profiler, enable_persistent_kernel_cache, skip_for_grayskull
+from models.utility_functions import profiler, enable_persistent_kernel_cache, skip_for_grayskull, skip_for_wormhole_b0
 from tt_metal.tools.profiler.process_model_log import get_samples_per_s
 
 
+@skip_for_wormhole_b0("Non-deterministic hang on CI (#8606)")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, iterations, expected_compile_time, expected_inference_time",
-    ((32, 10, 15.0, 0.75),),  # Issue 7816 Compile time
+    ((32, 10, 12.5, 0.40),),  # Issue 7816 Compile time
 )
 def test_mamba_e2e_perf(
     device, batch, iterations, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds

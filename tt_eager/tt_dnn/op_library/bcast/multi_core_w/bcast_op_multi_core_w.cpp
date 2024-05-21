@@ -10,17 +10,14 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 
-
 using namespace tt::tt_metal;
 using namespace tt::constants;
-
 
 namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor &b, const Tensor& output, BcastOpMath bcast_math, BcastOpDim bcast_dim) {
-    TT_ASSERT(bcast_dim == BcastOpDim::W);
+operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor &b, const Tensor& output, BcastOpMath bcast_math) {
 
     const auto ashape = a.get_legacy_shape();
     const auto bshape = b.get_legacy_shape();
@@ -47,9 +44,13 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 
     tt_metal::Device *device = a.device();
 
-	tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+	tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);
+    uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
 
 	auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -63,25 +64,22 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 	auto dst_buffer = output.buffer();
 	TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    const char* reader_name = bcast_op_utils::get_reader_name(bcast_dim, BcastOpParallelizationStrategy::MULTI_CORE_W);
-    const char* compute_name = bcast_op_utils::get_compute_name(bcast_dim);
-
 	uint32_t src0_cb_index = 0;
 	uint32_t num_input_tiles = 2;
 
-	tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-		.set_page_size(src0_cb_index, single_tile_size);
+	tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
+		.set_page_size(src0_cb_index, src0_single_tile_size);
 	auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_device_cores, src0_cb_config);
 
 	uint32_t src1_cb_index = 1;
-	tt_metal::CircularBufferConfig src1_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
-		.set_page_size(src1_cb_index, single_tile_size);
+	tt_metal::CircularBufferConfig src1_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * src1_single_tile_size, {{src1_cb_index, src1_cb_data_format}})
+		.set_page_size(src1_cb_index, src1_single_tile_size);
 	auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, src1_cb_config);
 
 	uint32_t output_cb_index = 16; // output operands start at index 16
 	uint32_t num_output_tiles = 2;
-	tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
-		.set_page_size(output_cb_index, single_tile_size);
+	tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
+		.set_page_size(output_cb_index, dst_single_tile_size);
 	auto cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, output_cb_config);
 
 
@@ -94,7 +92,7 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 
 	KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
 		program,
-		reader_name,
+		"tt_eager/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_w_interleaved_input_cols_partitioned.cpp",
 		all_device_cores,
 		tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -104,10 +102,10 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 		all_device_cores,
 		tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-	std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(bcast_dim, bcast_math);
+	std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(BcastOpDim::W, bcast_math);
 	auto bcast_kernel_id = tt_metal::CreateKernel(
 		program,
-		compute_name,
+		"tt_eager/tt_dnn/op_library/bcast/kernels/compute/bcast_w.cpp",
 		all_device_cores,
 		tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines}
 	);

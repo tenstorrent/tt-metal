@@ -85,42 +85,6 @@ def preprocess_and_validate_inputs(input_prompts, tokenizer, max_seq_len, perf_m
     return prefill_ids, num_users, num_input_tokens
 
 
-def initialize_kv_cache(model_config, configuration, num_layers, batch_size, max_seq_len, devices):
-    head_dim = configuration.hidden_size // configuration.num_attention_heads
-    num_kv_heads = configuration.num_kv_heads
-
-    tt_kv_cache = ()
-    tt_k_cache_host = torch.zeros(batch_size, num_kv_heads, max_seq_len, head_dim)
-    tt_v_cache_host = torch.zeros(batch_size, num_kv_heads, max_seq_len, head_dim)
-    tt_k_cache_host = torch.chunk(tt_k_cache_host, len(devices), 1)
-    tt_v_cache_host = torch.chunk(tt_v_cache_host, len(devices), 1)
-
-    for _ in tqdm(range(num_layers), desc="Initializing kv cache on devices for each layer"):
-        tt_k_cache = []
-        tt_v_cache = []
-        for j in range(len(devices)):
-            tt_k_cache.append(
-                torch2tt_tensor(
-                    tt_k_cache_host[j],
-                    devices[j],
-                    tt_lib.tensor.Layout.TILE,
-                    model_config["KV_CACHE_MEMCFG"],
-                    model_config["KV_CACHE_DTYPE"],
-                )
-            )
-            tt_v_cache.append(
-                torch2tt_tensor(
-                    tt_v_cache_host[j],
-                    devices[j],
-                    tt_lib.tensor.Layout.TILE,
-                    model_config["KV_CACHE_MEMCFG"],
-                    model_config["KV_CACHE_DTYPE"],
-                )
-            )
-        tt_kv_cache += ((tt_k_cache, tt_v_cache),)
-    return tt_kv_cache
-
-
 # TODO: Remove once we have prefill on device
 def initialize_and_fill_kv_cache(
     pytorch_FalconCausalLM, model_config, configuration, prefill_ids, num_layers, batch_size, max_seq_len, devices
@@ -286,14 +250,8 @@ def run_falcon_demo_kv(
 
     synchronize_devices(devices)
 
-    profiler.start(f"initializing_KV_cache")
-    kv_cache_singlelayer = initialize_kv_cache(
-        model_config, configuration, 1, batch_size, max_seq_len, devices
-    )  # only used for compile
-    kv_cache = initialize_kv_cache(model_config, configuration, num_layers, batch_size, max_seq_len, devices)
-    profiler.end(f"initializing_KV_cache")
+    kv_cache_singlelayer = tt_FalconCausalLM_singlelayer.initialize_kv_cache()  # only used for compile
 
-    # TODO: Is this safe? Disabling kernel caching disable program caching as well?
     enable_persistent_kernel_cache()
 
     ### First prefill run with compile ###
@@ -394,6 +352,10 @@ def run_falcon_demo_kv(
     logger.info("Moved weights (all layers) to device!")
     profiler.end(f"moving_to_device")
 
+    profiler.start(f"initializing_KV_cache")
+    kv_cache = tt_FalconCausalLM.initialize_kv_cache()  # Initialized kv cache for all layers
+    profiler.end(f"initializing_KV_cache")
+
     ### Second prefill run without compile ###
     enable_persistent_kernel_cache()
 
@@ -415,7 +377,7 @@ def run_falcon_demo_kv(
             max_seq_len,
             devices,
         )
-        profiler.end(f"initializing_KV_cache")
+        profiler.end(f"initializing_KV_cache_on_host")
 
         output_ids = torch.zeros(num_users, 1, dtype=torch.int64)
         for user_id in range(num_users):

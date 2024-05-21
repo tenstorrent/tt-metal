@@ -985,10 +985,6 @@ def max_bw(x, y, z, *args, **kwargs):
     return [in_data.grad, other_data.grad]
 
 
-def minimum(x, y, *args, **kwargs):
-    return torch.minimum(x, y)
-
-
 def min(x, y, *args, **kwargs):
     return torch.min(x, y)
 
@@ -1190,27 +1186,23 @@ def tilize_with_zero_padding(x, *args, **kwargs):
     )
 
 
-def tilize_with_val_padding(x, output_tensor_shape, input_tensor_start, pad_value, *args, **kwargs):
+def tilize_with_val_padding(x, output_tensor_shape, pad_value, *args, **kwargs):
     pad = torch.nn.functional.pad(
         x,
-        tuple(
-            j
-            for i in reversed(range(len(x.shape)))
-            for j in (input_tensor_start[i], output_tensor_shape[i] - x.shape[i])
-        ),
+        tuple(j for i in reversed(range(len(x.shape))) for j in (0, output_tensor_shape[i] - x.shape[i])),
         value=pad_value,
     )
     tilized = tilize_util(pad)
     return tilized
 
 
-def untilize_with_unpadding(x, output_tensor_start, output_tensor_end, *args, **kwargs):
+def untilize_with_unpadding(x, output_tensor_end, *args, **kwargs):
     untilized = untilize_util(x)
     unpad = untilized[
-        output_tensor_start[0] : output_tensor_end[0] + 1,
-        output_tensor_start[1] : output_tensor_end[1] + 1,
-        output_tensor_start[2] : output_tensor_end[2] + 1,
-        output_tensor_start[3] : output_tensor_end[3] + 1,
+        : output_tensor_end[0] + 1,
+        : output_tensor_end[1] + 1,
+        : output_tensor_end[2] + 1,
+        : output_tensor_end[3] + 1,
     ]
     return unpad
 
@@ -1760,16 +1752,6 @@ def clamp_bw(x, y, scalar, *args, **kwargs):
     return in_data.grad
 
 
-def rms_norm(hidden_states, weight, *, epsilon=1e-6):
-    variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
-    hidden_states = hidden_states * torch.rsqrt(variance + epsilon)
-
-    if weight.dtype in [torch.float16, torch.bfloat16]:
-        hidden_states = hidden_states.to(weight.dtype)
-
-    return weight * hidden_states
-
-
 def global_avg_pool2d(x, *args, **kwargs):
     output_size = (1, 1)
     x = x.to(torch.float32)
@@ -1868,3 +1850,35 @@ def max_pool2d(x, *args, **kwargs):
 
 def repeat_2(x, *args, shape, **kwargs):
     return x.repeat(*shape)
+
+
+def power_2(x, y, *args, exponent=None, **kwargs):
+    if exponent is None:
+        result = torch.pow(x, y)
+    else:
+        result = x**exponent
+    return result
+
+
+def subtract_and_apply_activation(x, y, *args, **kwargs):
+    activation = kwargs.pop("activation")
+    output = torch.sub(x, y)
+
+    if activation == "relu":
+        output = torch.relu(output)
+    elif activation == "gelu":
+        output = torch.gelu(output)
+
+    return output
+
+
+def multiply_and_apply_activation(x, y, *args, **kwargs):
+    activation = kwargs.pop("activation")
+    output = torch.mul(x, y)
+
+    if activation == "relu":
+        output = torch.relu(output)
+    elif activation == "gelu":
+        output = torch.gelu(output)
+
+    return output

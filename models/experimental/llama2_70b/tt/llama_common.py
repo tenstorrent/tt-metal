@@ -9,9 +9,15 @@ from typing import Tuple
 import numpy as np
 import torch
 from torch import nn
-import tt_lib
+import ttnn.experimental as tt_lib
 import ttnn
 from models.utility_functions import tt2torch_tensor, torch2tt_tensor
+from loguru import logger
+from pathlib import Path
+from models.experimental.llama2_70b.reference.llama.llama.generation import (
+    load_chunked_checkpoints,
+    load_sharded_checkpoints,
+)
 
 MAX_SEQ_LEN = 4096
 BASE_URL = "layers"
@@ -19,6 +25,25 @@ UNIT_TEST_N_LAYER = 1
 UNIT_TEST_LAYER_NUM = 0
 UNIT_TEST_START_POS = 0
 UNIT_TEST_GENERATION_LENGTH = 20
+
+
+def load_llama_state_dict(ckpt_dir, n_layers, start_layer_idx=0):
+    checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
+    assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
+    is_chunked = "layers_" in str(checkpoints[0])
+    if is_chunked:
+        checkpoint = load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx)
+    else:
+        checkpoint = load_sharded_checkpoints(checkpoints, n_layers)
+
+    return checkpoint
+
+
+def should_skip_model_load():
+    skip_model_load = bool(os.environ.get("LLAMA_SKIP_MODEL_LOAD", 0))
+    if skip_model_load:
+        logger.warning("LLAMA_SKIP_MODEL_LOAD is set. Skipping model load")
+    return skip_model_load
 
 
 def get_llama_path(devices, model_config, n_devices, emulated):
@@ -40,11 +65,12 @@ def get_llama_path(devices, model_config, n_devices, emulated):
     logger.info(f"Tokenizer file: {tokenizer_path}")
     logger.info(f"Cache directory: {cache_path}")
 
-    if emulated:
-        logger.info(f"Running emulated, replicating on {n_devices} devices")
-        devices = [devices[0] for _ in range(n_devices)]  # Emulate fracturing on N chips
-    else:
-        logger.info(f"Running on {n_devices} devices on T3000 chips")
+    if not isinstance(devices, ttnn._ttnn.multi_device.DeviceMesh):
+        if emulated:
+            logger.info(f"Running emulated, replicating on {n_devices} devices")
+            devices = [devices[0] for _ in range(n_devices)]  # Emulate fracturing on N chips
+        else:
+            logger.info(f"Running on {n_devices} devices on T3000 chips")
 
     return devices, ckpt_dir, tokenizer_path, cache_path
 
@@ -319,3 +345,24 @@ def get_atol_rtol_pcc(golden, calculated):
         cal_pcc,
         f"Max ATOL Delta: {cal_atol}, Max RTOL Delta: {cal_rtol}, PCC: {cal_pcc}",
     )
+
+
+def check_kv_cache(pt_cache_all, tt_cache_all, generation_start_pos, generation_length, seq_len, is_prefill, pcc):
+    test_passed = True
+    for cache_pt, cache_tt in zip(pt_cache_all, tt_cache_all):
+        cache_length_to_check = generation_start_pos + generation_length
+        if is_prefill:
+            cache_pt = cache_pt[:, :, :seq_len, :]
+            cache_tt = cache_tt[:, :, :seq_len, :]
+        else:
+            cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
+            cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
+        does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
+        logger.info(f"Output: {output_pcc}")
+
+        if does_pass:
+            logger.info(f"KV Cache Passed!")
+        else:
+            logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
+            test_passed = False
+    return test_passed

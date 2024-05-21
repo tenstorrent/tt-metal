@@ -32,7 +32,6 @@ params += [
                 ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
             ),
             "output_tensor_shape": [1, 1, 128, 7328],
-            "input_tensor_start": [0, 0, 0, 0],
             "pad_value": 10,
         },
     )

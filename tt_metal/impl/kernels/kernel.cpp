@@ -41,6 +41,7 @@ Kernel::Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &cor
         }
     }
     this->core_to_runtime_args_ = { max_x+1, std::vector< std::vector<uint32_t > > (max_y+1, std::vector<uint32_t>() ) };
+    this->core_to_runtime_args_data_ = { max_x+1, std::vector< RuntimeArgsData > (max_y+1, RuntimeArgsData{} ) };
 }
 
 std::string Kernel::name() const {
@@ -114,13 +115,13 @@ uint8_t ComputeKernel::expected_num_binaries() const {
     return 3;
 }
 
-std::vector<ll_api::memory> const &Kernel::binaries(chip_id_t device_id) const {
+std::vector<ll_api::memory> const &Kernel::binaries(uint32_t build_key) const {
     int expected_num_binaries = this->expected_num_binaries();
-    if (this->binaries_.find(device_id) != this->binaries_.end() and this->binaries_.at(device_id).size() != expected_num_binaries) {
+    if (this->binaries_.find(build_key) != this->binaries_.end() and this->binaries_.at(build_key).size() != expected_num_binaries) {
         TT_THROW("Expected " + std::to_string(expected_num_binaries) + " binaries but have "
-                    + std::to_string(this->binaries_.at(device_id).size()) + " for kernel " + this->name());
+                    + std::to_string(this->binaries_.at(build_key).size()) + " for kernel " + this->name());
     }
-    return this->binaries_.at(device_id);
+    return this->binaries_.at(build_key);
 }
 
 std::string DataMovementKernel::config_hash() const {
@@ -144,25 +145,32 @@ std::string Kernel::compute_hash() const {
     );
 }
 
-void Kernel::update_runtime_arg( const CoreCoord &logical_core, size_t idx, uint32_t value){
-    ZoneScoped;
-    auto & v = this->core_to_runtime_args_[logical_core.x][logical_core.y];
-    TT_ASSERT( idx < v.size(), "Runtime arg offset {} for Core {} out of bounds", idx, logical_core.str());
-    v[idx] = value;
-}
-
 std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord &logical_core) {
     // TODO (abhullar): Should this check only be enabled in debug mode?
     TT_FATAL( logical_core.x < this->core_to_runtime_args_.size() && logical_core.y < this->core_to_runtime_args_[logical_core.x].size(), "Cannot get runtime args for kernel {} that is not placed on core {}", this->name(), logical_core.str());
     return this->core_to_runtime_args_[logical_core.x][logical_core.y];
 }
 
+RuntimeArgsData &Kernel::runtime_args_data(const CoreCoord &logical_core) {
+    // TODO (abhullar): Should this check only be enabled in debug mode?
+    TT_FATAL( logical_core.x < this->core_to_runtime_args_.size() && logical_core.y < this->core_to_runtime_args_[logical_core.x].size(), "Cannot get runtime args for kernel {} that is not placed on core {}", this->name(), logical_core.str());
+    return this->core_to_runtime_args_data_[logical_core.x][logical_core.y];
+}
+
 std::vector< std::vector< std::vector<uint32_t>> > & Kernel::runtime_args() {
     return this->core_to_runtime_args_;
 }
 
+std::vector< std::vector<RuntimeArgsData> > & Kernel::runtime_args_data() {
+    return this->core_to_runtime_args_data_;
+}
+
 std::vector<uint32_t>& Kernel::common_runtime_args() {
     return this->common_runtime_args_;
+}
+
+std::vector<RuntimeArgsData> & Kernel::common_runtime_args_data() {
+    return this->common_runtime_args_data_;
 }
 
 std::pair<uint64_t, uint64_t> DataMovementKernel::get_runtime_args_range() const {
@@ -217,19 +225,26 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<u
 
     // TODO (abhullar): If we don't include this check then user can write runtime args to a core that the kernel is not placed on.
     //                  Should this check only be enabled in debug mode?
-    // TT_FATAL(this->is_on_logical_core(logical_core), "Cannot set runtime args for core {} since kernel {} is not placed on it!", logical_core.str(), this->name());
+    TT_ASSERT(this->is_on_logical_core(logical_core), "Cannot set runtime args for core {} since kernel {} is not placed on it!", logical_core.str(), this->name());
 
     // Keep state for validation, to be able to check from both set_runtime_args() and set_common_runtime_args() APIs.
-    if (runtime_args.size() > max_runtime_args_per_core_) {
-        max_runtime_args_per_core_ = runtime_args.size();
-        core_with_max_runtime_args_ = logical_core;
+
+    auto &set_rt_args = this->core_to_runtime_args_[logical_core.x][logical_core.y];
+    // TODO: Only allow setting once
+    if (set_rt_args.empty()) {
+        if (runtime_args.size() > max_runtime_args_per_core_) {
+            max_runtime_args_per_core_ = runtime_args.size();
+            core_with_max_runtime_args_ = logical_core;
+        }
+        this->validate_runtime_args_size(runtime_args.size(), this->common_runtime_args_.size(), logical_core);
+        set_rt_args = runtime_args;
+        this->core_to_runtime_args_data_[logical_core.x][logical_core.y] = RuntimeArgsData{set_rt_args.data(), set_rt_args.size()};
+        this->core_with_runtime_args_.insert( logical_core );
+    } else {
+        TT_FATAL(set_rt_args.size() == runtime_args.size(), "Illegal Runtime Args: Number of runtime args cannot be modified!");
+        std::memcpy(this->core_to_runtime_args_data_[logical_core.x][logical_core.y].rt_args_data, runtime_args.data(), runtime_args.size() * sizeof(uint32_t));
     }
 
-    this->validate_runtime_args_size(runtime_args.size(), this->common_runtime_args_.size(), logical_core);
-    auto &set_rt_args = this->core_to_runtime_args_[logical_core.x][logical_core.y];
-    TT_FATAL(set_rt_args.empty() or set_rt_args.size() == runtime_args.size(), "Illegal Runtime Args: Number of runtime args cannot be modified!");
-    set_rt_args = runtime_args;
-    this->core_with_runtime_args_.insert( logical_core );
 }
 
 void Kernel::set_common_runtime_args(const std::vector<uint32_t> &common_runtime_args) {
@@ -238,10 +253,26 @@ void Kernel::set_common_runtime_args(const std::vector<uint32_t> &common_runtime
     //                  Should this check only be enabled in debug mode?
     // TT_FATAL(this->is_on_logical_core(logical_core), "Cannot set runtime args for core {} since kernel {} is not placed on it!", logical_core.str(), this->name());
 
-    this->validate_runtime_args_size(max_runtime_args_per_core_, common_runtime_args.size(), core_with_max_runtime_args_);
     auto &set_rt_args = this->common_runtime_args_;
-    TT_FATAL(set_rt_args.empty() or set_rt_args.size() == common_runtime_args.size(), "Illegal Common Runtime Args: Number of common runtime args cannot be modified!");
+    TT_FATAL(set_rt_args.empty(), "Illegal Common Runtime Args: Can only set common runtime args once. Get and modify args in place instead.");
+    this->validate_runtime_args_size(max_runtime_args_per_core_, common_runtime_args.size(), core_with_max_runtime_args_);
     set_rt_args = common_runtime_args;
+    this->common_runtime_args_data_ = std::vector<RuntimeArgsData>(this->core_range_set_.ranges().size(), RuntimeArgsData{set_rt_args.data(), set_rt_args.size()});
+}
+
+void Kernel::set_common_runtime_args(const RuntimeArgsData& common_runtime_args) {
+
+    // TODO (abhullar): If we don't include this check then user can write runtime args to a core that the kernel is not placed on.
+    //                  Should this check only be enabled in debug mode?
+    // TT_FATAL(this->is_on_logical_core(logical_core), "Cannot set runtime args for core {} since kernel {} is not placed on it!", logical_core.str(), this->name());
+
+    auto &set_rt_args = this->common_runtime_args_;
+    TT_FATAL(!set_rt_args.empty() and set_rt_args.size() == common_runtime_args.size(), "Illegal Common Runtime Args: Number of common runtime args cannot be modified!");
+    for (auto& rt_args_data : this->common_runtime_args_data_) {
+        if (common_runtime_args.data() != rt_args_data.data()) {
+            memcpy(rt_args_data.data(), common_runtime_args.data(), common_runtime_args.size() * sizeof(uint32_t));
+        }
+    }
 }
 
 void DataMovementKernel::set_build_options(JitBuildOptions& build_options) const {
@@ -314,11 +345,11 @@ void Kernel::set_common_runtime_args_offset(){
     this->defines_["COMMON_RT_ARGS_OFFSET"] = std::to_string(offset);
 }
 
-void Kernel::set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&binaries) {
-    if (this->binaries_.find(device_id) != this->binaries_.end()) {
-        TT_ASSERT(this->binaries_.at(device_id) == binaries);
+void Kernel::set_binaries(uint32_t build_key, std::vector<ll_api::memory> &&binaries) {
+    if (this->binaries_.find(build_key) != this->binaries_.end()) {
+        TT_ASSERT(this->binaries_.at(build_key) == binaries);
     } else {
-        this->binaries_[device_id] = std::move(binaries);
+        this->binaries_[build_key] = std::move(binaries);
     }
 }
 
@@ -335,7 +366,7 @@ void DataMovementKernel::read_binaries(Device *device) {
     log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", riscv_id, this->binary_size16_ * 16);
 
     binaries.push_back(binary_mem);
-    this->set_binaries(device->id(), std::move(binaries));
+    this->set_binaries(device->build_key(), std::move(binaries));
 }
 
 void EthernetKernel::read_binaries(Device *device) {
@@ -346,7 +377,7 @@ void EthernetKernel::read_binaries(Device *device) {
     const JitBuildState& build_state = device->build_kernel_state(JitBuildProcessorType::ETHERNET, erisc_id);
     ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_));
     binaries.push_back(binary_mem);
-    this->set_binaries(device->id(), std::move(binaries));
+    this->set_binaries(device->build_key(), std::move(binaries));
 }
 
 void ComputeKernel::read_binaries(Device *device) {
@@ -359,7 +390,7 @@ void ComputeKernel::read_binaries(Device *device) {
         log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", trisc_id + 2, this->binary_size16_ * 16);
         binaries.push_back(binary_mem);
     }
-    this->set_binaries(device->id(), std::move(binaries));
+    this->set_binaries(device->build_key(), std::move(binaries));
 }
 
 RISCV DataMovementKernel::processor() const {
@@ -383,7 +414,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     }
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    ll_api::memory binary_mem = this->binaries(device_id).at(0);
+    ll_api::memory binary_mem = this->binaries(device->build_key()).at(0);
 
     int riscv_id;
     switch (this->config_.processor) {
@@ -407,7 +438,7 @@ bool EthernetKernel::configure(Device *device, const CoreCoord &logical_core) co
     bool pass = true;
     auto device_id = device->id();
     auto ethernet_core = device->ethernet_core_from_logical_core(logical_core);
-    ll_api::memory binary_mem = this->binaries(device_id).at(0);
+    ll_api::memory binary_mem = this->binaries(device->build_key()).at(0);
     int riscv_id = this->config_.eth_mode == Eth::IDLE ? 6 : 5;
     pass &= tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, ethernet_core, riscv_id);
     return pass;
@@ -420,7 +451,7 @@ bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core) con
     }
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    std::vector<ll_api::memory> binaries = this->binaries(device_id);
+    std::vector<ll_api::memory> binaries = this->binaries(device->build_key());
 
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         pass &= tt::llrt::test_load_write_read_trisc_binary(
