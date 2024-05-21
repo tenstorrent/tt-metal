@@ -48,6 +48,7 @@ void MAIN {
             mm_init_short(in_cb, trans_mat_cb);
             cb_wait_front(in_cb, onetile);
             cb_reserve_back(rotated_in_interm_cb, onetile);
+            //for
             ACQ();
             matmul_tiles(in_cb, trans_mat_cb, in0_index, in1_index, interm_index, false);
             pack_tile(0, rotated_in_interm_cb);

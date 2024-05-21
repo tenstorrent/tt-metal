@@ -74,7 +74,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     bool row_major;
-    uint32_t num_cores, num_rows_per_core_group_1, num_rows_per_core_group_2;
+    uint32_t num_cores, num_rows_per_core_group_1, num_rows_per_core_group_2, num_rows_per_core;
 
     CoreRangeSet all_cores({}), core_group_1({}), core_group_2({});
 
@@ -91,12 +91,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
         split_work_to_cores(compute_with_storage_grid_size, num_rows, row_major);
 
-    log_info("num_cores: {}", num_cores);
-    log_info("all_cores: {}", all_cores);
-    log_info("core_group_1: {}", core_group_1);
-    log_info("core_group_2: {}", core_group_2);
-    log_info("num_rows_per_core_group_1: {}", num_rows_per_core_group_1);
-    log_info("num_rows_per_core_group_2: {}", num_rows_per_core_group_2);
+    num_rows_per_core = num_rows_per_core_group_1;
 
     uint32_t input_cb_index = CB::c_in0;
     tt_metal::CircularBufferConfig cb_input_config =
@@ -179,10 +174,12 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         (std::uint32_t)trans_mat_is_dram,
         (std::uint32_t)Ht,
         (std::uint32_t)Wt,
-        (std::uint32_t)HtWt
+        (std::uint32_t)HtWt,
+        (std::uint32_t)num_rows_per_core
     };
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {
+        (std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram, (std::uint32_t)num_rows_per_core * Wt};
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -205,8 +202,8 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         (std::uint32_t)cos_interm_cb_index,
         (std::uint32_t)sin_interm_cb_index,
         (std::uint32_t)output_cb_index,
-        (std::uint32_t)num_rows_per_core_group_1,
-        (std::uint32_t)Wt
+        (std::uint32_t)num_rows_per_core,
+        (std::uint32_t)Wt,
         };
 
     auto rotary_embedding_kernel_group_1_id = tt_metal::CreateKernel(
@@ -215,19 +212,10 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity=math_fidelity, .fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args, .defines = kernel_defines});
 
-    uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
-
     const auto &cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; ++i) {
         const CoreCoord &core = cores.at(i);
-        uint32_t num_rows_per_core = 0;
-        if (i < g1_numcores) {
-            num_rows_per_core = num_rows_per_core_group_1;
-        } else {
-            num_rows_per_core = num_rows_per_core_group_2;
-        }
 
         std::vector<uint32_t> reader_rt_args;
 
@@ -236,7 +224,6 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
                 cos_buffer->address(),
                 sin_buffer->address(),
                 trans_mat_buffer->address(),
-                num_rows_per_core,
                 num_tiles_written,
                 num_tiles_written / Wt, // start_row_id
                 num_tiles_written % HtWt, // This range of this idx must be [0, HtWt - 1], where HtWt is the size of the sin/cos matrices in # of tiles
@@ -247,14 +234,18 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
             program,
             unary_writer_kernel_id,
             core,
-            {dst_buffer->address(), num_rows_per_core * Wt, num_tiles_written});
+            {dst_buffer->address(), num_tiles_written});
 
         num_tiles_written += num_rows_per_core * Wt;
 
     }
 
-
-    auto override_runtime_arguments_callback = [unary_reader_kernel_id, unary_writer_kernel_id, Wbytes, Wt](
+    auto override_runtime_arguments_callback = [unary_reader_kernel_id,
+                                                unary_writer_kernel_id,
+                                                cores,
+                                                num_rows_per_core,
+                                                Wt
+                                                ](
                                                    const void *operation,
                                                    const Program &program,
                                                    const std::vector<Tensor> &input_tensors,
@@ -268,19 +259,21 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
         auto dst_buffer = output_tensors.at(0).buffer();
 
-        CoreCoord core = {0, 0};
+        for (uint32_t i = 0, num_tiles_written = 0; i < cores.size(); ++i) {
+            const CoreCoord &core = cores.at(i);
+            {
+                auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                runtime_args[0] = src_buffer->address();
+                runtime_args[1] = cos_buffer->address();
+                runtime_args[2] = sin_buffer->address();
+                runtime_args[3] = trans_mat_buffer->address();
+            }
 
-        {
-            auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-            runtime_args[1] = cos_buffer->address();
-            runtime_args[2] = sin_buffer->address();
-            runtime_args[3] = trans_mat_buffer->address();
-        }
-
-        {
-            auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
+            {
+                auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                runtime_args[0] = dst_buffer->address();
+            }
+            num_tiles_written += num_rows_per_core * Wt;
         }
     };
 

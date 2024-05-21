@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import torch
 from torch import nn
-import tt_lib
+import ttnn.experimental as tt_lib
 import ttnn
 
 from models.experimental.llama2_70b.reference.llama.llama import Llama
@@ -272,16 +272,34 @@ def test_LlamaAttention_inference(
     seq_len,
     pcc,
     all_devices,
+    use_program_cache,
 ):
     devices = all_devices
     model_config = get_model_config(num_devices=8, seq_len=seq_len)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
-    run_test_LlamaReshape(
-        devices,
-        batch,
-        seq_len,
-        pcc,
-        model_config,
-    )
+
+    for i in range(3):
+        run_test_LlamaReshape(
+            devices,
+            batch,
+            seq_len,
+            pcc,
+            model_config,
+        )
+
+        # shift input/output tensor by creating very small tensor between loop
+        inp = torch.rand(1, 1, 32, 32)
+        test_tensor = (
+            tt_lib.tensor.Tensor(
+                inp.reshape(-1).tolist(),
+                inp.shape,
+                ttnn.bfloat16,
+                tt_lib.tensor.Layout.ROW_MAJOR,
+            )
+            .to(tt_lib.tensor.Layout.TILE)
+            .to(devices[0])
+        )
+
+    assert devices[0].num_program_cache_entries() == 2

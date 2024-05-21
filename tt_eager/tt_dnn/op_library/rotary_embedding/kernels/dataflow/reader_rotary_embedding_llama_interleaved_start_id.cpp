@@ -12,10 +12,9 @@ void kernel_main() {
     uint32_t cos_addr  = get_arg_val<uint32_t>(1);
     uint32_t sin_addr  = get_arg_val<uint32_t>(2);
     uint32_t trans_mat_addr = get_arg_val<uint32_t>(3);
-    uint32_t num_rows = get_arg_val<uint32_t>(4); // Index correctly in the for loop
-    uint32_t num_tiles_written = get_arg_val<uint32_t>(5); // Index correctly in the for loop
-    uint32_t start_row_id = get_arg_val<uint32_t>(6); // Index correctly in the for loop
-    uint32_t cos_sin_start_id = get_arg_val<uint32_t>(7); // Index correctly in the for loop
+    uint32_t num_tiles_written = get_arg_val<uint32_t>(4); // Index correctly in the for loop
+    uint32_t start_row_id = get_arg_val<uint32_t>(5); // Index correctly in the for loop
+    uint32_t cos_sin_start_id = get_arg_val<uint32_t>(6); // Index correctly in the for loop
 
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t cos_cb_id = get_compile_time_arg_val(1);
@@ -28,6 +27,7 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(8);
     constexpr uint32_t Wt = get_compile_time_arg_val(9);
     constexpr uint32_t HtWt = get_compile_time_arg_val(10);
+    constexpr uint32_t num_rows = get_compile_time_arg_val(11);
 
     constexpr uint32_t onetile = 1;
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
