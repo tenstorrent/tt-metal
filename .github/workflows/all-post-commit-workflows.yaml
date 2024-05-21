@@ -4,7 +4,7 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
-    branches: ["main", "fd-2/main"]
+    branches: ["main"]
 
 permissions:
   actions: read
