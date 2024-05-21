@@ -3,95 +3,83 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/program/program.hpp"
-#include "tt_metal/llrt/llrt.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/buffers/semaphore.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/host_api.hpp"
+
+#include "common/executor.hpp"
+#include "tools/profiler/profiler.hpp"
+#include "tt_metal/detail/kernel_cache.hpp"
+#include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
-#include "common/executor.hpp"
-#include "tt_metal/detail/persistent_kernel_cache.hpp"
-#include "tt_metal/detail/kernel_cache.hpp"
-#include "tt_metal/jit_build/genfiles.hpp"
-
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tools/profiler/profiler.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/host_api.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
+#include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
+#include "tt_metal/jit_build/genfiles.hpp"
+#include "tt_metal/llrt/llrt.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 namespace tt::tt_metal {
 
+namespace {
+std::atomic<bool> enable_persistent_kernel_cache = false;
 
-namespace{
-    std::atomic<bool> enable_persistent_kernel_cache = false;
-
-    void GenerateBinaries(Device *device, JitBuildOptions& build_options, std::shared_ptr<Kernel> kernel) {
-        ZoneScoped;
-        const std::string tracyPrefix = "GenerateBinaries_";
-        ZoneName( (tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
-        try {
-            jit_build_genfiles_descriptors(device->build_env(), build_options);
-            kernel->generate_binaries(device, build_options);
-        } catch (std::runtime_error &ex) {
-            TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
-        }
-    }
-
-
-    #ifdef GENERATE_HASH_LOG
-    #include <fstream>
-    #endif
-
-    size_t KernelCompileHash(
-        const std::shared_ptr<Kernel> kernel, JitBuildOptions &build_options, uint32_t build_key) {
-        // Account for device id in hash because generated headers are dependent on harvesting config, which can differ per device
-        // This can be removed with https://github.com/tenstorrent/tt-metal/issues/3381
-
-        // Also account for watcher/dprint enabled in hash because they enable additional code to
-        // be compiled into the kernel.
-        string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}",
-            build_key,
-            std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
-            kernel->compute_hash(),
-            tt::llrt::OptionsG.get_watcher_enabled(),
-            tt::llrt::OptionsG.get_dprint_enabled());
-        size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
-
-    #ifdef GENERATE_HASH_LOG
-        static std::ofstream f("/tmp/hashlog.txt");
-        static std::mutex mutex_;
-        {
-            unique_lock<mutex> lock;
-            f << kernel->name() << " :: "
-            << build_key << "::"
-            << std::hash<tt_hlk_desc>{}(build_options.hlk_desc) << " :: "
-            << kernel->compute_hash() << " :: "
-            << compile_hash_str << " "
-            << compile_hash << std::endl << std::flush;
-        }
-    #endif
-        return compile_hash;
-    }
-}
-namespace detail{
-    void EnablePersistentKernelCache()
-    {
-        enable_persistent_kernel_cache = true;
-    }
-
-    void DisablePersistentKernelCache()
-    {
-        enable_persistent_kernel_cache = false;
+void GenerateBinaries(Device *device, JitBuildOptions &build_options, std::shared_ptr<Kernel> kernel) {
+    ZoneScoped;
+    const std::string tracyPrefix = "GenerateBinaries_";
+    ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
+    try {
+        jit_build_genfiles_descriptors(device->build_env(), build_options);
+        kernel->generate_binaries(device, build_options);
+    } catch (std::runtime_error &ex) {
+        TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
     }
 }
 
+#ifdef GENERATE_HASH_LOG
+#include <fstream>
+#endif
+
+size_t KernelCompileHash(const std::shared_ptr<Kernel> kernel, JitBuildOptions &build_options, uint32_t build_key) {
+    // Account for device id in hash because generated headers are dependent on harvesting config, which can differ per
+    // device This can be removed with https://github.com/tenstorrent/tt-metal/issues/3381
+
+    // Also account for watcher/dprint enabled in hash because they enable additional code to
+    // be compiled into the kernel.
+    string compile_hash_str = fmt::format(
+        "{}_{}_{}_{}_{}",
+        build_key,
+        std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
+        kernel->compute_hash(),
+        tt::llrt::OptionsG.get_watcher_enabled(),
+        tt::llrt::OptionsG.get_dprint_enabled());
+    size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
+
+#ifdef GENERATE_HASH_LOG
+    static std::ofstream f("/tmp/hashlog.txt");
+    static std::mutex mutex_;
+    {
+        unique_lock<mutex> lock;
+        f << kernel->name() << " :: " << build_key << "::" << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
+          << " :: " << kernel->compute_hash() << " :: " << compile_hash_str << " " << compile_hash << std::endl
+          << std::flush;
+    }
+#endif
+    return compile_hash;
+}
+}  // namespace
+namespace detail {
+void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
+
+void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
+}  // namespace detail
 
 std::atomic<uint64_t> Program::program_counter = 0;
 
-Program::Program(): id(program_counter++),worker_crs_({}), local_circular_buffer_allocation_needed_(false), loaded_onto_device(false) {
+Program::Program() :
+    id(program_counter++), worker_crs_({}), local_circular_buffer_allocation_needed_(false), loaded_onto_device(false) {
     std::set<CoreType> supported_core_types = {CoreType::WORKER, CoreType::ETH};
-    for (const auto& core_type : supported_core_types) {
+    for (const auto &core_type : supported_core_types) {
         kernels_.insert({core_type, {}});
         grid_extent_.insert({core_type, {}});
         kernel_groups_.insert({core_type, {}});
@@ -110,8 +98,9 @@ KernelHandle Program::add_kernel(std::shared_ptr<Kernel> kernel, const CoreType 
 }
 
 std::shared_ptr<Kernel> Program::get_kernel(KernelHandle kernel_id) const {
-    //TT_ASSERT(kernel_id < this->kernels_.size(), "Expected Kernel with ID {} to be in Program {}", kernel_id, this->id);
-    // find coretype based on kernel_id
+    // TT_ASSERT(kernel_id < this->kernels_.size(), "Expected Kernel with ID {} to be in Program {}", kernel_id,
+    // this->id);
+    //  find coretype based on kernel_id
     for (const auto &[core_type, kernels] : this->kernels_) {
         if (kernels.find(kernel_id) != kernels.end()) {
             return kernels.at(kernel_id);
@@ -122,8 +111,7 @@ std::shared_ptr<Kernel> Program::get_kernel(KernelHandle kernel_id) const {
     return nullptr;
 }
 
-KernelGroup::KernelGroup() : core_ranges({}) {
-}
+KernelGroup::KernelGroup() : core_ranges({}) {}
 
 KernelGroup::KernelGroup(
     const Program &program,
@@ -147,7 +135,8 @@ KernelGroup::KernelGroup(
     if (brisc_id) {
         // Use brisc's noc if brisc specifies a noc
         this->launch_msg.enable_brisc = true;
-        this->launch_msg.brisc_noc_id = std::get<DataMovementConfig>(program.get_kernel(brisc_id.value())->config()).noc;
+        this->launch_msg.brisc_noc_id =
+            std::get<DataMovementConfig>(program.get_kernel(brisc_id.value())->config()).noc;
         this->launch_msg.brisc_watcher_kernel_id = program.get_kernel(brisc_id.value())->get_watcher_kernel_id();
     } else {
         this->launch_msg.brisc_watcher_kernel_id = 0;
@@ -196,14 +185,15 @@ CoreType KernelGroup::get_core_type() const {
     }
 };
 
-std::vector<KernelGroup>& Program::get_kernel_groups(const CoreType &core_type) {
+std::vector<KernelGroup> &Program::get_kernel_groups(const CoreType &core_type) {
     update_kernel_groups(core_type);
     return kernel_groups_[core_type];
 }
 
-KernelGroup * Program::kernels_on_core(const CoreCoord &core, const CoreType &core_type) {
+KernelGroup *Program::kernels_on_core(const CoreCoord &core, const CoreType &core_type) {
     update_kernel_groups(core_type);
-    if (core.x >= grid_extent_[core_type].x || core.y >= grid_extent_[core_type].y) return nullptr;
+    if (core.x >= grid_extent_[core_type].x || core.y >= grid_extent_[core_type].y)
+        return nullptr;
     uint8_t index = core_to_kernel_group_index_table_[core_type].at(core.y * grid_extent_[core_type].x + core.x);
     return (index == core_to_kernel_group_invalid_index) ? nullptr : &kernel_groups_[core_type].at(index);
 }
@@ -215,33 +205,24 @@ struct KernelGroupInt {
     std::optional<KernelHandle> ncrisc_id = std::nullopt;
     std::optional<KernelHandle> erisc_id = std::nullopt;
 
-    bool operator==(const KernelGroupInt& b) const;
+    bool operator==(const KernelGroupInt &b) const;
     void update(RISCV riscv_processor, size_t kernel_idx) {
         switch (riscv_processor) {
-        case RISCV::BRISC:
-            this->brisc_id = static_cast<KernelHandle>(kernel_idx);
-            break;
-        case RISCV::NCRISC:
-            this->ncrisc_id = static_cast<KernelHandle>(kernel_idx);
-            break;
-        case RISCV::COMPUTE:
-            this->trisc_id = static_cast<KernelHandle>(kernel_idx);
-            break;
-        case RISCV::ERISC:
-            this->erisc_id = static_cast<KernelHandle>(kernel_idx);
-            break;
-        default:
-            TT_ASSERT(false, "Unsupported kernel processor!");
+            case RISCV::BRISC: this->brisc_id = static_cast<KernelHandle>(kernel_idx); break;
+            case RISCV::NCRISC: this->ncrisc_id = static_cast<KernelHandle>(kernel_idx); break;
+            case RISCV::COMPUTE: this->trisc_id = static_cast<KernelHandle>(kernel_idx); break;
+            case RISCV::ERISC: this->erisc_id = static_cast<KernelHandle>(kernel_idx); break;
+            default: TT_ASSERT(false, "Unsupported kernel processor!");
         }
     }
 };
 
-bool KernelGroupInt::operator==(const KernelGroupInt& b) const {
+bool KernelGroupInt::operator==(const KernelGroupInt &b) const {
     return trisc_id == b.trisc_id && brisc_id == b.brisc_id && ncrisc_id == b.ncrisc_id && erisc_id == b.erisc_id;
 }
 
 struct KernelGroupIntHasher {
-    std::size_t operator()(const KernelGroupInt& x) const {
+    std::size_t operator()(const KernelGroupInt &x) const {
         return static_cast<size_t>(x.erisc_id.value_or(0)) | static_cast<size_t>(x.trisc_id.value_or(0)) |
                static_cast<size_t>(x.brisc_id.value_or(0)) << 16 | static_cast<size_t>(x.ncrisc_id.value_or(0)) << 32;
     }
@@ -250,15 +231,18 @@ struct KernelGroupIntHasher {
 void Program::update_kernel_groups(const CoreType &core_type) {
     if (core_to_kernel_group_index_table_[core_type].size() == 0) {
         // Get the extent of the kernels in x, y
-        CoreCoord base = {std::numeric_limits<decltype(base.x)>::max(),
-                          std::numeric_limits<decltype(base.y)>::max()};
+        CoreCoord base = {std::numeric_limits<decltype(base.x)>::max(), std::numeric_limits<decltype(base.y)>::max()};
         grid_extent_[core_type] = {0, 0};
         for (auto [id, kernel] : kernels_[core_type]) {
             for (auto core : kernel->logical_cores()) {
-                if (core.x > grid_extent_[core_type].x) grid_extent_[core_type].x = core.x;
-                if (core.y > grid_extent_[core_type].y) grid_extent_[core_type].y = core.y;
-                if (core.x < base.x) base.x = core.x;
-                if (core.y < base.y) base.y = core.y;
+                if (core.x > grid_extent_[core_type].x)
+                    grid_extent_[core_type].x = core.x;
+                if (core.y > grid_extent_[core_type].y)
+                    grid_extent_[core_type].y = core.y;
+                if (core.x < base.x)
+                    base.x = core.x;
+                if (core.y < base.y)
+                    base.y = core.y;
             }
         }
         grid_extent_[core_type].x++;
@@ -267,7 +251,7 @@ void Program::update_kernel_groups(const CoreType &core_type) {
         // grid maps cores to sets-of-kernels running on that core
         std::vector<KernelGroupInt> grid;
         grid.resize(grid_extent_[core_type].x * grid_extent_[core_type].y);
-        for (auto [id, kernel]: kernels_[core_type]) {
+        for (auto [id, kernel] : kernels_[core_type]) {
             for (auto core : kernel->logical_cores()) {
                 int core_index = core.y * grid_extent_[core_type].x + core.x;
                 grid[core_index].valid = true;
@@ -281,7 +265,7 @@ void Program::update_kernel_groups(const CoreType &core_type) {
             for (auto x = base.x; x < grid_extent_[core_type].x; x++) {
                 int index = y * grid_extent_[core_type].x + x;
                 if (grid[index].valid) {
-                    std::set<CoreRange>& set = map[grid[index]];
+                    std::set<CoreRange> &set = map[grid[index]];
                     set.insert(CoreRange({x, y}, {x, y}));
                 }
             }
@@ -292,9 +276,9 @@ void Program::update_kernel_groups(const CoreType &core_type) {
         TT_ASSERT(map.size() < core_to_kernel_group_invalid_index);
         kernel_groups_.reserve(map.size());
         int index = 0;
-        core_to_kernel_group_index_table_[core_type].resize(grid_extent_[core_type].x * grid_extent_[core_type].y, core_to_kernel_group_invalid_index);
-        for (auto& kg_to_cores : map) {
-
+        core_to_kernel_group_index_table_[core_type].resize(
+            grid_extent_[core_type].x * grid_extent_[core_type].y, core_to_kernel_group_invalid_index);
+        for (auto &kg_to_cores : map) {
             int last_cb_index = -1;
 
             // Map from core X,Y back to the unique KernelGroup
@@ -333,7 +317,11 @@ void Program::update_kernel_groups(const CoreType &core_type) {
 void Program::CircularBufferAllocator::mark_address(uint64_t address, uint64_t size) {
     auto &last_region = this->l1_regions.back();
     if (address < last_region.second) {
-        TT_THROW("Local buffer address {} has to append to last L1 region [{}, {}) or be at a higher address", address, last_region.first, last_region.second);
+        TT_THROW(
+            "Local buffer address {} has to append to last L1 region [{}, {}) or be at a higher address",
+            address,
+            last_region.first,
+            last_region.second);
     }
     if (address == last_region.second) {
         last_region.second += size;
@@ -345,11 +333,11 @@ void Program::CircularBufferAllocator::mark_address(uint64_t address, uint64_t s
 CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
     this->invalidate_compile();
     std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(core_range_set, config);
-    // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory allocator
+    // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
+    // allocator
     if (not circular_buffer->globally_allocated()) {
         this->invalidate_circular_buffer_allocation();
-    }
-    else {
+    } else {
         circular_buffer->assign_global_address();
     }
     // Mark which buffer indices are being used on each core the circular buffer is used on
@@ -361,20 +349,28 @@ CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const 
 
                 for (uint32_t buffer_index : circular_buffer->buffer_indices()) {
                     if (buffer_index > NUM_CIRCULAR_BUFFERS) {
-                        TT_THROW("Invalid circular buffer index: {} should be between 0 and {}", buffer_index, NUM_CIRCULAR_BUFFERS);
+                        TT_THROW(
+                            "Invalid circular buffer index: {} should be between 0 and {}",
+                            buffer_index,
+                            NUM_CIRCULAR_BUFFERS);
                     }
                     if (cb_indices.to_ulong() & (1 << buffer_index)) {
-                        TT_THROW("Invalid circular buffer index: Cannot add circular buffer at index {}, another circular buffer already exists", buffer_index);
+                        TT_THROW(
+                            "Invalid circular buffer index: Cannot add circular buffer at index {}, another circular "
+                            "buffer already exists",
+                            buffer_index);
                     }
                     cb_indices[buffer_index] = 1;
                 }
             }
         }
 
-        // There is one CircularBufferAllocator per unique core range, create one if it does not already exist for current core range
-        auto val = std::find_if(cb_allocators_.begin(), cb_allocators_.end(), [&core_range](const CircularBufferAllocator &cb_allocator) {
-            return cb_allocator.core_range == core_range;
-        });
+        // There is one CircularBufferAllocator per unique core range, create one if it does not already exist for
+        // current core range
+        auto val = std::find_if(
+            cb_allocators_.begin(), cb_allocators_.end(), [&core_range](const CircularBufferAllocator &cb_allocator) {
+                return cb_allocator.core_range == core_range;
+            });
         if (val == cb_allocators_.end()) {
             this->cb_allocators_.emplace_back(core_range);
         }
@@ -402,7 +398,7 @@ const std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers_on_
     return cbs_on_core;
 }
 
-const std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers_on_corerange(const CoreRange & cr) const {
+const std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers_on_corerange(const CoreRange &cr) const {
     std::vector<std::shared_ptr<CircularBuffer>> cbs_on_core;
     for (auto circular_buffer : circular_buffers_) {
         if (circular_buffer->is_on_logical_corerange(cr)) {
@@ -460,15 +456,15 @@ void Program::allocate_circular_buffers() {
             for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
                 if (cb_allocator.core_range.intersects(core_range)) {
                     if (cb_allocator.core_range != core_range and computed_addr < cb_allocator.get_cb_region_end()) {
-                        // Intersecting core range has already been marked to have allocation at this address. This could have been marked by a circular buffer on a core range disjoint from
-                        // current `core_range` but also intersecting `cb_allocator.core_range`
+                        // Intersecting core range has already been marked to have allocation at this address. This
+                        // could have been marked by a circular buffer on a core range disjoint from current
+                        // `core_range` but also intersecting `cb_allocator.core_range`
                         continue;
                     }
                     cb_allocator.mark_address(computed_addr, circular_buffer->size());
                 }
             }
         }
-
 
         circular_buffer->set_locally_allocated_address(computed_addr);
     }
@@ -480,7 +476,7 @@ void Program::validate_circular_buffer_region(const Device *device) const {
 
     // Banks are in lockstep so we only need to get lowest L1 address of one compute and storage core
     // Only compute with storage cores can have CBs and all compute with storage cores will have the same bank offset
-    const std::vector<uint32_t>& bank_ids =
+    const std::vector<uint32_t> &bank_ids =
         device->bank_ids_from_logical_core(BufferType::L1, *device->compute_cores_.begin());
     std::optional<uint64_t> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
     uint32_t max_l1_size = device->l1_size_per_core();
@@ -488,43 +484,51 @@ void Program::validate_circular_buffer_region(const Device *device) const {
     for (const CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
         uint64_t cb_region_end = cb_allocator.get_cb_region_end();
         if (cb_region_end > max_l1_size) {
-            TT_THROW("Statically allocated circular buffers on core range {} grow to {} B which is beyond max L1 size of {} B", cb_allocator.core_range.str(), cb_region_end, max_l1_size);
+            TT_THROW(
+                "Statically allocated circular buffers on core range {} grow to {} B which is beyond max L1 size of {} "
+                "B",
+                cb_allocator.core_range.str(),
+                cb_region_end,
+                max_l1_size);
         }
         if (lowest_address.has_value() and lowest_address.value() < cb_region_end) {
-            TT_THROW("Statically allocated circular buffers in program {} clash with L1 buffers on core range {}. L1 buffer allocated at {} and static circular buffer region ends at {}", this->id, cb_allocator.core_range.str(), lowest_address.value(), cb_region_end);
+            TT_THROW(
+                "Statically allocated circular buffers in program {} clash with L1 buffers on core range {}. L1 buffer "
+                "allocated at {} and static circular buffer region ends at {}",
+                this->id,
+                cb_allocator.core_range.str(),
+                lowest_address.value(),
+                cb_region_end);
         }
     }
 }
 
-size_t Program::num_semaphores(const CoreCoord &core) const {
-    return semaphores_on_core(core).size();
-}
+size_t Program::num_semaphores(const CoreCoord &core) const { return semaphores_on_core(core).size(); }
 
-size_t Program::num_semaphores() const {
-    return semaphores_.size();
-}
+size_t Program::num_semaphores() const { return semaphores_.size(); }
 
-void Program::init_semaphores( const Device & device, const CoreCoord &logical_core, const CoreType core_type) const{
+void Program::init_semaphores(const Device &device, const CoreCoord &logical_core, const CoreType core_type) const {
     auto semaphores_on_core = this->semaphores_on_core(logical_core);
     for (auto semaphore : semaphores_on_core) {
-        llrt::write_hex_vec_to_core(device.id(), device.physical_core_from_logical_core(logical_core, core_type), {semaphore.get().initial_value()}, semaphore.get().address());
+        llrt::write_hex_vec_to_core(
+            device.id(),
+            device.physical_core_from_logical_core(logical_core, core_type),
+            {semaphore.get().initial_value()},
+            semaphore.get().address());
     }
 }
 
-void Program::add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value, CoreType core_type) {
+void Program::add_semaphore(const CoreRangeSet &crs, uint32_t address, uint32_t init_value, CoreType core_type) {
     this->invalidate_compile();
-    semaphores_.emplace_back(Semaphore( crs, address, init_value, core_type));
+    semaphores_.emplace_back(Semaphore(crs, address, init_value, core_type));
 }
 
-void Program::add_config_buffer(std::shared_ptr<Buffer> config_buffer) {
-    this->invalidate_compile();
-    config_buffers_.emplace_back(config_buffer);
-}
+void Program::add_config_buffer(std::shared_ptr<Buffer> config_buffer) { config_buffers_.emplace_back(config_buffer); }
 
 std::unordered_map<CoreType, std::vector<CoreCoord>> Program::logical_cores() const {
     std::unordered_map<CoreType, std::vector<CoreCoord>> cores_in_program;
     std::unordered_map<CoreType, std::set<CoreCoord>> unique_cores;
-    for (auto [core_type, kernels] : kernels_){
+    for (auto [core_type, kernels] : kernels_) {
         if (cores_in_program.find(core_type) == cores_in_program.end()) {
             cores_in_program.insert({core_type, {}});
         }
@@ -546,21 +550,21 @@ std::unordered_map<CoreType, std::vector<CoreCoord>> Program::logical_cores() co
 
 void Program::construct_core_range_set_for_worker_cores() {
     bool found_kernels = false;
-    for (auto [id, kernel] : kernels_[CoreType::WORKER]){
-        this->worker_crs_ = this->worker_crs_.merge ( kernel->core_range_set() );
+    for (auto [id, kernel] : kernels_[CoreType::WORKER]) {
+        this->worker_crs_ = this->worker_crs_.merge(kernel->core_range_set());
         found_kernels = true;
     }
     TT_ASSERT(!found_kernels || this->worker_crs_.ranges().size() >= 1, "Invalid core range set");
 }
 
-void Program::set_cb_data_fmt(
-    Device *device, const std::vector<CoreRange> & crs, JitBuildOptions &build_options) const {
+void Program::set_cb_data_fmt(Device *device, const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
     ZoneScoped;
     for (auto logical_cr : crs) {
         auto cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (auto circular_buffer : cbs_on_core) {
             for (auto buffer_index : circular_buffer->buffer_indices()) {
-                build_options.set_cb_dataformat_all_cores(static_cast<CB>(buffer_index), circular_buffer->data_format(buffer_index));
+                build_options.set_cb_dataformat_all_cores(
+                    static_cast<CB>(buffer_index), circular_buffer->data_format(buffer_index));
             }
         }
     }
@@ -572,8 +576,7 @@ void Program::invalidate_compile() {
     }
 }
 
-
-void Program::populate_dispatch_data(Device* device) {
+void Program::populate_dispatch_data(Device *device) {
     static const map<RISCV, uint32_t> processor_to_local_mem_addr = {
         {RISCV::BRISC, MEM_BRISC_INIT_LOCAL_L1_BASE},
         {RISCV::NCRISC, MEM_NCRISC_INIT_LOCAL_L1_BASE},
@@ -583,10 +586,10 @@ void Program::populate_dispatch_data(Device* device) {
         {RISCV::ERISC, eth_l1_mem::address_map::FIRMWARE_BASE}};
 
     auto extract_dst_noc_unicast_info =
-        [&device](const set<CoreRange>& ranges, const CoreType core_type) -> vector<pair<uint32_t, uint32_t>> {
+        [&device](const set<CoreRange> &ranges, const CoreType core_type) -> vector<pair<uint32_t, uint32_t>> {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
         vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info;
-        for (const CoreRange& core_range : ranges) {
+        for (const CoreRange &core_range : ranges) {
             for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
                 for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
                     CoreCoord physical_coord = device->physical_core_from_logical_core(CoreCoord({x, y}), core_type);
@@ -600,13 +603,15 @@ void Program::populate_dispatch_data(Device* device) {
     };
 
     // Unicast/Multicast Semaphores
-    for (const Semaphore& semaphore : this->semaphores()) {
+    for (const Semaphore &semaphore : this->semaphores()) {
         vector<uint32_t> semaphore_data(1);
         semaphore_data[0] = semaphore.initial_value();
 
         // TODO: use semaphore.core_type from main
         if (semaphore.core_type() == CoreType::WORKER) {
-            vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info = extract_dst_noc_multicast_info<std::set<CoreRange>>(device, semaphore.core_range_set().ranges(), semaphore.core_type());
+            vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
+                extract_dst_noc_multicast_info<std::set<CoreRange>>(
+                    device, semaphore.core_range_set().ranges(), semaphore.core_type());
             transfer_info_2 transfer_info = {
                 .dst_base_addr = semaphore.address(),
                 .dst_noc_info = dst_noc_multicast_info,
@@ -614,7 +619,8 @@ void Program::populate_dispatch_data(Device* device) {
                 .data = semaphore_data};
             this->program_transfer_info.multicast_semaphores[semaphore.address()].push_back(transfer_info);
         } else if (semaphore.core_type() == CoreType::ETH) {
-            vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info = extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), semaphore.core_type());
+            vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info =
+                extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), semaphore.core_type());
             transfer_info_2 transfer_info = {
                 .dst_base_addr = semaphore.address(),
                 .dst_noc_info = dst_noc_unicast_info,
@@ -629,9 +635,9 @@ void Program::populate_dispatch_data(Device* device) {
     // Assume here and in command queue that kg_buffers is populated with multicast buffers first then unicast buffers
     // Program Binaries and Go Signals
     // TODO: cleanup put the WORKERS and ETH logic together..
-    for (KernelGroup& kernel_group : this->get_kernel_groups(CoreType::WORKER)) {
-        vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
-            extract_dst_noc_multicast_info<std::set<CoreRange>>(device, kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
+    for (KernelGroup &kernel_group : this->get_kernel_groups(CoreType::WORKER)) {
+        vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info = extract_dst_noc_multicast_info<std::set<CoreRange>>(
+            device, kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
 
         // So far, we don't support linking optimizations for kernel groups
         // which use multiple core ranges
@@ -654,10 +660,10 @@ void Program::populate_dispatch_data(Device* device) {
             }
 
             uint32_t sub_kernel_index = 0;
-            const auto& binaries = kernel->binaries(device->build_key());
+            const auto &binaries = kernel->binaries(device->build_key());
 
             for (size_t j = 0; j < binaries.size(); j++) {
-                const ll_api::memory& kernel_bin = binaries[j];
+                const ll_api::memory &kernel_bin = binaries[j];
                 uint32_t k = 0;
                 uint32_t num_spans = kernel_bin.num_spans();
 
@@ -699,7 +705,7 @@ void Program::populate_dispatch_data(Device* device) {
             }
         }
     }
-    for (KernelGroup& kernel_group : this->get_kernel_groups(CoreType::ETH)) {
+    for (KernelGroup &kernel_group : this->get_kernel_groups(CoreType::ETH)) {
         vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info =
             extract_dst_noc_unicast_info(kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
 
@@ -717,9 +723,9 @@ void Program::populate_dispatch_data(Device* device) {
             }
 
             uint32_t sub_kernel_index = 0;
-            const auto& binaries = kernel->binaries(device->build_key());
+            const auto &binaries = kernel->binaries(device->build_key());
             for (size_t j = 0; j < binaries.size(); j++) {
-                const ll_api::memory& kernel_bin = binaries[j];
+                const ll_api::memory &kernel_bin = binaries[j];
                 uint32_t k = 0;
                 uint32_t num_spans = kernel_bin.num_spans();
 
@@ -768,8 +774,7 @@ void Program::populate_dispatch_data(Device* device) {
     return;
 }
 
-void Program::compile( Device * device )
-{
+void Program::compile(Device *device) {
     ZoneScoped;
     bool first_compile_on_device = compile_needed_.find(device->id()) == compile_needed_.end();
     if (not first_compile_on_device and (not compile_needed_.at(device->id()))) {
@@ -787,43 +792,46 @@ void Program::compile( Device * device )
     DprintServerSetProfilerState(profile_kernel);
 
     for (auto &[core_type, kernels] : kernels_) {
-        for (auto &[id, kernel]: kernels) {
-            launch_build_step([kernel, device, this] {
-                JitBuildOptions build_options(device->build_env());
-                kernel->set_common_runtime_args_offset();
-                kernel->set_build_options(build_options);
-                this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
+        for (auto &[id, kernel] : kernels) {
+            launch_build_step(
+                [kernel, device, this] {
+                    JitBuildOptions build_options(device->build_env());
+                    kernel->set_common_runtime_args_offset();
+                    kernel->set_build_options(build_options);
+                    this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
 
-                auto kernel_hash = KernelCompileHash(kernel, build_options, device->build_key());
-                std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
-                kernel->set_full_name(kernel_path_suffix);
-                build_options.set_name(kernel_path_suffix);
-                bool cache_hit = true;
-                bool path_exists = std::filesystem::exists(build_options.path);
-                if (enable_persistent_kernel_cache && path_exists) {
-                    if (not detail::HashLookup::inst().exists(kernel_hash)) {
-                        detail::HashLookup::inst().add(kernel_hash);
+                    auto kernel_hash = KernelCompileHash(kernel, build_options, device->build_key());
+                    std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
+                    kernel->set_full_name(kernel_path_suffix);
+                    build_options.set_name(kernel_path_suffix);
+                    bool cache_hit = true;
+                    bool path_exists = std::filesystem::exists(build_options.path);
+                    if (enable_persistent_kernel_cache && path_exists) {
+                        if (not detail::HashLookup::inst().exists(kernel_hash)) {
+                            detail::HashLookup::inst().add(kernel_hash);
+                            detail::HashLookup::inst().add_generated_bin(kernel_hash);
+                        }
+                    } else if (detail::HashLookup::inst().add(kernel_hash)) {
+                        GenerateBinaries(device, build_options, kernel);
+                        cache_hit = false;
                         detail::HashLookup::inst().add_generated_bin(kernel_hash);
                     }
-                } else if (detail::HashLookup::inst().add(kernel_hash)) {
-                    GenerateBinaries(device, build_options, kernel);
-                    cache_hit = false;
-                    detail::HashLookup::inst().add_generated_bin(kernel_hash);
-                }
-                while (not detail::HashLookup::inst().is_bin_generated(kernel_hash)) {
-                }
-                if (detail::CompilationReporter::enabled()) {
-                    detail::CompilationReporter::inst().add_kernel_compile_stats(*this, kernel, cache_hit, kernel_hash);
-                }
-                kernel->set_binary_path(build_options.path);
-            }, events);
+                    while (not detail::HashLookup::inst().is_bin_generated(kernel_hash)) {
+                    }
+                    if (detail::CompilationReporter::enabled()) {
+                        detail::CompilationReporter::inst().add_kernel_compile_stats(
+                            *this, kernel, cache_hit, kernel_hash);
+                    }
+                    kernel->set_binary_path(build_options.path);
+                },
+                events);
         }
     }
     sync_build_step(events);
 
     for (auto &[core_type, kernels] : kernels_) {
         for (auto &[id, kernel] : kernels) {
-            launch_build_step ([kernel, device] { kernel->read_binaries(device); }, events);
+            launch_build_step([kernel, device] { kernel->read_binaries(device); }, events);
         }
     }
 
@@ -845,6 +853,5 @@ void Program::compile( Device * device )
     this->loaded_onto_device = false;
 }
 
-Program::~Program() {
-}
+Program::~Program() {}
 }  // namespace tt::tt_metal
