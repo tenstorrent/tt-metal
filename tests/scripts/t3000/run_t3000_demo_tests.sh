@@ -17,7 +17,23 @@ run_t3000_falcon40b_tests() {
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_ethernet_tests $duration seconds to complete"
+  echo "LOG_METAL: run_t3000_falcon40b_tests $duration seconds to complete"
+}
+
+run_t3000_falcon7b_tests(){
+  # Record the start time
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_falcon7b_tests"
+
+  # Falcon7B demo (perf verification and output verification)
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/t3000/falcon7b/input_data_t3000.json' models/demos/t3000/falcon7b/demo_t3000.py::test_demo_multichip[user_input0-8-True-perf_mode_stochastic_verify]
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/t3000/falcon7b/input_data_t3000.json' models/demos/t3000/falcon7b/demo_t3000.py::test_demo_multichip[user_input0-8-True-default_mode_greedy_verify]
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_falcon7b_tests $duration seconds to complete"
 }
 
 run_t3000_mixtral_tests() {
@@ -41,6 +57,9 @@ run_t3000_tests() {
 
   # Run mixtral tests
   run_t3000_mixtral_tests
+
+  # Run falcon7b tests
+  run_t3000_falcon7b_tests
 }
 
 main() {
