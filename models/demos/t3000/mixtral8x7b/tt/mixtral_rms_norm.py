@@ -3,12 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 import torch
 import ttnn
+from ttnn import ReplicateTensorToMesh
 
 
 class TtRMSNorm(torch.nn.Module):
     def __init__(
         self,
-        device,
+        device_mesh,
         state_dict,
         args,
         dtype,
@@ -17,7 +18,7 @@ class TtRMSNorm(torch.nn.Module):
         eps: float = 1e-05,
     ):
         super().__init__()
-        self.device = device
+        self.device_mesh = device_mesh
         self.eps = eps
         self.state_dict = state_dict
         self.model_config = args.get_model_config()
@@ -28,15 +29,16 @@ class TtRMSNorm(torch.nn.Module):
             weight_name = f"layers.{layer_num}.{weight_key}.weight"
 
         torch_weight = self.state_dict[weight_name].unsqueeze(0).expand(32, -1)
-        cache_name = args.weight_cache_path(dtype) / weight_name
+        cache_name = args.weight_cache_path(dtype) / (weight_name + "multidevice")
 
         self.weight = ttnn.as_tensor(
             torch_weight,
-            device=self.device,
+            device=self.device_mesh,
             dtype=dtype,
             layout=self.model_config["NORM_W_LAYOUT_TILE"],
             memory_config=self.model_config["NORM_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,
+            mesh_mapper=ReplicateTensorToMesh(device_mesh),
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -47,7 +49,7 @@ class TtRMSNorm(torch.nn.Module):
 class TtRMSNormSharded(torch.nn.Module):
     def __init__(
         self,
-        device,
+        device_mesh,
         state_dict,
         args,
         dtype,
@@ -56,7 +58,7 @@ class TtRMSNormSharded(torch.nn.Module):
         eps: float = 1e-05,
     ):
         super().__init__()
-        self.device = device
+        self.device_mesh = device_mesh
         self.eps = eps
         self.state_dict = state_dict
         self.model_config = args.get_model_config()
@@ -66,16 +68,19 @@ class TtRMSNormSharded(torch.nn.Module):
         else:
             weight_name = f"layers.{layer_num}.{weight_key}.weight"
 
-        torch_weight = self.state_dict[weight_name].unsqueeze(0).reshape([1, 1, -1, 32])
-        cache_name = args.weight_cache_path(dtype) / (weight_name + ".reshaped")
+        torch_weight = self.state_dict[weight_name].unsqueeze(0).view(1, 1, 4096).expand([1, 32, 4096])
+        cache_name = args.weight_cache_path(dtype) / (weight_name + "multidevice")
 
         self.weight = ttnn.as_tensor(
             torch_weight,
-            device=self.device,
+            device=self.device_mesh,
             dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
             memory_config=self.model_config["NORM_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,
+            mesh_mapper=ReplicateTensorToMesh(device_mesh),
         )
+        self.weight = ttnn.to_device(self.weight, device_mesh)
 
     def forward(self, x: ttnn.Tensor, out_sharded=False) -> ttnn.Tensor:
         x = ttnn.experimental.tensor.interleaved_to_sharded(
