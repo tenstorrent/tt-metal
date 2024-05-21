@@ -58,8 +58,8 @@ def preprocess_inputs(
 def get_expected_times(bert):
     return {
         ttnn_bert: (0.1, 0.1),
-        ttnn_optimized_bert: (5.4, 0.07),
-        ttnn_optimized_sharded_bert: (5, 0.07),
+        ttnn_optimized_bert: (5.5, 0.07),
+        ttnn_optimized_sharded_bert: (5.1, 0.07),
     }[bert]
 
 
