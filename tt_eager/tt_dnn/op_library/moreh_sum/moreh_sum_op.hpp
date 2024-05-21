@@ -11,6 +11,7 @@
 #include <tuple>
 
 #include "tt_dnn/op_library/run_operation.hpp"
+#include "tt_dnn/op_library/compute_kernel_config.hpp"
 #include "tt_eager/tensor/tensor.hpp"
 
 namespace tt {
@@ -40,6 +41,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const Shape& shape
 struct MorehSum {
     int64_t dim;
     MemoryConfig output_mem_config;
+    const DeviceComputeKernelConfig compute_kernel_config;
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -48,22 +50,23 @@ struct MorehSum {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &inputs, std::vector<Tensor> &outputs) const;
     stl::reflection::Attributes attributes() const;
-    static constexpr auto attribute_names = std::make_tuple("dim", "output_mem_config");
+    static constexpr auto attribute_names = std::make_tuple("dim", "output_mem_config", "compute_kernel_config");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->dim), std::cref(this->output_mem_config));
+        return std::make_tuple(std::cref(this->dim), std::cref(this->output_mem_config), std::cref(this->compute_kernel_config));
     }
 };
 
-operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Tensor &output, int64_t dim);
+operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Tensor &output, int64_t dim, const DeviceComputeKernelConfig &compute_kernel_config);
 // revised from reduce_op
-operation::ProgramWithCallbacks moreh_sum_w_impl(const Tensor &a, const Tensor &output);
-operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &output);
+operation::ProgramWithCallbacks moreh_sum_w_impl(const Tensor &a, const Tensor &output, const DeviceComputeKernelConfig &compute_kernel_config);
+operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &output, const DeviceComputeKernelConfig &compute_kernel_config);
 
 Tensor moreh_sum(
     const Tensor &input,
     std::vector<int64_t> &dims,
     const std::optional<const Tensor> output = std::nullopt,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 

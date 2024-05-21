@@ -7,19 +7,28 @@ import torch
 from loguru import logger
 
 import tt_lib as ttl
-from models.utility_functions import comp_allclose_and_pcc, skip_for_wormhole_b0
+from models.utility_functions import comp_allclose_and_pcc
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+    get_compute_kernel_options,
+    compute_kernel_options,
+    compute_kernel_ids,
+)
 
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
 
 
-def get_tensors(input_shape, output_shape, device, *, with_padding=True):
+def get_tensors(input_shape, output_shape, device, *, with_padding=True, use_randint=True):
     npu_dtype = ttl.tensor.DataType.BFLOAT16
     cpu_dtype = torch.bfloat16
     npu_layout = ttl.tensor.Layout.TILE
 
-    torch_input = torch.randint(-2, 3, input_shape, dtype=cpu_dtype, requires_grad=True)
-    torch_output = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
+    if use_randint:
+        torch_input = torch.randint(-2, 3, input_shape, dtype=cpu_dtype, requires_grad=True)
+        torch_output = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
+    else:
+        torch_input = torch.rand(input_shape, dtype=cpu_dtype, requires_grad=True)
+        torch_output = torch.rand(output_shape, dtype=cpu_dtype)
 
     if with_padding:
         tt_input = ttl.tensor.Tensor(torch_input, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
@@ -166,6 +175,53 @@ def test_moreh_sum_non_4d(input_shape, dims, device):
 
     logger.debug(f"Out passing={passing}")
     logger.debug(f"Output pcc={output_pcc}")
+
+    assert passing
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (([10, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 12 - 1]),),
+    ids=[
+        "10, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 12 - 1",
+    ],
+)
+@pytest.mark.parametrize(
+    "dims",
+    ([0],),
+    ids=["0"],
+)
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_moreh_sum_fp32_dest_acc(input_shape, dims, compute_kernel_options, device):
+    torch.manual_seed(2023)
+    output_shape = input_shape.copy()
+
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
+
+    for dim in dims:
+        output_shape[dim] = 1
+
+    (tt_input, tt_output, torch_input) = get_tensors(input_shape, output_shape, device, use_randint=False)
+    torch_input = torch_input.float()
+    torch_output = torch.sum(torch_input, dims, True)
+
+    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    tt_output_cpu = (
+        ttl.operations.primary.moreh_sum(
+            tt_input, dims=dims, output=tt_output, compute_kernel_config=compute_kernel_config
+        )
+        .cpu()
+        .to(cpu_layout)
+        .unpad_from_tile(output_shape)
+        .to_torch()
+    )
+
+    rtol = atol = 0.1
+    passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
+    logger.debug(f"Out passing={passing}")
+    logger.debug(f"Output pcc={output_pcc}")
+    logger.debug(f"std={torch.std(torch.abs(torch_output - tt_output_cpu))}")
+    logger.debug(f"mean={torch.abs(torch_output - tt_output_cpu).mean()}")
 
     assert passing
 

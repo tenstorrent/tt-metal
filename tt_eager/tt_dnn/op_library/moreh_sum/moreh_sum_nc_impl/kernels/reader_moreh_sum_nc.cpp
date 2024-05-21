@@ -50,7 +50,6 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             cb_push_back(cb_id_in0, onetile);
-            // read_tile_id += input_tile_offset;
             read_tile_id += inner_tile_size;
         }
     }
