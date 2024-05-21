@@ -162,12 +162,14 @@ class TtFalconMLP:
                 )
             )
             x[i].deallocate(True)
+
         hidden_states = tt_lib.tensor.all_gather(
             hidden_states,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )
+
         for i in range(len(hidden_states)):
             hidden_states[i] = falcon_prefill_matmul(
                 hidden_states[i],

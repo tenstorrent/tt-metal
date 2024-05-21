@@ -518,6 +518,7 @@ class TtFalconAttention:
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )
+
         for i in range(len(attn_output)):
             attn_output[i] = falcon_prefill_matmul(
                 attn_output[i],
@@ -566,7 +567,7 @@ class TtFalconAttention:
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
                     output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
                     program_config=self.model_config["ATTENTION_MM_2_PROGCFG"],
-                    output_dtype=self.model_config["ATTENTION_DTYPE"],
+                    output_dtype=self.model_config["ATTENTION_OUT_DTYPE"],
                 )
             )
             attn_weights[i].deallocate(True)

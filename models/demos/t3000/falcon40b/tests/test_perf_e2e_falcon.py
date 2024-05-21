@@ -304,7 +304,7 @@ def run_test_FalconCausalLM_end_to_end(
     ("tiiuae/falcon-40b-instruct",),
     ids=["falcon_40b"],
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT8_B-SHARDED", "BFLOAT8_B-DRAM"))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT8_B-SHARDED", "BFLOAT8_B-DRAM", "BFLOAT16-DRAM"))
 def test_perf_bare_metal(
     num_devices,
     model_version,
@@ -323,8 +323,8 @@ def test_perf_bare_metal(
     all_devices,
     use_program_cache,
 ):
-    if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM"] or num_devices != 8):
-        pytest.skip("Prefill is only supported for BFLOAT8_B-DRAM memory config and 8 chips!")
+    if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
+        pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
     if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED"]:
         pytest.skip("Decode is only supported for SHARDED memory config!")
 

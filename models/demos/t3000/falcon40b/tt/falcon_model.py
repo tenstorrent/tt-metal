@@ -320,12 +320,21 @@ class TtFalconModelShared:
             presents += layer_output[1:]
             layer_output = layer_output[0]
 
+        if layer_output[0].dtype != self.model_config["BFP8_DTYPE"]:
+            for i in range(len(layer_output)):
+                layer_output[i] = tt_lib.tensor.typecast(layer_output[i], self.model_config["BFP8_DTYPE"])
+
         layer_output = tt_lib.tensor.all_gather(
             layer_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )
+
+        if self.model_config["LN_INPUT_DTYPE"] != self.model_config["BFP8_DTYPE"]:
+            for i in range(len(layer_output)):
+                layer_output[i] = tt_lib.tensor.typecast(layer_output[i], self.model_config["LN_INPUT_DTYPE"])
+
         # apply final norm layer
         layer_output = partial_layernorm(
             layer_output,
