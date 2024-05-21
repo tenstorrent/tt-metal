@@ -27,9 +27,7 @@ def skip(rank_of_tensors, layout, **_) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def is_expected_to_fail(
-    number_of_tensors, rank_of_tensors, dimension_to_concatenate_on, **_
-) -> Tuple[bool, Optional[str]]:
+def xfail(number_of_tensors, rank_of_tensors, dimension_to_concatenate_on, **_) -> Tuple[bool, Optional[str]]:
     if number_of_tensors == 1:
         return True, "You must have at least two tensors to concat!"
 
@@ -79,7 +77,13 @@ def run(
             torch_input_tensors.append(new_tensor)
 
     input_tensors = [
-        ttnn.from_torch(torch_input_tensor, device=device, layout=layout, dtype=dtype, memory_config=memory_config)
+        ttnn.from_torch(
+            torch_input_tensor,
+            device=device,
+            layout=layout,
+            dtype=dtype,
+            memory_config=memory_config,
+        )
         for torch_input_tensor in torch_input_tensors
     ]
     output_tensor = ttnn.concat(input_tensors, dim=dimension_to_concatenate_on)

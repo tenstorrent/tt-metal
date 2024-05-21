@@ -31,6 +31,7 @@ transformers==4.37.2
 xlsxwriter==3.0.8
 tiktoken==0.3.3
 tqdm==4.65.0
+enlighten==1.12.4
 sentencepiece==0.1.97
 numba>=0.58.1
 librosa==0.10.0
