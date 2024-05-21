@@ -10,7 +10,7 @@
 #include "llk_math_unary_datacopy_api.h"
 #endif
 #ifdef TRISC_UNPACK
-#include "llk_unpack_AB_api.h"
+#include "llk_unpack_A_api.h"
 #endif
 
 
