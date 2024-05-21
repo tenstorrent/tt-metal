@@ -48,6 +48,9 @@ Tensor assign(const Tensor& input, const MemoryConfig& output_mem_config, std::o
 // binary assign
 Tensor assign(const Tensor& input_a, const Tensor& input_b);
 
+// binary assign with queue_id
+Tensor assign(uint8_t queue_id, const Tensor& input_a, const Tensor& input_b);
+
 }  // namespace tt_metal
 
 }  // namespace tt

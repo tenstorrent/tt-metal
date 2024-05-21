@@ -115,6 +115,12 @@ Tensor assign(const Tensor& input_a, const Tensor& input_b) {
     return input_b;
 }
 
+// binary assign with queue_id
+Tensor assign(uint8_t queue_id, const Tensor& input_a, const Tensor& input_b ) {
+    operation::run(Copy{input_b.memory_config(), input_b.get_dtype()}, {input_a, input_b}, {}, {}, queue_id);
+    return input_b;
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt
