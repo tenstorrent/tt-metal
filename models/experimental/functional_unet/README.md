@@ -1,0 +1,1 @@
+To run the Unet model, download the weights file from https://github.com/mateuszbuda/brain-segmentation-pytorch/blob/master/weights/unet.pt and place the weights file in this directory: tests/ttnn/integrated_tests/unet/
