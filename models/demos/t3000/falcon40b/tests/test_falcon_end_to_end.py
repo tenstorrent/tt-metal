@@ -489,19 +489,19 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
                     token_pcc = 0.99
             elif data_type == "BFLOAT16":
                 if seq_len == 32:
-                    out_pcc = 0.98
-                    k_cache_pcc = 0.99
-                    v_cache_pcc = 0.98
+                    out_pcc = 0.986
+                    k_cache_pcc = 0.993
+                    v_cache_pcc = 0.978
                     token_pcc = 0.99
                 elif seq_len == 128:
-                    out_pcc = 0.99
-                    k_cache_pcc = 0.98
-                    v_cache_pcc = 0.93
+                    out_pcc = 0.991
+                    k_cache_pcc = 0.994
+                    v_cache_pcc = 0.982
                     token_pcc = 0.99
                 elif seq_len == 2048:
-                    out_pcc = 0.99
-                    k_cache_pcc = 0.98
-                    v_cache_pcc = 0.97
+                    out_pcc = 0.992
+                    k_cache_pcc = 0.992
+                    v_cache_pcc = 0.980
                     token_pcc = 0.99
         elif num_layers == 12:
             out_pcc = 0.99

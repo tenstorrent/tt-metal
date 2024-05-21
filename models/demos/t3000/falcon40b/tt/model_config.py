@@ -15,6 +15,7 @@ OP_KEYS = (
     "WORD_EMBEDDING_WEIGHTS",
     "WORD_EMBEDDING_OUTPUT",
     # Decoder
+    "LN_INPUT",
     "LN_ATTN_WEIGHTS",
     "LN_ATTN_BIAS",
     "LN_ATTN_OUTPUT",
@@ -26,6 +27,7 @@ OP_KEYS = (
     "COS_CACHED_WEIGHTS",
     # Attention
     "ATTN_INPUT",
+    "ATTENTION_OUT",
     "FUSED_QKV_MM_WEIGHTS",
     "FUSED_QKV_MM_INPUT",
     "FUSED_QKV_MM_OUTPUT",
@@ -716,6 +718,15 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     model_config["KV_CACHE_DTYPE"] = BFP8_DTYPE
 
     model_config["ATTN_MASK_DTYPE"] = BFP4_DTYPE
+
+    model_config["LN_INPUT_DTYPE"] = BFLOAT16_DTYPE
+    model_config["LN_MLP_OUTPUT_DTYPE"] = BFLOAT16_DTYPE
+    model_config["ATTENTION_DTYPE"] = BFLOAT16_DTYPE  # used for SDPA
+
+    # Set input df for AllGathers to bfp8 to save data bandwidth
+    model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"] = BFP8_DTYPE  # MLP AllGather
+    model_config["ATTENTION_OUT_DTYPE"] = BFP8_DTYPE  # Attention AllGather
+    model_config["SELFOUT_MM_OUTPUT_DTYPE"] = BFP8_DTYPE  # AllGather at start of the decoder layer and final AllGather
 
     head_dim = 64
     hidden_size = model_config_entries["hidden_size"]
