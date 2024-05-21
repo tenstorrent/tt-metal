@@ -25,6 +25,7 @@ def matmul(
     dtype: Optional[ttnn.DataType] = None,
     core_grid: Optional[ttnn.CoreGrid] = None,
     program_config: Optional[MatmulProgramConfig] = None,
+    activation: Optional[str] = None,
     use_1d_systolic_array: Optional[bool] = None,
     compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
 ) -> ttnn.Tensor:

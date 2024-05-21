@@ -6,10 +6,49 @@ from typing import Optional, Tuple
 
 import torch
 import tt_lib
+import ttnn
 from models.demos.falcon7b.tt.falcon_lm_head import falcon_lm_head_matmul_2d
 from models.demos.falcon7b.tt.falcon_model import TtFalconModelShared
 from models.demos.falcon7b.tt.model_utils import get_weights_cached
 from models.utility_functions import torch_tensors_to_tt_tensors
+
+
+def falcon_lm_head_matmul(
+    input_tensor_a,
+    input_tensor_b,
+    core_grid,
+    output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+    output_dtype=None,
+):
+    seq_len = input_tensor_a.get_legacy_shape()[2]
+    if seq_len > 512:
+        # TODO: Review if this path is used? If not, we can delete
+        return ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=output_mem_config, dtype=output_dtype)
+    else:
+        device_arch = input_tensor_a.device().arch()
+        if device_arch == ttnn.Arch.GRAYSKULL:
+            compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=True
+            )
+        elif device_arch == ttnn.Arch.WORMHOLE_B0:
+            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        else:
+            raise RuntimeError(f"Unsupported arch: {device_arch}")
+
+        return ttnn.matmul(
+            input_tensor_a,
+            input_tensor_b,
+            memory_config=output_mem_config,
+            dtype=output_dtype,
+            core_grid=core_grid,
+            use_1d_systolic_array=True,
+            compute_kernel_config=compute_kernel_config,
+        )
 
 
 class TtFalconCausalLM(TtFalconModelShared):
@@ -124,10 +163,10 @@ class TtFalconCausalLM(TtFalconModelShared):
             ]
         else:
             lm_logits = [
-                tt_lib.tensor.falcon_lm_head_matmul(
+                falcon_lm_head_matmul(
                     hidden_states[device_id],
                     self.lm_head_weights[device_id],
-                    bias=None,
+                    core_grid=self.model_config["DEFAULT_CORE_GRID"],
                     output_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
                 )

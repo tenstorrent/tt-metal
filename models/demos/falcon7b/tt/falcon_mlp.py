@@ -10,6 +10,81 @@ from models.utility_functions import torch2tt_tensor
 from torch import nn
 
 
+def falcon_dense_4h_to_h_matmul(
+    input_tensor_a,
+    input_tensor_b,
+    core_grid,
+    output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+    output_dtype=None,
+    packer_l1_acc=False,
+):
+    device_arch = input_tensor_a.device().arch()
+    if device_arch == ttnn.Arch.GRAYSKULL:
+        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=True
+        )
+    elif device_arch == ttnn.Arch.WORMHOLE_B0:
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=packer_l1_acc,
+        )
+    else:
+        raise RuntimeError(f"Unsupported arch: {device_arch}")
+
+    return ttnn.matmul(
+        input_tensor_a,
+        input_tensor_b,
+        memory_config=output_mem_config,
+        dtype=output_dtype,
+        core_grid=core_grid,
+        use_1d_systolic_array=True,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+
+def falcon_dense_h_to_4h_matmul(
+    input_tensor_a,
+    input_tensor_b,
+    core_grid,
+    fused_activation=None,
+    output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+    output_dtype=None,
+):
+    seq_len = input_tensor_a.get_legacy_shape()[2]
+    if seq_len > 1024:
+        # TODO: Review if this path is used? If not, we can delete
+        assert fused_activation == None
+        return ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=output_mem_config, dtype=output_dtype)
+    else:
+        device_arch = input_tensor_a.device().arch()
+        if device_arch == ttnn.Arch.GRAYSKULL:
+            compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=True
+            )
+        elif device_arch == ttnn.Arch.WORMHOLE_B0:
+            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        else:
+            raise RuntimeError(f"Unsupported arch: {device_arch}")
+
+        return ttnn.matmul(
+            input_tensor_a,
+            input_tensor_b,
+            memory_config=output_mem_config,
+            dtype=output_dtype,
+            core_grid=core_grid,
+            activation=fused_activation,
+            use_1d_systolic_array=True,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+
 class TtFalconMLPPrefill(nn.Module):
     def __init__(
         self,
@@ -190,19 +265,21 @@ class TtFalconMLPPrefill(nn.Module):
             hidden_states = []
             for device_id in range(len(x)):
                 hidden_states.append(
-                    tt_lib.tensor.falcon_dense_h_to_4h_matmul(
+                    falcon_dense_h_to_4h_matmul(
                         x[device_id],
                         self.dense_h_to_4h_weights[device_id],
-                        fused_activation=[tt_lib.tensor.FusibleActivation.GELU, True],
+                        core_grid=self.model_config["DEFAULT_CORE_GRID"],
+                        fused_activation="gelu",
                         output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
                         output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
                     )
                 )
                 x[device_id].deallocate()
             for device_id in range(len(x)):
-                hidden_states[device_id] = tt_lib.tensor.falcon_dense_4h_to_h_matmul(
+                hidden_states[device_id] = falcon_dense_4h_to_h_matmul(
                     hidden_states[device_id],
                     self.dense_4h_to_h_weights[device_id],
+                    core_grid=self.model_config["DEFAULT_CORE_GRID"],
                     output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
                     packer_l1_acc=True,
@@ -300,19 +377,21 @@ class TtFalconMLPDecode(nn.Module):
                     [x[device_id], self.model_config["MLP_DECODE_PADDING_TENSORS"][device_id]], dim=3
                 )
             hidden_states.append(
-                tt_lib.tensor.falcon_dense_h_to_4h_matmul(
+                falcon_dense_h_to_4h_matmul(
                     x[device_id],
                     self.dense_h_to_4h_weights[device_id],
-                    fused_activation=[tt_lib.tensor.FusibleActivation.GELU, True],
+                    core_grid=self.model_config["DEFAULT_CORE_GRID"],
+                    fused_activation="gelu",
                     output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
                 )
             )
             x[device_id].deallocate()
         for device_id in range(len(x)):
-            hidden_states[device_id] = tt_lib.tensor.falcon_dense_4h_to_h_matmul(
+            hidden_states[device_id] = falcon_dense_4h_to_h_matmul(
                 hidden_states[device_id],
                 self.dense_4h_to_h_weights[device_id],
+                core_grid=self.model_config["DEFAULT_CORE_GRID"],
                 output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
                 output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
                 packer_l1_acc=True,

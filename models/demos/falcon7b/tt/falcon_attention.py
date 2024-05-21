@@ -8,6 +8,7 @@ from torch import nn
 from typing import List, Optional, Tuple
 
 import tt_lib
+import ttnn
 
 from models.utility_functions import (
     torch2tt_tensor,
@@ -231,11 +232,13 @@ class TtFalconAttentionPrefill(nn.Module):
         fused_query_key_value = []
         for i in range(self.num_devices):
             fused_query_key_value.append(
-                tt_lib.tensor.falcon_fused_qkv_matmul(
+                ttnn.matmul(
                     hidden_states[i],
                     self.query_key_value_weights[i],
-                    output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                    memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+                    dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                    core_grid=self.model_config["DEFAULT_CORE_GRID"],
+                    use_1d_systolic_array=True,
                 )
             )
 
@@ -353,11 +356,13 @@ class TtFalconAttentionPrefill(nn.Module):
             )
 
         for i in range(self.num_devices):
-            attn_output[i] = tt_lib.tensor.falcon_selfout_matmul(
+            attn_output[i] = ttnn.matmul(
                 attn_output[i],
                 self.dense_weights[i],
-                output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
-                output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+                memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
+                dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+                core_grid=self.model_config["DEFAULT_CORE_GRID"],
+                use_1d_systolic_array=True,
             )
 
         return attn_output, layer_present
@@ -389,11 +394,13 @@ class TtFalconAttentionPrefill(nn.Module):
             ]
         else:
             fused_query_key_value = [
-                tt_lib.tensor.falcon_fused_qkv_matmul(
+                ttnn.matmul(
                     hidden_states[device_id],
                     self.query_key_value_weights[device_id],
-                    output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                    memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+                    dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                    core_grid=self.model_config["DEFAULT_CORE_GRID"],
+                    use_1d_systolic_array=True,
                 )
                 for device_id in range(self.num_devices)
             ]
@@ -545,11 +552,13 @@ class TtFalconAttentionPrefill(nn.Module):
         ]
 
         attn_outputs = [
-            tt_lib.tensor.falcon_selfout_matmul(
+            ttnn.matmul(
                 attn_outputs[device_id],
                 self.dense_weights[device_id],
-                output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
-                output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+                memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
+                dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+                core_grid=self.model_config["DEFAULT_CORE_GRID"],
+                use_1d_systolic_array=True,
             )
             for device_id in range(self.num_devices)
         ]
@@ -662,11 +671,13 @@ class TtFalconAttentionDecode(nn.Module):
         fused_query_key_value = []
         for i in range(self.num_devices):
             fused_query_key_value.append(
-                tt_lib.tensor.falcon_fused_qkv_matmul(
+                ttnn.matmul(
                     hidden_states[i],
                     self.query_key_value_weights[i],
-                    output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                    memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+                    dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                    core_grid=self.model_config["DEFAULT_CORE_GRID"],
+                    use_1d_systolic_array=True,
                 )
             )
 
@@ -968,11 +979,13 @@ class TtFalconAttentionDecode(nn.Module):
             )
 
         for i in range(self.num_devices):
-            attn_output[i] = tt_lib.tensor.falcon_selfout_matmul(
+            attn_output[i] = ttnn.matmul(
                 attn_output[i],
                 self.dense_weights[i],
-                output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
-                output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+                memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
+                dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+                core_grid=self.model_config["DEFAULT_CORE_GRID"],
+                use_1d_systolic_array=True,
             )
 
         return attn_output, layer_present
