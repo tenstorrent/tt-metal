@@ -24,14 +24,6 @@ parameters = {
 }
 
 
-def skip(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
-def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
 def torch_geglu(input_tensor, *args, **kwargs):
     split_size = input_tensor.size(-1) // 2
     split_tensors = torch.split(input_tensor, split_size_or_sections=[split_size, split_size], dim=-1)

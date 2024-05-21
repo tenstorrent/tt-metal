@@ -23,14 +23,6 @@ parameters = {
 }
 
 
-def skip(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
-def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
 def run(
     batch_sizes,
     height,
@@ -51,7 +43,11 @@ def run(
     torch_output_tensor = torch.acos(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, dtype=input_dtype, device=device, memory_config=input_memory_config, layout=layout
+        torch_input_tensor,
+        dtype=input_dtype,
+        device=device,
+        memory_config=input_memory_config,
+        layout=layout,
     )
 
     output_tensor = ttnn.acos(input_tensor, memory_config=output_memory_config)

@@ -37,7 +37,7 @@ def custom_numel(tensor):
 args_used = {}
 
 
-def is_expected_to_fail(make_repeat_a_tensor, rank_of_tensor, **_) -> Tuple[bool, Optional[str]]:
+def xfail(make_repeat_a_tensor, rank_of_tensor, **_) -> Tuple[bool, Optional[str]]:
     repeats = args_used["repeats"]
     tensor = args_used.get("tensor", None)
     dim = args_used["dim"]

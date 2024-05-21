@@ -156,14 +156,6 @@ Add `tests/ttnn/sweep_tests/sweeps/ttl_<new_operation>.py`:
     }
 
 
-    def skip(**_) -> Tuple[bool, Optional[str]]:
-        return False, None
-
-
-    def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
-        return False, None
-
-
     def run(
         height,
         width,

@@ -19,21 +19,6 @@ parameters = {
 }
 
 
-def skip(
-    batch_size,
-    c,
-    h,
-    w,
-    scale_h,
-    scale_w,
-) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
-def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
 def run(
     batch_size,
     c,
@@ -59,7 +44,3 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
 
     return check_with_pcc(torch_result, output_tensor)
-
-
-def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
-    return False, None

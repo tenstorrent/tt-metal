@@ -26,14 +26,6 @@ parameters = {
 }
 
 
-def skip(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
-def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
 def torch_squared_difference(x, y, *args, **kwargs):
     return torch.square(torch.sub(x, y))
 

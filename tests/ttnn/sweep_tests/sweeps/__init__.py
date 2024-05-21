@@ -3,20 +3,35 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import datetime
-from importlib.machinery import SourceFileLoader
 import pathlib
 import pickle
-import zlib
-
-from loguru import logger
-import pandas as pd
 import sqlite3
-from tqdm import tqdm
+from types import ModuleType
+import zlib
+from importlib.machinery import SourceFileLoader
+
+import enlighten
+import pandas as pd
+from loguru import logger
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
 SWEEP_RESULTS_DIR = SWEEPS_DIR / "results"
 DATABASE_FILE_NAME = SWEEP_RESULTS_DIR / "db.sqlite"
+
+
+class SweepFileLoader(SourceFileLoader):
+    def load_module(self) -> ModuleType:
+        module = super().load_module()
+
+        if not hasattr(module, "skip"):
+            setattr(module, "skip", lambda **kwargs: (False, None))
+
+        if not hasattr(module, "xfail"):
+            setattr(module, "xfail", lambda **kwargs: (False, None))
+
+        return module
+
 
 if not SWEEP_RESULTS_DIR.exists():
     SWEEP_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -78,7 +93,7 @@ def get_parameter_values(parameter_names, permutation):
         yield parameter_value
 
 
-def _run_single_test(run, skip, is_expected_to_fail, permutation, *, device):
+def _run_single_test(run, skip, xfail, permutation, *, device):
     try:
         should_be_skipped, message = skip(**permutation)
         if should_be_skipped:
@@ -89,9 +104,9 @@ def _run_single_test(run, skip, is_expected_to_fail, permutation, *, device):
         if passed:
             message = None
     except Exception as e:
-        should_fail, expected_exception = is_expected_to_fail(**permutation)
+        should_fail, expected_exception = xfail(**permutation)
         if should_fail and expected_exception == str(e):
-            status = "is_expected_to_fail"
+            status = "xfailed"
             message = expected_exception
         else:
             status = "crashed"
@@ -107,7 +122,7 @@ def run_single_test(file_name, index, *, device):
     logger.info(f"Running {file_name}")
 
     sweep_name = get_sweep_name(file_name)
-    sweep_module = SourceFileLoader(f"sweep_module_{sweep_name}", str(file_name)).load_module()
+    sweep_module = SweepFileLoader(f"sweep_module_{sweep_name}", str(file_name)).load_module()
     permutation = list(permutations(sweep_module.parameters))[index]
 
     pretty_printed_parameters = ",\n".join(
@@ -115,26 +130,39 @@ def run_single_test(file_name, index, *, device):
     )
     logger.info(f"Running sweep test at index {index}:\n{{{pretty_printed_parameters}}}")
     return _run_single_test(
-        sweep_module.run, sweep_module.skip, sweep_module.is_expected_to_fail, permutation, device=device
+        sweep_module.run,
+        sweep_module.skip,
+        sweep_module.xfail,
+        permutation,
+        device=device,
     )
 
 
 def run_sweep(file_name, *, device):
     current_datetime = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     sweep_name = get_sweep_name(file_name)
-    sweep_module = SourceFileLoader(f"sweep_module_{sweep_name}", str(file_name)).load_module()
+    sweep_module = SweepFileLoader(f"sweep_module_{sweep_name}", str(file_name)).load_module()
 
     parameter_names = get_parameter_names(sweep_module.parameters)
     column_names = ["sweep_name", "timestamp", "status", "exception"] + parameter_names
 
     rows = []
-    for permutation in tqdm(list(permutations(sweep_module.parameters))):
+    manager = enlighten.get_manager()
+    pbar = manager.counter(total=len(list(permutations(sweep_module.parameters))), desc=sweep_name, leave=False)
+    pbar.refresh()
+    for permutation in permutations(sweep_module.parameters):
         status, message = _run_single_test(
-            sweep_module.run, sweep_module.skip, sweep_module.is_expected_to_fail, permutation, device=device
+            sweep_module.run,
+            sweep_module.skip,
+            sweep_module.xfail,
+            permutation,
+            device=device,
         )
         rows.append(
             [sweep_name, current_datetime, status, message] + list(get_parameter_values(parameter_names, permutation))
         )
+        pbar.update()
+    pbar.close()
 
     connection = sqlite3.connect(DATABASE_FILE_NAME)
     cursor = connection.cursor()
@@ -184,7 +212,7 @@ def run_sweeps(*, device, include):
 
 
 def print_summary(*, table_names):
-    stats_df = pd.DataFrame(columns=["name", "passed", "failed", "crashed", "skipped", "is_expected_to_fail"])
+    stats_df = pd.DataFrame(columns=["name", "passed", "failed", "crashed", "skipped", "xfailed"])
 
     def add_row(df, name):
         df.loc[-1] = [name] + [0] * len(df.columns[1:])

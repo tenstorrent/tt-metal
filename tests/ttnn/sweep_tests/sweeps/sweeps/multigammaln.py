@@ -23,14 +23,6 @@ parameters = {
 }
 
 
-def skip(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
-def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
 def torch_multigammaln(x, *args, **kwargs):
     result = torch.lgamma(x)
     result += torch.lgamma(x - 0.5)

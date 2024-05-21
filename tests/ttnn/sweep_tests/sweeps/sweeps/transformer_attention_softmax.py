@@ -23,14 +23,6 @@ parameters = {
 }
 
 
-def skip(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
-def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
 def run(
     batch_size,
     num_heads,

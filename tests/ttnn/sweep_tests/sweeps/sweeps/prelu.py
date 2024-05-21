@@ -25,14 +25,6 @@ parameters = {
 }
 
 
-def skip(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
-def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
 def torch_prelu(x, *args, **kwargs):
     weight = kwargs.pop("scalar")
     result = F.prelu(x, torch.tensor(weight, dtype=x.dtype))
