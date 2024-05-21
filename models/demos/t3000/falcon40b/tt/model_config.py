@@ -722,6 +722,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     model_config["LN_INPUT_DTYPE"] = BFLOAT16_DTYPE
     model_config["LN_MLP_OUTPUT_DTYPE"] = BFLOAT16_DTYPE
     model_config["ATTENTION_DTYPE"] = BFLOAT16_DTYPE  # used for SDPA
+    model_config["WORD_EMBEDDING_OUTPUT_DTYPE"] = BFLOAT16_DTYPE  # embeddings output and the residual stream
 
     # Set input df for AllGathers to bfp8 to save data bandwidth
     model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"] = BFP8_DTYPE  # MLP AllGather
