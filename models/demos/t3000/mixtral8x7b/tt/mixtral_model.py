@@ -6,12 +6,13 @@ import ttnn
 import torch
 from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
 from models.demos.t3000.mixtral8x7b.tt.mixtral_rms_norm import TtRMSNormSharded
+from ttnn import ReplicateTensorToMesh
 
 
 class TtTransformer(torch.nn.Module):
     def __init__(
         self,
-        devices,
+        device_mesh,
         state_dict,
         args,
         dtype,
@@ -21,14 +22,14 @@ class TtTransformer(torch.nn.Module):
         self.args = args
         self.vocab_size = args.vocab_size
         self.n_layers = args.n_layers
-        self.devices = devices
+        self.device_mesh = device_mesh
         self.model_config = args.get_model_config()
         assert self.vocab_size > 0
 
         self.layers = torch.nn.ModuleList(
             [
                 TtTransformerBlock(
-                    devices=devices,
+                    device_mesh=device_mesh,
                     state_dict=state_dict,
                     args=args,
                     dtype=dtype,
@@ -37,30 +38,26 @@ class TtTransformer(torch.nn.Module):
                 for i in layers
             ]
         )
-        self.norm = [
-            TtRMSNormSharded(
-                device=dev,
-                state_dict=state_dict,
-                args=args,
-                dtype=ttnn.bfloat16,
-                layer_num=None,
-                weight_key="norm",
-            )
-            for dev in self.devices
-        ]
+        self.norm = TtRMSNormSharded(
+            device_mesh=device_mesh,
+            state_dict=state_dict,
+            args=args,
+            dtype=ttnn.bfloat16,
+            layer_num=None,
+            weight_key="norm",
+        )
+
         self.state_dict = state_dict
 
-        self.output_weight = [
-            ttnn.as_tensor(
-                self.state_dict["output.weight"].permute(1, 0),
-                device=dev,
-                layout=self.model_config["OUTPUT_W_LAYOUT_TILE"],
-                dtype=dtype,
-                memory_config=self.model_config["OUTPUT_WEIGHTS_MEMCFG"],
-                cache_file_name=args.weight_cache_path(dtype) / "output.weight",
-            )
-            for dev in self.devices
-        ]
+        self.output_weight = ttnn.as_tensor(
+            self.state_dict["output.weight"].permute(1, 0),
+            device=device_mesh,
+            layout=self.model_config["OUTPUT_W_LAYOUT_TILE"],
+            dtype=dtype,
+            memory_config=self.model_config["OUTPUT_WEIGHTS_MEMCFG"],
+            cache_file_name=args.weight_cache_path(dtype) / "output_multidevice.weight",
+            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+        )
 
         self.compute_kernel = self.args.get_compute_kernel_config()
 
@@ -74,18 +71,14 @@ class TtTransformer(torch.nn.Module):
         for i, layer in enumerate(self.layers):
             x = layer(x, start_pos, current_pos, rot_mats)
 
-        outputs = []
-        x_norm = []
-        for i in range(len(self.devices)):
-            x_norm.append(self.norm[i](x[i]))
-            output_i = ttnn.linear(
-                x_norm[i],
-                self.output_weight[i],
-                core_grid=self.args.max_grid_size,
-                use_1d_systolic_array=True,
-                memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
-                compute_kernel_config=self.compute_kernel,
-            )
-            outputs.append(output_i)
+        x_norm = self.norm(x)
+        outputs = ttnn.linear(
+            x_norm,
+            self.output_weight,
+            core_grid=self.args.max_grid_size,
+            use_1d_systolic_array=True,
+            memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
+            compute_kernel_config=self.compute_kernel,
+        )
 
         return outputs

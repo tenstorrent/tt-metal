@@ -1,10 +1,19 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import os
 import torch
 import pytest
+
+# Set Mixtral flags for CI, if CI environment is setup
+if os.getenv("CI") == "true":
+    os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
+    os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
+    os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
+    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
+
 import ttnn
-import os
+from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     prepare_inputs_ttnn,
@@ -12,19 +21,9 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
 )
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
-from models.utility_functions import get_devices_for_t3000
-
-
+from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import profiler, enable_persistent_kernel_cache
-
-# Set Mixtral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-
-from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 
 
 class Emb(torch.nn.Module):
@@ -47,16 +46,16 @@ class Emb(torch.nn.Module):
     ),
 )
 def test_mixtral_model_perf(
-    all_devices, generation_start_pos, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds
+    t3k_device_mesh,
+    generation_start_pos,
+    expected_compile_time,
+    expected_inference_time,
+    use_program_cache,
+    reset_seeds,
 ):
     dtype = ttnn.bfloat8_b
 
-    devices = all_devices
-    num_devices = len(devices)
-    assert num_devices == 8, "This test requires a T3000 (8 devices)"
-    devices = get_devices_for_t3000(devices, num_devices)
-
-    model_args = TtModelArgs(devices[0])
+    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
     model_args.n_layers = 32
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
@@ -87,7 +86,7 @@ def test_mixtral_model_perf(
 
     # Load TTNN model
     tt_model = TtTransformer(
-        devices=devices,
+        device_mesh=t3k_device_mesh,
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
@@ -97,7 +96,7 @@ def test_mixtral_model_perf(
     rot_mat = prepare_rotation_mat_ttnn(
         tt_model.args.head_dim,
         tt_model.args.max_seq_len,
-        tt_model.devices,
+        tt_model.device_mesh,
     )
     profiler.end("TtMistral_model_setup")
 
@@ -117,13 +116,6 @@ def test_mixtral_model_perf(
 
     comment = f"kv_cache_len={generation_start_pos}_num_layers={model_args.n_layers}"
 
-    "generation_start_pos, expected_compile_time, expected_inference_time",
-    (
-        (32, 30, 8.5),
-        (128, 30, 8.5),
-        (1024, 30, 8.5),
-        (2048, 30, 8.5),
-    ),
     prep_perf_report(
         model_name=f"Mixtral8x7B_{comment}",
         batch_size=model_args.max_batch_size,
@@ -154,7 +146,7 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
         decode_input = prepare_inputs_ttnn(
             tt_decode_input,
             tt_model.args.dim,
-            tt_model.devices,
+            tt_model.device_mesh,
         )
         profiler.end(f"prepare_inputs_for_inference_{i}")
 
@@ -164,7 +156,13 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
 
         # Convert ttnn tensor to torch tensor
         profiler.start(f"result_wait_for_inference_{i}")
-        tt_output_torch = ttnn.to_torch(tt_out[0]).squeeze(1).view(batch, seqlen, -1).detach().float()
+        tt_output_torch = (
+            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(tt_model.device_mesh, dim=0))[0]
+            .squeeze(1)
+            .view(batch, seqlen, -1)
+            .detach()
+            .float()
+        )
 
         profiler.end(f"model_run_for_inference_{i}")
         profiler.end(f"result_wait_for_inference_{i}")
@@ -174,8 +172,3 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
         tt_token_batch = tt_output_torch.squeeze().argmax(axis=-1)
         tt_decode_input = embd(tt_token_batch).view(batch, seqlen, -1)
         profiler.end(f"torch_argmax_and_embed_{i}")
-
-        profiler.start(f"deallocate_tt_tensors_{i}")
-        for t in decode_input + tt_out:
-            t.deallocate(force=True)
-        profiler.end(f"deallocate_tt_tensors_{i}")

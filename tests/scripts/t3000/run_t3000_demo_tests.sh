@@ -20,9 +20,27 @@ run_t3000_falcon40b_tests() {
   echo "LOG_METAL: run_t3000_ethernet_tests $duration seconds to complete"
 }
 
+run_t3000_mixtral_tests() {
+  # Record the start time
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_mixtral8x7b_tests"
+
+  # mixtral8x7b 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
+  pytest models/demos/t3000/mixtral8x7b/demo/demo.py::test_mixtral8x7b_demo[wormhole_b0-True-general_weights]
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_mixtral_tests $duration seconds to complete"
+}
+
 run_t3000_tests() {
   # Run falcon40b tests
   run_t3000_falcon40b_tests
+
+  # Run mixtral tests
+  run_t3000_mixtral_tests
 }
 
 main() {
