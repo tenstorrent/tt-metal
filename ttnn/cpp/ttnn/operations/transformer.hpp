@@ -272,8 +272,7 @@ struct RotaryEmbedding : public tt::tt_metal::RotaryEmbedding {
         uint32_t B = input_tensor.get_legacy_shape()[0];
         uint32_t X = input_tensor.get_legacy_shape()[-1];
 
-        auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
-                                                                       : AutoFormat::GetDefaultDevice()->arch();
+        auto arch = input_tensor.device()->arch();
         auto kernel_config_val =
             init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
 
@@ -363,7 +362,7 @@ constexpr auto attention_softmax =
 constexpr auto attention_softmax_ =
     ttnn::register_operation<ttnn::operations::transformer::ExecuteAttentionSoftmax<true>>(
         "ttnn::transfomer::attention_softmax_");
-        
+
 }  // namespace transformer
 
 }  // namespace ttnn
