@@ -65,7 +65,7 @@ run_device_perf_models() {
     if [ "$tt_arch" == "grayskull" ]; then
         #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
         #Model Device perf regression tests to make sure thy run on no-soft-reset BMs
-        tests/scripts/run_profiler_regressions.sh PROFILER
+        tests/scripts/run_profiler_regressions.sh PROFILER_NO_RESET
 
         env pytest models/demos/metal_BERT_large_11/tests -m $test_marker
 
