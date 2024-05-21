@@ -474,7 +474,7 @@ class resnetBlock2D:
             # hidden_states = nonlinearity(hidden_states, memory_config=ttnn.get_memory_config(hidden_states))
             # hidden_states = self.conv1s[0](hidden_states)
 
-            conv_config = ttnn.ConvConfig(
+            conv_config = ttnn.Conv2dConfig(
                 dtype=ttnn.bfloat8_b,
                 weights_dtype=ttnn.bfloat8_b,
                 math_fidelity=ttnn.MathFidelity.LoFi,
@@ -544,7 +544,7 @@ class resnetBlock2D:
                 )
                 # split_hidden_states[i] = self.conv1s[i](split_hidden_states[i])
 
-                conv_config = ttnn.ConvConfig(
+                conv_config = ttnn.Conv2dConfig(
                     dtype=ttnn.bfloat8_b,
                     weights_dtype=ttnn.bfloat8_b,
                     math_fidelity=ttnn.MathFidelity.LoFi,
@@ -669,7 +669,7 @@ class resnetBlock2D:
 
         # hidden_states = self.conv2(hidden_states)
 
-        conv_config = ttnn.ConvConfig(
+        conv_config = ttnn.Conv2dConfig(
             dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -709,7 +709,7 @@ class resnetBlock2D:
             #         input_tensor, self.conv_shortcut.conv.input_sharded_memory_config, hidden_states.dtype
             #     )
             # input_tensor = self.conv_shortcut(input_tensor)
-            conv_config = ttnn.ConvConfig(
+            conv_config = ttnn.Conv2dConfig(
                 dtype=ttnn.bfloat8_b,
                 weights_dtype=ttnn.bfloat8_b,
                 math_fidelity=ttnn.MathFidelity.LoFi,
