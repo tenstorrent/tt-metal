@@ -28,14 +28,15 @@ void MAIN {
             bool last_out = (j == num_input_tiles - 1);
             uint32_t cb_add  = (enable_reload) ? (cb_intermed0) : (cb_in1);
 
-            ACQ();
             cb_wait_front(cb_in0, onetile);
             if (enable_reload) {
                 cb_wait_front(cb_intermed0, onetile);
             }
 
-            add_tiles_init();
+            tile_regs_acquire();
+            add_tiles_init(cb_in0, cb_add);
             add_tiles(cb_in0, cb_add, first_tile, first_tile, dst0);
+            tile_regs_commit();
 
             cb_pop_front(cb_in0, onetile);
             if (enable_reload) {
@@ -44,9 +45,10 @@ void MAIN {
 
             uint32_t cb_out = (last_out) ? (cb_out0) : (cb_intermed0);
             cb_reserve_back(cb_out, onetile);
+            tile_regs_wait();
             pack_tile(dst0, cb_out);
+            tile_regs_release();
             cb_push_back(cb_out, onetile);
-            REL();
             enable_reload = true;
         }
     }
