@@ -36,13 +36,30 @@ std::vector<std::optional<Tensor>> addalpha_bw(
     std::optional<Tensor> input_grad = std::nullopt,
     std::optional<Tensor> other_grad = std::nullopt);
 
-std::vector<Tensor> addcmul_bw(
+std::vector<std::optional<Tensor>> addcmul_bw(
+    uint8_t queue_id,
     const Tensor& grad,
     const Tensor& input,
     const Tensor& tensor1,
     const Tensor& tensor2,
     float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true, true},
+    std::optional<Tensor> input_grad = std::nullopt,
+    std::optional<Tensor> tensor1_grad = std::nullopt,
+    std::optional<Tensor> tensor2_grad = std::nullopt);
+
+std::vector<std::optional<Tensor>> addcmul_bw(
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& tensor1,
+    const Tensor& tensor2,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true, true},
+    std::optional<Tensor> input_grad = std::nullopt,
+    std::optional<Tensor> tensor1_grad = std::nullopt,
+    std::optional<Tensor> tensor2_grad = std::nullopt);
 
 std::vector<Tensor> unary_mul_bw(
     const Tensor& grad,
@@ -62,13 +79,30 @@ std::vector<Tensor> unary_pow_bw(
     float exponent,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> addcdiv_bw(
+std::vector<std::optional<Tensor>> addcdiv_bw(
+    uint8_t queue_id,
     const Tensor& grad,
     const Tensor& input,
     const Tensor& tensor1,
     const Tensor& tensor2,
     float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true, true},
+    std::optional<Tensor> input_grad = std::nullopt,
+    std::optional<Tensor> tensor1_grad = std::nullopt,
+    std::optional<Tensor> tensor2_grad = std::nullopt);
+
+std::vector<std::optional<Tensor>> addcdiv_bw(
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& tensor1,
+    const Tensor& tensor2,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true, true},
+    std::optional<Tensor> input_grad = std::nullopt,
+    std::optional<Tensor> tensor1_grad = std::nullopt,
+    std::optional<Tensor> tensor2_grad = std::nullopt);
 
 std::vector<std::optional<Tensor>> mul_bw(
     const Tensor& grad,

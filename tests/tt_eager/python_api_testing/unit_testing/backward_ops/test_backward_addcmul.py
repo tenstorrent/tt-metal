@@ -50,21 +50,38 @@ def test_bw_addcmul(input_shapes, value, device):
     ),
 )
 @pytest.mark.parametrize("value", [0.05, 1.0, 0.5, 0.12])
-@pytest.mark.parametrize("are_required_outputs", [[True, True, True], [False, True, True], [False, False, False]])
+@pytest.mark.parametrize(
+    "are_required_outputs",
+    [
+        [True, True, True],
+        [True, True, False],
+        [True, False, False],
+        [True, False, True],
+        [False, True, True],
+        [False, True, False],
+        [False, False, True],
+    ],
+)
 def test_bw_addcmul_with_optional(input_shapes, value, are_required_outputs, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 20, 30, device, True)
     tensor1_data, tensor1_tensor = data_gen_with_range(input_shapes, -30, -20, device, True)
     tensor2_data, tensor2_tensor = data_gen_with_range(input_shapes, -10, -1, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
-    output_tensor = []
-    for i in range(len(are_required_outputs)):
-        if are_required_outputs[i]:
-            _, optional_output_tensor = data_gen_with_range(input_shapes, 1, 10, device, True)
-            output_tensor.append(optional_output_tensor)
-        else:
-            output_tensor.append(None)
+    if are_required_outputs[0]:
+        _, input_grad = data_gen_with_range(input_shapes, 1, 10, device)
+    else:
+        input_grad = None
+    if are_required_outputs[1]:
+        _, tensor1_grad = data_gen_with_range(input_shapes, 10, 20, device)
+    else:
+        tensor1_grad = None
+    if are_required_outputs[2]:
+        _, tensor2_grad = data_gen_with_range(input_shapes, 20, 30, device)
+    else:
+        tensor2_grad = None
 
+    cq_id = 0
     tt_output_tensor_on_device = tt_lib.tensor.addcmul_bw(
         grad_tensor,
         input_tensor,
@@ -72,7 +89,10 @@ def test_bw_addcmul_with_optional(input_shapes, value, are_required_outputs, dev
         tensor2_tensor,
         value,
         are_required_outputs=are_required_outputs,
-        output_tensor=output_tensor,
+        input_grad=input_grad,
+        tensor1_grad=tensor1_grad,
+        tensor2_grad=tensor2_grad,
+        queue_id=cq_id,
     )
 
     in_data.retain_grad()

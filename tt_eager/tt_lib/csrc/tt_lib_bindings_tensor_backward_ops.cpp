@@ -191,14 +191,37 @@ namespace tt::tt_metal::detail{
                     "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
             )doc");
 
-
-    m_tensor.def("addcmul_bw", &tt::tt_metal::addcmul_bw,
-            py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("tensor1").noconvert(), py::arg("tensor2").noconvert(), py::arg("value") = 1.0f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("are_required_outputs").noconvert() = std::vector<bool>{true, true, true}, py::arg("output_tensor").noconvert() = std::vector<std::optional<Tensor>>{std::nullopt, std::nullopt, std::nullopt}, R"doc(
+    m_tensor.def("addcmul_bw",
+            [](const Tensor& grad,
+                const Tensor& input,
+                const Tensor& tensor1,
+                const Tensor& tensor2,
+                const float value,
+                const MemoryConfig& output_mem_config,
+                const std::vector<bool>& are_required_outputs,
+                std::optional<Tensor> input_grad,
+                std::optional<Tensor> tensor1_grad,
+                std::optional<Tensor> tensor2_grad,
+                uint8_t queue_id) {
+                    return addcmul_bw(queue_id, grad, input, tensor1, tensor2, value, output_mem_config, are_required_outputs, input_grad, tensor1_grad, tensor2_grad);
+                },
+            py::arg("grad").noconvert(),
+            py::arg("input").noconvert(),
+            py::arg("tensor1").noconvert(),
+            py::arg("tensor2").noconvert(),
+            py::arg("value") = 1.0f,
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("are_required_outputs").noconvert() = std::vector<bool>{true, true, true},
+            py::arg("input_grad").noconvert() = std::nullopt,
+            py::arg("tensor1_grad").noconvert() = std::nullopt,
+            py::arg("tensor2_grad").noconvert() = std::nullopt,
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
             Performs backward operations for multiplication of ``tensor1``, ``tensor2`` and ``value`` tensors with given ``grad``.
 
             Input tensor must have BFLOAT16 data type.
 
-            Output tensor will have BFLOAT16 data type.
+            Output tensors will have BFLOAT16 data type.
 
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
@@ -210,7 +233,10 @@ namespace tt::tt_metal::detail{
                 "value", "Value", "float", "default to 1.0f", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 "are_required_outputs", "Are Required Outputs", "List of bool", "Default value is [True, True, True]", "No"
-                "output_tensor", "Optional Output Tensor", "List of tensor", "Default value is [None, None, None]", "No"
+                "input_grad", "Optional Output Tensor", "tensor", "Default value is None", "No"
+                "tensor1_grad", "Optional Output Tensor", "tensor", "Default value is None", "No"
+                "tensor2_grad", "Optional Output Tensor", "tensor", "Default value is None", "No"
+                "queue_id", "queue_id", "uint8_t", "Default is 0", "No"
         )doc");
 
     m_tensor.def("unary_assign_bw", &tt::tt_metal::unary_assign_bw,
@@ -294,13 +320,37 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-    m_tensor.def("addcdiv_bw", &tt::tt_metal::addcdiv_bw,
-            py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("tensor1").noconvert(), py::arg("tensor2").noconvert(), py::arg("value") = 1.0f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+    m_tensor.def("addcdiv_bw",
+            [](const Tensor& grad,
+                const Tensor& input,
+                const Tensor& tensor1,
+                const Tensor& tensor2,
+                const float value,
+                const MemoryConfig& output_mem_config,
+                const std::vector<bool>& are_required_outputs,
+                std::optional<Tensor> input_grad,
+                std::optional<Tensor> tensor1_grad,
+                std::optional<Tensor> tensor2_grad,
+                uint8_t queue_id) {
+                    return addcdiv_bw(queue_id, grad, input, tensor1, tensor2, value, output_mem_config, are_required_outputs, input_grad, tensor1_grad, tensor2_grad);
+                },
+            py::arg("grad").noconvert(),
+            py::arg("input").noconvert(),
+            py::arg("tensor1").noconvert(),
+            py::arg("tensor2").noconvert(),
+            py::arg("value") = 1.0f,
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("are_required_outputs").noconvert() = std::vector<bool>{true, true, true},
+            py::arg("input_grad").noconvert() = std::nullopt,
+            py::arg("tensor1_grad").noconvert() = std::nullopt,
+            py::arg("tensor2_grad").noconvert() = std::nullopt,
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
             Performs backward operations for multiplication and division of ``tensor1``, ``tensor2`` and ``value`` tensors with given ``grad``.
 
             Input tensor must have BFLOAT16 data type.
 
-            Output tensor will have BFLOAT16 data type.
+            Output tensors will have BFLOAT16 data type.
 
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
@@ -311,6 +361,11 @@ namespace tt::tt_metal::detail{
                 "tensor2", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "value", "Value", "float", "default to 1.0f", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "are_required_outputs", "Are Required Outputs", "List of bool", "Default value is [True, True, True]", "No"
+                "input_grad", "Optional Output Tensor", "tensor", "Default value is None", "No"
+                "tensor1_grad", "Optional Output Tensor", "tensor", "Default value is None", "No"
+                "tensor2_grad", "Optional Output Tensor", "tensor", "Default value is None", "No"
+                "queue_id", "queue_id", "uint8_t", "Default is 0", "No"
         )doc");
 
     m_tensor.def("add_bw",
