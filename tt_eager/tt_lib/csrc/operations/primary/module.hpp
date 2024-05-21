@@ -909,6 +909,7 @@ void py_module(py::module& m_primary) {
         py::arg("dims").noconvert() = std::vector<int64_t>(),
         py::arg("output").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs sum operation. Returns an output tensor.");
 
     m_primary.def(

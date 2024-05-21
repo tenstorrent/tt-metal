@@ -82,19 +82,36 @@ FORCE_INLINE void generate_bcast_scaler(uint32_t cb_scaler, uint32_t scaler) {
     cb_push_back(cb_scaler, 1);
 }
 
+template <typename T>
+FORCE_INLINE void process_data(int cb_id, uint32_t value, int32_t num_of_elems) {
+    T* ptr = reinterpret_cast<T*>(get_write_ptr(cb_id));
+    for (int j = 0; j < num_of_elems; j++)
+    {
+        ptr[j] = static_cast<T>(value);
+    }
+}
+
+template <>
+FORCE_INLINE void process_data<uint16_t>(int cb_id, uint32_t value, int32_t num_of_elems) {
+    uint16_t* ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_id));
+    for (int j = 0; j < num_of_elems; j++)
+    {
+        ptr[j] = static_cast<uint16_t>(value >> 16);
+    }
+}
+
 FORCE_INLINE void fill_cb_with_value(uint32_t cb_id, uint32_t value, int32_t num_of_elems = 1024) {
     cb_reserve_back(cb_id, 1);
-#if defined FP32_DEST_ACC_EN
-    auto ptr = reinterpret_cast<uint32_t *>(get_write_ptr(cb_id));
-    for (int j = 0; j < 1024; j++) {
-        ptr[j] = value;
+    const DataFormat data_format = get_dataformat(cb_id);
+    switch((uint)data_format & 0x1F) {
+        case ((uint8_t)DataFormat::Float32):
+            process_data<uint32_t>(cb_id, value, num_of_elems);
+            break;
+        case ((uint8_t)DataFormat::Float16_b):
+        default:
+            process_data<uint16_t>(cb_id, value, num_of_elems);
+            break;
     }
-#else
-    auto ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_id));
-    for (int j = 0; j < 1024; j++) {
-        ptr[j] = uint16_t(value >> 16);
-    }
-#endif
     cb_push_back(cb_id, 1);
 }
 
