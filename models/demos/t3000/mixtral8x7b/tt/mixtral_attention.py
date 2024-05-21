@@ -107,12 +107,14 @@ class TtMixtralAttention(torch.nn.Module):
         )
         layer_past = [cache_k, cache_v]
         self.layer_past = [
-            ttnn.from_torch(
+            ttnn.as_tensor(
                 lp,
                 device=self.device_mesh,
                 mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=0),
-                layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 dtype=ttnn.bfloat8_b,
+                layout=self.model_config["ATTN_W_LAYOUT_TILE"],
+                memory_config=self.model_config["ATTN_CACHE_WEIGHTS_MEMCFG"],
+                cache_file_name=cache_name(f"empty_attn_cache_{cache_k.shape}"),
             )
             for lp in layer_past
         ]
