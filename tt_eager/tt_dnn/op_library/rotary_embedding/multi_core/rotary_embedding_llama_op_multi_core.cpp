@@ -239,16 +239,16 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
                 num_rows_per_core,
                 num_tiles_written,
                 num_tiles_written / Wt, // start_row_id
-                num_tiles_written / Wt % Ht,
+                num_tiles_written % HtWt, // This range of this idx must be [0, HtWt - 1], where HtWt is the size of the sin/cos matrices in # of tiles
         };
         tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
-
 
         tt_metal::SetRuntimeArgs(
             program,
             unary_writer_kernel_id,
             core,
             {dst_buffer->address(), num_rows_per_core * Wt, num_tiles_written});
+
         num_tiles_written += num_rows_per_core * Wt;
 
     }
