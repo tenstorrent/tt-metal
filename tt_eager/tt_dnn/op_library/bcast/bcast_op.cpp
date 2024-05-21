@@ -55,7 +55,6 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
 
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE);
     TT_FATAL(input_tensor_b.get_layout() == Layout::TILE);
-    TT_FATAL(input_tensor_a.get_dtype() == input_tensor_b.get_dtype());
     TT_FATAL(is_floating_point(input_tensor_a.get_dtype()), "Unsupported data format");
     if (this->in_place) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout);
