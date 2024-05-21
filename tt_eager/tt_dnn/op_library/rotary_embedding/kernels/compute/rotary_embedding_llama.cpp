@@ -28,7 +28,7 @@ void MAIN {
     constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(5);
     constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
     constexpr uint32_t out_cb = get_compile_time_arg_val(7);
-    constexpr uint32_t num_rows = get_compile_time_arg_val(8);
+    constexpr uint32_t num_rows = get_compile_time_arg_val(8); // Index correctly in the for loop
     constexpr uint32_t Wt = get_compile_time_arg_val(9);
 
     mm_init();

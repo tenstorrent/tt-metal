@@ -20,8 +20,8 @@ enum class RotaryEmbeddingLlamaOpParallelizationStrategy { MULTI_CORE = 0, SINGL
 
 operation::ProgramWithCallbacks rotary_embedding_llama_single_core(
     const Tensor &input, const Tensor &cos, const Tensor &sin, const Tensor &trans_mat, Tensor &output, DeviceComputeKernelConfig compute_kernel_config);
-// operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
-//     const Tensor &input, const Tensor &cos, const Tensor &sin, const Tensor &trans_mat, Tensor &output, DeviceComputeKernelConfig compute_kernel_config);
+operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
+    const Tensor &input, const Tensor &cos, const Tensor &sin, const Tensor &trans_mat, Tensor &output, DeviceComputeKernelConfig compute_kernel_config);
 
 struct RotaryEmbeddingLlama {
     const uint32_t seq_len;

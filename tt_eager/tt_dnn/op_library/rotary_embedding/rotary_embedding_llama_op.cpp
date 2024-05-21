@@ -68,9 +68,9 @@ operation::ProgramWithCallbacks RotaryEmbeddingLlama::create_program(
     auto& output_tensor = output_tensors.at(0);
 
     switch (this->get_parallelization_strategy(input_tensors)) {
-        // case RotaryEmbeddingLlamaOpParallelizationStrategy::MULTI_CORE:
-        //     return rotary_embedding_llama_multi_core(input_tensor, cos, sin, trans_mat, output_tensor, this->compute_kernel_config);
-        //     break;
+        case RotaryEmbeddingLlamaOpParallelizationStrategy::MULTI_CORE:
+            return rotary_embedding_llama_multi_core(input_tensor, cos, sin, trans_mat, output_tensor, this->compute_kernel_config);
+            break;
         case RotaryEmbeddingLlamaOpParallelizationStrategy::SINGLE_CORE:
         default: return rotary_embedding_llama_single_core(input_tensor, cos, sin, trans_mat, output_tensor, this->compute_kernel_config);
     }
@@ -79,11 +79,11 @@ operation::ProgramWithCallbacks RotaryEmbeddingLlama::create_program(
 RotaryEmbeddingLlamaOpParallelizationStrategy RotaryEmbeddingLlama::get_parallelization_strategy(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    // 1 x 1 x 128 x 128 / 128 / 32
+    // num_rows = 1 x 8 x 128 x 128 / 128 / 32 = 32
     uint32_t num_rows = input_tensor.volume() / input_tensor.get_legacy_shape()[-1] / TILE_HEIGHT;
-    // if (num_rows > 1) {
-    //     return RotaryEmbeddingLlamaOpParallelizationStrategy::MULTI_CORE;
-    // } else {return RotaryEmbeddingLlamaOpParallelizationStrategy::SINGLE_CORE;}
+    if (num_rows > 1) {
+        return RotaryEmbeddingLlamaOpParallelizationStrategy::MULTI_CORE;
+    } else {return RotaryEmbeddingLlamaOpParallelizationStrategy::SINGLE_CORE;}
     return RotaryEmbeddingLlamaOpParallelizationStrategy::SINGLE_CORE;
 }
 
