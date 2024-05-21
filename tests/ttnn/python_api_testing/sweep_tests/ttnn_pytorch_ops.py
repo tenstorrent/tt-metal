@@ -75,7 +75,8 @@ def layernorm_noweights(x, *args, **kwargs):
 
 
 def attention_softmax_nomask(x, *args, **kwargs):
-    torch_output_tensor = ttnn.transformer.attention_softmax.golden_function(
+    golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax)
+    torch_output_tensor = golden_function(
         x,
         head_size=None,
         attention_mask=None,
@@ -90,7 +91,8 @@ def attention_softmax(x, y, *args, scalar, **kwargs):
     if scalar < 0:
         scalar = -scalar
 
-    torch_output_tensor = ttnn.transformer.attention_softmax.golden_function(
+    golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax)
+    torch_output_tensor = golden_function(
         x,
         head_size=None,
         attention_mask=y,
@@ -100,7 +102,8 @@ def attention_softmax(x, y, *args, scalar, **kwargs):
 
 
 def transformer_concatenate_heads(x, *args, **kwargs):
-    return ttnn.transformer.concatenate_heads.golden_function(x)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.concatenate_heads)
+    return golden_function(x)
 
 
 def rmsnorm(hidden_states, weight, epsilon=1e-6, *args, **kwargs):
