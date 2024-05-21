@@ -470,36 +470,6 @@ void gen_dram_write_cmd(Device *device,
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 }
 
-// This is pretty much a blit: copies from worker core's start of data back to the end of data
-void gen_linear_read_cmd(Device *device,
-                         vector<uint32_t>& prefetch_cmds,
-                         vector<uint32_t>& cmd_sizes,
-                         DeviceData& device_data,
-                         CoreCoord worker_core,
-                         uint32_t length,
-                         uint32_t offset = 0) {
-
-    vector<uint32_t> dispatch_cmds;
-    const uint32_t bank_id = 0; // No interleaved pages here.
-
-    gen_bare_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, length);
-    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
-
-    auto prior_end = prefetch_cmds.size();
-    uint32_t addr = device_data.get_base_result_addr(device_data.get_core_type(worker_core));
-    add_prefetcher_linear_read_cmd(device, prefetch_cmds, cmd_sizes, worker_core, addr + offset * sizeof(uint32_t), length);
-    uint32_t new_size = (prefetch_cmds.size() - prior_end) * sizeof(uint32_t);
-    TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
-    TT_ASSERT((new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
-    cmd_sizes.push_back(new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE);
-
-    // Add linear data to worker data:
-    uint32_t length_words = length / sizeof(uint32_t);
-    for (uint32_t i = 0; i < length_words; i++) {
-        device_data.push_one(worker_core, device_data.at(worker_core, bank_id, offset + i));
-    }
-}
-
 void gen_wait_and_stall_cmd(Device *device,
                             vector<uint32_t>& prefetch_cmds,
                             vector<uint32_t>& cmd_sizes) {
@@ -517,6 +487,40 @@ void gen_wait_and_stall_cmd(Device *device,
 
     vector<uint32_t> empty_payload; // don't give me grief, it is just a test
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_STALL, empty_payload);
+}
+
+// This is pretty much a blit: copies from worker core's start of data back to the end of data
+void gen_linear_read_cmd(Device *device,
+                         vector<uint32_t>& prefetch_cmds,
+                         vector<uint32_t>& cmd_sizes,
+                         DeviceData& device_data,
+                         CoreCoord worker_core,
+                         uint32_t length,
+                         uint32_t offset = 0) {
+
+    vector<uint32_t> dispatch_cmds;
+    const uint32_t bank_id = 0; // No interleaved pages here.
+
+    // Stall because we are reading data that was previously written
+    gen_wait_and_stall_cmd(device, prefetch_cmds, cmd_sizes);
+
+    gen_bare_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, length);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
+
+    auto prior_end = prefetch_cmds.size();
+    uint32_t addr = device_data.get_base_result_addr(device_data.get_core_type(worker_core));
+    add_prefetcher_linear_read_cmd(device, prefetch_cmds, cmd_sizes, worker_core, addr + offset * sizeof(uint32_t), length);
+    uint32_t new_size = (prefetch_cmds.size() - prior_end) * sizeof(uint32_t);
+    TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
+    TT_ASSERT((new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
+    cmd_sizes.push_back(new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE);
+
+    // Add linear data to worker data:
+    uint32_t length_words = length / sizeof(uint32_t);
+    for (uint32_t i = 0; i < length_words; i++) {
+        device_data.push_one(worker_core, device_data.at(worker_core, bank_id, offset + i));
+    }
+    device_data.pad(worker_core, bank_id, 16); // XXXX L1_ALIGNMENT
 }
 
 void gen_dispatcher_delay_cmd(Device *device,
@@ -654,6 +658,7 @@ void gen_host_test(Device *device,
         uint32_t new_size = (prefetch_cmds.size() - prior_end) * sizeof(uint32_t);
         cmd_sizes.push_back(new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE);
 
+        // write host writes the command back to the host
         for (auto datum : dispatch_cmds) {
             device_data.push_one(device_data.get_host_core(), 0, datum);
         }
@@ -662,6 +667,28 @@ void gen_host_test(Device *device,
         }
         pad_host_data(device_data);
     }
+}
+
+void gen_rnd_linear_cmd(Device *device,
+                        vector<uint32_t>& prefetch_cmds,
+                        vector<uint32_t>& cmd_sizes,
+                        DeviceData& device_data,
+                        CoreCoord worker_core) {
+
+    vector<uint32_t> dispatch_cmds;
+
+    // Hmm, how big a size to test?
+    int max_linear_cmd_read_size = 20 * dispatch_buffer_page_size_g; // XXXXX 10 *
+    uint32_t size = std::rand() % max_linear_cmd_read_size;
+    size &= ~(sizeof(uint32_t) - 1);
+    uint32_t offset = std::rand() % dispatch_buffer_page_size_g;
+    offset = (offset >> 2) << 2;
+    device_data.relevel(CoreType::WORKER); // XXXXX shouldn't be needed
+    if (device_data.size_at(worker_core, 0) * sizeof(uint32_t) < max_linear_cmd_read_size + offset) {
+        // Not enough data yet, just bail on this cmd
+        return;
+    }
+    gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, size, offset);
 }
 
 void gen_rnd_dram_paged_cmd(Device *device,
@@ -762,6 +789,11 @@ void gen_rnd_test(Device *device,
         CoreCoord worker_core(first_worker_g.x + x, first_worker_g.y + y);
 
         switch (cmd) {
+        case CQ_PREFETCH_CMD_RELAY_LINEAR:
+            // TODO: disabled for now
+            // test issue w/ handling re-leveling of results data after paged commands
+            //gen_rnd_linear_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core);
+            break;
         case CQ_PREFETCH_CMD_RELAY_PAGED:
             gen_rnd_dram_paged_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core);
             break;
@@ -896,6 +928,23 @@ void gen_smoke_test(Device *device,
     gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, 8448);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
+    // Check some hard page alignment sizes
+    dispatch_cmds.resize(0);
+    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, dispatch_buffer_page_size_g);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+
+    dispatch_cmds.resize(0);
+    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, dispatch_buffer_page_size_g - sizeof(CQDispatchCmd));
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+
+    dispatch_cmds.resize(0);
+    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data,  2 * dispatch_buffer_page_size_g);
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+
+    dispatch_cmds.resize(0);
+    gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data,  2 * dispatch_buffer_page_size_g - sizeof(CQDispatchCmd));
+    add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+
     // Merge 4 commands in the FetchQ
     dispatch_cmds.resize(0);
     gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, 112);
@@ -991,6 +1040,10 @@ void gen_smoke_test(Device *device,
     // These tests copy data from earlier tests so can't run first
     gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, 32);
     gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, 65 * 1024);
+    gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, dispatch_buffer_page_size_g - sizeof(CQDispatchCmd));
+    gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, dispatch_buffer_page_size_g);
+    gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, 2 * dispatch_buffer_page_size_g - sizeof(CQDispatchCmd));
+    gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, 2 * dispatch_buffer_page_size_g);
 
     // Test wait/stall
     gen_dispatcher_delay_cmd(device, prefetch_cmds, cmd_sizes, 1024 * 1024);
