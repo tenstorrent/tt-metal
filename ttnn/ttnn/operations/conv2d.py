@@ -22,6 +22,10 @@ from ttnn.device import (
 import ttnn.experimental
 
 
+def _nearest_32(x):
+    return math.ceil(x / 32) * 32
+
+
 class Conv2d:
     def __init__(
         self,
