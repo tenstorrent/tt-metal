@@ -32,8 +32,8 @@ namespace tt::tt_metal::detail{
         program.validate_circular_buffer_region(device);
     }
 
-    inline void AddConfigTensor(Program &program, const Tensor& config_tensor) {
-        program.add_config_tensor(config_tensor);
+    inline void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer) {
+        program.add_config_buffer(config_buffer);
     }
 
 }  // namespace tt::tt_metal::detail

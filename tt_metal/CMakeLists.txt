@@ -18,10 +18,10 @@ set(TT_METAL_OBJECTS
 
 add_library(tt_metal ${TT_METAL_OBJECTS})
 if(BUILD_SHARED_LIBS)
-    target_link_libraries(tt_metal PUBLIC device tensor)
+    target_link_libraries(tt_metal PUBLIC device)
     add_dependencies(tt_metal umd_device)
 else()
-    target_link_libraries(tt_metal PUBLIC ${UMD_STATIC_LIB} metal_common_libs tensor)
+    target_link_libraries(tt_metal PUBLIC ${UMD_STATIC_LIB} metal_common_libs)
     add_dependencies(tt_metal umd_static_lib_target)
 endif()
 

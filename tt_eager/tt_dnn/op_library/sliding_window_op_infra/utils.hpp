@@ -5,17 +5,13 @@
 #pragma once
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/common/math.hpp"
 
 
 namespace tt::tt_metal {
 
 namespace utils {
 
-inline uint32_t nearest_y(uint32_t val, uint32_t divisor) {
-    return (val + divisor - 1) / divisor * divisor;
-}
-
-// std::map<CoreCoord, CoreCoord> left_neighbor_core, right_neighbor_core;
 inline void init_neighbor_core_xy_mapping(CoreCoord grid_size, std::map<CoreCoord, CoreCoord>& left_neighbor_core, std::map<CoreCoord, CoreCoord>& right_neighbor_core, bool is_twod = false) {
     TT_ASSERT((grid_size.x == 12 && grid_size.y == 9) || (grid_size.x == 8 && grid_size.y == 8) || (grid_size.x == 8 && grid_size.y == 7));
     if (is_twod) {

@@ -93,7 +93,7 @@ def run_conv(
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
     # breakpoint()
-    conv_config = ttnn.ConvConfig(
+    conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=math_fidelity,
@@ -212,7 +212,7 @@ def run_conv_with_split(
     torch_input2_tensor = torch.permute(split_input_tensors[1], (0, 2, 3, 1))
     reader_patterns_cache = {}
 
-    conv_config = ttnn.ConvConfig(
+    conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=math_fidelity,

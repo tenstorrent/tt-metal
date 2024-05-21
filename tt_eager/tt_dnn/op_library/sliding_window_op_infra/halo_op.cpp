@@ -83,9 +83,9 @@ operation::ProgramWithCallbacks Halo::create_program(const std::vector<Tensor>& 
 
     Program program = CreateProgram();
 
-    tt::tt_metal::detail::AddConfigTensor(program, pad_config_device_tensor);
-    tt::tt_metal::detail::AddConfigTensor(program, local_config_device_tensor);
-    tt::tt_metal::detail::AddConfigTensor(program, remote_config_device_tensor);
+    tt::tt_metal::detail::AddConfigBuffer(program, pad_config_device_tensor.device_buffer());
+    tt::tt_metal::detail::AddConfigBuffer(program, local_config_device_tensor.device_buffer());
+    tt::tt_metal::detail::AddConfigBuffer(program, remote_config_device_tensor.device_buffer());
 
     return {untilize_with_halo_multi_core_v2(
         program,

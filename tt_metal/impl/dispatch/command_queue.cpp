@@ -1242,24 +1242,6 @@ void HWCommandQueue::enqueue_command(T& command, bool blocking) {
     }
 }
 
-// TODO: Currently converting page ordering from interleaved to sharded and then doing contiguous read/write
-//  Look into modifying command to do read/write of a page at a time to avoid doing copy
-void convert_interleaved_to_sharded_on_host(void * swapped, const void* host, const Buffer& buffer) {
-    const uint32_t num_pages = buffer.num_pages();
-    const uint32_t page_size = buffer.page_size();
-
-    std::set<uint32_t> pages_seen;
-    auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
-    uint32_t shard_width_in_pages = buffer.shard_spec().tensor_shard_spec.shape[1] / buffer.shard_spec().page_shape[1];
-    for (uint32_t page_id = 0; page_id < num_pages; page_id++) {
-        uint32_t local_num_pages;
-        auto host_page_id = page_id;
-        auto dev_page_id = buffer_page_mapping.host_page_to_dev_page_mapping_[host_page_id];
-        TT_ASSERT(host_page_id < num_pages and host_page_id >= 0);
-        std::memcpy((char*)swapped + dev_page_id * page_size, (char*)host + host_page_id * page_size, page_size);
-    }
-}
-
 void HWCommandQueue::enqueue_read_buffer(std::shared_ptr<Buffer> buffer, void* dst, bool blocking) {
     this->enqueue_read_buffer(*buffer, dst, blocking);
 }

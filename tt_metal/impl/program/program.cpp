@@ -516,10 +516,9 @@ void Program::add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t
     semaphores_.emplace_back(Semaphore( crs, address, init_value, core_type));
 }
 
-void Program::add_config_tensor(const Tensor& config_tensor) {
+void Program::add_config_buffer(std::shared_ptr<Buffer> config_buffer) {
     this->invalidate_compile();
-    config_tensors_.emplace_back(config_tensor);
-    // TODO: what else is needed here? ...
+    config_buffers_.emplace_back(config_buffer);
 }
 
 std::unordered_map<CoreType, std::vector<CoreCoord>> Program::logical_cores() const {
