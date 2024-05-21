@@ -158,8 +158,6 @@ def decompose_conv_into_shards_and_generate_tensor_metadata(
         )
         conv_output_start_stick += conv_output_shard_height
 
-    # print("req_conv_input_shard_start_end=", req_conv_input_shard_start_end)
-
     remap = lambda a, b: (a, b)
     if act_reshard_num_cores != 0:
         assert input_nhw_height != 0

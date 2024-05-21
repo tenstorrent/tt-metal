@@ -1371,7 +1371,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
     conv_reader_indices_tensor = sliding_window::move_config_tensor_to_device(conv_reader_indices_tensor, parallel_config, is_block_sharded, a.device());
 
     // add config tensor to program
-    tt::tt_metal::detail::AddConfigTensor(program, conv_reader_indices_tensor);
+    tt::tt_metal::detail::AddConfigBuffer(program, conv_reader_indices_tensor.device_buffer());
     return multi_core_optimized_conv_sharded_v2_impl(program, a, b, Shape(input_tensor_shape), bias, conv_reader_indices_tensor, conv_params, output_channels, untilize_out, bias.has_value(), fuse_relu, parallelization_config, block_config, extra_padding_for_32B_alignment, use_shallow_conv_variant, parallel_config.shard_orientation == ShardOrientation::COL_MAJOR, output, compute_kernel_config.value());
 }
 }  // namespace tt_metal

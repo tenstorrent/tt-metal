@@ -153,6 +153,8 @@ class Conv2d:
         self.groups = groups
 
     def _golden_function_conv2d(self, activations):
+        import torch
+
         # inputs in [1, 1, NWH, C] format, reshape to N, H, W, C
         if self.in_channels < 32:
             activations = activations[:, :, :, : self.in_channels]
@@ -665,6 +667,8 @@ def conv2d(
                     value=0,
                 )
             else:
+                import torch
+
                 input_tensor = ttnn.to_torch(input_tensor)
                 input_tensor = torch.nn.functional.pad(
                     input_tensor,
@@ -758,6 +762,8 @@ def conv2d(
     # Run conv
     output_tensor = conv(input_tensor)
     if run_new_conv:
+        import torch
+
         assert output_height == output_height_new
         assert output_width == output_width_new
         assert conv.conv.weight.layout == weight_tensor_on_dev_new.layout
