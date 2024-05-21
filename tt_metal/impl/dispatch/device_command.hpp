@@ -312,7 +312,8 @@ class DeviceCommand {
         uint32_t payload_sizeB,
         const std::vector<PackedSubCmd> &sub_cmds,
         const std::vector<std::pair<const void *, uint32_t>> &data_collection,
-        const uint32_t offset_idx = 0) {
+        const uint32_t offset_idx = 0,
+        const bool no_stride = false) {
         static_assert(std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
         bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
 
@@ -325,7 +326,7 @@ class DeviceCommand {
         auto initialize_write_packed_cmd = [&](CQDispatchCmd *write_packed_cmd) {
             write_packed_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
             write_packed_cmd->write_packed.flags =
-                multicast ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE;
+                (multicast ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE) | (no_stride ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE);
             write_packed_cmd->write_packed.count = num_sub_cmds;
             write_packed_cmd->write_packed.addr = common_addr;
             write_packed_cmd->write_packed.size = packed_data_sizeB;
@@ -350,7 +351,8 @@ class DeviceCommand {
 
         // copy the actual data
         increment_sizeB = align(packed_data_sizeB, L1_ALIGNMENT);
-        for (uint32_t i = offset_idx; i < offset_idx + num_sub_cmds; ++i) {
+        uint32_t num_data_copies = no_stride ? 1 : num_sub_cmds;
+        for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
             this->memcpy((char*)this->cmd_region + this->cmd_write_offsetB, data_collection[i].first, data_collection[i].second);
             this->cmd_write_offsetB += increment_sizeB;
         }

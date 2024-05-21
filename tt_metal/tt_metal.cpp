@@ -927,15 +927,6 @@ void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const 
     }
 }
 
-void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const RuntimeArgsData &runtime_args) {
-    ZoneScoped;
-    TT_FATAL( not CommandQueue::async_mode_set(), "This variant of SetCommonRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
-    if (runtime_args.size() != 0) {
-        detail::GetKernel(program, kernel_id)->set_common_runtime_args(runtime_args);
-    }
-}
-
-
 RuntimeArgsData & GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core) {
     TT_FATAL( not CommandQueue::async_mode_set(), "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
     return detail::GetKernel(program, kernel_id)->runtime_args_data(logical_core);
@@ -948,7 +939,7 @@ std::vector< std::vector< RuntimeArgsData> >& GetRuntimeArgs(const Program &prog
 
 RuntimeArgsData & GetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id) {
     TT_FATAL( not CommandQueue::async_mode_set(), "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
-    return detail::GetKernel(program, kernel_id)->common_runtime_args_data().at(0);
+    return detail::GetKernel(program, kernel_id)->common_runtime_args_data();
 }
 
 uint32_t BeginTraceCapture(Device *device, const uint8_t cq_id, const uint32_t trace_buff_size) {
