@@ -499,3 +499,26 @@ def test_clone(device_mesh):
     results_11BH = ttnn.to_device(results_11BH, device_mesh)
     results_11BH = ttnn.clone(results_11BH, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
     print(results_11BH)
+
+
+def test_device_shard_to_torch(device_mesh):
+    """Test `ttnn.get_device_tensor(..) API"""
+    torch_input_tensor = torch.rand((1, 1, 32, 32 * device_mesh.get_num_devices()), dtype=torch.bfloat16)
+    torch_output_golden = torch.nn.functional.gelu(torch_input_tensor)
+    torch_output_golden = torch.exp(torch_output_golden)
+
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ShardTensorToMesh(device_mesh, dim=3),
+        device=device_mesh,
+    )
+
+    ttnn_gelu_output = ttnn.gelu(ttnn_input_tensor)
+    ttnn_output_tensor = ttnn.exp(ttnn_gelu_output)
+
+    # Skip the compose/torch.cat call entirely
+    for i, device in enumerate(device_mesh.get_devices()):
+        device_tensor = ttnn.get_device_tensor(ttnn_output_tensor, device)
+        torch_device_tensor = ttnn.to_torch(device_tensor)
+        assert_with_pcc(torch_device_tensor, torch_output_golden[..., i * 32 : (i + 1) * 32], pcc=0.999)
