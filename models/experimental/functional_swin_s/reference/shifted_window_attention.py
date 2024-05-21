@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
@@ -33,29 +37,27 @@ class ShiftedWindowAttention(nn.Module):
         self.define_relative_position_index()
 
     def define_relative_position_bias_table(self):
-        # define a parameter table of relative position bias
         self.relative_position_bias_table = nn.Parameter(
             torch.zeros((2 * self.window_size[0] - 1) * (2 * self.window_size[1] - 1), self.num_heads)
-        )  # 2*Wh-1 * 2*Ww-1, nH
+        )
         nn.init.trunc_normal_(self.relative_position_bias_table, std=0.02)
 
     def define_relative_position_index(self):
-        # get pair-wise relative position index for each token inside the window
         coords_h = torch.arange(self.window_size[0])
         coords_w = torch.arange(self.window_size[1])
-        coords = torch.stack(torch.meshgrid(coords_h, coords_w, indexing="ij"))  # 2, Wh, Ww
-        coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
-        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
-        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
-        relative_coords[:, :, 0] += self.window_size[0] - 1  # shift to start from 0
+        coords = torch.stack(torch.meshgrid(coords_h, coords_w, indexing="ij"))
+        coords_flatten = torch.flatten(coords, 1)
+        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]
+        relative_coords = relative_coords.permute(1, 2, 0).contiguous()
+        relative_coords[:, :, 0] += self.window_size[0] - 1
         relative_coords[:, :, 1] += self.window_size[1] - 1
         relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
-        relative_position_index = relative_coords.sum(-1).flatten()  # Wh*Ww*Wh*Ww
+        relative_position_index = relative_coords.sum(-1).flatten()
         self.register_buffer("relative_position_index", relative_position_index)
 
     def get_relative_position_bias(self) -> torch.Tensor:
         N = self.window_size[0] * self.window_size[1]
-        relative_position_bias = self.relative_position_bias_table[self.relative_position_index]  # type: ignore[index]
+        relative_position_bias = self.relative_position_bias_table[self.relative_position_index]
         relative_position_bias = relative_position_bias.view(N, N, -1)
         relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous().unsqueeze(0)
         return relative_position_bias
@@ -63,6 +65,7 @@ class ShiftedWindowAttention(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         relative_position_bias = self.get_relative_position_bias()
         logit_scale = None
+
         B, H, W, C = x.shape
         # pad feature maps to multiples of window size
         pad_r = (self.window_size[1] - W % self.window_size[1]) % self.window_size[1]
@@ -95,9 +98,11 @@ class ShiftedWindowAttention(nn.Module):
             self.qkv.bias = self.qkv.bias.clone()
             length = self.qkv.bias.numel() // 3
             self.qkv.bias[length : 2 * length].zero_()
+
         qkv = F.linear(x, self.qkv.weight, self.qkv.bias)
         qkv = qkv.reshape(x.size(0), x.size(1), 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
+
         if logit_scale is not None:
             # cosine attention
             attn = F.normalize(q, dim=-1) @ F.normalize(k, dim=-1).transpose(-2, -1)
@@ -138,11 +143,11 @@ class ShiftedWindowAttention(nn.Module):
             attn = attn.view(-1, self.num_heads, x.size(1), x.size(1))
 
         attn = F.softmax(attn, dim=-1)
-        attn = F.self.dropout(attn, p=self.attention_dropout, training=self.training)
+        attn = F.dropout(attn, p=self.attention_dropout, training=self.training)
 
         x = attn.matmul(v).transpose(1, 2).reshape(x.size(0), x.size(1), C)
         x = F.linear(x, self.proj.weight, self.proj.bias)
-        x = F.self.dropout(x, p=self.dropout, training=self.training)
+        x = F.dropout(x, p=self.dropout, training=self.training)
 
         # reverse windows
         x = x.view(
@@ -155,5 +160,6 @@ class ShiftedWindowAttention(nn.Module):
             x = torch.roll(x, shifts=(self.shift_size[0], self.shift_size[1]), dims=(1, 2))
 
         # unpad features
+        # print("SWA x shape: ", x.shape)
         x = x[:, :H, :W, :].contiguous()
         return x
