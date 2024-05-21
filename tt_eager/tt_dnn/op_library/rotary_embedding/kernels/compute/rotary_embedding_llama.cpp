@@ -42,11 +42,14 @@ void MAIN {
     uint32_t interm_index = 0;
 
     for (uint32_t i = 0; i < num_rows; ++i) {
+        // input cb wait and reserve
+        cb_wait_front(in_cb, Wt);
+        cb_wait_front(sin_cb, Wt);
+        cb_wait_front(cos_cb, Wt);
         for (uint32_t j = 0; j < Wt; ++j) {
 
             // rotated = x @ trans_mat
             mm_init_short(in_cb, trans_mat_cb);
-            cb_wait_front(in_cb, onetile);
             cb_reserve_back(rotated_in_interm_cb, onetile);
             //for
             ACQ();
@@ -56,9 +59,8 @@ void MAIN {
             cb_push_back(rotated_in_interm_cb, onetile);
 
             // sin_interim = rotated * sin
-            cb_wait_front(rotated_in_interm_cb, onetile);
-            cb_wait_front(sin_cb, onetile);
             cb_reserve_back(sin_interm_cb, onetile);
+            cb_wait_front(rotated_in_interm_cb, onetile);
             mul_tiles_init();
             ACQ();
             mul_tiles(rotated_in_interm_cb, sin_cb, 0, 0, 0);
@@ -69,7 +71,6 @@ void MAIN {
             cb_pop_front(rotated_in_interm_cb, onetile);
 
             // cos_interim = x * cos
-            cb_wait_front(cos_cb, onetile);
             cb_reserve_back(cos_interm_cb, onetile);
             ACQ();
             mul_tiles(in_cb, cos_cb, 0, 0, 0);

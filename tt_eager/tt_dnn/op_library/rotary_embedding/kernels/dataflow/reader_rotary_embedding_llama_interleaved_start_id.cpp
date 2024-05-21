@@ -78,6 +78,8 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(trans_mat_cb_id, onetile);
 
+    const uint32_t total_pushed = num_rows * Wt;
+
     /*
         Read a ublock of tiles from src to CB, and then push the ublock to unpacker
 
@@ -86,32 +88,32 @@ void kernel_main() {
         Wt = 4
     */
     for (uint32_t i = 0; i < num_rows; ++i) {
+        cb_reserve_back(input_cb_id, Wt);
+        cb_reserve_back(sin_cb_id, Wt);
+        cb_reserve_back(cos_cb_id, Wt);
+        uint32_t input_l1_write_addr = get_write_ptr(input_cb_id);
+        uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
+        uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
         for (uint32_t j = 0; j < Wt; ++j) {
 
             // Read input into CB
-            cb_reserve_back(input_cb_id, onetile);
-            uint32_t input_l1_write_addr = get_write_ptr(input_cb_id);
             noc_async_read_tile(input_curr_id, s0, input_l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(input_cb_id, onetile);
             input_curr_id++;
+            input_l1_write_addr+=input_tile_bytes;
 
             // Read sin into CB
-            cb_reserve_back(sin_cb_id, onetile);
-            uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
             noc_async_read_tile(cos_sin_curr_id, s2, sin_l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(sin_cb_id, onetile);
+            sin_l1_write_addr+=sin_tile_bytes;
 
             // Read cos into CB
-            cb_reserve_back(cos_cb_id, onetile);
-            uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
             noc_async_read_tile(cos_sin_curr_id, s1, cos_l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cos_cb_id, onetile);
-
             cos_sin_curr_id++;
+            cos_l1_write_addr+=cos_tile_bytes;
         }
+        noc_async_read_barrier();
+        cb_push_back(sin_cb_id, Wt);
+        cb_push_back(input_cb_id, Wt);
+        cb_push_back(cos_cb_id, Wt);
 
         /*
             sin and cos matrices are duplicated across num_heads. So, reset their indices
@@ -124,6 +126,5 @@ void kernel_main() {
             cos_sin_curr_id -= HtWt;
         }
     }
-
 
 }
