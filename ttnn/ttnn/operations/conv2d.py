@@ -15,11 +15,15 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv imp
     find_closest_largest_divisor,
     find_closest_largest_divisor_with_num_padding,
 )
-from models.utility_functions import (
+from ttnn.device import (
     is_grayskull,
     is_wormhole_b0,
 )
 import ttnn.experimental
+
+
+def _nearest_32(x):
+    return math.ceil(x / 32) * 32
 
 
 class Conv2d:
