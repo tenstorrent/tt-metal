@@ -754,6 +754,8 @@ inline void gen_bare_dispatcher_unicast_write_cmd(Device *device,
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = 0;
 
+    TT_FATAL((cmd.write_linear.addr & (16 - 1)) == 0); // XXXXX L1_ALIGNMENT16
+
     add_bare_dispatcher_cmd(cmds, cmd);
 }
 
