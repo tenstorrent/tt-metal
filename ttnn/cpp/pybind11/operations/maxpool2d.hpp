@@ -12,7 +12,7 @@
 
 namespace py = pybind11;
 
-namespace ttnn::operations::maxpool {
+namespace ttnn::operations::maxpool2d {
 
 using array2_t = std::array<uint32_t, 2>;
 

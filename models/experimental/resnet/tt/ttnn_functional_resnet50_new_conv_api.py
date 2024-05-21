@@ -166,7 +166,7 @@ class resnet50Bottleneck:
                 batch_size=batch_size,
                 input_height=input_height,
                 input_width=input_width,
-                conv_config=ttnn.ConvConfig(
+                conv_config=ttnn.Conv2dConfig(
                     dtype=self.model_config["ACTIVATIONS_DTYPE"],
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                     math_fidelity=self.model_config["MATH_FIDELITY"],
@@ -208,7 +208,7 @@ class resnet50Bottleneck:
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
-            conv_config=ttnn.ConvConfig(
+            conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
@@ -256,7 +256,7 @@ class resnet50Bottleneck:
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
-            conv_config=ttnn.ConvConfig(
+            conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
@@ -287,7 +287,7 @@ class resnet50Bottleneck:
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
-            conv_config=ttnn.ConvConfig(
+            conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
@@ -307,8 +307,9 @@ class resnet50Bottleneck:
             # underscore version is in_place = True
             out = ttnn.add_(out, ds_out, activations=["relu"], memory_config=ttnn.get_memory_config(out))
         else:
-            out = ttnn.add(out, ds_out, activations=["relu"], memory_config=ttnn.L1_MEMORY_CONFIG)
-
+            out = ttnn.add(
+                out, ds_out, activations=["relu"], memory_config=ttnn.L1_MEMORY_CONFIG
+            )  ## TODO: check why not out mem config???
         ttnn.deallocate(ds_out)
         if batch_size == 20 and module_input_height == 56 and self.conv1_input_channels == 64:
             out = ttnn.reallocate(out)
@@ -512,7 +513,7 @@ class resnet50:
             batch_size=self.batch_size,
             input_height=115,
             input_width=115,
-            conv_config=ttnn.ConvConfig(
+            conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
@@ -662,7 +663,6 @@ class resnet50:
         unpadded_shape = x.shape_without_padding()
         x = ttnn.experimental.tensor.untilize_with_unpadding(
             x,
-            (0, 0, 0, 0),
             (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
             ttnn.L1_MEMORY_CONFIG,
         )
@@ -706,13 +706,12 @@ class resnet50:
         x = ttnn.experimental.tensor.tilize_with_val_padding(
             x,
             padded_shape,
-            [0, 0, 0, 0],
             0,
             output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
-        x = self.avgpool(x, ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+        x = self.avgpool(x, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
 
         unpadded_shape_end = [
             x.get_legacy_shape()[0] - 1,
@@ -721,7 +720,7 @@ class resnet50:
             x.get_legacy_shape()[3] - 1,
         ]
         x = ttnn.experimental.tensor.untilize_with_unpadding(
-            x, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            x, unpadded_shape_end, output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         )
 
         x = ttnn.reshape(
@@ -739,7 +738,6 @@ class resnet50:
         x = ttnn.experimental.tensor.tilize_with_val_padding(
             x,
             padded_shape,
-            [0, 0, 0, 0],
             0,
             output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
@@ -750,7 +748,6 @@ class resnet50:
         desired_shape[-1] = 1000
         x = ttnn.experimental.tensor.untilize_with_unpadding(
             x,
-            [0, 0, 0, 0],
             (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
             ttnn.L1_MEMORY_CONFIG,
         )
@@ -794,7 +791,7 @@ class resnet50:
             batch_size=self.batch_size,
             input_height=115,
             input_width=115,
-            conv_config=ttnn.ConvConfig(
+            conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
@@ -870,7 +867,6 @@ class resnet50:
         unpadded_shape = x.shape_without_padding()
         x = ttnn.experimental.tensor.untilize_with_unpadding(
             x,
-            (0, 0, 0, 0),
             (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
             ttnn.L1_MEMORY_CONFIG,
         )
@@ -915,13 +911,12 @@ class resnet50:
         x = ttnn.experimental.tensor.tilize_with_val_padding(
             x,
             padded_shape,
-            [0, 0, 0, 0],
             0,
             output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
-        x = self.avgpool(x, ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+        x = self.avgpool(x, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
 
         unpadded_shape_end = [
             x.get_legacy_shape()[0] - 1,
@@ -930,7 +925,7 @@ class resnet50:
             x.get_legacy_shape()[3] - 1,
         ]
         x = ttnn.experimental.tensor.untilize_with_unpadding(
-            x, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            x, unpadded_shape_end, output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         )
 
         x = ttnn.reshape(
@@ -948,7 +943,6 @@ class resnet50:
         x = ttnn.experimental.tensor.tilize_with_val_padding(
             x,
             padded_shape,
-            [0, 0, 0, 0],
             0,
             output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
@@ -959,7 +953,6 @@ class resnet50:
         desired_shape[-1] = 1000
         x = ttnn.experimental.tensor.untilize_with_unpadding(
             x,
-            [0, 0, 0, 0],
             (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
             ttnn.L1_MEMORY_CONFIG,
         )

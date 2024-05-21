@@ -8,6 +8,8 @@ import tt_lib as ttl
 import ttnn
 import os
 
+from tt_lib.device import Arch
+
 
 def get_device_core_grid(device):
     compute_with_storage_grid_size = device.compute_with_storage_grid_size()
@@ -73,14 +75,12 @@ def dump_device_memory_state(device, prefix=""):
     ttl.device.DumpDeviceMemoryState(device, prefix)
 
 
-def is_wormhole_b0():
-    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
-    return "wormhole_b0" in ARCH_NAME
+def is_wormhole_b0(device):
+    return device.arch() == Arch.WORMHOLE_B0
 
 
-def is_grayskull():
-    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
-    return "grayskull" in ARCH_NAME
+def is_grayskull(device):
+    return device.arch() == Arch.GRAYSKULL
 
 
 __all__ = []

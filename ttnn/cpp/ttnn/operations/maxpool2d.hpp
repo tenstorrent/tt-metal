@@ -13,10 +13,9 @@
 #include "tt_eager/tt_dnn/op_library/sliding_window_op_infra/halo_op.hpp"
 #include "tt_eager/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 
-using namespace tt;
 
 namespace ttnn::operations {
-namespace maxpool {
+namespace maxpool2d {
 
 using array2_t = std::array<uint32_t, 2>;
 
