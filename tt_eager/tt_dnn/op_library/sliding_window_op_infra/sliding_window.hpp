@@ -9,7 +9,6 @@
 #include <fmt/core.h>
 #include <fmt/format.h>
 
-// #include "tensor/tensor.hpp"
 #include "tt_eager/tensor/host_buffer/functions.hpp"
 #include "utils.hpp"
 
@@ -94,7 +93,7 @@ namespace tt::tt_metal {
             TT_ASSERT(has_parallel_config_, "Parallel config is not set in SlidingWindowConfig");
             Shape output_shape = get_output_shape();
             uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
-            uint32_t output_nhw_padded = utils::nearest_y(output_nhw, num_cores_nhw_ * (snap_to_tile ? constants::TILE_HEIGHT : 1));
+            uint32_t output_nhw_padded = round_up(output_nhw, num_cores_nhw_ * (snap_to_tile ? constants::TILE_HEIGHT : 1));
             return (output_nhw_padded / num_cores_nhw_);
         }
     }; // struct SlidingWindowConfig

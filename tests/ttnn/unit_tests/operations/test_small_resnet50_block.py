@@ -115,7 +115,7 @@ class resnet50Bottleneck:
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
-            conv_config=ttnn.ConvConfig(
+            conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
@@ -136,7 +136,7 @@ class resnet50Bottleneck:
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
-            conv_config=ttnn.ConvConfig(
+            conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
@@ -159,7 +159,7 @@ class resnet50Bottleneck:
                 batch_size=batch_size,
                 input_height=input_height,
                 input_width=input_width,
-                conv_config=ttnn.ConvConfig(
+                conv_config=ttnn.Conv2dConfig(
                     dtype=self.model_config["ACTIVATIONS_DTYPE"],
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                     math_fidelity=self.model_config["MATH_FIDELITY"],
@@ -184,7 +184,7 @@ class resnet50Bottleneck:
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
-            conv_config=ttnn.ConvConfig(
+            conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
@@ -208,7 +208,7 @@ class resnet50Bottleneck:
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
-            conv_config=ttnn.ConvConfig(
+            conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
