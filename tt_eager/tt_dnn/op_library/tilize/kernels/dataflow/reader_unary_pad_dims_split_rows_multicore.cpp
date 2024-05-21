@@ -53,9 +53,8 @@ void kernel_main() {
 
         cb_reserve_back(cb_id_in0, num_tiles_per_row * has_rows);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t src_noc_addr = get_noc_addr(curr_stick_id + k, s);
+            uint64_t src_noc_addr = get_noc_addr(base_stick_id + k, s);
 
             // Read from DRAM to tmp buffer
             noc_async_read(src_noc_addr, l1_write_addr, unpadded_X_size);

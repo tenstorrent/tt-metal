@@ -16,7 +16,7 @@ namespace tt {
 namespace tt_metal {
 
 enum class RotateHalfOpParallelizationStrategy {
-    MULTI_CORE, SINGLE_CORE
+    SINGLE_CORE
 };
 
 operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input_tensor, Tensor &output_tensor);

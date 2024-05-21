@@ -153,7 +153,6 @@ Tensor AutoFormat::format_output_tensor(
             } else if (formatted_output.get_layout() == Layout::TILE && AutoFormat::legal_rm_shape(shape)) {
                 formatted_output = untilize_with_unpadding(
                     formatted_output,
-                    {0, 0, 0, 0},
                     {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1},
                     mem_config);
                 return formatted_output;
@@ -163,7 +162,6 @@ Tensor AutoFormat::format_output_tensor(
                 AutoFormat::legal_rm_shape(shape)) {
                 formatted_output = untilize_with_unpadding(
                     formatted_output,
-                    {0, 0, 0, 0},
                     {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1},
                     mem_config);
                 return formatted_output;

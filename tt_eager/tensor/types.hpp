@@ -11,12 +11,12 @@
 #include <vector>
 
 #include "common/bfloat16.hpp"
-#include "tensor/borrowed_buffer.hpp"
-#include "tensor/owned_buffer.hpp"
+#include "tensor/host_buffer/types.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
+#include "tt_metal/common/core_coord.h"
 
 namespace tt {
 
@@ -36,6 +36,18 @@ enum class DataType {
     INT32 = 7,
     INVALID = 8,
 };
+
+inline bool is_floating_point(DataType dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT16:
+        case DataType::FLOAT32:
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B:
+            return true;
+        default:
+            return false;
+    }
+}
 
 enum class StorageType {
     OWNED,

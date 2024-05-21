@@ -957,7 +957,7 @@ def eltwise_tanh(x, *args, device, dtype, layout, input_mem_config, output_mem_c
     return ttnn_tensor_to_torch(t1)
 
 
-def eltwise_softmax(
+def softmax(
     x,
     *args,
     device,
@@ -972,7 +972,7 @@ def eltwise_softmax(
     return ttnn_tensor_to_torch(t1)
 
 
-def eltwise_softplus(
+def softplus(
     x,
     *args,
     beta,
@@ -1170,7 +1170,6 @@ def rmsnorm(
     x,
     y,
     *args,
-    scalar=0,
     device,
     dtype,
     layout,
@@ -1179,10 +1178,9 @@ def rmsnorm(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttnn.rms_norm(t0, t1)  # , memory_config=memory_config_to_ttnn(output_mem_config))
-
+    t2 = ttnn.rms_norm(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
     return ttnn_tensor_to_torch(t2)
 
 
@@ -1762,24 +1760,6 @@ def eltwise_isclose(
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
     t2 = ttnn.isclose(t0, t1, rtol, atol, memory_config=memory_config_to_ttnn(output_mem_config))
-
-    return ttnn_tensor_to_torch(t2)
-
-
-def eltwise_minimum(
-    x,
-    y,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttnn.minimum(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t2)
 
@@ -2646,6 +2626,40 @@ def sum(
     return ttnn_tensor_to_torch(t1)
 
 
+def max(
+    x,
+    *args,
+    dim,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.max(t0, dim=dim, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def min(
+    x,
+    *args,
+    dim,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.min(t0, dim=dim, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
+
+
 def eltwise_max(
     x,
     y,
@@ -2661,14 +2675,13 @@ def eltwise_max(
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
     t2 = ttnn.maximum(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
-
     return ttnn_tensor_to_torch(t2)
 
 
 def eltwise_min(
     x,
+    y,
     *args,
-    dim,
     device,
     dtype,
     layout,
@@ -2677,9 +2690,10 @@ def eltwise_min(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.min(t0, dim=dim)
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
-    return ttnn_tensor_to_torch(t1)
+    t2 = ttnn.minimum(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t2)
 
 
 def rotary_embedding(
@@ -2763,25 +2777,6 @@ def nextafter(
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
     t2 = ttnn.nextafter(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
-
-    return ttnn_tensor_to_torch(t2)
-
-
-def max(
-    x,
-    y,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-
-    t2 = ttnn.maximum(t0, t1, memory_config=memory_config_to_ttnn(output_mem_config))
 
     return ttnn_tensor_to_torch(t2)
 

@@ -6,8 +6,9 @@
 #include <cstdint>
 #include <optional>
 
-#include "tensor/borrowed_buffer_functions.hpp"
-#include "tensor/owned_buffer_functions.hpp"
+#include "common/bfloat4.hpp"
+#include "common/bfloat8.hpp"
+#include "tensor/host_buffer/functions.hpp"
 #include "tensor/tensor.hpp"
 #include "tensor/tensor_impl_wrapper.hpp"
 #include "tensor/tensor_utils.hpp"
@@ -17,9 +18,6 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_stl/concepts.hpp"
-
-#include "common/bfloat4.hpp"
-#include "common/bfloat8.hpp"
 
 namespace tt {
 
@@ -322,8 +320,8 @@ inline DeviceBuffer to_device_buffer(
             if (memory_config.is_sharded()) {
                 TT_ASSERT(shard_spec.has_value(), "If sharded must provide shard_spec");
             }
-            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                auto data_to_write = owned_buffer::get_as<T>(storage.buffer);
+            if constexpr (std::is_same_v<StorageType, OwnedStorage> or std::is_same_v<StorageType, BorrowedStorage>) {
+                auto data_to_write = host_buffer::get_as<T>(storage.buffer);
                 TT_ASSERT(
                     compute_buffer_size(shape, data_type) == data_to_write.size(),
                     fmt::format(
@@ -339,28 +337,6 @@ inline DeviceBuffer to_device_buffer(
                     data_to_write, device, shape, data_type, layout, memory_config, shard_spec);
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage doesn't support to_device_buffer");
-            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                if constexpr (
-                    std::is_same_v<T, float> or std::is_same_v<T, bfloat16> or std::is_same_v<T, std::uint32_t> or
-                    std::is_same_v<T, std::int32_t> or std::is_same_v<T, std::uint16_t>) {
-                    auto data_to_write = borrowed_buffer::get_as<T>(storage.buffer);
-                    TT_ASSERT(
-                        compute_buffer_size(shape, data_type) == data_to_write.size(),
-                        fmt::format(
-                            "Tensor buffer size and number of data elements does not match: {} != {}",
-                            compute_buffer_size(shape, data_type),
-                            data_to_write.size()));
-                    if (layout == Layout::TILE) {
-                        TT_ASSERT(
-                            (shape[-2] % tt::constants::TILE_HEIGHT == 0 && shape[-1] % tt::constants::TILE_WIDTH == 0),
-                            "Tensor shape incompatible for specified layout");
-                    }
-                    return initialize_data_on_device<T>(
-                        data_to_write, device, shape, data_type, layout, memory_config, shard_spec);
-
-                } else {
-                    TT_THROW("Borrowed storage doesn't support this data type");
-                }
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
                 TT_THROW("MultiHostStorage storage doesn't support to_device_buffer");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {

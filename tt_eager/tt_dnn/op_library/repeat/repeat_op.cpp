@@ -15,17 +15,7 @@ namespace tt {
 namespace tt_metal {
 
 RepeatOpParallelizationStrategy Repeat::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
-    uint32_t num_pages = tt_metal::compute_volume(this->compute_output_shapes(input_tensors).at(0));
-    if (input_tensors[0].get_layout() == Layout::ROW_MAJOR) {
-        num_pages /= input_tensors[0].get_legacy_shape()[-1];
-    } else {
-        num_pages /= TILE_HW;
-    }
-    if (num_pages > 1) {
-        return RepeatOpParallelizationStrategy::MULTI_CORE;
-    } else {
-        return RepeatOpParallelizationStrategy::SINGLE_CORE;
-    }
+    return RepeatOpParallelizationStrategy::MULTI_CORE;
 }
 
 void Repeat::validate(const std::vector<Tensor> &input_tensors) const {
@@ -65,9 +55,8 @@ operation::ProgramWithCallbacks Repeat::create_program(
     const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const {
     switch (this->get_parallelization_strategy(input_tensors)) {
         case RepeatOpParallelizationStrategy::MULTI_CORE:
+        default:
             return repeat_multi_core(input_tensors[0], this->repeat_dim, this->num_repeats, output_tensors[0]);
-        case RepeatOpParallelizationStrategy::SINGLE_CORE:
-        default: return repeat_single_core(input_tensors[0], this->repeat_dim, this->num_repeats, output_tensors[0]);
     };
 }
 

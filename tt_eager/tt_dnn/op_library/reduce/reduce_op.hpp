@@ -21,13 +21,13 @@ enum class ReduceOpDim {
 };
 
 enum class ReduceOpParallelizationStrategy {
-    MULTI_CORE_H, MULTI_CORE_W, MULTI_CORE_HW, SINGLE_CORE
+    MULTI_CORE_H, MULTI_CORE_W, MULTI_CORE_HW, SINGLE_CORE_HW
 };
 
 // TODO: Accept parallelization
-operation::ProgramWithCallbacks reduce_single_core(const Tensor &input_tensor, Tensor &output_tensor, ReduceOpMath reduce_math, ReduceOpDim reduce_dim, float scaler = 1.0f);
-operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &input_tensor, Tensor &output_tensor, ReduceOpMath reduce_math, ReduceOpDim reduce_dim, float scaler = 1.0f);
-operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &input_tensor, Tensor &output_tensor, ReduceOpMath reduce_math, ReduceOpDim reduce_dim, float scaler = 1.0f);
+operation::ProgramWithCallbacks reduce_single_core_hw(const Tensor &input_tensor, Tensor &output_tensor, ReduceOpMath reduce_math, float scaler = 1.0f);
+operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &input_tensor, Tensor &output_tensor, ReduceOpMath reduce_math, float scaler = 1.0f);
+operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &input_tensor, Tensor &output_tensor, ReduceOpMath reduce_math, float scaler = 1.0f);
 
 struct Reduce {
     const ReduceOpMath math_op;
@@ -66,10 +66,6 @@ Tensor global_min(const Tensor& val, const MemoryConfig& output_mem_config);
 }  // namespace tt
 
 namespace reduce_op_utils {
-
-using namespace tt::tt_metal;
-
-string dim_to_kernel_name(ReduceOpDim reduce_dim, ReduceOpMath reduce_op);
 
 std::map<string, string> get_defines(ReduceOpMath reduce_op, ReduceOpDim reduce_dim);
 

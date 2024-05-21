@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-#include "tensor/owned_buffer_functions.hpp"
+#include "tensor/host_buffer/functions.hpp"
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_dnn/op_library/sharding_utilities.hpp"
 #include "tt_dnn/op_library/sliding_window_op_infra/utils.hpp"

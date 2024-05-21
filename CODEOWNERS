@@ -181,3 +181,6 @@ tests/python_api_testing/conv/ @tt-nshanker
 tests/python_api_testing/unit_testing/fallback_ops @tt-aho
 scripts/profiler/ @mo-tenstorrent
 scripts/install @tapspatel
+scripts/docker @ttmchiou @TT-billteng @tt-rkim
+
+dockerfile @ttmchiou @TT-billteng @tt-rkim

@@ -211,24 +211,14 @@ operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<
 
     switch (this->get_parallelization_strategy(input_tensors)) {
         case BinaryOpParallelizationStrategy::MULTI_CORE:
+        default:
             return eltwise_binary_multi_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type, this->fused_activations);
-            break;
-        case BinaryOpParallelizationStrategy::SINGLE_CORE:
-        default: return eltwise_binary_single_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type, this->fused_activations);
     }
 }
 
 
 BinaryOpParallelizationStrategy EltwiseBinary::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(0);
-    uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
-    if(num_tiles > 1 || input_tensor_a.memory_config().is_sharded() || input_tensor_b.memory_config().is_sharded() || this->output_mem_config.is_sharded()){
-        return BinaryOpParallelizationStrategy::MULTI_CORE;
-    }
-    else{
-       return BinaryOpParallelizationStrategy::SINGLE_CORE;
-    }
+    return BinaryOpParallelizationStrategy::MULTI_CORE;
 }
 
 const operation::Hash EltwiseBinary::compute_program_hash(

@@ -139,7 +139,6 @@ def test_LlamaMLP_inference(
     n_devices,
     t3k_device_mesh,
     emulated,
-    use_program_cache,
 ):
     model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
 

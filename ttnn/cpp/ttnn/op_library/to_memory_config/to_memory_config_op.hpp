@@ -9,7 +9,7 @@
 
 #include "tensor/tensor.hpp"
 // #include "third_party/magic_enum/magic_enum.hpp"
-// #include "tt_eager/tensor/owned_buffer_functions.hpp"
+// #include "tt_eager/tensor/host_buffer/functions.hpp"
 // #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_eager/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "tt_eager/tt_dnn/op_library/copy/copy_op.hpp"
@@ -31,7 +31,7 @@ struct ToMemoryConfig {
     static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
         return {ttnn::TensorSchema{
             1,
-            4,
+            8,
             {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b, ttnn::float32, ttnn::uint16, ttnn::uint32, ttnn::int32},
             {ttnn::ROW_MAJOR_LAYOUT, ttnn::TILE_LAYOUT},
             true,
@@ -43,13 +43,11 @@ struct ToMemoryConfig {
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor& tensor_arg, Args&&... args) {
         return std::make_tuple(tensor_arg);
-    };
+    }
 
     // TODO: Move to cpp once we merge with tt_eager
     static Tensor execute(
-        const ttnn::Tensor tensor,
-        const ttnn::MemoryConfig& memory_config,
-        std::optional<ttnn::DataType> dtype) {
+        const ttnn::Tensor& tensor, const ttnn::MemoryConfig& memory_config, std::optional<ttnn::DataType> dtype) {
         // Temporary until we see why buffer data not being populated
         const auto original_shape = tensor.get_shape();
 
