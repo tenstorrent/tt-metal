@@ -48,7 +48,6 @@ dynamic = ["version"]
 [tool.black]
 line-length = 120
 include = '^.*(ttnn|tests/scripts|tests/ttnn|tests/tt_eager/python_api_testing|tt_eager/tt_lib|tests/scripts|models/demos)/.*\.py$'
-exclude = '^.*(models/experimental/llama2_70b/reference|models/demos/t3000/llama2_70b/reference)/.*$'
 
 [tool.ruff]
 line-length = 120
