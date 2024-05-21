@@ -17,6 +17,7 @@
 #include "normalization.hpp"
 #include "kv_cache.hpp"
 #include "pool.hpp"
+#include "embedding.hpp"
 
 namespace py = pybind11;
 
@@ -33,6 +34,9 @@ void py_module(py::module& module) {
 
     auto m_core = module.def_submodule("core", "core operations");
     core::py_module(m_core);
+
+    auto m_embedding = module.def_submodule("embedding", "embedding operations");
+    embedding::py_module(m_embedding);
 
     auto m_matmul = module.def_submodule("matmul", "matmul operations");
     matmul::py_module(m_matmul);
