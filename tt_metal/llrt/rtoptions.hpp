@@ -135,6 +135,22 @@ class RunTimeOptions {
     inline uint32_t get_feature_transaction_mask(RunTimeDebugFeatures feature) { return feature_targets[feature].transaction_mask; }
     inline void set_feature_transaction_mask(RunTimeDebugFeatures feature, uint32_t transaction_mask) { feature_targets[feature].transaction_mask = transaction_mask; }
 
+    // Returns the string representation of the feature hash for a given feature.
+    inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) {
+        switch (feature) {
+            case RunTimeDebugFeatureDprint:
+                return std::to_string(get_feature_enabled(feature));
+            case RunTimeDebugFeatureDebugDelay:
+                if (get_feature_enabled(feature)) {
+                    return std::to_string(get_watcher_debug_delay());
+                } else {
+                    return "false";
+                }
+            default:
+                return "";
+        }
+    }
+
     // Used for both watcher and dprint servers, this dev option (no corresponding env var) sets
     // whether to catch exceptions (test mode = true) coming from debug servers or to throw them
     // (test mode = false). We need to catch for gtesting, since an unhandled exception will kill

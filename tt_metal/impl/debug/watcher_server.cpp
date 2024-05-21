@@ -901,16 +901,13 @@ void watcher_init(Device *device) {
 
     CoreCoord grid_size = device->logical_grid_size();
 
-    // Initialize debug delay masks
-
-    // If RTOptions doesn't enable DPRINT on this device, return here and don't actually attach it
-    // to the server.
-    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
+    // Initialize Debug Delay feature
+    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDebugDelay);
     bool chip_enabled = tt::llrt::OptionsG.get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDebugDelay) ||
                         std::find(chip_ids.begin(), chip_ids.end(), device->id()) != chip_ids.end();
     if (chip_enabled) {
         static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
-        std::vector<uint32_t> debug_insert_delays_init_val_zero; // Cores that are not involved get 0
+        std::vector<uint32_t> debug_insert_delays_init_val_zero; // Cores that are not involved get 0 for both masks
         debug_insert_delays_init_val_zero.resize(sizeof(debug_insert_delays_msg_t) / sizeof(uint32_t));
         std::vector<uint32_t> debug_insert_delays_init_val;
         debug_insert_delays_init_val.resize(sizeof(debug_insert_delays_msg_t) / sizeof(uint32_t));
@@ -922,17 +919,19 @@ void watcher_init(Device *device) {
         insert_delays_data->debug_delay_riscv_mask = hart_mask;
         insert_delays_data->debug_delay_transaction_type_mask = transaction_mask;
 
-        // Initialize worker cores insert delay values
-        for (uint32_t y = 0; y < grid_size.y; y++) {
-            for (uint32_t x = 0; x < grid_size.x; x++) {
-                CoreCoord logical_core(x, y);
-                CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
-
-                bool insert_delays_for_core = false; // FINISH: this should be populated by the code that parses env vars (see dprint)
-                if (insert_delays_for_core) {
-                    tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_insert_delays_init_val, GET_MAILBOX_ADDRESS_HOST(debug_insert_delays));
-                } else {
-                    tt::llrt::write_hex_vec_to_core(device->id(), worker_core, debug_insert_delays_init_val_zero, GET_MAILBOX_ADDRESS_HOST(debug_insert_delays));
+        for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
+            vector<CoreCoord> delayed_cores = tt::llrt::OptionsG.get_feature_cores(tt::llrt::RunTimeDebugFeatureDebugDelay)[core_type];
+            for (tt_xy_pair logical_core : delayed_cores) {
+                CoreCoord phys_core;
+                bool valid_logical_core = true;
+                try {
+                    phys_core = device->physical_core_from_logical_core(logical_core, core_type);
+                } catch (std::runtime_error& error) {
+                    valid_logical_core = false;
+                }
+                if (valid_logical_core) {
+                    auto addr = GET_MAILBOX_ADDRESS_HOST(debug_insert_delays);
+                    tt::llrt::write_hex_vec_to_core(device->id(), phys_core, debug_insert_delays_init_val, addr, true);
                 }
             }
         }

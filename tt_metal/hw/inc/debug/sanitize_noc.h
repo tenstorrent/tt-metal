@@ -264,15 +264,15 @@ void debug_sanitize_noc_and_worker_addr(
 // Delay for debugging purposes
 inline void debug_sanitize_insert_debug_delay(uint8_t transaction_type) {
 #if defined(WATCHER_DEBUG_DELAY)
-    debug_sanitize_noc_addr_msg_t tt_l1_ptr *v = *GET_MAILBOX_ADDRESS_DEV(sanitize_noc);
+    debug_insert_delays_msg_t tt_l1_ptr *v = GET_MAILBOX_ADDRESS_DEV(debug_insert_delays);
 
-    bool in_riscv_mask = v[0].debug_delay_riscv_mask & (1 << debug_get_which_riscv());
-    bool in_transaction_type_mask = v[0].debug_delay_transaction_type_mask & (1 << transaction_type);
+    bool in_riscv_mask = (v[0].debug_delay_riscv_mask & (1 << debug_get_which_riscv())) != 0;
+    bool in_transaction_type_mask = (v[0].debug_delay_transaction_type_mask & (1 << transaction_type)) != 0;
 
     if (in_riscv_mask && in_transaction_type_mask) {
         // WATCHER_DEBUG_DELAY is a compile time constant passed with -D
-        for (volatile uint32_t i = 0; i < WATCHER_DEBUG_DELAY; i++) ;
-        for (;;); // TODO: remove this
+        for (volatile uint32_t i = 0; i < WATCHER_DEBUG_DELAY; i++)
+            ; // Spin loop
     }
 #endif // WATCHER_DEBUG_DELAY
 

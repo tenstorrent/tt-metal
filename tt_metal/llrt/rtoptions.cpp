@@ -116,6 +116,11 @@ void RunTimeOptions::ParseWatcherEnv() {
     const char *watcher_debug_delay_str = getenv("TT_METAL_WATCHER_DEBUG_DELAY");
     if (watcher_debug_delay_str != nullptr) {
         sscanf(watcher_debug_delay_str, "%u", &watcher_debug_delay);
+        set_feature_enabled(RunTimeDebugFeatureDebugDelay, true);
+        // Assert watcher is also enabled (TT_METAL_WATCHER=1)
+        TT_ASSERT(watcher_enabled, "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER");
+        // Assert TT_METAL_WATCHER_DISABLE_NOC_SANITIZE is either not set or set to 0
+        TT_ASSERT(watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(), "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=0");
     }
 }
 
@@ -128,6 +133,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
     ParseFeatureChipIds(feature, feature_env_prefix + "_CHIPS");
     ParseFeatureRiscvMask(feature, feature_env_prefix + "_RISCVS");
     ParseFeatureFileName(feature, feature_env_prefix + "_FILE");
+    ParseFeatureTransactionMask(feature, feature_env_prefix + "_TRANSACTION_MASK");
 
     // Set feature enabled if the user asked for any dprint cores
     feature_targets[feature].enabled = false;
@@ -248,10 +254,14 @@ void RunTimeOptions::ParseFeatureFileName(RunTimeDebugFeatures feature, const st
 
 void RunTimeOptions::ParseFeatureTransactionMask(RunTimeDebugFeatures feature, const std::string &env_var) {
     char *env_var_str = std::getenv(env_var.c_str());
+    if (env_var_str == nullptr) {
+        feature_targets[feature].transaction_mask = (1 << TransactionNumTypes) - 1;
+        return;
+    }
     const char *transaction_type_names[TransactionNumTypes] = { "READ", "WRITE", "ATOMIC" };
 
     for (int i = 0; i < TransactionNumTypes; i++) {
-        if (strstr(env_var_str, transaction_type_names[i]) != nullptr) {
+        if (strcasestr(env_var_str, transaction_type_names[i]) != nullptr) {
             feature_targets[feature].transaction_mask |= (1 << i);
         }
     }
