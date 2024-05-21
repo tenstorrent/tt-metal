@@ -211,7 +211,7 @@ class Conv2d:
 
 
 # user facing
-class ConvConfig:
+class Conv2dConfig:
     def __init__(
         self,
         *,
@@ -473,15 +473,15 @@ def conv2d(
     dilation: Union[int, Tuple[int, int]] = (1, 1),
     groups: int = 1,
     bias_tensor: ttnn.Tensor = None,
-    conv_config: ConvConfig = None,  # manual override by user
+    conv_config: Conv2dConfig = None,  # manual override by user
     reshard_if_not_optimal=False,  # default
     conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
     debug=False,
-    run_new_conv=True,
+    run_new_conv=False,
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
-    run_new_conv = True
+    # run_new_conv = True
     if run_new_conv:
-        conv_config_ = ttnn._ttnn.operations.conv2d.ConvConfig(
+        conv_config_ = ttnn._ttnn.operations.conv2d.Conv2dConfig(
             math_fidelity=conv_config.math_fidelity,
             dtype=conv_config.dtype,
             weights_dtype=conv_config.weights_dtype,
@@ -533,9 +533,9 @@ def conv2d(
             )
     if run_new_conv:
         print("DEBUG MODE ENABLED. WILL RUN OLD PATH AND COMPARE WEIGHT, BIAS & OUTPUT TENSORS.")
-    assert (
-        not conv_config.deallocate_activation
-    )  # cannot run old path if activation was deallocated in the new path above
+        assert (
+            not conv_config.deallocate_activation
+        )  # cannot run old path if activation was deallocated in the new path above
     output_height = ((int)((input_height - kernel_size[0] + 2 * padding[0]) / stride[0])) + 1
     output_width = ((int)((input_width - kernel_size[1] + 2 * padding[1]) / stride[1])) + 1
 
@@ -550,7 +550,7 @@ def conv2d(
 
     # Input processing. TODO: Cache input processing decisions
     if conv_config is None:
-        conv_config = ConvConfig()
+        conv_config = Conv2dConfig()
     config_shard_grid = None
     if conv_config.core_grid is not None:
         config_shard_grid = get_shard_grid_from_core_grid(conv_config.core_grid)
@@ -710,18 +710,20 @@ def conv2d(
         assert parallel_config is not None
         block_and_parallel_config_override["grid_size"] = [parallel_config.grid_size.x, parallel_config.grid_size.y]
         block_and_parallel_config_override["num_cores_nhw"] = parallel_config.num_cores_nhw
-        if is_grayskull():
+        if is_grayskull(device=device):
             compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
                 math_fidelity=conv_config.math_fidelity,
                 math_approx_mode=conv_config.math_approx_mode,
             )
-        else:
+        elif is_wormhole_b0(device=device):
             compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=conv_config.math_fidelity,
                 math_approx_mode=conv_config.math_approx_mode,
                 fp32_dest_acc_en=conv_config.fp32_dest_acc_en,
                 packer_l1_acc=conv_config.packer_l1_acc,
             )
+        else:
+            assert False, f"Unsupported device: {device}"
         # Build conv op object
         conv = ttnn.Conv2d(
             in_channels=in_channels,

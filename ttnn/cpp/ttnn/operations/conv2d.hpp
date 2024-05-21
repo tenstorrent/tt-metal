@@ -19,13 +19,12 @@
 #include "tt_eager/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 #include "tt_eager/tt_dnn/op_library/sliding_window_op_infra/halo_op.hpp"
 
-using namespace tt;
 namespace ttnn {
 
 namespace operations {
 namespace conv2d {
 
-struct ConvConfig {
+struct Conv2dConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     DataType dtype = DataType::BFLOAT16;
     DataType weights_dtype = DataType::BFLOAT16;
@@ -114,7 +113,7 @@ std::pair<uint32_t, uint32_t> determine_largest_subblock_size(uint32_t block_hei
 
 tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(const ParallelConfig& parallel_config, const tt::tt_metal::OptimizedConvParallelizationConfig& conv_op_parallel_config, uint32_t padded_in_channels, uint32_t act_block_h_override, uint32_t window_w, bool fp32_accum, bool use_shallow_conv_variant);
 
-std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_required(Device& device, const ttnn::Tensor& input_tensor_, const ConvConfig& conv_config, uint32_t batch_size, uint32_t height, uint32_t width, uint32_t in_channels, uint32_t out_channels);
+std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_required(Device& device, const ttnn::Tensor& input_tensor_, const Conv2dConfig& conv_config, uint32_t batch_size, uint32_t height, uint32_t width, uint32_t in_channels, uint32_t out_channels);
 
 void validate_weight_and_bias_tensors(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor);
 
@@ -134,7 +133,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-    std::optional<const ConvConfig> conv_config_ = std::nullopt
+    std::optional<const Conv2dConfig> conv_config_ = std::nullopt
     );
 
 
@@ -144,7 +143,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
 
 
 
-template <> struct fmt::formatter<ttnn::operations::conv2d::ConvConfig> : formatter<string_view> {
+template <> struct fmt::formatter<ttnn::operations::conv2d::Conv2dConfig> : formatter<string_view> {
     // constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
-    auto format(const ttnn::operations::conv2d::ConvConfig& t, fmt::format_context& ctx);
+    auto format(const ttnn::operations::conv2d::Conv2dConfig& t, fmt::format_context& ctx);
 };

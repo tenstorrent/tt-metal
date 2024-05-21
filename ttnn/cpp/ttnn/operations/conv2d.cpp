@@ -254,7 +254,7 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(cons
     };
 }
 
-std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_required(Device& device, const ttnn::Tensor& input_tensor_, const ConvConfig& conv_config, uint32_t batch_size, uint32_t height, uint32_t width, uint32_t in_channels, uint32_t out_channels) {
+std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_required(Device& device, const ttnn::Tensor& input_tensor_, const Conv2dConfig& conv_config, uint32_t batch_size, uint32_t height, uint32_t width, uint32_t in_channels, uint32_t out_channels) {
     ttnn::Tensor input_tensor = input_tensor_; // tensor to return
     bool input_tensor_on_device = ttnn::has_storage_type_of(input_tensor_, ttnn::DEVICE_STORAGE_TYPE);
     bool needs_shard_or_reshard = false;
@@ -349,7 +349,11 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_requi
         auto input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(Shape({input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}), parallel_config, 32);
 
         if (input_is_on_device) {
-            input_tensor = ttnn::operations::core::ToMemoryConfig::execute(input_tensor, input_tensor_sharded_memory_config,{});
+            auto resharded_input_tensor = ttnn::operations::core::ToMemoryConfig::execute(input_tensor, input_tensor_sharded_memory_config,{});
+            if (conv_config.deallocate_activation) {
+                input_tensor.deallocate();
+            }
+            input_tensor = resharded_input_tensor;
         } else {
             input_tensor = ttnn::operations::core::to_device(input_tensor, const_cast<Device*>(&device), input_tensor_sharded_memory_config);
         }
@@ -501,13 +505,13 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
-    std::optional<const ConvConfig> conv_config_) {
+    std::optional<const Conv2dConfig> conv_config_) {
     ttnn::validate_input_tensor("ttnn.conv2d", input_tensor, input_schemas[0]);
     ttnn::validate_input_tensor("ttnn.conv2d", weight_tensor, input_schemas[1]);
     if(bias_tensor.has_value()) {
         ttnn::validate_input_tensor("ttnn.conv2d", bias_tensor.value(), input_schemas[2]);
     }
-    ConvConfig conv_config = conv_config_.value_or(ConvConfig());
+    Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     uint32_t output_height = ((input_height - kernel_size[0] + 2 * padding[0]) / stride[0]) + 1;
     uint32_t output_width = ((input_width - kernel_size[1] + 2 * padding[1]) / stride[1]) + 1;
     auto [input_tensor_post_tm, parallel_config, tensor_manipulated] = shard_or_reshard_tensor_if_required(device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels);
@@ -540,9 +544,6 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         if (conv_config.deallocate_activation) {
             input_tensor_post_tm.deallocate();
         }
-        device.synchronize();
-        tt::tt_metal::detail::DumpDeviceMemoryState(&device, "conv2d_3_");
-        // input_tensor_post_tm_out = ttnn::operations::core::reallocate(input_tensor_post_tm_out, input_tensor_post_tm_out.memory_config());
         device.synchronize();
         tt::tt_metal::detail::DumpDeviceMemoryState(&device, "conv2d_4_");
         input_tensor_post_tm = input_tensor_post_tm_out;
@@ -600,7 +601,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
 
 
 
-auto fmt::formatter<ttnn::operations::conv2d::ConvConfig>::format(const ttnn::operations::conv2d::ConvConfig& t, fmt::format_context& ctx) {
-    std::string str = fmt::format("ConvConfig(math_fidelity={}, dtype={}, weights_dtype={}, math_approx_mode_enabled={}, fp32_dest_acc_enabled={}, packer_l1_accum_enabled={}, activation={}, input_channels_alignment={}, deallocate_activation={}, reallocate_halo_output={}, act_block_h_override={}, reshard_if_not_optimal={}, override_sharding_config={}, height_sharding={}, core_grid={}, transpose_shards={}, output_layout={})", t.math_fidelity, t.dtype, t.weights_dtype, t.math_approx_mode_enabled, t.fp32_dest_acc_enabled, t.packer_l1_accum_enabled, t.activation, t.input_channels_alignment, t.deallocate_activation, t.reallocate_halo_output, t.act_block_h_override, t.reshard_if_not_optimal, t.override_sharding_config, t.height_sharding, t.core_grid.str(), t.transpose_shards, t.output_layout);
+auto fmt::formatter<ttnn::operations::conv2d::Conv2dConfig>::format(const ttnn::operations::conv2d::Conv2dConfig& t, fmt::format_context& ctx) {
+    std::string str = fmt::format("Conv2dConfig(math_fidelity={}, dtype={}, weights_dtype={}, math_approx_mode_enabled={}, fp32_dest_acc_enabled={}, packer_l1_accum_enabled={}, activation={}, input_channels_alignment={}, deallocate_activation={}, reallocate_halo_output={}, act_block_h_override={}, reshard_if_not_optimal={}, override_sharding_config={}, height_sharding={}, core_grid={}, transpose_shards={}, output_layout={})", t.math_fidelity, t.dtype, t.weights_dtype, t.math_approx_mode_enabled, t.fp32_dest_acc_enabled, t.packer_l1_accum_enabled, t.activation, t.input_channels_alignment, t.deallocate_activation, t.reallocate_halo_output, t.act_block_h_override, t.reshard_if_not_optimal, t.override_sharding_config, t.height_sharding, t.core_grid.str(), t.transpose_shards, t.output_layout);
     return format_to(ctx.out(), "{}", str);
 }
