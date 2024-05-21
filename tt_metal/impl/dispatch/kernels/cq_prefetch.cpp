@@ -342,16 +342,21 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr,
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
-template<uint32_t extra_space,
+// The hard problem here is: when an xfer lands exactly at a page boundary, who is responsible for getting the next page?
+// For inner loop, call N grabs page N+1.  No client should ever hit this as inline_noflush puts 16 bytes at the top of
+// the first page
+// At the end, do not grab page N+1
+template<int32_t round,
          bool test_for_nonzero>
 static uint32_t write_pages_to_dispatcher(uint32_t& downstream_data_ptr,
                                           uint32_t& scratch_write_addr,
                                           uint32_t& amt_to_write) {
 
     uint32_t page_residual_space = downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1));
-    uint32_t npages = (amt_to_write - page_residual_space + downstream_cb_page_size + extra_space - 1) / downstream_cb_page_size;
+    uint32_t npages = (amt_to_write - page_residual_space + downstream_cb_page_size - round) / downstream_cb_page_size;
 
     // Grabbing all pages at once is ok if scratch_size < 3 * downstream_cb_block_size
+    // test_for_nonzero is an optimization: inner loops moving lots of pages don't bother
     if (!test_for_nonzero || npages != 0) {
         cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages);
     }
@@ -465,7 +470,7 @@ uint32_t process_relay_paged_cmd_large(uint32_t cmd_ptr,
         uint32_t amt_to_write = write_length;
         ASSERT((amt_to_write & 0x1f) == 0);
 
-        uint32_t npages = write_pages_to_dispatcher<CQ_DISPATCH_CMD_SIZE, true>
+        uint32_t npages = write_pages_to_dispatcher<1, true>
             (downstream_data_ptr, scratch_write_addr, amt_to_write);
 
         // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
@@ -578,7 +583,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr,
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_read - cmd->relay_paged.length_adjust;
     ASSERT((amt_to_write & 0x1f) == 0);
-    uint32_t npages = write_pages_to_dispatcher<CQ_DISPATCH_CMD_SIZE, true>
+    uint32_t npages = write_pages_to_dispatcher<1, true>
         (downstream_data_ptr, scratch_write_addr, amt_to_write);
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
@@ -644,7 +649,7 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr,
     // Third step - write from DB
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_to_read;
-    uint32_t npages = write_pages_to_dispatcher<CQ_DISPATCH_CMD_SIZE, true>
+    uint32_t npages = write_pages_to_dispatcher<1, true>
         (downstream_data_ptr, scratch_write_addr, amt_to_write);
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
