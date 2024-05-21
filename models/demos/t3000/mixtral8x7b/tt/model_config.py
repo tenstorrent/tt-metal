@@ -40,6 +40,7 @@ class TtModelArgs:
         "MLP_W_LAYOUT",
         # Attention
         "ATTN_WEIGHTS",
+        "ATTN_CACHE_WEIGHTS",
         "XQKV_MM_OUTPUT",
         "QKV_HEADS_OUTPUT",
         "QV_ROT_EMB_OUTPUT",
