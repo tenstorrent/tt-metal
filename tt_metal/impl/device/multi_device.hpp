@@ -34,7 +34,7 @@ public:
     DeviceMesh &operator=(DeviceMesh &&) = delete;
 
     std::vector<Device*> get_devices() const;
-    Device &get_device(int queried_device_id);
+    Device* get_device(int queried_device_id);
 
     const DeviceIds get_device_ids() const;
 

@@ -205,17 +205,21 @@ const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volu
 
   bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
-Tensor get_device_tensor(Device* device, const Tensor& multi_device_tensor) {
+Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id) {
     const auto& tensor_storage = std::get<MultiDeviceStorage>(multi_device_tensor.get_storage());
-    if (tensor_storage.buffers.find(device->id()) != tensor_storage.buffers.end()) {
+    if (tensor_storage.buffers.find(device_id) != tensor_storage.buffers.end()) {
         return Tensor{
-            DeviceStorage{tensor_storage.buffers.at(device->id())},
+            DeviceStorage{tensor_storage.buffers.at(device_id)},
             multi_device_tensor.get_legacy_shape(),
             multi_device_tensor.get_dtype(),
             multi_device_tensor.get_layout()
         };
     }
     TT_THROW("Device not found in multi-device tensor");
+}
+
+Tensor get_device_tensor(const Tensor& multi_device_tensor, const Device* device) {
+    return get_device_tensor(multi_device_tensor, device->id());
 }
 
 bool is_multi_device_tensor(const Tensor& tensor) {
