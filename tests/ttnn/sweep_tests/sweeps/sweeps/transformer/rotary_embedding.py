@@ -49,9 +49,8 @@ def run(
 
     torch_input_tensor = torch_random(input_shape, low, high, dtype=torch.float32)
 
-    torch_output_tensor = ttnn.transformer.rotary_embedding.golden_function(
-        torch_input_tensor, torch_cos_cached, torch_sin_cached, token_index
-    )
+    golden_function = ttnn.get_golden_function(ttnn.transformer.rotary_embedding)
+    torch_output_tensor = golden_function(torch_input_tensor, torch_cos_cached, torch_sin_cached, token_index)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, device=device, memory_config=input_memory_config, layout=layout

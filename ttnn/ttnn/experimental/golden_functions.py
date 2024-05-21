@@ -3,19 +3,27 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch
 
 import ttnn.experimental
+
+
+def attach_golden(func, golden_func):
+    ttnn.decorators.OPERATION_TO_GOLDEN_FUNCTION[func] = golden_func
+
 
 if not ttnn.CONFIG.enable_fast_runtime_mode:
     # set golden functions
 
     def _golden_function(input_tensor, *args, **kwargs):
+        import torch
+
         return torch.exp(input_tensor)
 
-    ttnn.experimental.tensor.exp.golden_function = _golden_function
+    attach_golden(ttnn.experimental.tensor.exp, _golden_function)
 
     def _golden_function_matmul(input_tensor_a, input_tensor_b, *args, **kwargs):
+        import torch
+
         ret = input_tensor_a.float() @ input_tensor_b.float()
         if "bias" in kwargs:
             ret += kwargs["bias"]
@@ -35,7 +43,7 @@ if not ttnn.CONFIG.enable_fast_runtime_mode:
                 raise RuntimeError(f"{activation} is not supported as activation function")
         return ret
 
-    ttnn.experimental.operations.primary.matmul.golden_function = _golden_function_matmul
+    attach_golden(ttnn.experimental.operations.primary.matmul, _golden_function_matmul)
 
     def _golden_function(
         input_tensor,
@@ -73,9 +81,11 @@ if not ttnn.CONFIG.enable_fast_runtime_mode:
 
         return query, key, value
 
-    ttnn.experimental.tensor.create_qkv_heads_from_separate_tensors.golden_function = _golden_function
+    attach_golden(ttnn.experimental.tensor.create_qkv_heads_from_separate_tensors, _golden_function)
 
     def _golden_function(input_tensor, scalar, attention_mask, *args, **kwargs):
+        import torch
+
         input_tensor = input_tensor.float()
         input_tensor = input_tensor * scalar
         if attention_mask is not None:
@@ -83,21 +93,25 @@ if not ttnn.CONFIG.enable_fast_runtime_mode:
         ret = torch.softmax(input_tensor, dim=-1)
         return ret
 
-    ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place.golden_function = _golden_function
+    attach_golden(ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place, _golden_function)
 
     def _golden_function(input_tensor, *args, **kwargs):
+        import torch
+
         input_tensor = input_tensor.float()
         ret = torch.softmax(input_tensor, dim=-1)
         return ret
 
-    ttnn.experimental.operations.primary.softmax_in_place.golden_function = _golden_function
+    attach_golden(ttnn.experimental.operations.primary.softmax_in_place, _golden_function)
 
     def _golden_function(tensor, starts, stops, *args, **kwargs):
+        import torch
+
         for dim, (start, stop) in enumerate(zip(starts, stops)):
             tensor = torch.index_select(tensor, dim, torch.arange(start, stop + 1))
         return tensor
 
-    ttnn.experimental.tensor.unpad.golden_function = _golden_function
+    attach_golden(ttnn.experimental.tensor.unpad, _golden_function)
 
     def _golden_function(tensor, grid_size, shard_spec, num_slices, slice, *args, **kwargs):
         tensor = tensor.reshape(1, 1, -1, tensor.shape[-1])
@@ -107,11 +121,11 @@ if not ttnn.CONFIG.enable_fast_runtime_mode:
         tensor = tensor[:, :, start:stop, :]
         return tensor
 
-    ttnn.experimental.tensor.interleaved_to_sharded_partial.golden_function = _golden_function
+    attach_golden(ttnn.experimental.tensor.interleaved_to_sharded_partial, _golden_function)
 
     def _nop_golden_function(input_tensor, *args, **kwargs):
         return input_tensor
 
-    ttnn.experimental.tensor.interleaved_to_sharded.golden_function = _nop_golden_function
-    ttnn.experimental.tensor.reshard.golden_function = _nop_golden_function
-    ttnn.experimental.tensor.tilize.golden_function = _nop_golden_function
+    attach_golden(ttnn.experimental.tensor.interleaved_to_sharded, _nop_golden_function)
+    attach_golden(ttnn.experimental.tensor.reshard.golden_function, _nop_golden_function)
+    attach_golden(ttnn.experimental.tensor.tilize.golden_function, _nop_golden_function)
