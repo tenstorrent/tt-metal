@@ -477,9 +477,9 @@ def conv2d(
     reshard_if_not_optimal=False,  # default
     conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
     debug=False,
-    run_new_conv=True,
+    run_new_conv=False,
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
-    run_new_conv = True
+    # run_new_conv = True
     if run_new_conv:
         conv_config_ = ttnn._ttnn.operations.conv2d.ConvConfig(
             math_fidelity=conv_config.math_fidelity,
@@ -533,9 +533,9 @@ def conv2d(
             )
     if run_new_conv:
         print("DEBUG MODE ENABLED. WILL RUN OLD PATH AND COMPARE WEIGHT, BIAS & OUTPUT TENSORS.")
-    assert (
-        not conv_config.deallocate_activation
-    )  # cannot run old path if activation was deallocated in the new path above
+        assert (
+            not conv_config.deallocate_activation
+        )  # cannot run old path if activation was deallocated in the new path above
     output_height = ((int)((input_height - kernel_size[0] + 2 * padding[0]) / stride[0])) + 1
     output_width = ((int)((input_width - kernel_size[1] + 2 * padding[1]) / stride[1])) + 1
 

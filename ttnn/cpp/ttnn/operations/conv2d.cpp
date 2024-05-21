@@ -349,7 +349,11 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_requi
         auto input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(Shape({input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}), parallel_config, 32);
 
         if (input_is_on_device) {
-            input_tensor = ttnn::operations::core::ToMemoryConfig::execute(input_tensor, input_tensor_sharded_memory_config,{});
+            auto resharded_input_tensor = ttnn::operations::core::ToMemoryConfig::execute(input_tensor, input_tensor_sharded_memory_config,{});
+            if (conv_config.deallocate_activation) {
+                input_tensor.deallocate();
+            }
+            input_tensor = resharded_input_tensor;
         } else {
             input_tensor = ttnn::operations::core::to_device(input_tensor, const_cast<Device*>(&device), input_tensor_sharded_memory_config);
         }
@@ -540,9 +544,6 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         if (conv_config.deallocate_activation) {
             input_tensor_post_tm.deallocate();
         }
-        device.synchronize();
-        tt::tt_metal::detail::DumpDeviceMemoryState(&device, "conv2d_3_");
-        // input_tensor_post_tm_out = ttnn::operations::core::reallocate(input_tensor_post_tm_out, input_tensor_post_tm_out.memory_config());
         device.synchronize();
         tt::tt_metal::detail::DumpDeviceMemoryState(&device, "conv2d_4_");
         input_tensor_post_tm = input_tensor_post_tm_out;
