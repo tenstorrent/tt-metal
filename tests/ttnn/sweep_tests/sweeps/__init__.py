@@ -199,15 +199,24 @@ def run_sweep(file_name, *, device):
     return table_name
 
 
-def run_sweeps(*, device, include):
-    table_names = []
+def collect_tests(*, include):
     for file_name in sorted(SWEEP_SOURCES_DIR.glob("**/*.py")):
         sweep_name = get_sweep_name(file_name)
         if include and sweep_name not in include:
             continue
-        logger.info(f"Running {file_name}")
-        table_name = run_sweep(file_name, device=device)
-        table_names.append(table_name)
+        yield file_name, sweep_name
+
+
+def run_sweeps(*, device, include):
+    table_names = []
+    for file_name, sweep_name in collect_tests(include=include):
+        if not device:
+            logger.info(f"Collecting {sweep_name}")
+            continue
+        else:
+            logger.info(f"Running {sweep_name}")
+            table_name = run_sweep(file_name, device=device)
+            table_names.append(table_name)
     return table_names
 
 
