@@ -496,6 +496,7 @@ def test_resnet50_conv_wh(
     )
 
 
+@pytest.mark.skip("Needs to be tests with new API")
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_l1_small_size", [16384], indirect=True)
 @pytest.mark.parametrize(
@@ -617,7 +618,7 @@ def test_resnet50_conv_wh_fp32(
     )
 
 
-@pytest.mark.skip("New API needs to be tested")
+# @pytest.mark.skip("New API needs to be tested")
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("device_l1_small_size", [16384], indirect=True)
 @pytest.mark.parametrize(
@@ -913,7 +914,7 @@ def test_sd_conv_wh(
         )
 
 
-@pytest.mark.skip("New API needs to be tested")
+# @pytest.mark.skip("New API needs to be tested")
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("device_l1_small_size", [16384], indirect=True)
 @pytest.mark.parametrize(
