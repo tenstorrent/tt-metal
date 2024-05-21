@@ -53,10 +53,6 @@ def skip(
     return False, None
 
 
-def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
 def run(
     act_shape,
     kernel_size,
