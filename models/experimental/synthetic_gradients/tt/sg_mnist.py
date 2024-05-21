@@ -146,7 +146,7 @@ class TtMnistModel(nn.Module):
 
         # x is a pytorch tensor,... need to convert to a buda tensor
         inp = tt_lib.tensor.Tensor(x_, x.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.TILE, device)
-        breakpoint()
+        # breakpoint()
         lin1_out = self.lin1(inp)
         bn1_out = self.batchnorm1d_1(lin1_out)
         relu1_out = self.TtRelu(lin1_out)
@@ -240,7 +240,7 @@ def run_mnist_inference():
 
     close_or_far = is_close(pytorch_out, tt_out)
     print("close or far?", close_or_far)
-    breakpoint()
+    # breakpoint()
     # assert tt_out_oom == pytorch_out_oom, "The order of magnitudes of the outputs must be the same"
 
 
