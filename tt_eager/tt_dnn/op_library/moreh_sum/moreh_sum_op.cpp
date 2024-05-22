@@ -49,7 +49,8 @@ Tensor _moreh_sum(
     const Tensor& input,
     const int64_t& dim,
     const std::optional<const Tensor>& output,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& output_mem_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE);

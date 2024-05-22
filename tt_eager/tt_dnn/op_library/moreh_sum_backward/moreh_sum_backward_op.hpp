@@ -9,6 +9,7 @@
 
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
+#include "tt_dnn/op_library/compute_kernel_config.hpp"
 
 namespace tt {
 
@@ -21,6 +22,7 @@ using namespace tt_metal;
 struct MorehSumBackward {
     std::vector<int64_t> dims;
     MemoryConfig input_grad_mem_config;
+    const DeviceComputeKernelConfig compute_kernel_config;
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -28,20 +30,21 @@ struct MorehSumBackward {
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple("dims", "input_grad_mem_config");
+    static constexpr auto attribute_names = std::make_tuple("dims", "input_grad_mem_config", "compute_kernel_config");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->dims), std::cref(this->input_grad_mem_config));
+        return std::make_tuple(std::cref(this->dims), std::cref(this->input_grad_mem_config), std::cref(this->compute_kernel_config));
     }
 };
 
-operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_grad, const Tensor &input_grad);
+operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_grad, const Tensor &input_grad, const DeviceComputeKernelConfig &compute_kernel_config);
 
 Tensor moreh_sum_backward(
     const Tensor &output_grad,
     const Tensor &input,
     std::vector<int64_t> &dims,
     const std::optional<const Tensor> input_grad = std::nullopt,
-    const MemoryConfig &input_grad_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig &input_grad_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 
