@@ -136,6 +136,10 @@ void DeviceModule(py::module &m_device) {
         Returns number of Tenstorrent devices that are connected to host via PCIe and can be targeted.
     )doc");
 
+    m_device.def("GetPCIeDeviceID", &GetPCIeDeviceID, R"doc(
+        Returns associated mmio device of give device id.
+    )doc");
+
     m_device.def("SetDefaultDevice", &AutoFormat::SetDefaultDevice, R"doc(
         Sets the default device to use for ops when inputs aren't on device.
 

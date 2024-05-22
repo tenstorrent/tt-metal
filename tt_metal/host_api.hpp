@@ -55,6 +55,8 @@ size_t GetNumAvailableDevices();
  */
 size_t GetNumPCIeDevices();
 
+chip_id_t GetPCIeDeviceID(chip_id_t device_id);
+
 /**
  * Instantiates a device object.
  *

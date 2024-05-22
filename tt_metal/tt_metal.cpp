@@ -730,6 +730,10 @@ size_t GetNumPCIeDevices() {
 #endif
 }
 
+chip_id_t GetPCIeDeviceID(chip_id_t device_id){
+    return tt::Cluster::instance().get_associated_mmio_device(device_id);
+}
+
 Device *CreateDevice(
     chip_id_t device_id,
     const uint8_t num_hw_cqs,
