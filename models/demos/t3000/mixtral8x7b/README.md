@@ -47,18 +47,18 @@ Note that the cached weights folder structure will contain the general and instr
 4. Cache the weights (first-time setup):
 ```
 # Build a full 32 layer model to cache the weights. This will take some time.
-pytest -svv models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py::test_mixtral_model_inference[1-32-output]
+pytest -svv models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py::test_mixtral_model_inference[wormhole_b0-True-1-32-output]
 ```
 
 ### Run the demo
 ```
 # Run the demo with a pre-written batch of 32 user prompts
-pytest -svv models/demos/t3000/mixtral8x7b/demo/demo.py::test_mixtral8x7b_demo[general_weights]
+pytest -svv models/demos/t3000/mixtral8x7b/demo/demo.py::test_mixtral8x7b_demo[wormhole_b0-True-general_weights]
 ```
 
 We also provide an input file with 32 user question-prompt for instruct weights (don't forget to update your flags to the correct weights):
 ```
-pytest -svv models/demos/t3000/mixtral8x7b/demo/demo.py::test_mixtral8x7b_demo[instruct_weights]
+pytest -svv models/demos/t3000/mixtral8x7b/demo/demo.py::test_mixtral8x7b_demo[wormhole_b0-True-instruct_weights]
 ```
 
 Both input files are provided inside `models/demos/t3000/mixtral8x7b/demo/`.
