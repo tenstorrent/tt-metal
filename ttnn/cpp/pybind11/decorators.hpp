@@ -70,18 +70,22 @@ std::string append_input_tensor_schemas_to_doc(
             tuple);
     };
 
-    if constexpr (std::tuple_size_v<decltype(concrete_operation_t::input_tensor_schemas())> > 0) {
-        updated_doc << doc << "\n\n";
-        auto tensor_index = 0;
-        for (const auto& schema : concrete_operation_t::input_tensor_schemas()) {
-            updated_doc << "    .. list-table:: Input Tensor " << tensor_index << "\n\n";
-            write_row(ttnn::TensorSchema::attribute_names());
-            write_row(schema.attribute_values());
-            tensor_index++;
+    if constexpr (detail::has_input_tensor_schemas<concrete_operation_t>()) {
+        if constexpr (std::tuple_size_v<decltype(concrete_operation_t::input_tensor_schemas())> > 0) {
+            updated_doc << doc << "\n\n";
+            auto tensor_index = 0;
+            for (const auto& schema : concrete_operation_t::input_tensor_schemas()) {
+                updated_doc << "    .. list-table:: Input Tensor " << tensor_index << "\n\n";
+                write_row(ttnn::TensorSchema::attribute_names());
+                write_row(schema.attribute_values());
+                tensor_index++;
+                updated_doc << "\n";
+            }
             updated_doc << "\n";
+            return updated_doc.str();
+        } else {
+            return doc;
         }
-        updated_doc << "\n";
-        return updated_doc.str();
     } else {
         return doc;
     }
@@ -119,7 +123,10 @@ auto bind_registered_operation(
             if constexpr (is_specialization_of<pybind_arguments_t, std::decay_t<decltype(overload)>>::value) {
                 std::apply(
                     [&py_operation](auto&&... args) {
-                        py_operation.def("__call__", resolve_call_method<registered_operation_t>(&concrete_operation_t::execute), args...);
+                        py_operation.def(
+                            "__call__",
+                            resolve_call_method<registered_operation_t>(&concrete_operation_t::execute),
+                            args...);
                     },
                     overload.value);
             } else {
