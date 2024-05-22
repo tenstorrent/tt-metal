@@ -26,13 +26,21 @@ void kernel_main() {
     };
 
     uint32_t end_id = num_tiles_written + num_tiles; // num_tiles = (num_rows / total_cores) * Wt
-    for (uint32_t i = num_tiles_written; i < end_id; ++i) {
-        cb_wait_front(cb_id_out, onetile);
+
+    const uint32_t granularity = 4;
+    constexpr uint32_t loop_count = num_tiles/granularity;
+    uint32_t write_id = num_tiles_written;
+
+    for (uint32_t i = 0; i < loop_count; ++i) {
+        cb_wait_front(cb_id_out, granularity);
 
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-        noc_async_write_tile(i, s, l1_read_addr);
-        noc_async_write_barrier();
+        for (uint32_t j = 0; j < granularity; ++j) {
+            noc_async_write_tile(write_id++, s, l1_read_addr);
+            l1_read_addr += tile_bytes;
+        }
 
-        cb_pop_front(cb_id_out, onetile);
+        noc_async_write_barrier();
+        cb_pop_front(cb_id_out, granularity);
     }
 }

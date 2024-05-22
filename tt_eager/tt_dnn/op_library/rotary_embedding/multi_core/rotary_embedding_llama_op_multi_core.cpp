@@ -122,7 +122,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
             .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size);
     auto cb_trans_mat = tt_metal::CreateCircularBuffer(program, all_cores, cb_trans_mat_config);
 
-    uint32_t num_interm_tiles = 1;
+    uint32_t num_interm_tiles = Wt;
     uint32_t rotated_input_interm_cb_index = CB::c_intermed0;
     tt_metal::CircularBufferConfig cb_rotated_input_interm_config =
         tt_metal::CircularBufferConfig(

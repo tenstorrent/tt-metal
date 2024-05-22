@@ -46,53 +46,59 @@ void MAIN {
         cb_wait_front(in_cb, Wt);
         cb_wait_front(sin_cb, Wt);
         cb_wait_front(cos_cb, Wt);
+
+        cb_reserve_back(rotated_in_interm_cb, Wt);
+        cb_reserve_back(sin_interm_cb, Wt);
+        cb_reserve_back(cos_interm_cb, Wt);
+        cb_reserve_back(out_cb, Wt);
+
+        // rotated = x @ trans_mat
+        mm_init_short(in_cb, trans_mat_cb);
+        ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
-
-            // rotated = x @ trans_mat
-            mm_init_short(in_cb, trans_mat_cb);
-            cb_reserve_back(rotated_in_interm_cb, onetile);
-            //for
-            ACQ();
-            matmul_tiles(in_cb, trans_mat_cb, in0_index, in1_index, interm_index, false);
-            pack_tile(0, rotated_in_interm_cb);
-            REL();
-            cb_push_back(rotated_in_interm_cb, onetile);
-
-            // sin_interim = rotated * sin
-            cb_reserve_back(sin_interm_cb, onetile);
-            cb_wait_front(rotated_in_interm_cb, onetile);
-            mul_tiles_init();
-            ACQ();
-            mul_tiles(rotated_in_interm_cb, sin_cb, 0, 0, 0);
-            pack_tile(0, sin_interm_cb);
-            REL();
-            cb_push_back(sin_interm_cb, onetile);
-            cb_pop_front(sin_cb, onetile);
-            cb_pop_front(rotated_in_interm_cb, onetile);
-
-            // cos_interim = x * cos
-            cb_reserve_back(cos_interm_cb, onetile);
-            ACQ();
-            mul_tiles(in_cb, cos_cb, 0, 0, 0);
-            pack_tile(0, cos_interm_cb);
-            REL();
-            cb_push_back(cos_interm_cb, onetile);
-            cb_pop_front(cos_cb, onetile);
-            cb_pop_front(in_cb, onetile); // Done with input
-
-            // out = cos_interim + sin_interim
-            cb_wait_front(cos_interm_cb, onetile);
-            cb_wait_front(sin_interm_cb, onetile);
-            cb_reserve_back(out_cb, onetile);
-            add_tiles_init();
-            ACQ();
-            add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
-            pack_tile(0, out_cb);
-            REL();
-            cb_push_back(out_cb, onetile);
-            cb_pop_front(cos_interm_cb, onetile);
-            cb_pop_front(sin_interm_cb, onetile);
+            matmul_tiles(in_cb, trans_mat_cb, j, in1_index, j, false);
+            pack_tile(j, rotated_in_interm_cb, j);
         }
+        REL();
+        cb_push_back(rotated_in_interm_cb, Wt);
+        cb_wait_front(rotated_in_interm_cb, Wt);
+
+        mul_tiles_init();
+        ACQ();
+        for (uint32_t j = 0; j < Wt; ++j) {
+            // sin_interim = rotated * sin
+            mul_tiles(rotated_in_interm_cb, sin_cb, j, j, j);
+            pack_tile(j, sin_interm_cb, j);
+        }
+        REL();
+        cb_push_back(sin_interm_cb, Wt);
+        cb_pop_front(sin_cb, Wt);
+        cb_pop_front(rotated_in_interm_cb, Wt);
+
+        ACQ();
+        for (uint32_t j = 0; j < Wt; ++j) {
+            // cos_interim = x * cos
+            mul_tiles(in_cb, cos_cb, j, j, j);
+            pack_tile(j, cos_interm_cb, j);
+        }
+        REL();
+        cb_push_back(cos_interm_cb, Wt);
+        cb_pop_front(cos_cb, Wt);
+        cb_pop_front(in_cb, Wt); // Done with input
+
+        cb_wait_front(cos_interm_cb, Wt);
+        cb_wait_front(sin_interm_cb, Wt);
+        add_tiles_init();
+        ACQ();
+        for (uint32_t j = 0; j < Wt; ++j) {
+            // out = cos_interim + sin_interim
+            add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
+            pack_tile(j, out_cb, j);
+        }
+        REL();
+        cb_push_back(out_cb, Wt);
+        cb_pop_front(cos_interm_cb, Wt);
+        cb_pop_front(sin_interm_cb, Wt);
     }
 
     // Done with the transformation matrix, so remove from CB
