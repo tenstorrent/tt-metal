@@ -496,6 +496,10 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_right_shift,
         "pytorch_op": pytorch_ops.right_shift,
     },
+    "eltwise-mod": {
+        "tt_op": tt_lib_ops.eltwise_mod,
+        "pytorch_op": pytorch_ops.mod,
+    },
     "eltwise-unary_ne": {
         "tt_op": tt_lib_ops.eltwise_unary_ne,
         "pytorch_op": pytorch_ops.unary_ne,

@@ -533,6 +533,12 @@ def right_shift(x, *args, **kwargs):
     return result
 
 
+def mod(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.remainder(x, value)
+    return result
+
+
 def unary_ne(x, *args, **kwargs):
     value = kwargs.pop("scalar")
     result = torch.ne(x, value)

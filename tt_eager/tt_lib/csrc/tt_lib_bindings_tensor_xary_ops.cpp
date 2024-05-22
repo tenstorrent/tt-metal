@@ -365,6 +365,16 @@ void TensorModuleXaryOPs(py::module &m_tensor) {
     );
     detail::bind_unary_op_with_param(
         m_tensor,
+        "mod",
+        mod,
+        py::arg("value"),
+        R"doc(Computes mod operation on input tensor ``{0}`` by scalar ``{1}``.)doc",
+
+        R"doc("value", "float", "")doc"
+
+    );
+    detail::bind_unary_op_with_param(
+        m_tensor,
         "unary_ne",
         unary_ne,
         py::arg("value"),

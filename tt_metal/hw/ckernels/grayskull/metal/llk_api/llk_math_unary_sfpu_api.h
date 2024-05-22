@@ -10,6 +10,7 @@
 #include "llk_math_eltwise_unary_sfpu_heaviside.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_left_shift.h"
+#include "llk_math_eltwise_unary_sfpu_mod.h"
 #include "llk_math_eltwise_unary_sfpu_power.h"
 #include "llk_math_eltwise_unary_sfpu_right_shift.h"
 #include "llk_math_eltwise_unary_sfpu_rsqrt.h"

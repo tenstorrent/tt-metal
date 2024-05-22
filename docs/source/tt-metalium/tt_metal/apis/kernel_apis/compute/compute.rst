@@ -51,6 +51,7 @@ Compute APIs
   transpose_wh_tile
   left_shift_tile
   right_shift_tile
+  mod_tile
 
   tanh_tile
   tan_tile
