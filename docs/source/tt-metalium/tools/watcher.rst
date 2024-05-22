@@ -205,11 +205,10 @@ watcher log:
 
 Debug Delays
 ------------
-  It is possible to add a delay to the watcher sanitization routines to which can be useful for debugging
-race conditions.
-  The delay can be set using the environment variable `TT_METAL_WATCHER_DELAY` which
-specifies the number of iterations of a spin loop. The delay can be set for all cores, or a subset of cores
-with the environment variable `TT_METAL_DEBUG_DELAY_CORES`: x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all.
+  It is possible to add delays to NOC transactions. This can be useful for debugging race conditions.
+  The delay can be set using environment variable `TT_METAL_WATCHER_DELAY`. The variable specifies the number
+of spin loop iterations to wait for. The delay can be set for all cores, or a subset through the environment
+variable `TT_METAL_DEBUG_DELAY_CORES`: x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all.
   The delay can also be set per NOC transaction type using `TT_METAL_DEBUG_DELAY_TRANSACTION_MASK`
 which can be one or more of: READ, WRITE, ATOMIC; if not set, the delay is applied to all transaction types.
   Finally, the delay can be set of specific RISCs (BRISC, NCRISC, TRISC0, TRISC1, TRISC2) through the
