@@ -6,9 +6,9 @@
 
 namespace NAMESPACE {
 void MAIN {
-    ArgFetcher arg_fetcher;
-    const auto num_input_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
+    // compile-time args
+    constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t num_input_tiles = get_compile_time_arg_val(1);
 
     constexpr auto cb_in0 = tt::CB::c_in0;
     constexpr auto cb_in1 = tt::CB::c_in1;
@@ -19,7 +19,7 @@ void MAIN {
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t first_tile = 0;
 
-    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in1);
+    binary_op_init_common(cb_in0, cb_in1, cb_out0);
     cb_wait_front(cb_in1, onetile);
 
     for (uint32_t i = 0; i < num_output_tiles; i++) {
