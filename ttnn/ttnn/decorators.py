@@ -757,11 +757,13 @@ def register_operation(
         global OPERATION_TO_FALLBACK_FUNCTION
 
         def fallback_function(*function_args, **function_kwargs):
-            updated_function_args, updated_function_kwargs = preprocess_golden_function_inputs(
-                function_args, function_kwargs
-            )
+            preprocess_inputs = preprocess_golden_function_inputs or default_preprocess_golden_function_inputs
+            postprocess_outputs = postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
+
+            updated_function_args, updated_function_kwargs = preprocess_inputs(function_args, function_kwargs)
             output = golden_function(*updated_function_args, **updated_function_kwargs)
-            output = postprocess_golden_function_outputs(output, function_args, function_kwargs)
+            output = postprocess_outputs(output, function_args, function_kwargs)
+
             return output
 
         if ttnn.CONFIG.enable_fast_runtime_mode:
