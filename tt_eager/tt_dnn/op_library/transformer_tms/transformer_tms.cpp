@@ -538,13 +538,25 @@ void SSMEltwiseMul::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(
         input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Unsupported memory layout for input b!");
-    TT_FATAL(input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format for input a!");
-    TT_FATAL(input_tensor_b.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format for input b!");
+    TT_FATAL(
+        input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        "Unsupported data format for input a!");
+    TT_FATAL(
+        input_tensor_b.get_dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        "Unsupported data format for input b!");
+    TT_FATAL(
+        input_tensor_a.get_dtype() == input_tensor_b.get_dtype(),
+        "Input a and input b must have the same data format!");
 
     TT_FATAL(
         this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Unsupported memory layout for output!");
-    TT_FATAL(this->output_dtype == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format for output!");
+    TT_FATAL(
+        this->output_dtype == tt::tt_metal::DataType::BFLOAT16 ||
+            this->output_dtype == tt::tt_metal::DataType::BFLOAT8_B,
+        "Unsupported data format for output!");
 
     const auto ashape = input_tensor_a.get_legacy_shape();
     const auto bshape = input_tensor_b.get_legacy_shape();
@@ -553,8 +565,10 @@ void SSMEltwiseMul::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL((ashape[2] == TILE_HEIGHT), "Num of users must be 32 for input a!");
     TT_FATAL((bshape[2] == TILE_HEIGHT), "Num of users must be 32 for input b!");
     TT_FATAL((ashape[3] != bshape[3]), "Use eltwise mul for same size inputs!");
-    TT_FATAL((ashape[3] == TILE_WIDTH || ashape[3] == TILE_WIDTH * HIDDEN_SIZE), "Input a width must be 32 or 32*5120!");
-    TT_FATAL((bshape[3] == HIDDEN_SIZE || bshape[3] == TILE_WIDTH * HIDDEN_SIZE), "Input b width must be 32 or 32*5120!");
+    TT_FATAL(
+        (ashape[3] == TILE_WIDTH || ashape[3] == TILE_WIDTH * HIDDEN_SIZE), "Input a width must be 32 or 32*5120!");
+    TT_FATAL(
+        (bshape[3] == HIDDEN_SIZE || bshape[3] == TILE_WIDTH * HIDDEN_SIZE), "Input b width must be 32 or 32*5120!");
 }
 
 std::vector<Shape> SSMEltwiseMul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -606,12 +620,18 @@ void SSM1DSumReduce::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(
         input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Unsupported memory layout for input a!");
-    TT_FATAL(input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format for input a!");
+    TT_FATAL(
+        input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        "Unsupported data format for input a!");
 
     TT_FATAL(
         this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Unsupported memory layout for output!");
-    TT_FATAL(this->output_dtype == tt::tt_metal::DataType::BFLOAT16 || this->output_dtype == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format for output!");
+    TT_FATAL(
+        this->output_dtype == tt::tt_metal::DataType::BFLOAT16 ||
+            this->output_dtype == tt::tt_metal::DataType::BFLOAT8_B,
+        "Unsupported data format for output!");
 
     constexpr uint32_t latent = 32;
     const auto ashape = input_tensor_a.get_legacy_shape();
