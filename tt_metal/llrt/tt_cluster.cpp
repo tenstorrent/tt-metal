@@ -6,10 +6,10 @@
 
 #include <immintrin.h>
 
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <string>
-#include <filesystem>
 
 #include "device_data.hpp"
 #include "hostdevcommon/dprint_common.h"
@@ -98,8 +98,9 @@ std::filesystem::path get_cluster_desc_yaml() {
     fs::create_directory(umd_path);
     const fs::path cluster_desc_path = umd_path / "cluster_desc.yaml";
     if (!fs::exists(cluster_desc_path)) {
-        auto val = system ( ("touch " + cluster_desc_path.string()).c_str());
-        if(val != 0) throw std::runtime_error("YAML Cluster folder and file before create-ethernet-map failed!");
+        auto val = system(("touch " + cluster_desc_path.string()).c_str());
+        if (val != 0)
+            throw std::runtime_error("YAML Cluster folder and file before create-ethernet-map failed!");
     }
 
     // Generates the cluster descriptor in the CWD
@@ -113,20 +114,24 @@ std::filesystem::path get_cluster_desc_yaml() {
 #endif
     std::string cmd = eth_fpath.string() + " " + cluster_desc_path.string();
     int val = system(cmd.c_str());
-    if(val != 0) throw std::runtime_error("Cluster Generation with create-ethernet-map Failed!");
+    if (val != 0)
+        throw std::runtime_error("Cluster Generation with create-ethernet-map Failed!");
 
     return fs::absolute(cluster_desc_path);
 }
 
 void Cluster::generate_cluster_descriptor() {
-    this->cluster_desc_path_ = (this->target_type_ == TargetDevice::Silicon and this->arch_ == tt::ARCH::WORMHOLE_B0) ? get_cluster_desc_yaml().string() : "";
+    this->cluster_desc_path_ = (this->target_type_ == TargetDevice::Silicon and this->arch_ == tt::ARCH::WORMHOLE_B0)
+                                   ? get_cluster_desc_yaml().string()
+                                   : "";
 
     // create-eth-map not available for Blackhole bring up
     if (this->arch_ == tt::ARCH::GRAYSKULL or this->arch_ == tt::ARCH::BLACKHOLE) {
         // Cannot use tt_SiliconDevice::detect_available_device_ids because that returns physical device IDs
         std::vector<chip_id_t> physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids();
         std::set<chip_id_t> logical_mmio_device_ids;
-        for (chip_id_t logical_mmio_device_id = 0; logical_mmio_device_id < physical_mmio_device_ids.size(); logical_mmio_device_id++) {
+        for (chip_id_t logical_mmio_device_id = 0; logical_mmio_device_id < physical_mmio_device_ids.size();
+             logical_mmio_device_id++) {
             logical_mmio_device_ids.insert(logical_mmio_device_id);
         }
         this->cluster_desc_ =
@@ -150,9 +155,13 @@ void Cluster::generate_cluster_descriptor() {
     }
 
     uint32_t total_num_hugepages = get_num_hugepages();
-    TT_FATAL(total_num_hugepages >= this->cluster_desc_->get_all_chips().size(),
-        "Machine setup error: Insufficient number of hugepages available, expected one per device ({}) but have {}. Increase number of hugepages!", this->cluster_desc_->get_all_chips().size(), total_num_hugepages);
-
+    // TODO (abhullar): ignore hugepage set up for BH bringup
+    TT_FATAL(
+        this->arch_ == tt::ARCH::BLACKHOLE or total_num_hugepages >= this->cluster_desc_->get_all_chips().size(),
+        "Machine setup error: Insufficient number of hugepages available, expected one per device ({}) but have {}. "
+        "Increase number of hugepages!",
+        this->cluster_desc_->get_all_chips().size(),
+        total_num_hugepages);
 }
 
 void Cluster::initialize_device_drivers() {
@@ -176,9 +185,10 @@ void Cluster::assert_risc_reset() {
     }
 }
 
-void Cluster::assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids) {
-    // g_MAX_HOST_MEM_CHANNELS (4) is defined in tt_SiliconDevice and denotes the max number of host memory channels per MMIO device
-    // Metal currently assigns 1 channel per device. See https://github.com/tenstorrent/tt-metal/issues/4087
+void Cluster::assign_mem_channels_to_devices(
+    chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids) {
+    // g_MAX_HOST_MEM_CHANNELS (4) is defined in tt_SiliconDevice and denotes the max number of host memory channels per
+    // MMIO device Metal currently assigns 1 channel per device. See https://github.com/tenstorrent/tt-metal/issues/4087
     TT_ASSERT(controlled_device_ids.size() <= 4, "Unable to assign each device to its own host memory channel!");
     uint16_t channel = 0;
     this->device_to_host_mem_channel_[mmio_device_id] = channel++;
@@ -199,15 +209,17 @@ void Cluster::get_metal_desc_from_tt_desc(
     }
 }
 
-void Cluster::open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids, const bool &skip_driver_allocs) {
+void Cluster::open_driver(
+    chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids, const bool &skip_driver_allocs) {
     const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
 
     std::unique_ptr<tt_device> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
         // This is the target/desired number of mem channels per arch/device.
-        // Silicon driver will attempt to open this many hugepages as channels, and assert if workload uses more than available.
-        // Metal currently uses assigns 1 channel per device
-        uint32_t num_host_mem_ch_per_mmio_device = controlled_device_ids.size();
+        // Silicon driver will attempt to open this many hugepages as channels, and assert if workload uses more than
+        // available. Metal currently uses assigns 1 channel per device
+        uint32_t num_host_mem_ch_per_mmio_device =
+            this->arch_ == tt::ARCH::BLACKHOLE ? 0 : controlled_device_ids.size();
         std::unordered_map<std::string, std::int32_t> dynamic_tlb_config = ll_api::get_dynamic_tlb_config();
         // This will remove harvested rows from the soc descriptor
         const bool perform_harvesting = true;
@@ -225,7 +237,8 @@ void Cluster::open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &c
         device_driver->set_driver_host_address_params(host_address_params);
         device_driver->set_driver_eth_interface_params(eth_interface_params);
 
-        // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata that is later expected to be populated by unrelated APIs
+        // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata
+        // that is later expected to be populated by unrelated APIs
         TT_FATAL(device_driver->get_target_mmio_device_ids().size() == 1);
     } else if (this->target_type_ == TargetDevice::Versim) {
         device_driver = std::make_unique<tt_VersimDevice>(sdesc_path, this->cluster_desc_path_);
@@ -233,7 +246,8 @@ void Cluster::open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &c
     device_driver->set_device_dram_address_params(dram_address_params);
     device_driver->set_device_l1_address_params(l1_address_params);
 
-    this->get_metal_desc_from_tt_desc(device_driver->get_virtual_soc_descriptors(), device_driver->get_harvesting_masks_for_soc_descriptors());
+    this->get_metal_desc_from_tt_desc(
+        device_driver->get_virtual_soc_descriptors(), device_driver->get_harvesting_masks_for_soc_descriptors());
     this->mmio_device_id_to_driver_[mmio_device_id] = std::move(device_driver);
 }
 
@@ -243,8 +257,10 @@ void Cluster::start_driver(chip_id_t mmio_device_id, tt_device_params &device_pa
     TT_FATAL(this->sdesc_per_chip_.size(), "Descriptor must be loaded. Try open_driver()");
 
     // static TLBs avoided for Blackhole bring up
-    if (this->target_type_ == TargetDevice::Silicon && device_params.init_device && this->arch_ != tt::ARCH::BLACKHOLE) {
-        ll_api::configure_static_tlbs(this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), this->get_driver(mmio_device_id));
+    if (this->target_type_ == TargetDevice::Silicon && device_params.init_device &&
+        this->arch_ != tt::ARCH::BLACKHOLE) {
+        ll_api::configure_static_tlbs(
+            this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), this->get_driver(mmio_device_id));
     }
 
     this->mmio_device_id_to_driver_.at(mmio_device_id)->start_device(device_params);
@@ -268,7 +284,11 @@ tt_device &Cluster::get_driver(chip_id_t device_id) const {
 
 const metal_SocDescriptor &Cluster::get_soc_desc(chip_id_t chip) const {
     if (this->sdesc_per_chip_.find(chip) == this->sdesc_per_chip_.end()) {
-        TT_THROW("Cannot access soc descriptor for {} before device driver is initialized! Call initialize_device_driver({}) first", chip, chip);
+        TT_THROW(
+            "Cannot access soc descriptor for {} before device driver is initialized! Call "
+            "initialize_device_driver({}) first",
+            chip,
+            chip);
     }
     return this->sdesc_per_chip_.at(chip);
 }
@@ -349,11 +369,11 @@ void Cluster::write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
     tt_cxy_pair dram_core = tt_cxy_pair(chip_id, desc_to_use.get_core_for_dram_channel(d_chan, d_subchannel));
     size_t offset = desc_to_use.get_address_offset(d_chan);
-        write_core(vec.data(), vec.size() * sizeof(uint32_t), dram_core, addr + offset, small_access);
+    write_core(vec.data(), vec.size() * sizeof(uint32_t), dram_core, addr + offset, small_access);
 }
 
 void Cluster::read_dram_vec(
-    vector<uint32_t> &vec, uint32_t sz_in_bytes, tt_target_dram dram, uint64_t addr,  bool small_access) const {
+    vector<uint32_t> &vec, uint32_t sz_in_bytes, tt_target_dram dram, uint64_t addr, bool small_access) const {
     int chip_id, d_chan, d_subchannel;
     std::tie(chip_id, d_chan, d_subchannel) = dram;
     const metal_SocDescriptor &desc_to_use = get_soc_desc(chip_id);
@@ -375,15 +395,14 @@ void Cluster::write_core(
     chip_id_t chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
-        tt::watcher_sanitize_host_noc_write(
-            soc_desc, {core.x, core.y}, addr, sz_in_bytes);
+        tt::watcher_sanitize_host_noc_write(soc_desc, {core.x, core.y}, addr, sz_in_bytes);
     }
     tt_cxy_pair virtual_core = soc_desc.convert_to_umd_coordinates(core);
     this->get_driver(chip_id).write_to_device(mem_ptr, sz_in_bytes, virtual_core, addr, "LARGE_WRITE_TLB");
     if (this->get_driver(chip_id).get_target_remote_device_ids().find(virtual_core.chip) !=
         this->get_driver(chip_id).get_target_remote_device_ids().end()) {
-            this->get_driver(chip_id).wait_for_non_mmio_flush();
-        }
+        this->get_driver(chip_id).wait_for_non_mmio_flush();
+    }
 }
 
 void Cluster::read_core(
@@ -392,8 +411,7 @@ void Cluster::read_core(
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
-        tt::watcher_sanitize_host_noc_read(
-            soc_desc, {core.x, core.y}, addr, size_in_bytes);
+        tt::watcher_sanitize_host_noc_read(soc_desc, {core.x, core.y}, addr, size_in_bytes);
     }
 
     tt_cxy_pair virtual_core = soc_desc.convert_to_umd_coordinates(core);
@@ -401,7 +419,7 @@ void Cluster::read_core(
 }
 
 void Cluster::read_core(
-    vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
+    vector<uint32_t> &data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
     data.resize(size_in_bytes / sizeof(uint32_t));
     read_core(data.data(), size_in_bytes, core, addr, small_access);
 }
@@ -434,12 +452,14 @@ void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr
     this->get_driver(chip_id).read_from_device(mem_ptr, virtual_target, addr, size_in_bytes, "REG_TLB");
 }
 
-void Cluster::write_sysmem(const void* vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const {
+void Cluster::write_sysmem(
+    const void *vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const {
     TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(src_device_id));
     this->get_driver(src_device_id).write_to_sysmem(vec, size_in_bytes, addr, channel, src_device_id);
 }
 
-void Cluster::read_sysmem(void *vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const {
+void Cluster::read_sysmem(
+    void *vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const {
     TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(src_device_id));
     this->get_driver(src_device_id).read_from_sysmem(vec, addr, channel, size_in_bytes, src_device_id);
 }
@@ -551,12 +571,13 @@ void Cluster::initialize_ethernet_sockets() {
                 continue;
             }
             for (const auto &eth_core : eth_cores) {
-              if(this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::IDLE) {
-                this->ethernet_sockets_.at(chip_id).at(connected_chip_id).emplace_back(eth_core);
-                this->ethernet_sockets_.at(connected_chip_id)
-                    .at(chip_id)
-                    .emplace_back(std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core))));
-              }
+                if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::IDLE) {
+                    this->ethernet_sockets_.at(chip_id).at(connected_chip_id).emplace_back(eth_core);
+                    this->ethernet_sockets_.at(connected_chip_id)
+                        .at(chip_id)
+                        .emplace_back(
+                            std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core))));
+                }
             }
         }
     }
@@ -566,21 +587,23 @@ std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id
     std::unordered_set<chip_id_t> device_ids;
     const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
     for (const auto &[other_chip_id, eth_cores] : connected_chips) {
-      for (const auto &eth_core: eth_cores) {
-        if(this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::IDLE) {
-            device_ids.insert(other_chip_id);
+        for (const auto &eth_core : eth_cores) {
+            if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::IDLE) {
+                device_ids.insert(other_chip_id);
+            }
         }
-      }
     }
     return device_ids;
 }
 
-std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(chip_id_t chip_id, bool skip_reserved_tunnel_cores) const {
+std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
+    chip_id_t chip_id, bool skip_reserved_tunnel_cores) const {
     std::unordered_set<CoreCoord> active_ethernet_cores;
     const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
     for (const auto &[other_chip_id, eth_cores] : connected_chips) {
         for (const auto &eth_core : eth_cores) {
-            if(this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::BI_DIR_TUNNELING and skip_reserved_tunnel_cores) {
+            if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::BI_DIR_TUNNELING and
+                skip_reserved_tunnel_cores) {
                 continue;
             }
             active_ethernet_cores.insert(eth_core);
@@ -655,13 +678,17 @@ void Cluster::reserve_ethernet_cores_for_tunneling() {
                         if (this->device_eth_routing_info_.at(chip_id).find(eth_core) ==
                             this->device_eth_routing_info_.at(chip_id).end()) {
                             tt_cxy_pair this_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
-                            if (devices.find(connected_chip_id) != devices.end() && reserved_chip_connections.find(std::make_tuple(chip_id, connected_chip_id)) == reserved_chip_connections.end()) {
-                                // only setup fd tunneling for devices grouped with same mmio device and if no bi dir tunnel found between the two chips
-                                    this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::BI_DIR_TUNNELING});
-                                    this->device_eth_routing_info_.at(connected_chip_id)
-                                        .insert({connected_eth_core, EthRouterMode::BI_DIR_TUNNELING});
-                                    reserved_chip_connections.insert({std::make_tuple(chip_id, connected_chip_id), true});
-                                    reserved_chip_connections.insert({std::make_tuple(connected_chip_id, chip_id), true});
+                            if (devices.find(connected_chip_id) != devices.end() &&
+                                reserved_chip_connections.find(std::make_tuple(chip_id, connected_chip_id)) ==
+                                    reserved_chip_connections.end()) {
+                                // only setup fd tunneling for devices grouped with same mmio device and if no bi dir
+                                // tunnel found between the two chips
+                                this->device_eth_routing_info_.at(chip_id).insert(
+                                    {eth_core, EthRouterMode::BI_DIR_TUNNELING});
+                                this->device_eth_routing_info_.at(connected_chip_id)
+                                    .insert({connected_eth_core, EthRouterMode::BI_DIR_TUNNELING});
+                                reserved_chip_connections.insert({std::make_tuple(chip_id, connected_chip_id), true});
+                                reserved_chip_connections.insert({std::make_tuple(connected_chip_id, chip_id), true});
                             } else {
                                 this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::IDLE});
                             }
@@ -681,13 +708,11 @@ void Cluster::reserve_ethernet_cores_for_tunneling() {
     }
 }
 
-
 tt_cxy_pair Cluster::get_eth_core_for_dispatch_core(
     tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const {
     const auto &local_chip_id = logical_dispatch_core.chip;
     for (const auto &[eth_core, router_mode] : this->device_eth_routing_info_.at(local_chip_id)) {
-
-      // Check for connected chip id since one chip can be bi directional tunneling to multiple chips
+        // Check for connected chip id since one chip can be bi directional tunneling to multiple chips
         const auto connected_tunnel_chip_id =
             std::get<0>(this->get_connected_ethernet_core(std::make_tuple(local_chip_id, eth_core)));
         if (router_mode == mode and connected_tunnel_chip_id == connected_chip_id) {
@@ -709,12 +734,12 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
         .routing_enabled = 0,
         .src_sent_valid_cmd = 0,
         .dst_acked_valid_cmd = 0,
-      };
+    };
     const routing_info_t routing_info_enabled = {
         .routing_enabled = 1,
         .src_sent_valid_cmd = 0,
         .dst_acked_valid_cmd = 0,
-      };
+    };
     for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
         for (const auto &chip_id : devices) {
             for (const auto &[eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
@@ -730,11 +755,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
                 } else if (chip_id != assoc_mmio_device and enable_internal_routing) {
                     // Enable internal ethernet routing for non-mmio devices
                     write_core(
-                        (void *)&routing_info_enabled,
-                        sizeof(routing_info_t),
-                        eth_phys_core,
-                        routing_info_addr,
-                        false);
+                        (void *)&routing_info_enabled, sizeof(routing_info_t), eth_phys_core, routing_info_addr, false);
 
                 } else {
                     continue;
@@ -755,11 +776,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
                 } else if (chip_id == assoc_mmio_device and enable_internal_routing) {
                     // Enable internal ethernet routing for mmio devices
                     write_core(
-                        (void *)&routing_info_enabled,
-                        sizeof(routing_info_t),
-                        eth_phys_core,
-                        routing_info_addr,
-                        false);
+                        (void *)&routing_info_enabled, sizeof(routing_info_t), eth_phys_core, routing_info_addr, false);
                 } else {
                     continue;
                 }
@@ -768,9 +785,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
     }
 }
 
-uint32_t Cluster::get_tensix_soft_reset_addr() const {
-    return DEVICE_DATA.TENSIX_SOFT_RESET_ADDR;
-}
+uint32_t Cluster::get_tensix_soft_reset_addr() const { return DEVICE_DATA.TENSIX_SOFT_RESET_ADDR; }
 
 }  // namespace tt
 
