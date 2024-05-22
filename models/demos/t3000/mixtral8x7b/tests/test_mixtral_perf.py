@@ -11,6 +11,7 @@ if os.getenv("CI") == "true":
     os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
+    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
 from ttnn import ConcatMeshToTensor
