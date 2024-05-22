@@ -4,11 +4,11 @@
 
 #pragma once
 
+#include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_eager/tt_dnn/op_library/run_operation.hpp"
-#include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
-#include "ttnn/operations/core.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/operations/core.hpp"
 #include "ttnn/validation.hpp"
 
 namespace ttnn {
@@ -35,7 +35,7 @@ inline const std::array<ttnn::TensorSchema, 1> input_tensor_schemas() {
 
 template <typename... Args>
 inline auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-    return std::make_tuple(input_tensor);
+    return std::forward_as_tuple(input_tensor);
 }
 
 inline Tensor execute(
@@ -62,8 +62,7 @@ struct Unary {
     }
 
     static Tensor execute(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return detail::execute(
-            input_tensor, {UnaryWithParam{unary_op_type}}, memory_config);
+        return detail::execute(input_tensor, {UnaryWithParam{unary_op_type}}, memory_config);
     }
 };
 
@@ -111,7 +110,11 @@ struct Softplus {
         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
     }
 
-    static Tensor execute(const Tensor& input, const float beta, const float threshold, const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
+    static Tensor execute(
+        const Tensor& input,
+        const float beta,
+        const float threshold,
+        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
         auto original_input_shape = input.get_shape();
         auto input_4D = ttnn::unsqueeze_to_4D(input);
 
@@ -194,4 +197,4 @@ auto prelu = leaky_relu;  // Alias for leaky_relu. TODO(#8544): implement PReLU 
 // Other unaries (composite operations)
 constexpr auto softplus = ttnn::register_operation<ttnn::operations::unary::Softplus>("ttnn::softplus");
 
-} // namespace ttnn
+}  // namespace ttnn

@@ -39,7 +39,7 @@ struct ToLayout {
 
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor& tensor_arg, Args&&... args) {
-        return std::make_tuple(tensor_arg);
+        return std::forward_as_tuple(tensor_arg);
     }
 
     static Tensor execute(

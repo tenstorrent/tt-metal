@@ -31,30 +31,35 @@ struct UpdateKVCache {
                 false,
                 false,
                 false},
-            };
+        };
     }
 
     template <typename... Args>
     static auto input_tensors_to_validate(const ttnn::Tensor& cache, const ttnn::Tensor& token, Args&&... args) {
-        return std::make_tuple(cache, token);
+        return std::forward_as_tuple(cache, token);
     }
 };
 
 struct FillCache : public UpdateKVCache {
     static ttnn::Tensor execute(const ttnn::Tensor& cache, const ttnn::Tensor& input, const uint32_t batch_index) {
         operation::run(
-            tt::tt_metal::UpdateCache{batch_index, 0, 0, tt::tt_metal::UpdateCacheOpType::FILL}, std::vector<ttnn::Tensor>{cache, input});
+            tt::tt_metal::UpdateCache{batch_index, 0, 0, tt::tt_metal::UpdateCacheOpType::FILL},
+            std::vector<ttnn::Tensor>{cache, input});
         return cache;
     }
 };
 
 struct UpdateCache : public UpdateKVCache {
-    static ttnn::Tensor execute(const ttnn::Tensor& cache, const ttnn::Tensor& input, const uint32_t update_index, const uint32_t batch_offset, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
+    static ttnn::Tensor execute(
+        const ttnn::Tensor& cache,
+        const ttnn::Tensor& input,
+        const uint32_t update_index,
+        const uint32_t batch_offset,
+        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
         auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config);
         operation::run(
             tt::tt_metal::UpdateCache{
-                0, update_index, batch_offset, tt::tt_metal::UpdateCacheOpType::UPDATE, kernel_config_val
-            },
+                0, update_index, batch_offset, tt::tt_metal::UpdateCacheOpType::UPDATE, kernel_config_val},
             std::vector<ttnn::Tensor>{cache, input});
         return cache;
     }
@@ -63,7 +68,9 @@ struct UpdateCache : public UpdateKVCache {
 }  // namespace kv_cache
 }  // namespace operations
 
-constexpr auto fill_cache_for_user_ = ttnn::register_operation<ttnn::operations::kv_cache::FillCache>("ttnn::fill_cache_for_user_");
-constexpr auto update_cache_for_token_ = ttnn::register_operation<ttnn::operations::kv_cache::UpdateCache>("ttnn::update_cache_for_token_");
+constexpr auto fill_cache_for_user_ =
+    ttnn::register_operation<ttnn::operations::kv_cache::FillCache>("ttnn::fill_cache_for_user_");
+constexpr auto update_cache_for_token_ =
+    ttnn::register_operation<ttnn::operations::kv_cache::UpdateCache>("ttnn::update_cache_for_token_");
 
 }  // namespace ttnn

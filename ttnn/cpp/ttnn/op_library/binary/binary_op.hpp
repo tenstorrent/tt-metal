@@ -34,10 +34,9 @@ struct BinaryProgramConfig {
     const MemoryConfig memory_config;
     const DataType dtype;
 
-    static constexpr auto attribute_names = std::make_tuple("activations", "memory_config", "dtype");
+    static constexpr auto attribute_names = std::forward_as_tuple("activations", "memory_config", "dtype");
     const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->activations), std::cref(this->memory_config), std::cref(this->dtype));
+        return std::forward_as_tuple(this->activations, this->memory_config, this->dtype);
     }
 };
 
@@ -59,9 +58,9 @@ struct Binary {
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple("program_config", "compute_kernel_config");
+    static constexpr auto attribute_names = std::forward_as_tuple("program_config", "compute_kernel_config");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->program_config), std::cref(this->compute_kernel_config));
+        return std::forward_as_tuple(this->program_config, this->compute_kernel_config);
     }
 
     static inline const std::array<TensorSchema, 2> input_tensor_schemas() {
@@ -88,7 +87,7 @@ struct Binary {
 
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
-        return std::make_tuple(input_tensor_a, input_tensor_b);
+        return std::forward_as_tuple(input_tensor_a, input_tensor_b);
     }
 
     static Tensor execute(
@@ -120,14 +119,15 @@ struct Binary {
         }
 
         return operation::run(
-            Binary{BinaryProgramConfig{
-                activations, output_memory_config, dtype.value_or(input_tensor_a.get_dtype())}},
-            {input_tensor_a, input_tensor_b}).at(0);
+                   Binary{BinaryProgramConfig{
+                       activations, output_memory_config, dtype.value_or(input_tensor_a.get_dtype())}},
+                   {input_tensor_a, input_tensor_b})
+            .at(0);
     }
 
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor &input_tensor_a, const float input_tensor_b, Args &&...args) {
-        return std::make_tuple(input_tensor_a, input_tensor_b);
+        return std::forward_as_tuple(input_tensor_a, input_tensor_b);
     }
 
     // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this

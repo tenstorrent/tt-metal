@@ -42,7 +42,7 @@ struct ToMemoryConfig {
 
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor& tensor_arg, Args&&... args) {
-        return std::make_tuple(tensor_arg);
+        return std::forward_as_tuple(tensor_arg);
     }
 
     // TODO: Move to cpp once we merge with tt_eager

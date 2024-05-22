@@ -216,7 +216,7 @@ ttnn.Tensor.__eq__ = lambda self, *args, **kwargs: eq(self, *args, **kwargs)
 ttnn.Tensor.__ne__ = lambda self, *args, **kwargs: ne(self, *args, **kwargs)
 ttnn.Tensor.__gt__ = lambda self, *args, **kwargs: gt(self, *args, **kwargs)
 ttnn.Tensor.__ge__ = lambda self, *args, **kwargs: ge(self, *args, **kwargs)
-ttnn.Tensor.__lt__ = lambda self, *args, **kwargs: lte(self, *args, **kwargs)
+ttnn.Tensor.__lt__ = lambda self, *args, **kwargs: lt(self, *args, **kwargs)
 ttnn.Tensor.__le__ = lambda self, *args, **kwargs: le(self, *args, **kwargs)
 
 

@@ -28,7 +28,7 @@ struct Config {
     std::string root_report_path = "generated/ttnn/reports";
     std::optional<std::string> report_name = std::nullopt;
 
-    static constexpr auto attribute_names = std::make_tuple(
+    static constexpr auto attribute_names = std::forward_as_tuple(
         "cache_path",
         "model_cache_path",
         "tmp_dir",
@@ -45,21 +45,21 @@ struct Config {
         "report_name");
 
     const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->cache_path),
-            std::cref(this->model_cache_path),
-            std::cref(this->tmp_dir),
-            std::cref(this->enable_model_cache),
-            std::cref(this->enable_fast_runtime_mode),
-            std::cref(this->throw_exception_on_fallback),
-            std::cref(this->enable_logging),
-            std::cref(this->enable_graph_report),
-            std::cref(this->enable_detailed_buffer_report),
-            std::cref(this->enable_detailed_tensor_report),
-            std::cref(this->enable_comparison_mode),
-            std::cref(this->comparison_mode_pcc),
-            std::cref(this->root_report_path),
-            std::cref(this->report_name));
+        return std::forward_as_tuple(
+            this->cache_path,
+            this->model_cache_path,
+            this->tmp_dir,
+            this->enable_model_cache,
+            this->enable_fast_runtime_mode,
+            this->throw_exception_on_fallback,
+            this->enable_logging,
+            this->enable_graph_report,
+            this->enable_detailed_buffer_report,
+            this->enable_detailed_tensor_report,
+            this->enable_comparison_mode,
+            this->comparison_mode_pcc,
+            this->root_report_path,
+            this->report_name);
     }
 };
 

@@ -231,7 +231,7 @@ struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
 
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-        return std::make_tuple(input_tensor);
+        return std::forward_as_tuple(input_tensor);
     }
 
     static inline ttnn::Tensor execute(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
@@ -278,10 +278,7 @@ struct RotaryEmbedding : public tt::tt_metal::RotaryEmbedding {
 
         return operation::run(
                    RotaryEmbedding{
-                       seq_len,
-                       token_index,
-                       memory_config.value_or(input_tensor.memory_config()),
-                       kernel_config_val},
+                       seq_len, token_index, memory_config.value_or(input_tensor.memory_config()), kernel_config_val},
                    {input_tensor, cos_cache, sin_cache})
             .at(0);
     }
@@ -301,7 +298,7 @@ struct ExecuteAttentionSoftmax {
         const std::optional<int>& head_size = std::nullopt,
         const std::optional<const ttnn::Tensor>& attention_mask = std::nullopt,
         Args&&... args) {
-        return std::make_tuple(input_tensor, attention_mask);
+        return std::forward_as_tuple(input_tensor, attention_mask);
     }
 
     static ttnn::Tensor execute(

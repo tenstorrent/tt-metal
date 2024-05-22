@@ -48,7 +48,11 @@ Tensor host_function(const Tensor& input_tensor) {
         output_buffer[index] = bfloat16(value);
     }
 
-    return Tensor(OwnedStorage{output_buffer}, input_tensor.get_legacy_shape(), input_tensor.get_dtype(), input_tensor.get_layout());
+    return Tensor(
+        OwnedStorage{output_buffer},
+        input_tensor.get_legacy_shape(),
+        input_tensor.get_dtype(),
+        input_tensor.get_layout());
 }
 
 template <auto UnaryOpType, typename... Args>
@@ -107,7 +111,7 @@ void test_operation_infrastructure() {
         MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}});
 
     auto program_hash = op.compute_program_hash({input_tensor}, {});
-    TT_FATAL(program_hash == 9656532145062328483ULL, fmt::format("Actual value is {}", program_hash));
+    TT_FATAL(program_hash == 12891264133052461068ULL, fmt::format("Actual value is {}", program_hash));
 
     auto profiler_info = op.create_profiler_info({input_tensor});
     TT_FATAL(
@@ -266,10 +270,7 @@ void test_program_cache() {
     device->enable_program_cache();
     run_tests();
 
-    TT_FATAL(
-        device->num_program_cache_entries() == 4,
-        "There are {} entries",
-        device->num_program_cache_entries());
+    TT_FATAL(device->num_program_cache_entries() == 4, "There are {} entries", device->num_program_cache_entries());
 
     device->disable_and_clear_program_cache();
     TT_FATAL(device->num_program_cache_entries() == 0);

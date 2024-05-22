@@ -26,7 +26,7 @@ struct AllGather {
 
     template <typename... Args>
     static auto input_tensors_to_validate(const ttnn::Tensor& input_tensor, Args&&... args) {
-        return std::make_tuple(input_tensor);
+        return std::forward_as_tuple(input_tensor);
     }
 
     static ttnn::Tensor execute_async(
