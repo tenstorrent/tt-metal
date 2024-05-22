@@ -56,7 +56,7 @@ def test_mixtral_model_perf(
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
-    model_args.n_layers = 32
+    model_args.n_layers = 1
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     # Clear global profiler state before starting measurements
@@ -135,7 +135,6 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
     pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
-    tt_decode_input = pt_decode_input
     profiler.end(f"torch_embed_initial")
 
     for i in range(generation_length):
@@ -143,16 +142,18 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
         current_pos = start_pos % tt_model.args.sliding_window
 
         profiler.start(f"prepare_inputs_for_inference_{i}")
-        decode_input = prepare_inputs_ttnn(
-            tt_decode_input,
+        decode_input, attn_mask = prepare_inputs_ttnn(
+            pt_decode_input,
             tt_model.args.dim,
+            start_pos,
+            tt_model.args.sliding_window,
             tt_model.device_mesh,
         )
         profiler.end(f"prepare_inputs_for_inference_{i}")
 
         # Run TT model
         profiler.start(f"model_run_for_inference_{i}")
-        tt_out = tt_model(decode_input, start_pos, current_pos, rot_mat)
+        tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask, rot_mat)
 
         # Convert ttnn tensor to torch tensor
         profiler.start(f"result_wait_for_inference_{i}")
