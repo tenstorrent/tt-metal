@@ -49,20 +49,13 @@ jobs:
       - uses: ./.github/actions/install-python-deps
       - name: Build Docs
         timeout-minutes: 15
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_build_docs.sh
-      - name: Build additional ttnn sweeps docs
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          export PYTHONPATH=$(pwd)
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd docs/
-          make ttnn_sweeps/check_directory
-          make ttnn_sweeps
       - name: Prepare artifact - move output
         run: |
           mkdir gh_pages
