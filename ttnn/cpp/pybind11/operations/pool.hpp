@@ -21,7 +21,7 @@ namespace detail {
 
 void bind_global_avg_pool2d(py::module& module) {
     auto doc = fmt::format(
-    R"doc({0}(input_tensor: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+        R"doc({0}(input_tensor: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
 
         Applies {0} to :attr:`input_tensor` by performing a 2D adaptive average pooling over an input signal composed of several input planes. This operation computes the average of all elements in each channel across the entire spatial dimensions.
 
@@ -43,12 +43,12 @@ void bind_global_avg_pool2d(py::module& module) {
             >>> tensor = ttnn.from_torch(torch.randn((10, 3, 32, 32), dtype=ttnn.bfloat16), device=device)
             >>> output = {1}(tensor)
     )doc",
-    ttnn::operations::pool::global_avg_pool2d.name(),
-    ttnn::operations::pool::global_avg_pool2d.python_fully_qualified_name());
+        ttnn::global_avg_pool2d.name(),
+        ttnn::global_avg_pool2d.python_fully_qualified_name());
 
     bind_registered_operation(
         module,
-        ttnn::operations::pool::global_avg_pool2d,
+        ttnn::global_avg_pool2d,
         doc,
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
@@ -59,9 +59,7 @@ void bind_global_avg_pool2d(py::module& module) {
 
 }  // namespace detail
 
-void py_module(py::module& module) {
-    detail::bind_global_avg_pool2d(module);
-}
+void py_module(py::module& module) { detail::bind_global_avg_pool2d(module); }
 
 }  // namespace pool
 }  // namespace operations
