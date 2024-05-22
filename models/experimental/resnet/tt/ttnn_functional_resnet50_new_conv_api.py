@@ -242,7 +242,13 @@ class resnet50Bottleneck:
                 x, device, batch_size, input_height, input_width, conv_op_cache, reshard_if_not_optimal, height_sharding
             )
 
-        # print("Running conv2")
+        reallocate_halo_output = (
+            batch_size
+            == 20  # and
+            # input_height == 56 and
+            # self.conv1_input_channels == 256 and
+            # self.downsample
+        )
         out, input_height, input_width, self.conv2_weight_tensor, self.conv2_bias_tensor = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv2_weight_tensor,
@@ -262,9 +268,7 @@ class resnet50Bottleneck:
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 activation="relu",
                 deallocate_activation=True,
-                reallocate_halo_output=(
-                    batch_size == 20 and input_height == 56 and self.conv1_input_channels == 256 and self.downsample
-                ),
+                reallocate_halo_output=reallocate_halo_output,
                 act_block_h=act_block_h_override,
                 height_sharding=height_sharding,
             ),
@@ -760,12 +764,12 @@ class resnet50:
                 x.get_legacy_shape()[3],
             ),
         )
-        for _, tensor in conv_op_cache["reader_patterns_cache"]["conv"].items():
-            ttnn.deallocate(tensor)
-        for _, halo_tensors in conv_op_cache["reader_patterns_cache"]["halo"].items():
-            for tensor in halo_tensors.values():
-                if isinstance(tensor, ttnn.Tensor):
-                    ttnn.deallocate(tensor)
+        # for _, tensor in conv_op_cache["reader_patterns_cache"]["conv"].items():
+        #     ttnn.deallocate(tensor)
+        # for _, halo_tensors in conv_op_cache["reader_patterns_cache"]["halo"].items():
+        #     for tensor in halo_tensors.values():
+        #         if isinstance(tensor, ttnn.Tensor):
+        #             ttnn.deallocate(tensor)
         return x
 
     def optimized_run(self, input_tensor, device, batch_size, ops_parallel_config, conv_op_cache) -> ttnn.Tensor:
