@@ -5,8 +5,10 @@
 /** @file @brief Main firmware code */
 
 #include <unistd.h>
+
 #include <cstdint>
 
+// clang-format off
 #include "risc_common.h"
 #include "tensix.h"
 #include "tensix_types.h"
@@ -28,6 +30,7 @@
 
 #include "debug/status.h"
 #include "debug/dprint.h"
+// clang-format on
 
 uint8_t noc_index;
 
@@ -39,7 +42,7 @@ constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRI
 
 constexpr uint32_t num_cbs_to_early_init = 4;  // safe small number to overlap w/ ncrisc copy
 
-tt_l1_ptr mailboxes_t * const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
+tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
 uint32_t ncrisc_kernel_start_offset16;
 
 c_tensix_core core;
@@ -56,18 +59,18 @@ uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
-uint32_t atomic_ret_val __attribute__ ((section ("l1_data"))) __attribute__((used));
+uint32_t atomic_ret_val __attribute__((section("l1_data"))) __attribute__((used));
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 #define MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
 
 namespace kernel_profiler {
-    uint32_t wIndex __attribute__((used));
-    uint32_t stackSize __attribute__((used));
-    uint32_t sums[SUM_COUNT] __attribute__((used));
-    uint32_t sumIDs[SUM_COUNT] __attribute__((used));
-}
+uint32_t wIndex __attribute__((used));
+uint32_t stackSize __attribute__((used));
+uint32_t sums[SUM_COUNT] __attribute__((used));
+uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+}  // namespace kernel_profiler
 
 void enable_power_management() {
     // Mask and Hyst taken from tb_tensix math_tests
@@ -131,7 +134,6 @@ void enable_power_management() {
 }
 
 void set_deassert_addresses() {
-
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
 
     cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = MEM_NCRISC_IRAM_BASE;
@@ -144,12 +146,7 @@ void set_deassert_addresses() {
 
 void l1_to_ncrisc_iram_copy(uint32_t src, uint32_t dst, uint16_t size) {
     // Copy NCRISC firmware from L1 to local IRAM using tensix DMA
-    tdma_xmov(
-        TDMA_MOVER0,
-        src,
-        dst,
-        size,
-        XMOV_L1_TO_L0);
+    tdma_xmov(TDMA_MOVER0, src, dst, size, XMOV_L1_TO_L0);
 }
 
 void l1_to_ncrisc_iram_copy_wait() {
@@ -223,15 +220,14 @@ void init_sync_registers() {
     volatile tt_reg_ptr uint* tiles_received_ptr;
     volatile tt_reg_ptr uint* tiles_acked_ptr;
     for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
-      tiles_received_ptr = get_cb_tiles_received_ptr(operand);
-      tiles_received_ptr[0] = 0;
-      tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
-      tiles_acked_ptr[0] = 0;
+        tiles_received_ptr = get_cb_tiles_received_ptr(operand);
+        tiles_received_ptr[0] = 0;
+        tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
+        tiles_acked_ptr[0] = 0;
     }
 }
 
-inline void deassert_ncrisc_trisc()
-{
+inline void deassert_ncrisc_trisc() {
     // Below sets ncrisc to go so we can wait until it is cleared on first iteration
     mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
 
@@ -245,8 +241,7 @@ inline void deassert_ncrisc_trisc()
     deassert_all_reset();
 }
 
-inline void set_ncrisc_kernel_resume_deassert_address()
-{
+inline void set_ncrisc_kernel_resume_deassert_address() {
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
     DEBUG_STATUS("INW");
     while (mailboxes->ncrisc_halt.resume_addr == 0);
@@ -254,38 +249,36 @@ inline void set_ncrisc_kernel_resume_deassert_address()
     cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
 }
 
-inline void run_triscs()
-{
+inline void run_triscs() {
     if (mailboxes->launch.enable_triscs) {
         mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_TRISCS_GO;
     }
 }
 
-inline void finish_ncrisc_copy_and_run()
-{
-   if (mailboxes->launch.enable_ncrisc) {
-       mailboxes->slave_sync.ncrisc = RUN_SYNC_MSG_GO;
+inline void finish_ncrisc_copy_and_run() {
+    if (mailboxes->launch.enable_ncrisc) {
+        mailboxes->slave_sync.ncrisc = RUN_SYNC_MSG_GO;
 
-       l1_to_ncrisc_iram_copy_wait();
+        l1_to_ncrisc_iram_copy_wait();
 
-       // Note: only ncrisc is in reset, so just deasserts ncrisc
-       deassert_all_reset();
-   }
+        // Note: only ncrisc is in reset, so just deasserts ncrisc
+        deassert_all_reset();
+    }
 }
 
-inline void wait_ncrisc_trisc()
-{
+inline void wait_ncrisc_trisc() {
     DEBUG_STATUS("NTW");
     while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE);
     DEBUG_STATUS("NTD");
 }
 
 int main() {
-
     DEBUG_STATUS("I");
 
+    disable_lowcache();
+
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
-    l1_to_local_mem_copy((uint*)__ldm_data_start, (uint tt_l1_ptr *)MEM_BRISC_INIT_LOCAL_L1_BASE, num_words);
+    l1_to_local_mem_copy((uint*)__ldm_data_start, (uint tt_l1_ptr*)MEM_BRISC_INIT_LOCAL_L1_BASE, num_words);
 
     risc_init();
     device_setup();
@@ -316,9 +309,10 @@ int main() {
             DeviceZoneScopedMainN("BRISC-FW");
 
             // Always copy ncrisc even if its size is 0 (save branch)...
-            l1_to_ncrisc_iram_copy((MEM_NCRISC_INIT_IRAM_L1_BASE >> 4) + ncrisc_kernel_start_offset16,
-                                   MEM_MOVER_VIEW_IRAM_BASE_ADDR + ncrisc_kernel_start_offset16,
-                                   mailboxes->launch.ncrisc_kernel_size16);
+            l1_to_ncrisc_iram_copy(
+                (MEM_NCRISC_INIT_IRAM_L1_BASE >> 4) + ncrisc_kernel_start_offset16,
+                MEM_MOVER_VIEW_IRAM_BASE_ADDR + ncrisc_kernel_start_offset16,
+                mailboxes->launch.ncrisc_kernel_size16);
 
             // Invalidate the i$ now the kernels have loaded and before running
             volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
@@ -348,9 +342,17 @@ int main() {
 
             // Notify dispatcher core that it has completed
             if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
-                uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
+                uint64_t dispatch_addr =
+                    NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
                 DEBUG_SANITIZE_NOC_ADDR(dispatch_addr, 4);
-                noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
+                noc_fast_atomic_increment(
+                    noc_index,
+                    NCRISC_AT_CMD_BUF,
+                    dispatch_addr,
+                    NOC_UNICAST_WRITE_VC,
+                    1,
+                    31 /*wrap*/,
+                    false /*linked*/);
             }
         }
     }
