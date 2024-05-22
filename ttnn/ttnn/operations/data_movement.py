@@ -386,7 +386,7 @@ def _repeat_validate_input_tensors(operation_name, input_tensor, *args, **kwargs
     name="ttnn.repeat",
     validate_input_tensors=_repeat_validate_input_tensors,
     golden_function=_golden_function,
-    allow_to_fallback_to_golden_function_on_failure=True,
+    allow_to_fallback_to_golden_function_on_failure=False,
 )
 def repeat(
     input_tensor: ttnn.Tensor,
