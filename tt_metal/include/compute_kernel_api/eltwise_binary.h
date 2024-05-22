@@ -165,32 +165,32 @@ ALWI void sub_tiles( uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t iti
     MATH(( llk_math_eltwise_binary<ELWSUB, NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE, DST_ACCUM_MODE>(icb0, icb1, idst) ));
 }
 
-template<bool full_init = false>
 /**
  * Init function with a specified op
- * | Argument       | Description                                              | Type     | Valid Range                                    | Required |
- * |----------------|----------------------------------------------------------|----------|------------------------------------------------|----------|
- * | op_code        | op code corresponding to op                              | uint32_t | 0 to 31                                        | True     |
+ * template parameters:
+ * full_init: if true, the full init is performed (unpack+math), otherwise a nof init is performed (only math)
+ * eltwise_binary_op_type: the binary operation type
  */
-ALWI void binary_op_specific_init(int op_code) // TODO(AP): better naming
+template<bool full_init = false, EltwiseBinaryType eltwise_binary_op_type = ELWADD>
+ALWI void binary_op_specific_init() // TODO(AP): better naming
 {
-    #ifdef ELTWISE_OP
     if constexpr (full_init) {
-        if constexpr (ELTWISE_OP_CODE == 0) // TODO(AP): pass an enum probably
+        if constexpr (eltwise_binary_op_type == ELWADD) {
             add_tiles_init();
-        else if constexpr (ELTWISE_OP_CODE == 1)
+        } else if constexpr (eltwise_binary_op_type == ELWSUB) {
             sub_tiles_init();
-        else if constexpr (ELTWISE_OP_CODE == 2)
+        } else if constexpr (eltwise_binary_op_type == ELWMUL) {
             mul_tiles_init();
+        }
     } else {
-        if constexpr (ELTWISE_OP_CODE == 0) // TODO(AP): pass an enum probably
+        if constexpr (eltwise_binary_op_type == ELWADD) {
             add_tiles_init_nof();
-        else if constexpr (ELTWISE_OP_CODE == 1)
+        } else if constexpr (eltwise_binary_op_type == ELWSUB) {
             sub_tiles_init_nof();
-        else if constexpr (ELTWISE_OP_CODE == 2)
+        } else if constexpr (eltwise_binary_op_type == ELWMUL) {
             mul_tiles_init_f();
+        }
     }
-    #endif
 }
 
 /**
