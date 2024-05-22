@@ -25,9 +25,10 @@ def run_ssm_1d_sum_reduce(H: int, W: int, latent_size: int, dtype, in_mem_config
     )
 
     assert list(actual.get_legacy_shape()) == [1, 1, H, W // latent_size]
+    assert actual.dtype == dtype
 
     actual = tt2torch_tensor(actual)
-    passing_pcc, output_pcc = comp_pcc(actual, expected, 0.9999)
+    passing_pcc, output_pcc = comp_pcc(actual, expected, 0.9997)
     logger.debug(f"Out passing={passing_pcc}")
     logger.debug(f"Output pcc={output_pcc}")
 
@@ -50,7 +51,7 @@ def run_ssm_1d_sum_reduce(H: int, W: int, latent_size: int, dtype, in_mem_config
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT16,),
+    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B),
 )
 @pytest.mark.parametrize(
     "H, W, latent_size",
