@@ -20,7 +20,7 @@ namespace binary {
 namespace detail {
 
 template <typename binary_operation_t>
-void bind_binary(py::module& module, const binary_operation_t& operation, const std::string& description) {
+void bind_binary_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
         R"doc({0}(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, activations: Optional[List[str]] = None) -> ttnn.Tensor
 
@@ -84,86 +84,86 @@ void bind_binary(py::module& module, const binary_operation_t& operation, const 
 }  // namespace detail
 
 void py_module(py::module& module) {
-    detail::bind_binary(
+    detail::bind_binary_operation(
         module,
         ttnn::add,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
 
         .. math:: \mathrm{{ input\_tensor\_a }}_i + \mathrm{{ input\_tensor\_b }}_i)doc");
 
-    detail::bind_binary(
+    detail::bind_binary_operation(
         module,
         ttnn::add_,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place
         .. math:: \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary(
+    detail::bind_binary_operation(
         module,
         ttnn::subtract,
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{ input\_tensor\_a }}_i - \mathrm{{ input\_tensor\_b }}_i)doc");
 
-    detail::bind_binary(
+    detail::bind_binary_operation(
         module,
         ttnn::subtract_,
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place
         .. math:: \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary(
+    detail::bind_binary_operation(
         module,
         ttnn::multiply,
         R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{ input\_tensor\_a }}_i \times \mathrm{{ input\_tensor\_b }}_i)doc");
 
-    detail::bind_binary(
+    detail::bind_binary_operation(
         module,
         ttnn::multiply_,
         R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place
         .. math:: \mathrm{{input\_tensor\_a}}_i \times \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary(
+    detail::bind_binary_operation(
         module,
         ttnn::eq,
         R"doc(Compares if :attr:`input_tensor_a` is equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i == \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary(
+    detail::bind_binary_operation(
         module,
         ttnn::ne,
         R"doc(Compares if :attr:`input_tensor_a` is not equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i != \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary(
+    detail::bind_binary_operation(
         module,
         ttnn::lt,
         R"doc(Compares if :attr:`input_tensor_a` is less than :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i < \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary(
+    detail::bind_binary_operation(
         module,
         ttnn::le,
         R"doc(MCompares if :attr:`input_tensor_a` is less than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i <= \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary(
+    detail::bind_binary_operation(
         module,
         ttnn::gt,
         R"doc(Compares if :attr:`input_tensor_a` is greater than :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i > \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary(
+    detail::bind_binary_operation(
         module,
         ttnn::ge,
         R"doc(Compares if :attr:`input_tensor_a` is greater than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i >= \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary(
+    detail::bind_binary_operation(
         module,
         ttnn::logical_and,
         R"doc(Compute logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i && \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary(
+    detail::bind_binary_operation(
         module,
         ttnn::logical_or,
         R"doc(Compute logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`

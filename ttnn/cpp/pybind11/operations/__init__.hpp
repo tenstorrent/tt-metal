@@ -10,6 +10,7 @@
 #include "ccl.hpp"
 #include "core.hpp"
 #include "conv2d.hpp"
+#include "creation.hpp"
 #include "data_movement.hpp"
 #include "embedding.hpp"
 #include "kv_cache.hpp"
@@ -37,6 +38,9 @@ void py_module(py::module& module) {
 
     auto m_core = module.def_submodule("core", "core operations");
     core::py_module(m_core);
+
+    auto m_creation = module.def_submodule("creation", "creation operations");
+    creation::py_module(m_creation);
 
     auto m_embedding = module.def_submodule("embedding", "embedding operations");
     embedding::py_module(m_embedding);
