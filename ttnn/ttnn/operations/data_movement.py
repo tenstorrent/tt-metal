@@ -299,11 +299,14 @@ def _repeat_interleave_validate_input_tensors(operation_name, input_tensor, *arg
     )
 
 
+# This operation does not support the following cases:
+#   - Shape([2[32], 2[32]]) -> repeats = 2, dim = 0
+#   - Shape([2[32], 2[32]]) -> repeats = Tensor[1,2], dim = 1
 @ttnn.register_operation(
     name="ttnn.repeat_interleave",
     validate_input_tensors=_repeat_interleave_validate_input_tensors,
     golden_function=_golden_function,
-    allow_to_fallback_to_golden_function_on_failure=True,
+    allow_to_fallback_to_golden_function_on_failure=False,
 )
 def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int], dim: int = 0) -> ttnn.Tensor:
     r"""
