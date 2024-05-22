@@ -44,8 +44,10 @@ struct GlobalAveragePool2D {
         return result;
     }
 };
-constexpr auto global_avg_pool2d =
-    ttnn::register_operation<ttnn::operations::pool::GlobalAveragePool2D>("ttnn::pool::global_avg_pool2d");
 }  // namespace pool
 }  // namespace operations
+
+constexpr auto global_avg_pool2d =
+    ttnn::register_operation<ttnn::operations::pool::GlobalAveragePool2D>("ttnn::pool::global_avg_pool2d");
+
 }  // namespace ttnn

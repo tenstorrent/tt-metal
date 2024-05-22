@@ -18,7 +18,7 @@ namespace reduction {
 
 namespace detail {
 template <typename reduction_operation_t>
-void bind_reduction(py::module& module, const reduction_operation_t& operation) {
+void bind_reduction_operation(py::module& module, const reduction_operation_t& operation) {
     auto doc = fmt::format(
         R"doc({0}(input_tensor: ttnn.Tensor, dim: Optional[Union[int, Tuple[int]]] = None, keepdim: bool = True, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor)doc",
         operation.name());
@@ -36,12 +36,12 @@ void bind_reduction(py::module& module, const reduction_operation_t& operation) 
 }  // namespace detail
 
 void py_module(py::module& module) {
-    detail::bind_reduction(module, ttnn::sum);
-    detail::bind_reduction(module, ttnn::mean);
-    detail::bind_reduction(module, ttnn::max);
-    detail::bind_reduction(module, ttnn::min);
-    detail::bind_reduction(module, ttnn::std);
-    detail::bind_reduction(module, ttnn::var);
+    detail::bind_reduction_operation(module, ttnn::sum);
+    detail::bind_reduction_operation(module, ttnn::mean);
+    detail::bind_reduction_operation(module, ttnn::max);
+    detail::bind_reduction_operation(module, ttnn::min);
+    detail::bind_reduction_operation(module, ttnn::std);
+    detail::bind_reduction_operation(module, ttnn::var);
 }
 
 }  // namespace reduction
