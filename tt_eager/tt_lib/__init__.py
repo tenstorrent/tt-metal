@@ -63,6 +63,13 @@ if "ARCH_NAME" not in os.environ or os.environ["ARCH_NAME"] == "":
 if "TT_METAL_HOME" not in os.environ or os.environ["TT_METAL_HOME"] == "":
     # Workaround: treat $SITE_PACKAGES as TT_METAL_HOME
     os.environ["TT_METAL_HOME"] = str(site_pkgs_tt_lib.parent)
+# jit build needs linker script under $TT_METAL_HOME/build/hw/toolchain/,
+# so when TT_METAL_HOME is site-packags,
+# it needs to softlink build/ from site-packages/tt_lib
+build_soft_link = site_pkgs_tt_lib / ".." / "build"
+build_soft_link_src = site_pkgs_tt_lib / "build"
+if not os.path.exists(build_soft_link) and os.path.exists(build_soft_link_src):
+    os.symlink(build_soft_link_src, build_soft_link)
 
 _check_so_rpath_in_build_lib()
 _check_so_rpath("_C", site_pkgs_tt_lib / "build" / "lib")
