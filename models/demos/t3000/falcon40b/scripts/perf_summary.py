@@ -35,8 +35,18 @@ def group_by_op_all_devices(df):
     return grouped_df
 
 
-def analyze_perf_csv(csv_file, layers, show_all, out_file=None, num_chips=1, seq=32, group=False):
+def analyze_perf_csv(
+    csv_file, layers, show_all, out_file=None, num_chips=1, seq=32, group=False, remove_warmup_runs=False
+):
     df = pd.read_csv(csv_file)
+    # find index of the first non-warmup run
+    # and remove all warmup runs
+    # index of the first non-warmup run is latest occurrence of "tt::tt_metal::Embeddings" - 7
+    if remove_warmup_runs:
+        warmup_run_idx = df[df["OP CODE"] == "tt::tt_metal::Embeddings"].index[-1] - 7
+        df = df.iloc[warmup_run_idx:]
+        # save to intermed file for further analysis
+        df.to_csv(out_file.split(".")[0] + ".warmup_removed.csv", index=False, sep=",")
     df = df[df["DEVICE FW DURATION [ns]"] != "-"]
     df["DEVICE FW DURATION [ns]"] = df["DEVICE FW DURATION [ns]"].astype(int)
 
@@ -198,6 +208,7 @@ def main():
         "--num-chips", type=int, default=1, help="Number of chips running model in parallel mode. Default is 1."
     )
 
+    parser.add_argument("--remove-warmup", action="store_true", help="Remove warmup runs from the CSV file.")
     parser.add_argument("--seq", type=int, default=32, help="Sequence length or number of users.")
 
     parser.add_argument("-g", "--group", action="store_true", help="Group by ops running in parallel on all devices.")
@@ -212,6 +223,7 @@ def main():
         num_chips=args.num_chips,
         seq=args.seq,
         group=args.group,
+        remove_warmup_runs=args.remove_warmup,
     )
 
 
