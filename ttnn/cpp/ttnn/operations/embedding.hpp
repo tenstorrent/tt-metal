@@ -28,7 +28,7 @@ struct Embedding {
 
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor& input_tensor, const Tensor& weight, Args&&... args) {
-        return std::make_tuple(input_tensor, weight);
+        return std::forward_as_tuple(input_tensor, weight);
     }
 
     static Tensor execute(

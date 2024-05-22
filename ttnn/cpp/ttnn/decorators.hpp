@@ -101,7 +101,7 @@ constexpr bool is_any_of = (... || std::is_same_v<std::decay_t<T>, TypeToCheck>)
 template <typename T, typename... Include>
 constexpr auto conditional_tuple(T&& arg) {
     if constexpr (is_any_of<T, Include...>) {
-        return std::make_tuple(std::forward<T>(arg));
+        return std::forward_as_tuple(std::forward<T>(arg));
     } else {
         return std::tuple<>();
     }
