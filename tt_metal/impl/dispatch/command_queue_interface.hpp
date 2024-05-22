@@ -457,7 +457,11 @@ class SystemMemoryManager {
     }
 
     uint32_t get_issue_queue_write_ptr(const uint8_t cq_id) const {
-        return this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4;
+        if (this->bypass_enable) {
+            return this->bypass_buffer_write_offset;
+        } else {
+            return this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4;
+        }
     }
 
     uint32_t get_completion_queue_read_ptr(const uint8_t cq_id) const {
@@ -472,15 +476,10 @@ class SystemMemoryManager {
 
     void *issue_queue_reserve(uint32_t cmd_size_B, const uint8_t cq_id) {
         if (this->bypass_enable) {
-            TT_FATAL(
-                cmd_size_B % sizeof(uint32_t) == 0,
-                "Data cmd_size_B={} is not {}-byte aligned",
-                cmd_size_B,
-                sizeof(uint32_t));
             uint32_t curr_size = this->bypass_buffer.size();
             uint32_t new_size = curr_size + (cmd_size_B / sizeof(uint32_t));
             this->bypass_buffer.resize(new_size);
-            return (void *)((char *)this->bypass_buffer.data() + (curr_size * sizeof(uint32_t)));
+            return (void *)((char *)this->bypass_buffer.data() + this->bypass_buffer_write_offset);
         }
 
         uint32_t issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
@@ -518,15 +517,8 @@ class SystemMemoryManager {
         void *user_scratchspace = this->cq_sysmem_start + (write_ptr - this->channel_offset);
 
         if (this->bypass_enable) {
-            TT_FATAL(
-                size_in_bytes % sizeof(uint32_t) == 0,
-                "Data size_in_bytes={} is not {}-byte aligned",
-                size_in_bytes,
-                sizeof(uint32_t));
             std::copy(
-                (uint32_t *)data,
-                (uint32_t *)data + size_in_bytes / sizeof(uint32_t),
-                this->bypass_buffer.begin() + this->bypass_buffer_write_offset);
+                (uint8_t *)data, (uint8_t *)data + size_in_bytes, (uint8_t *)this->bypass_buffer.data() + write_ptr);
         } else {
             memcpy_to_device(user_scratchspace, data, size_in_bytes);
         }
@@ -535,12 +527,7 @@ class SystemMemoryManager {
     // TODO: RENAME issue_queue_stride ?
     void issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id) {
         if (this->bypass_enable) {
-            TT_FATAL(
-                push_size_B % sizeof(uint32_t) == 0,
-                "Data push_size_B={} is not {}-byte aligned",
-                push_size_B,
-                sizeof(uint32_t));
-            this->bypass_buffer_write_offset += (push_size_B / sizeof(uint32_t));
+            this->bypass_buffer_write_offset += push_size_B;
             return;
         }
 
