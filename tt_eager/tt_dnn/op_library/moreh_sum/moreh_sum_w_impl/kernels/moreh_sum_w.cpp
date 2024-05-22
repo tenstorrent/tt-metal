@@ -21,7 +21,7 @@ void MAIN {
     constexpr uint32_t TILE_W = 32;
     constexpr bool do_mask_w = (origin_W % TILE_W) != 0;
 
-    binary_op_init_common(cb_input, cb_input);
+    binary_op_init_common(cb_input, cb_scaler, cb_out);
 
     cb_wait_front(cb_scaler, 1);  // scaler tile from the reader
 
