@@ -59,10 +59,9 @@ ALWI void tilize_to_dst(uint32_t block_cb, uint32_t dst_cb) {
 
 namespace NAMESPACE {
 void MAIN {
-    uint32_t tiles_per_row = get_arg_val<uint32_t>(0);
-    uint32_t tiles_per_col = get_arg_val<uint32_t>(1);
-    uint32_t reshapes_per_row = get_arg_val<uint32_t>(2);
-    uint32_t total_tiles = get_arg_val<uint32_t>(3);
+    uint32_t tiles_per_col = get_arg_val<uint32_t>(0);
+    uint32_t reshapes_per_row = get_arg_val<uint32_t>(1);
+    uint32_t total_tiles = get_arg_val<uint32_t>(2);
 
     pack_untilize_init<tiles_per_block>(cb_src, cb_block);
 
@@ -77,7 +76,7 @@ void MAIN {
 
             cb_wait_front(cb_reshape, tiles_per_reshape);
             cb_reserve_back(cb_scanned, tiles_per_reshape);
-            cb_reserve_back(cb_aux, tiles_per_reshape);
+            cb_reserve_back(cb_aux, 1);
 
             // multiply the first tile of cb_reshape by the factor and push to cb_scanned
             mul_tiles_init();
@@ -97,6 +96,7 @@ void MAIN {
                 mul_tiles(cb_aux, cb_reshape, 0, tile, 0);
                 cb_pop_front(cb_aux, 1);
                 tile_regs_commit();
+                cb_reserve_back(cb_aux, 1);
                 tile_regs_wait();
                 pack_tile(0, cb_aux);
                 tile_regs_release();
@@ -108,11 +108,11 @@ void MAIN {
             // push this reshape to the destination
             tilize_to_dst(cb_block2, cb_dst);
 
-            cb_wait_front(cb_scanned2, tiles_per_reshape);  // we are blocked here - why?
+            cb_wait_front(cb_scanned2, tiles_per_reshape);
 
             // copy the last tile from cb_scanned back to cb_factors
             tile_regs_acquire();
-            copy_tile_to_dst_init_short(cb_scanned);
+            copy_tile_to_dst_init_short(cb_scanned2);
             copy_tile(cb_scanned2, tiles_per_reshape - 1, 0);
             tile_regs_commit();
             tile_regs_wait();

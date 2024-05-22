@@ -76,10 +76,9 @@ ALWI void undo_reshape_to_blocks(uint32_t scanned_cb, uint32_t block_cb) {
 }
 
 void kernel_main() {
-    uint32_t tiles_per_row = get_arg_val<uint32_t>(0);
-    uint32_t tiles_per_col = get_arg_val<uint32_t>(1);
-    uint32_t reshapes_per_row = get_arg_val<uint32_t>(2);
-    uint32_t total_tiles = get_arg_val<uint32_t>(3);
+    uint32_t tiles_per_col = get_arg_val<uint32_t>(0);
+    uint32_t reshapes_per_row = get_arg_val<uint32_t>(1);
+    uint32_t total_tiles = get_arg_val<uint32_t>(2);
 
     uint16_t bf16_one_u16 = bf16_one_u32 >> 16;
     fill_with_val(get_write_ptr(cb_factors), reshapes_per_row, bf16_one_u16);
