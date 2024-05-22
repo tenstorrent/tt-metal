@@ -91,7 +91,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
         split_work_to_cores(compute_with_storage_grid_size, num_rows, row_major);
 
-    num_rows_per_core = num_rows_per_core_group_1;
+    num_rows_per_core = num_rows_per_core_group_1; // Will always find equal split
 
     uint32_t input_cb_index = CB::c_in0;
     tt_metal::CircularBufferConfig cb_input_config =
@@ -179,7 +179,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     };
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram, (std::uint32_t)num_rows_per_core * Wt};
+        (std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram, (std::uint32_t)num_rows_per_core, Wt, Ht};
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -214,30 +214,43 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
     const auto &cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; ++i) {
-        const CoreCoord &core = cores.at(i);
+    uint32_t num_cores_per_sin_cos_row = num_cores / Ht; // since sin/cos matrices have Ht rows
+    uint32_t core_idx = 0;
+    /*
+        Outer loop: Ht iterations
+        Inner loop: # total cores / Ht iterations
 
-        std::vector<uint32_t> reader_rt_args;
+        Overall: # total cores iterations
+    */
+    for (uint32_t sin_cos_row = 0; sin_cos_row < Ht; sin_cos_row++) {
+        uint32_t anchor_row = sin_cos_row;
+        for (uint32_t i = 0; i < num_cores_per_sin_cos_row; i++) {
+            const CoreCoord &core = cores.at(core_idx);
 
-        reader_rt_args = {
-                src_buffer->address(),
-                cos_buffer->address(),
-                sin_buffer->address(),
-                trans_mat_buffer->address(),
-                num_tiles_written,
-                num_tiles_written / Wt, // start_row_id
-                num_tiles_written % HtWt, // This range of this idx must be [0, HtWt - 1], where HtWt is the size of the sin/cos matrices in # of tiles
-        };
-        tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
+            // Reader runtime args
+            uint32_t start_row = anchor_row + (i * num_rows_per_core * Ht); // anchor_row + stride
+            std::vector<uint32_t> reader_rt_args;
+            reader_rt_args = {
+                    src_buffer->address(),
+                    cos_buffer->address(),
+                    sin_buffer->address(),
+                    trans_mat_buffer->address(),
+                    start_row, // start_row_id
+                    sin_cos_row * Wt, // This range of this idx must be [0, HtWt - 1], where HtWt is the size of the sin/cos matrices in # of tiles
+            };
+            tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
 
-        tt_metal::SetRuntimeArgs(
-            program,
-            unary_writer_kernel_id,
-            core,
-            {dst_buffer->address(), num_tiles_written});
 
-        num_tiles_written += num_rows_per_core * Wt;
+            // Writer runtime args
+            tt_metal::SetRuntimeArgs(
+                program,
+                unary_writer_kernel_id,
+                core,
+                {dst_buffer->address(), start_row});
 
+            // Go to next core
+            core_idx++;
+        }
     }
 
     auto override_runtime_arguments_callback = [unary_reader_kernel_id,

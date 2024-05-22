@@ -18,9 +18,8 @@ void kernel_main() {
     uint32_t cos_addr  = get_arg_val<uint32_t>(1);
     uint32_t sin_addr  = get_arg_val<uint32_t>(2);
     uint32_t trans_mat_addr = get_arg_val<uint32_t>(3);
-    uint32_t num_tiles_written = get_arg_val<uint32_t>(4); // Index correctly in the for loop
-    uint32_t start_row_id = get_arg_val<uint32_t>(5); // Index correctly in the for loop
-    uint32_t cos_sin_start_id = get_arg_val<uint32_t>(6); // Index correctly in the for loop
+    uint32_t start_row_idx = get_arg_val<uint32_t>(4); // Index correctly in the for loop
+    uint32_t cos_sin_start_idx = get_arg_val<uint32_t>(5); // Index correctly in the for loop
 
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t cos_cb_id = get_compile_time_arg_val(1);
@@ -33,7 +32,7 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(8);
     constexpr uint32_t Wt = get_compile_time_arg_val(9);
     constexpr uint32_t HtWt = get_compile_time_arg_val(10);
-    constexpr uint32_t num_rows = get_compile_time_arg_val(11);
+    constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(11);
 
     constexpr uint32_t onetile = 1;
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
@@ -72,15 +71,15 @@ void kernel_main() {
         .data_format = trans_mat_format
     };
 
-    uint32_t input_curr_id = num_tiles_written;
-    uint32_t cos_sin_curr_id = cos_sin_start_id;
-    uint32_t trans_mat_curr_id = 0;
-    uint32_t ht = start_row_id;
+    uint32_t input_curr_idx = start_row_idx * Wt;
+    uint32_t cos_sin_curr_idx = cos_sin_start_idx;
+    uint32_t trans_mat_curr_idx = 0;
+    uint32_t ht = start_row_idx;
 
     // Read transformation matrix in CB (only once, because it will be reused)
     cb_reserve_back(trans_mat_cb_id, onetile);
     uint32_t trans_mat_l1_write_addr = get_write_ptr(trans_mat_cb_id);
-    noc_async_read_tile(trans_mat_curr_id, s3, trans_mat_l1_write_addr);
+    noc_async_read_tile(trans_mat_curr_idx, s3, trans_mat_l1_write_addr);
     noc_async_read_barrier();
     cb_push_back(trans_mat_cb_id, onetile);
 
@@ -89,64 +88,54 @@ void kernel_main() {
     /*
         Read a ublock of tiles from src to CB, and then push the ublock to unpacker
 
-        num_rows = 1 * 8 * 128 * 128 // 128 // 32 = 32
-        Ht = 4
-        Wt = 4
+        For example:
+            num_rows_per_core = 1 * 8 * 128 * 128 // 128 // 32 = 32
+            Ht = 4
+            Wt = 4
     */
-    for (uint32_t i = 0; i < num_rows; ++i) {
+    cb_reserve_back(sin_cb_id, Wt);
+    cb_reserve_back(cos_cb_id, Wt);
+    uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
+    uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
+
+
+    // To make sure the sin/cos row are read only once
+    bool done_sin_cos = false;
+
+    for (uint32_t i = 0; i < num_rows_per_core; ++i) {
         cb_reserve_back(input_cb_id, Wt);
-        cb_reserve_back(sin_cb_id, Wt);
-        cb_reserve_back(cos_cb_id, Wt);
         uint32_t input_l1_write_addr = get_write_ptr(input_cb_id);
-        uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
-        uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
         for (uint32_t j = 0; j < Wt; ++j) {
 
             // Read input into CB
-            noc_async_read_tile(input_curr_id, s0, input_l1_write_addr);
-            input_curr_id++;
+            noc_async_read_tile(input_curr_idx, s0, input_l1_write_addr);
+            input_curr_idx++;
             input_l1_write_addr+=input_tile_bytes;
 
-            // if (++barrier_count == barrier_threshold) {
-            //     noc_async_read_barrier();
-            //     barrier_count = 0;
-            // }
+            if (!done_sin_cos) {
+                // Read sin into CB
+                noc_async_read_tile(cos_sin_curr_idx, s2, sin_l1_write_addr);
+                sin_l1_write_addr+=sin_tile_bytes;
 
-            // Read sin into CB
-            noc_async_read_tile(cos_sin_curr_id, s2, sin_l1_write_addr);
-            sin_l1_write_addr+=sin_tile_bytes;
+                // Read cos into CB
+                noc_async_read_tile(cos_sin_curr_idx, s1, cos_l1_write_addr);
+                cos_l1_write_addr+=cos_tile_bytes;
 
-            // if (++barrier_count == barrier_threshold) {
-            //     noc_async_read_barrier();
-            //     barrier_count = 0;
-            // }
-
-            // Read cos into CB
-            noc_async_read_tile(cos_sin_curr_id, s1, cos_l1_write_addr);
-            cos_sin_curr_id++;
-            cos_l1_write_addr+=cos_tile_bytes;
-
-            // if (++barrier_count == barrier_threshold) {
-            //     noc_async_read_barrier();
-            //     barrier_count = 0;
-            // }
+                cos_sin_curr_idx++;
+            }
         }
+
         noc_async_read_barrier();
-        // barrier_count = 0;
-        cb_push_back(sin_cb_id, Wt);
         cb_push_back(input_cb_id, Wt);
-        cb_push_back(cos_cb_id, Wt);
 
-        /*
-            sin and cos matrices are duplicated across num_heads. So, reset their indices
-            here to duplicate them into CB
+        if (!done_sin_cos) {
+            cb_push_back(sin_cb_id, Wt);
+            cb_push_back(cos_cb_id, Wt);
 
-        */
-        ht++;
-        if (ht == Ht) {
-            ht = 0;
-            cos_sin_curr_id -= HtWt;
+            done_sin_cos = true;
         }
+        // Update input_curr_idx to stride the correct amount to the next row
+        input_curr_idx += (Ht - 1) * Wt;
     }
 
 }

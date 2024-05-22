@@ -28,7 +28,7 @@ void MAIN {
     constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(5);
     constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
     constexpr uint32_t out_cb = get_compile_time_arg_val(7);
-    constexpr uint32_t num_rows = get_compile_time_arg_val(8); // Index correctly in the for loop
+    constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(8); // Index correctly in the for loop
     constexpr uint32_t Wt = get_compile_time_arg_val(9);
 
     mm_init();
@@ -41,11 +41,12 @@ void MAIN {
     uint32_t in1_index = 0;
     uint32_t interm_index = 0;
 
-    for (uint32_t i = 0; i < num_rows; ++i) {
+    cb_wait_front(sin_cb, Wt);
+    cb_wait_front(cos_cb, Wt);
+
+    for (uint32_t i = 0; i < num_rows_per_core; ++i) {
         // input cb wait and reserve
         cb_wait_front(in_cb, Wt);
-        cb_wait_front(sin_cb, Wt);
-        cb_wait_front(cos_cb, Wt);
 
         cb_reserve_back(rotated_in_interm_cb, Wt);
         cb_reserve_back(sin_interm_cb, Wt);
@@ -72,7 +73,6 @@ void MAIN {
         }
         REL();
         cb_push_back(sin_interm_cb, Wt);
-        cb_pop_front(sin_cb, Wt);
         cb_pop_front(rotated_in_interm_cb, Wt);
 
         ACQ();
@@ -83,7 +83,6 @@ void MAIN {
         }
         REL();
         cb_push_back(cos_interm_cb, Wt);
-        cb_pop_front(cos_cb, Wt);
         cb_pop_front(in_cb, Wt); // Done with input
 
         cb_wait_front(cos_interm_cb, Wt);
@@ -100,6 +99,9 @@ void MAIN {
         cb_pop_front(cos_interm_cb, Wt);
         cb_pop_front(sin_interm_cb, Wt);
     }
+    cb_pop_front(sin_cb, Wt);
+    cb_pop_front(cos_cb, Wt);
+
 
     // Done with the transformation matrix, so remove from CB
     cb_pop_front(trans_mat_cb, onetile);
