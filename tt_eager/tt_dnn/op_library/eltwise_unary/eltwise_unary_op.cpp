@@ -71,6 +71,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::TYPECAST: defines["SFPU_OP_TYPECAST_INCLUDE"] = "1"; break;
         case UnaryOpType::RIGHT_SHIFT: defines["SFPU_OP_RIGHT_SHIFT_INCLUDE"] = "1"; break;
         case UnaryOpType::FLOOR: defines["SFPU_OP_FLOOR_INCLUDE"] = "1"; break;
+        case UnaryOpType::LEFT_SHIFT: defines["SFPU_OP_LEFT_SHIFT_INCLUDE"] = "1"; break;
         default: defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1"; break;
     };
 }
@@ -118,6 +119,11 @@ std::pair<string, string> get_op_init_and_func_parameterized(
             op_init_and_name = {
                 "right_shift_tile_init();",
                 fmt::format("right_shift_tile({}, {}u);", idst, std::to_string((uint)param0))};
+            break;
+        case UnaryOpType::LEFT_SHIFT:
+            op_init_and_name = {
+                "left_shift_tile_init();",
+                fmt::format("left_shift_tile({}, {}u);", idst, std::to_string((uint)param0))};
             break;
         case UnaryOpType::EXP:
             op_init_and_name = {

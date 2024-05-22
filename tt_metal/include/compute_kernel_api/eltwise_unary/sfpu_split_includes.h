@@ -76,6 +76,10 @@
 #include "compute_kernel_api/eltwise_unary/floor.h"
 #endif
 
+#if SFPU_OP_LEFT_SHIFT_INCLUDE
+#include "compute_kernel_api/eltwise_unary/left_shift.h"
+#endif
+
 #if SFPU_OP_BINOP_WITH_SCALAR_INCLUDE
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #endif
