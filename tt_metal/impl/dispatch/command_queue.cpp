@@ -986,18 +986,17 @@ void EnqueueProgramCommand::process() {
 
         this->manager.cq_write(
             cached_program_command_sequence.preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
-        this->manager.issue_queue_push_back(preamble_fetch_size_bytes, this->command_queue_id);
+        write_ptr += preamble_fetch_size_bytes;
 
         for (const auto& cmds : cached_program_command_sequence.runtime_args_command_sequences) {
-            write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
             this->manager.cq_write(cmds.data(), cmds.size_bytes(), write_ptr);
-            this->manager.issue_queue_push_back(cmds.size_bytes(), this->command_queue_id);
+            write_ptr += cmds.size_bytes();
         }
 
-        write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
         this->manager.cq_write(
             cached_program_command_sequence.program_command_sequence.data(), program_fetch_size_bytes, write_ptr);
-        this->manager.issue_queue_push_back(program_fetch_size_bytes, this->command_queue_id);
+
+        this->manager.issue_queue_push_back(total_fetch_size_bytes, this->command_queue_id);
 
         // One fetch queue entry for entire program
         this->manager.fetch_queue_reserve_back(this->command_queue_id);
