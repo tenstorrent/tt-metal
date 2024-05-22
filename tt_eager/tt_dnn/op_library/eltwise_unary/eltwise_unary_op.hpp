@@ -77,7 +77,8 @@ enum class UnaryOpType {
     UNARY_GT,
     UNARY_LT,
     TILED_PROD,
-    LEFT_SHIFT
+    LEFT_SHIFT,
+    RIGHT_SHIFT
 };
 
 template <typename T>
@@ -103,7 +104,8 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::UNARY_NE:
         case UnaryOpType::UNARY_GT:
         case UnaryOpType::UNARY_LT:
-        case UnaryOpType::LEFT_SHIFT: return true;
+        case UnaryOpType::LEFT_SHIFT:
+        case UnaryOpType::RIGHT_SHIFT: return true;
         default: return false;
     }
     return false;
@@ -358,6 +360,7 @@ constexpr auto prelu = leaky_relu;
 constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
 constexpr auto left_shift = make_eltwise_unary_with_param<UnaryOpType::LEFT_SHIFT>{};
+constexpr auto right_shift = make_eltwise_unary_with_param<UnaryOpType::RIGHT_SHIFT>{};
 constexpr auto unary_ne = make_eltwise_unary_with_param<UnaryOpType::UNARY_NE>{};
 constexpr auto rsub = make_eltwise_unary_with_param<UnaryOpType::RSUB>{};
 constexpr auto silu = make_eltwise_unary<UnaryOpType::SILU>{};

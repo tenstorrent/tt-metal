@@ -350,7 +350,17 @@ void TensorModuleXaryOPs(py::module &m_tensor) {
         py::arg("value"),
         R"doc(Computes left shift of input tensor ``{0}`` by ``{1}`` bits.)doc",
 
-        R"doc("value", "uint", "")doc"
+        R"doc("value", "float", "")doc"
+
+    );
+    detail::bind_unary_op_with_param(
+        m_tensor,
+        "right_shift",
+        right_shift,
+        py::arg("value"),
+        R"doc(Computes right shift of input tensor ``{0}`` by ``{1}`` bits.)doc",
+
+        R"doc("value", "float", "")doc"
 
     );
     detail::bind_unary_op_with_param(

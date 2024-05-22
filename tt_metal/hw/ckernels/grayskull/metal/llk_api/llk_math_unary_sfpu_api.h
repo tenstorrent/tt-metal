@@ -11,6 +11,7 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_left_shift.h"
 #include "llk_math_eltwise_unary_sfpu_power.h"
+#include "llk_math_eltwise_unary_sfpu_right_shift.h"
 #include "llk_math_eltwise_unary_sfpu_rsqrt.h"
 #include "llk_math_eltwise_unary_sfpu_sigmoid.h"
 #include "llk_math_eltwise_unary_sfpu_sign.h"

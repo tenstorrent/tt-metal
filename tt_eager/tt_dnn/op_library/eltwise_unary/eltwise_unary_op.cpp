@@ -114,6 +114,10 @@ std::pair<string, string> get_op_init_and_func_parameterized(
             op_init_and_name = {
                 "left_shift_tile_init();", fmt::format("left_shift_tile({}, {}u);", idst, Converter::to_hex(param0))};
             break;
+        case UnaryOpType::RIGHT_SHIFT:
+            op_init_and_name = {
+                "right_shift_tile_init();", fmt::format("right_shift_tile({}, {}u);", idst, Converter::to_hex(param0))};
+            break;
         case UnaryOpType::EXP:
             op_init_and_name = {
                 fmt::format("exp_tile_init<{}u>();", std::to_string((uint32_t)param0)),

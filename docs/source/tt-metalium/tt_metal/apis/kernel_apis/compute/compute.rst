@@ -50,6 +50,7 @@ Compute APIs
   reduce_tile
   transpose_wh_tile
   left_shift_tile
+  right_shift_tile
 
   tanh_tile
   tan_tile
