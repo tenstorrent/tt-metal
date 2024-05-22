@@ -40,7 +40,7 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
 
 }
 
-operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_grad, const Tensor &input_grad) {
+operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_grad, const Tensor &input_grad, const DeviceComputeKernelConfig &compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -70,8 +70,9 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
     get_tensor_dim(input_grad_dim, input_grad_shape);
 
     std::vector<uint32_t> need_bcast_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 0);
-    for (auto i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
-        // TODO: both rank can be different when keepdim=false
+    // TODO: both rank can be different when keepdim=false
+    // for (auto i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+    for (auto i = 0; i < input_grad_rank; ++i) {
         auto idx = input_grad_rank - 1 - i;
 
         // last 2-dim
@@ -82,11 +83,19 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
         }
     }
     const auto num_input_grad_tiles = input_grad.volume() / TILE_HW;
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(output_grad.device()->arch(), compute_kernel_config);
 
     for (auto i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
         log_debug(LogOp, "need_bcast_dim [{}] = {}", i, need_bcast_dim[i]);
     }
     log_debug(LogOp, "num_input_grad_tiles {}", num_input_grad_tiles);
+    log_debug(
+        LogOp,
+        "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
+        math_fidelity,
+        math_approx_mode,
+        fp32_dest_acc_en,
+        packer_l1_acc);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -133,9 +142,15 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
     std::map<string, string> compute_defines;
+    if (fp32_dest_acc_en) {
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
+    }
     const auto compute_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/moreh_sum_backward.cpp";
     const auto compute_kernel_1_id = CreateComputeKernel(
-        program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
+        program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode);
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
@@ -144,7 +159,10 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
             program,
             compute_kernel_file,
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
-            compute_defines);
+            compute_defines,
+            math_fidelity,
+            fp32_dest_acc_en,
+            math_approx_mode);
     }
 
     ////////////////////////////////////////////////////////////////////////////
