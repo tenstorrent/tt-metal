@@ -64,8 +64,8 @@ def repeat_kv(key, values, repeats, device):
     values = ttnn.to_layout(
         ttnn.to_device(ttnn.from_torch(values, dtype=ttnn.bfloat16), device), layout=ttnn.TILE_LAYOUT
     )
-    keys = ttnn.repeat_interleave(keys, repeats, dim)
-    values = ttnn.repeat_interleave(values, repeats, dim)
+    keys = ttnn.get_fallback_function(ttnn.repeat_interleave)(keys, repeats, dim)
+    values = ttnn.get_fallback_function(ttnn.repeat_interleave)(values, repeats, dim)
     return keys, values
 
 
