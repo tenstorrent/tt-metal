@@ -77,5 +77,6 @@ enum SfpuType {
     tiled_prod,
     right_shift,
     floor,
+    left_shift,
     unused,
 };
