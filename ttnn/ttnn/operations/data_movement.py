@@ -265,7 +265,7 @@ def _split_validate_input_tensors(operation_name, input_tensor, *args, **kwargs)
     name="ttnn.split",
     validate_input_tensors=_split_validate_input_tensors,
     golden_function=_golden_function,
-    allow_to_fallback_to_golden_function_on_failure=True,
+    allow_to_fallback_to_golden_function_on_failure=False,
 )
 def split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> ttnn.Tensor:
     r"""
