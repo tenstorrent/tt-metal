@@ -64,9 +64,9 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device, *, with_pa
 
 @pytest.mark.parametrize(
     "input_shape",
-    (([4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 12 - 1]),),
+    (([3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1]),),
     ids=[
-        "4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 12 - 1",
+        "3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1",
     ],
 )
 @pytest.mark.parametrize(
@@ -88,8 +88,9 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device, *, with_pa
     ),
     ids=["0", "0,1", "0,1,2", "0,1,2,3", "0,1,3", "0,2,3", "1", "1,2", "1,2,3", "1,3", "2", "2,3", "3"],
 )
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 @pytest.mark.parametrize("use_provide_output", (True, False), ids=["True", "False"])
-def test_moreh_sum(input_shape, dims, use_provide_output, device):
+def test_moreh_sum(input_shape, dims, compute_kernel_options, use_provide_output, device):
     torch.manual_seed(2023)
     output_shape = input_shape.copy()
 
@@ -103,9 +104,12 @@ def test_moreh_sum(input_shape, dims, use_provide_output, device):
 
     torch_output = torch.sum(torch_input, dims, True)
 
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
     tt_output_cpu = (
-        ttl.operations.primary.moreh_sum(tt_input, dims=dims, output=tt_output)
+        ttl.operations.primary.moreh_sum(
+            tt_input, dims=dims, output=tt_output, compute_kernel_config=compute_kernel_config
+        )
         .cpu()
         .to(cpu_layout)
         .unpad_from_tile(output_shape)
@@ -182,18 +186,18 @@ def test_moreh_sum_non_4d(input_shape, dims, device):
 @pytest.mark.parametrize(
     "input_shape",
     (
-        [10, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 12],
+        [10, TILE_HEIGHT * 12, TILE_WIDTH * 12],
         [10, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 12 - 1],
     ),
     ids=[
-        "10, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 12",
+        "10, TILE_HEIGHT * 12, TILE_WIDTH * 12",
         "10, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 12 - 1",
     ],
 )
 @pytest.mark.parametrize(
     "dims",
-    ([0], [2]),
-    ids=["dim-n", "dim-w"],
+    ([0], [1], [2]),
+    ids=["dim-n", "dim-h", "dim-w"],
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_moreh_sum_fp32_dest_acc(input_shape, dims, compute_kernel_options, device):
