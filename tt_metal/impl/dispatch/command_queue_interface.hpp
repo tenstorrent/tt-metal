@@ -7,17 +7,17 @@
 #include <mutex>
 
 #include "tt_metal/common/base.hpp"
+#include "tt_metal/common/math.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/llrt/llrt.hpp"
-#include "tt_metal/common/math.hpp"
 
 using namespace tt::tt_metal;
 
 // todo consider moving these to dispatch_addr_map
 static constexpr uint32_t PCIE_ALIGNMENT = 32;
-static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30; // 1GB;
+static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30;  // 1GB;
 
 static constexpr uint32_t MEMCPY_ALIGNMENT = sizeof(__m128i);
 
@@ -45,14 +45,16 @@ struct dispatch_constants {
 
     static constexpr uint32_t DISPATCH_BUFFER_LOG_PAGE_SIZE = 12;
     static constexpr uint32_t DISPATCH_BUFFER_SIZE_BLOCKS = 4;
-    static constexpr uint32_t DISPATCH_BUFFER_BASE = ((DISPATCH_L1_UNRESERVED_BASE - 1) | ((1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) + 1;
+    static constexpr uint32_t DISPATCH_BUFFER_BASE =
+        ((DISPATCH_L1_UNRESERVED_BASE - 1) | ((1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) + 1;
 
     static constexpr uint32_t PREFETCH_D_BUFFER_LOG_PAGE_SIZE = 12;
     static constexpr uint32_t PREFETCH_D_BUFFER_BLOCKS = 4;
 
     static constexpr uint32_t EVENT_PADDED_SIZE = 16;
-    // When page size of buffer to write/read exceeds MAX_PREFETCH_COMMAND_SIZE, the PCIe aligned page size is broken down into equal sized partial pages
-    // BASE_PARTIAL_PAGE_SIZE denotes the initial partial page size to use, it is incremented by PCIe alignment until page size can be evenly split
+    // When page size of buffer to write/read exceeds MAX_PREFETCH_COMMAND_SIZE, the PCIe aligned page size is broken
+    // down into equal sized partial pages BASE_PARTIAL_PAGE_SIZE denotes the initial partial page size to use, it is
+    // incremented by PCIe alignment until page size can be evenly split
     static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE = 4096;
 
     uint32_t prefetch_q_entries() const { return prefetch_q_entries_; }
@@ -106,7 +108,8 @@ struct dispatch_constants {
         scratch_db_base_ = cmddat_q_base_ + ((cmddat_q_size_ + PCIE_ALIGNMENT - 1) / PCIE_ALIGNMENT * PCIE_ALIGNMENT);
         const uint32_t l1_size = core_type == CoreType::WORKER ? MEM_L1_SIZE : MEM_ETH_SIZE;
         TT_ASSERT(scratch_db_base_ + scratch_db_size_ < l1_size);
-        dispatch_buffer_block_size_pages_ = dispatch_buffer_block_size / (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) / DISPATCH_BUFFER_SIZE_BLOCKS;
+        dispatch_buffer_block_size_pages_ =
+            dispatch_buffer_block_size / (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) / DISPATCH_BUFFER_SIZE_BLOCKS;
         dispatch_buffer_pages_ = dispatch_buffer_block_size_pages_ * DISPATCH_BUFFER_SIZE_BLOCKS;
         uint32_t dispatch_cb_end = DISPATCH_BUFFER_BASE + (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages_;
         TT_ASSERT(dispatch_cb_end < l1_size);
@@ -130,9 +133,7 @@ struct dispatch_constants {
 /// @param cq_id uint8_t ID the command queue
 /// @param cq_size uint32_t size of the command queue
 /// @return uint32_t relative offset
-inline uint32_t get_relative_cq_offset(uint8_t cq_id, uint32_t cq_size) {
-    return cq_id * cq_size;
-}
+inline uint32_t get_relative_cq_offset(uint8_t cq_id, uint32_t cq_size) { return cq_id * cq_size; }
 
 /// @brief Get absolute offset of the command queue
 /// @param channel uint16_t channel ID (hugepage)
@@ -148,7 +149,12 @@ inline uint32_t get_cq_issue_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t c
     uint32_t recv;
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(chip_id);
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(chip_id);
-    tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_ISSUE_READ_PTR + get_relative_cq_offset(cq_id, cq_size), mmio_device_id, channel);
+    tt::Cluster::instance().read_sysmem(
+        &recv,
+        sizeof(uint32_t),
+        HOST_CQ_ISSUE_READ_PTR + get_relative_cq_offset(cq_id, cq_size),
+        mmio_device_id,
+        channel);
     if (not addr_16B) {
         return recv << 4;
     }
@@ -160,7 +166,12 @@ inline uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint3
     uint32_t recv;
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(chip_id);
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(chip_id);
-    tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_COMPLETION_WRITE_PTR + get_relative_cq_offset(cq_id, cq_size), mmio_device_id, channel);
+    tt::Cluster::instance().read_sysmem(
+        &recv,
+        sizeof(uint32_t),
+        HOST_CQ_COMPLETION_WRITE_PTR + get_relative_cq_offset(cq_id, cq_size),
+        mmio_device_id,
+        channel);
     if (not addr_16B) {
         return recv << 4;
     }
@@ -171,87 +182,86 @@ inline uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint3
 // TODO: Revisit this w/ regard to possibly eliminating min sizes and orphan writes at the end
 // TODO: ditto alignment isues
 template <bool debug_sync = false>
-static inline void memcpy_to_device(void *__restrict dst, const void * __restrict src, size_t n)
-{
+static inline void memcpy_to_device(void *__restrict dst, const void *__restrict src, size_t n) {
     TT_ASSERT((uintptr_t)dst % MEMCPY_ALIGNMENT == 0);
     TT_ASSERT(n % sizeof(uint32_t) == 0);
 
     static constexpr uint32_t inner_loop = 8;
-    static constexpr uint32_t inner_blk_size = inner_loop * sizeof(__m128i);
+    static constexpr uint32_t inner_blk_size = inner_loop * sizeof(__m256i);
 
     uint8_t *src8 = (uint8_t *)src;
     uint8_t *dst8 = (uint8_t *)dst;
-    if (n < inner_blk_size) {
-        for (size_t i = 0; i < n / sizeof(__m128i); i++) {
-            __m128i blk = _mm_loadu_si128((const __m128i *)src8);
-            _mm_stream_si128((__m128i *)dst8, blk);
-            src8 += sizeof(__m128i);
-            dst8 += sizeof(__m128i);
-        }
-        n -= n / sizeof(__m128i) * sizeof(__m128i);
-        int32_t *src32 = (int32_t *)src8;
-        int32_t *dst32 = (int32_t *)dst8;
-        for (size_t i = 0; i < n / sizeof(int32_t); i++) {
-            _mm_stream_si32(dst32 + i, src32[i]);
-        }
-        if constexpr (debug_sync) {
-            tt_driver_atomics::sfence();
-        }
-        return;
-    }
 
-    size_t num_lines = n / inner_blk_size;
-
-    for (size_t i = 0; i < num_lines; i++) {
-        for (size_t j = 0; j < inner_loop; j++) {
-            __m128i blk = _mm_loadu_si128((const __m128i *)src8);
-            _mm_stream_si128((__m128i *)dst8, blk);
-            src8 += sizeof(__m128i);
-            dst8 += sizeof(__m128i);
+    if (size_t num_lines = n / inner_blk_size) {
+        for (size_t i = 0; i < num_lines; ++i) {
+            for (size_t j = 0; j < inner_loop; ++j) {
+                __m256i blk = _mm256_loadu_si256((const __m256i *)src8);
+                _mm256_stream_si256((__m256i *)dst8, blk);
+                src8 += sizeof(__m256i);
+                dst8 += sizeof(__m256i);
+            }
+            n -= inner_blk_size;
         }
-        n -= inner_blk_size;
     }
 
     if (n > 0) {
-        for (size_t i = 0; i < n / sizeof(__m128i); i++) {
-            __m128i blk = _mm_loadu_si128((const __m128i *)src8);
-            _mm_stream_si128((__m128i *)dst8, blk);
-            src8 += sizeof(__m128i);
-            dst8 += sizeof(__m128i);
+        if (size_t num_lines = n / sizeof(__m256i)) {
+            for (size_t i = 0; i < num_lines; ++i) {
+                __m256i blk = _mm256_loadu_si256((const __m256i *)src8);
+                _mm256_stream_si256((__m256i *)dst8, blk);
+                src8 += sizeof(__m256i);
+                dst8 += sizeof(__m256i);
+            }
+            n -= num_lines * sizeof(__m256i);
         }
-        n -= n / sizeof(__m128i) * sizeof(__m128i);
-        int32_t *src32 = (int32_t *)src8;
-        int32_t *dst32 = (int32_t *)dst8;
-        for (size_t i = 0; i < n / sizeof(int32_t); i++) {
-            _mm_stream_si32(dst32 + i, src32[i]);
+        if (size_t num_lines = n / sizeof(__m128i)) {
+            for (size_t i = 0; i < num_lines; ++i) {
+                __m128i blk = _mm_loadu_si128((const __m128i *)src8);
+                _mm_stream_si128((__m128i *)dst8, blk);
+                src8 += sizeof(__m128i);
+                dst8 += sizeof(__m128i);
+            }
+            n -= n / sizeof(__m128i) * sizeof(__m128i);
+        }
+        if (n > 0) {
+            for (size_t i = 0; i < n / sizeof(int32_t); ++i) {
+                _mm_stream_si32((int32_t *)dst8, *(int32_t *)src8);
+                src8 += sizeof(int32_t);
+                dst8 += sizeof(int32_t);
+            }
         }
     }
     if constexpr (debug_sync) {
         tt_driver_atomics::sfence();
     }
-    return;
 }
 
 struct SystemMemoryCQInterface {
     // CQ is split into issue and completion regions
     // Host writes commands and data for H2D transfers in the issue region, device reads from the issue region
-    // Device signals completion and writes data for D2H transfers in the completion region, host reads from the completion region
-    // Equation for issue fifo size is
-    // | issue_fifo_wr_ptr + command size B - issue_fifo_rd_ptr |
+    // Device signals completion and writes data for D2H transfers in the completion region, host reads from the
+    // completion region Equation for issue fifo size is | issue_fifo_wr_ptr + command size B - issue_fifo_rd_ptr |
     // Space available would just be issue_fifo_limit - issue_fifo_size
-    SystemMemoryCQInterface(uint16_t channel, uint8_t cq_id, uint32_t cq_size):
-      command_completion_region_size((((cq_size - CQ_START) / dispatch_constants::TRANSFER_PAGE_SIZE) / 4) * dispatch_constants::TRANSFER_PAGE_SIZE),
-      command_issue_region_size((cq_size - CQ_START) - this->command_completion_region_size),
-      issue_fifo_size(command_issue_region_size >> 4),
-      issue_fifo_limit(((CQ_START + this->command_issue_region_size) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4),
-      completion_fifo_size(command_completion_region_size >> 4),
-      completion_fifo_limit(issue_fifo_limit + completion_fifo_size),
-      offset(get_absolute_cq_offset(channel, cq_id, cq_size))
-     {
-        TT_ASSERT(this->command_completion_region_size % PCIE_ALIGNMENT == 0 and this->command_issue_region_size % PCIE_ALIGNMENT == 0, "Issue queue and completion queue need to be {}B aligned!", PCIE_ALIGNMENT);
+    SystemMemoryCQInterface(uint16_t channel, uint8_t cq_id, uint32_t cq_size) :
+        command_completion_region_size(
+            (((cq_size - CQ_START) / dispatch_constants::TRANSFER_PAGE_SIZE) / 4) *
+            dispatch_constants::TRANSFER_PAGE_SIZE),
+        command_issue_region_size((cq_size - CQ_START) - this->command_completion_region_size),
+        issue_fifo_size(command_issue_region_size >> 4),
+        issue_fifo_limit(
+            ((CQ_START + this->command_issue_region_size) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4),
+        completion_fifo_size(command_completion_region_size >> 4),
+        completion_fifo_limit(issue_fifo_limit + completion_fifo_size),
+        offset(get_absolute_cq_offset(channel, cq_id, cq_size)) {
+        TT_ASSERT(
+            this->command_completion_region_size % PCIE_ALIGNMENT == 0 and
+                this->command_issue_region_size % PCIE_ALIGNMENT == 0,
+            "Issue queue and completion queue need to be {}B aligned!",
+            PCIE_ALIGNMENT);
         TT_ASSERT(this->issue_fifo_limit != 0, "Cannot have a 0 fifo limit");
         // Currently read / write pointers on host and device assumes contiguous ranges for each channel
-        // Device needs absolute offset of a hugepage to access the region of sysmem that holds a particular command queue
+        // Device needs absolute offset of a hugepage to access the region of sysmem that holds a particular command
+        // queue
         //  but on host, we access a region of sysmem using addresses relative to a particular channel
         this->issue_fifo_wr_ptr = (CQ_START + this->offset) >> 4;  // In 16B words
         this->issue_fifo_wr_toggle = 0;
@@ -260,8 +270,9 @@ struct SystemMemoryCQInterface {
         this->completion_fifo_rd_toggle = 0;
     }
 
-    // Percentage of the command queue that is dedicated for issuing commands. Issue queue size is rounded to be 32B aligned and remaining space is dedicated for completion queue
-    // Smaller issue queues can lead to more stalls for applications that send more work to device than readback data.
+    // Percentage of the command queue that is dedicated for issuing commands. Issue queue size is rounded to be 32B
+    // aligned and remaining space is dedicated for completion queue Smaller issue queues can lead to more stalls for
+    // applications that send more work to device than readback data.
     static constexpr float default_issue_queue_split = 0.75;
     const uint32_t command_completion_region_size;
     const uint32_t command_issue_region_size;
@@ -283,9 +294,9 @@ class SystemMemoryManager {
     chip_id_t device_id;
     uint8_t num_hw_cqs;
     const uint32_t m_dma_buf_size;
-    const std::function<void(uint32_t, uint32_t, const uint8_t*, uint32_t)> fast_write_callable;
+    const std::function<void(uint32_t, uint32_t, const uint8_t *, uint32_t)> fast_write_callable;
     vector<uint32_t> completion_byte_addrs;
-    char* cq_sysmem_start;
+    char *cq_sysmem_start;
     vector<SystemMemoryCQInterface> cq_interfaces;
     uint32_t cq_size;
     uint32_t channel_offset;
@@ -316,11 +327,11 @@ class SystemMemoryManager {
         // Split hugepage into however many pieces as there are CQs
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-        char* hugepage_start = (char*) tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
+        char *hugepage_start = (char *)tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
         this->cq_sysmem_start = hugepage_start;
 
         // TODO(abhullar): Remove env var and expose sizing at the API level
-        char* cq_size_override_env = std::getenv("TT_METAL_CQ_SIZE_OVERRIDE");
+        char *cq_size_override_env = std::getenv("TT_METAL_CQ_SIZE_OVERRIDE");
         if (cq_size_override_env != nullptr) {
             uint32_t cq_size_override = std::stoi(string(cq_size_override_env));
             this->cq_size = cq_size_override;
@@ -331,24 +342,37 @@ class SystemMemoryManager {
 
         CoreType core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(device_id);
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-            tt_cxy_pair prefetcher_core = dispatch_core_manager::get(num_hw_cqs).prefetcher_core(device_id, channel, cq_id);
-            tt_cxy_pair prefetcher_physical_core = tt_cxy_pair(prefetcher_core.chip, tt::get_physical_core_coordinate(prefetcher_core, core_type));
+            tt_cxy_pair prefetcher_core =
+                dispatch_core_manager::get(num_hw_cqs).prefetcher_core(device_id, channel, cq_id);
+            tt_cxy_pair prefetcher_physical_core =
+                tt_cxy_pair(prefetcher_core.chip, tt::get_physical_core_coordinate(prefetcher_core, core_type));
             this->prefetcher_cores[cq_id] = prefetcher_physical_core;
 
-            tt_cxy_pair completion_queue_writer_core = dispatch_core_manager::get(num_hw_cqs).completion_queue_writer_core(device_id, channel, cq_id);
-            const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(completion_queue_writer_core.chip, tt::get_physical_core_coordinate(completion_queue_writer_core, core_type))).value();
+            tt_cxy_pair completion_queue_writer_core =
+                dispatch_core_manager::get(num_hw_cqs).completion_queue_writer_core(device_id, channel, cq_id);
+            const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data =
+                tt::Cluster::instance()
+                    .get_tlb_data(tt_cxy_pair(
+                        completion_queue_writer_core.chip,
+                        tt::get_physical_core_coordinate(completion_queue_writer_core, core_type)))
+                    .value();
             auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
             this->completion_byte_addrs[cq_id] = completion_tlb_offset + CQ_COMPLETION_READ_PTR % completion_tlb_size;
 
             this->cq_interfaces.push_back(SystemMemoryCQInterface(channel, cq_id, this->cq_size));
-            // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue must be as large as the max amount of space the prefetch queue can specify
-            // Plus 1 to handle wrapping
-            // Plus 1 to allow us to start writing to issue queue before we reserve space in the prefetch queue
-            TT_FATAL(dispatch_constants::get(core_type).max_prefetch_command_size() * (dispatch_constants::get(core_type).prefetch_q_entries() + 2) <= this->get_issue_queue_size(cq_id));
+            // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue
+            // must be as large as the max amount of space the prefetch queue can specify Plus 1 to handle wrapping Plus
+            // 1 to allow us to start writing to issue queue before we reserve space in the prefetch queue
+            TT_FATAL(
+                dispatch_constants::get(core_type).max_prefetch_command_size() *
+                    (dispatch_constants::get(core_type).prefetch_q_entries() + 2) <=
+                this->get_issue_queue_size(cq_id));
             this->cq_to_event.push_back(0);
             this->cq_to_last_completed_event.push_back(0);
             this->prefetch_q_dev_ptrs[cq_id] = dispatch_constants::PREFETCH_Q_BASE;
-            this->prefetch_q_dev_fences[cq_id] = dispatch_constants::PREFETCH_Q_BASE + dispatch_constants::get(core_type).prefetch_q_entries() * sizeof(dispatch_constants::prefetch_q_entry_type);
+            this->prefetch_q_dev_fences[cq_id] =
+                dispatch_constants::PREFETCH_Q_BASE + dispatch_constants::get(core_type).prefetch_q_entries() *
+                                                          sizeof(dispatch_constants::prefetch_q_entry_type);
         }
         vector<std::mutex> temp_mutexes(num_hw_cqs);
         cq_to_event_locks.swap(temp_mutexes);
@@ -374,7 +398,12 @@ class SystemMemoryManager {
     }
 
     void set_last_completed_event(const uint8_t cq_id, const uint32_t event_id) {
-        TT_ASSERT(event_id >= this->cq_to_last_completed_event[cq_id], "Event ID is expected to increase. Wrapping not supported for sync. Completed event {} but last recorded completed event is {}", event_id, this->cq_to_last_completed_event[cq_id]);
+        TT_ASSERT(
+            event_id >= this->cq_to_last_completed_event[cq_id],
+            "Event ID is expected to increase. Wrapping not supported for sync. Completed event {} but last recorded "
+            "completed event is {}",
+            event_id,
+            this->cq_to_last_completed_event[cq_id]);
         cq_to_event_locks[cq_id].lock();
         this->cq_to_last_completed_event[cq_id] = event_id;
         cq_to_event_locks[cq_id].unlock();
@@ -388,7 +417,7 @@ class SystemMemoryManager {
     }
 
     void reset(const uint8_t cq_id) {
-        SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+        SystemMemoryCQInterface &cq_interface = this->cq_interfaces[cq_id];
         cq_interface.issue_fifo_wr_ptr = (CQ_START + cq_interface.offset) >> 4;  // In 16B words
         cq_interface.issue_fifo_wr_toggle = 0;
         cq_interface.completion_fifo_rd_ptr = cq_interface.issue_fifo_limit;
@@ -396,7 +425,7 @@ class SystemMemoryManager {
     }
 
     void set_issue_queue_size(const uint8_t cq_id, const uint32_t issue_queue_size) {
-        SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+        SystemMemoryCQInterface &cq_interface = this->cq_interfaces[cq_id];
         cq_interface.issue_fifo_size = (issue_queue_size >> 4);
         cq_interface.issue_fifo_limit = (CQ_START + cq_interface.offset + issue_queue_size) >> 4;
     }
@@ -409,17 +438,11 @@ class SystemMemoryManager {
         }
     }
 
-    bool get_bypass_mode() {
-        return this->bypass_enable;
-    }
+    bool get_bypass_mode() { return this->bypass_enable; }
 
-    std::vector<uint32_t> get_bypass_data() {
-        return std::move(this->bypass_buffer);
-    }
+    std::vector<uint32_t> get_bypass_data() { return std::move(this->bypass_buffer); }
 
-    uint32_t get_issue_queue_size(const uint8_t cq_id) const {
-        return this->cq_interfaces[cq_id].issue_fifo_size << 4;
-    }
+    uint32_t get_issue_queue_size(const uint8_t cq_id) const { return this->cq_interfaces[cq_id].issue_fifo_size << 4; }
 
     uint32_t get_issue_queue_limit(const uint8_t cq_id) const {
         return this->cq_interfaces[cq_id].issue_fifo_limit << 4;
@@ -445,13 +468,15 @@ class SystemMemoryManager {
         return this->cq_interfaces[cq_id].completion_fifo_rd_toggle;
     }
 
-    uint32_t get_cq_size() const {
-        return this->cq_size;
-    }
+    uint32_t get_cq_size() const { return this->cq_size; }
 
     void *issue_queue_reserve(uint32_t cmd_size_B, const uint8_t cq_id) {
         if (this->bypass_enable) {
-            TT_FATAL(cmd_size_B % sizeof(uint32_t) == 0, "Data cmd_size_B={} is not {}-byte aligned", cmd_size_B, sizeof(uint32_t));
+            TT_FATAL(
+                cmd_size_B % sizeof(uint32_t) == 0,
+                "Data cmd_size_B={} is not {}-byte aligned",
+                cmd_size_B,
+                sizeof(uint32_t));
             uint32_t curr_size = this->bypass_buffer.size();
             uint32_t new_size = curr_size + (cmd_size_B / sizeof(uint32_t));
             this->bypass_buffer.resize(new_size);
@@ -467,30 +492,41 @@ class SystemMemoryManager {
         }
 
         // Currently read / write pointers on host and device assumes contiguous ranges for each channel
-        // Device needs absolute offset of a hugepage to access the region of sysmem that holds a particular command queue
+        // Device needs absolute offset of a hugepage to access the region of sysmem that holds a particular command
+        // queue
         //  but on host, we access a region of sysmem using addresses relative to a particular channel
         //  this->cq_sysmem_start gives start of hugepage for a given channel
         //  since all rd/wr pointers include channel offset from address 0 to match device side pointers
         //  so channel offset needs to be subtracted to get address relative to channel
-        // TODO: Reconsider offset sysmem offset calculations based on https://github.com/tenstorrent/tt-metal/issues/4757
-        void* issue_q_region = this->cq_sysmem_start + (issue_q_write_ptr - this->channel_offset);
+        // TODO: Reconsider offset sysmem offset calculations based on
+        // https://github.com/tenstorrent/tt-metal/issues/4757
+        void *issue_q_region = this->cq_sysmem_start + (issue_q_write_ptr - this->channel_offset);
 
         return issue_q_region;
     }
 
-    void cq_write(const void* data, uint32_t size_in_bytes, uint32_t write_ptr) {
+    void cq_write(const void *data, uint32_t size_in_bytes, uint32_t write_ptr) {
         // Currently read / write pointers on host and device assumes contiguous ranges for each channel
-        // Device needs absolute offset of a hugepage to access the region of sysmem that holds a particular command queue
+        // Device needs absolute offset of a hugepage to access the region of sysmem that holds a particular command
+        // queue
         //  but on host, we access a region of sysmem using addresses relative to a particular channel
         //  this->cq_sysmem_start gives start of hugepage for a given channel
         //  since all rd/wr pointers include channel offset from address 0 to match device side pointers
         //  so channel offset needs to be subtracted to get address relative to channel
-        // TODO: Reconsider offset sysmem offset calculations based on https://github.com/tenstorrent/tt-metal/issues/4757
-        void* user_scratchspace = this->cq_sysmem_start + (write_ptr - this->channel_offset);
+        // TODO: Reconsider offset sysmem offset calculations based on
+        // https://github.com/tenstorrent/tt-metal/issues/4757
+        void *user_scratchspace = this->cq_sysmem_start + (write_ptr - this->channel_offset);
 
         if (this->bypass_enable) {
-            TT_FATAL(size_in_bytes % sizeof(uint32_t) == 0, "Data size_in_bytes={} is not {}-byte aligned", size_in_bytes, sizeof(uint32_t));
-            std::copy((uint32_t*)data, (uint32_t*)data + size_in_bytes / sizeof(uint32_t), this->bypass_buffer.begin() + this->bypass_buffer_write_offset);
+            TT_FATAL(
+                size_in_bytes % sizeof(uint32_t) == 0,
+                "Data size_in_bytes={} is not {}-byte aligned",
+                size_in_bytes,
+                sizeof(uint32_t));
+            std::copy(
+                (uint32_t *)data,
+                (uint32_t *)data + size_in_bytes / sizeof(uint32_t),
+                this->bypass_buffer.begin() + this->bypass_buffer_write_offset);
         } else {
             memcpy_to_device(user_scratchspace, data, size_in_bytes);
         }
@@ -499,7 +535,11 @@ class SystemMemoryManager {
     // TODO: RENAME issue_queue_stride ?
     void issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id) {
         if (this->bypass_enable) {
-            TT_FATAL(push_size_B % sizeof(uint32_t) == 0, "Data push_size_B={} is not {}-byte aligned", push_size_B, sizeof(uint32_t));
+            TT_FATAL(
+                push_size_B % sizeof(uint32_t) == 0,
+                "Data push_size_B={} is not {}-byte aligned",
+                push_size_B,
+                sizeof(uint32_t));
             this->bypass_buffer_write_offset += (push_size_B / sizeof(uint32_t));
             return;
         }
@@ -507,46 +547,49 @@ class SystemMemoryManager {
         // All data needs to be 32B aligned
         uint32_t push_size_16B = align(push_size_B, 32) >> 4;
 
-        SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+        SystemMemoryCQInterface &cq_interface = this->cq_interfaces[cq_id];
 
         if (cq_interface.issue_fifo_wr_ptr + push_size_16B >= cq_interface.issue_fifo_limit) {
-            cq_interface.issue_fifo_wr_ptr = (CQ_START + cq_interface.offset) >> 4;  // In 16B words
-            cq_interface.issue_fifo_wr_toggle = not cq_interface.issue_fifo_wr_toggle; // Flip the toggle
+            cq_interface.issue_fifo_wr_ptr = (CQ_START + cq_interface.offset) >> 4;     // In 16B words
+            cq_interface.issue_fifo_wr_toggle = not cq_interface.issue_fifo_wr_toggle;  // Flip the toggle
         } else {
             cq_interface.issue_fifo_wr_ptr += push_size_16B;
         }
     }
 
-    void completion_queue_wait_front(const uint8_t cq_id, volatile bool& exit_condition) const {
+    void completion_queue_wait_front(const uint8_t cq_id, volatile bool &exit_condition) const {
         uint32_t write_ptr_and_toggle;
         uint32_t write_ptr;
         uint32_t write_toggle;
-        const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+        const SystemMemoryCQInterface &cq_interface = this->cq_interfaces[cq_id];
 
         do {
             write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
             write_ptr = write_ptr_and_toggle & 0x7fffffff;
             write_toggle = write_ptr_and_toggle >> 31;
-        } while (cq_interface.completion_fifo_rd_ptr == write_ptr and cq_interface.completion_fifo_rd_toggle == write_toggle and not exit_condition);
+        } while (cq_interface.completion_fifo_rd_ptr == write_ptr and
+                 cq_interface.completion_fifo_rd_toggle == write_toggle and not exit_condition);
     }
 
     void send_completion_queue_read_ptr(const uint8_t cq_id) const {
-        const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+        const SystemMemoryCQInterface &cq_interface = this->cq_interfaces[cq_id];
 
         uint32_t read_ptr_and_toggle =
             cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
-        this->fast_write_callable(this->completion_byte_addrs[cq_id], 4, (uint8_t*)&read_ptr_and_toggle, this->m_dma_buf_size);
+        this->fast_write_callable(
+            this->completion_byte_addrs[cq_id], 4, (uint8_t *)&read_ptr_and_toggle, this->m_dma_buf_size);
     }
 
     void wrap_issue_queue_wr_ptr(const uint8_t cq_id) {
-        if (this->bypass_enable) return;
-        SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+        if (this->bypass_enable)
+            return;
+        SystemMemoryCQInterface &cq_interface = this->cq_interfaces[cq_id];
         cq_interface.issue_fifo_wr_ptr = (CQ_START + cq_interface.offset) >> 4;
         cq_interface.issue_fifo_wr_toggle = not cq_interface.issue_fifo_wr_toggle;
     }
 
     void wrap_completion_queue_rd_ptr(const uint8_t cq_id) {
-        SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+        SystemMemoryCQInterface &cq_interface = this->cq_interfaces[cq_id];
         cq_interface.completion_fifo_rd_ptr = cq_interface.issue_fifo_limit;
         cq_interface.completion_fifo_rd_toggle = not cq_interface.completion_fifo_rd_toggle;
     }
@@ -555,7 +598,7 @@ class SystemMemoryManager {
         uint32_t data_read_B = num_pages_read * dispatch_constants::TRANSFER_PAGE_SIZE;
         uint32_t data_read_16B = data_read_B >> 4;
 
-        SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+        SystemMemoryCQInterface &cq_interface = this->cq_interfaces[cq_id];
         cq_interface.completion_fifo_rd_ptr += data_read_16B;
         if (cq_interface.completion_fifo_rd_ptr >= cq_interface.completion_fifo_limit) {
             cq_interface.completion_fifo_rd_ptr = cq_interface.issue_fifo_limit;
@@ -567,47 +610,60 @@ class SystemMemoryManager {
     }
 
     void fetch_queue_reserve_back(const uint8_t cq_id) {
-        if (this->bypass_enable) return;
+        if (this->bypass_enable)
+            return;
 
         // Wait for space in the FetchQ
         uint32_t fence;
         while (this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id]) {
-            tt::Cluster::instance().read_core(&fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], CQ_PREFETCH_Q_RD_PTR);
+            tt::Cluster::instance().read_core(
+                &fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], CQ_PREFETCH_Q_RD_PTR);
             this->prefetch_q_dev_fences[cq_id] = fence;
         }
 
         // Wrap FetchQ if possible
         CoreType core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(device_id);
         uint32_t prefetch_q_base = DISPATCH_L1_UNRESERVED_BASE;
-        uint32_t prefetch_q_limit = prefetch_q_base + dispatch_constants::get(core_type).prefetch_q_entries() * sizeof(dispatch_constants::prefetch_q_entry_type);
+        uint32_t prefetch_q_limit = prefetch_q_base + dispatch_constants::get(core_type).prefetch_q_entries() *
+                                                          sizeof(dispatch_constants::prefetch_q_entry_type);
         if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
             this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
 
             while (this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id]) {
-                tt::Cluster::instance().read_core(&fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], CQ_PREFETCH_Q_RD_PTR);
+                tt::Cluster::instance().read_core(
+                    &fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], CQ_PREFETCH_Q_RD_PTR);
                 this->prefetch_q_dev_fences[cq_id] = fence;
             }
         }
     }
 
     void fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id, bool stall_prefetcher = false) {
-        CoreType dispatch_core_type = dispatch_core_manager::get(this->num_hw_cqs).get_dispatch_core_type(this->device_id);
+        CoreType dispatch_core_type =
+            dispatch_core_manager::get(this->num_hw_cqs).get_dispatch_core_type(this->device_id);
         uint32_t max_command_size_B = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
-        TT_ASSERT(command_size_B <= max_command_size_B, "Generated prefetcher command of size {} B exceeds max command size {} B", command_size_B, max_command_size_B);
-        TT_ASSERT((command_size_B >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
-        if (this->bypass_enable) return;
+        TT_ASSERT(
+            command_size_B <= max_command_size_B,
+            "Generated prefetcher command of size {} B exceeds max command size {} B",
+            command_size_B,
+            max_command_size_B);
+        TT_ASSERT(
+            (command_size_B >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF,
+            "FetchQ command too large to represent");
+        if (this->bypass_enable)
+            return;
         tt_driver_atomics::sfence();
         uint32_t command_size_16B = command_size_B >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE;
 
         // stall_prefetcher is used for enqueuing traces, as replaying a trace will hijack the cmd_data_q
-        // so prefetcher fetches multiple cmds that include the trace cmd, they will be corrupted by trace pulling data from DRAM
-        // stall flag prevents pulling prefetch q entries that occur after the stall entry
-        // Stall flag for prefetcher is MSB of FetchQ entry.
+        // so prefetcher fetches multiple cmds that include the trace cmd, they will be corrupted by trace pulling data
+        // from DRAM stall flag prevents pulling prefetch q entries that occur after the stall entry Stall flag for
+        // prefetcher is MSB of FetchQ entry.
         if (stall_prefetcher) {
             command_size_16B |= (1 << ((sizeof(dispatch_constants::prefetch_q_entry_type) * 8) - 1));
         }
 
-        tt::Cluster::instance().write_reg(&command_size_16B, this->prefetcher_cores[cq_id], this->prefetch_q_dev_ptrs[cq_id]);
+        tt::Cluster::instance().write_reg(
+            &command_size_16B, this->prefetcher_cores[cq_id], this->prefetch_q_dev_ptrs[cq_id]);
         this->prefetch_q_dev_ptrs[cq_id] += sizeof(dispatch_constants::prefetch_q_entry_type);
     }
 };
