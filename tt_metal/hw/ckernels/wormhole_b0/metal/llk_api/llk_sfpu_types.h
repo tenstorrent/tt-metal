@@ -75,5 +75,6 @@ enum SfpuType {
     unary_lt,
     softplus,
     tiled_prod,
+    right_shift,
     unused,
 };
