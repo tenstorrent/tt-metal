@@ -4,18 +4,19 @@
 
 #pragma once
 #include "llk_math_common_api.h"
-#include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_comp.h"
 #include "llk_math_eltwise_unary_sfpu_exp2.h"
 #include "llk_math_eltwise_unary_sfpu_expm1.h"
 #include "llk_math_eltwise_unary_sfpu_heaviside.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_left_shift.h"
 #include "llk_math_eltwise_unary_sfpu_power.h"
 #include "llk_math_eltwise_unary_sfpu_rsqrt.h"
-#include "llk_math_eltwise_unary_sfpu_tiled_prod.h"
 #include "llk_math_eltwise_unary_sfpu_sigmoid.h"
 #include "llk_math_eltwise_unary_sfpu_sign.h"
 #include "llk_math_eltwise_unary_sfpu_signbit.h"
 #include "llk_math_eltwise_unary_sfpu_silu.h"
+#include "llk_math_eltwise_unary_sfpu_tiled_prod.h"
 #include "llk_math_eltwise_unary_sfpu_topk.h"
 #include "llk_math_eltwise_unary_sfpu_trigonometry.h"
 #include "llk_math_eltwise_unary_sfpu_unary_comp.h"
@@ -23,8 +24,8 @@
 namespace ckernel {
 
 /*************************************************************************
-* LLK ELTWISE UNARY SFPU
-*************************************************************************/
+ * LLK ELTWISE UNARY SFPU
+ *************************************************************************/
 
 // New LLK SFPU APIs
 
@@ -38,7 +39,7 @@ inline void llk_math_eltwise_unary_sfpu_log_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::log, APPROXIMATE>();
 }
 
-//abs
+// abs
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_abs(uint dst_index, int vector_mode = VectorMode::RC) {
     llk_math_eltwise_unary_sfpu<SfpuType::abs, APPROXIMATE, DstSync::SyncHalf>(dst_index, vector_mode);
@@ -49,10 +50,10 @@ inline void llk_math_eltwise_unary_sfpu_abs_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::abs, APPROXIMATE>();
 }
 
-//log with base
+// log with base
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_log_with_base(uint dst_index, uint base, int vector_mode = VectorMode::RC) {
-  llk_math_eltwise_unary_sfpu<SfpuType::log_with_base, APPROXIMATE, DstSync::SyncHalf>(dst_index, vector_mode, base);
+    llk_math_eltwise_unary_sfpu<SfpuType::log_with_base, APPROXIMATE, DstSync::SyncHalf>(dst_index, vector_mode, base);
 }
 
 template <bool APPROXIMATE>
@@ -104,6 +105,6 @@ inline void llk_math_eltwise_unary_sfpu_square_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::square, APPROXIMATE>();
 }
 
-//ELU - implemented in ckernel_sfpu_elu.h
+// ELU - implemented in ckernel_sfpu_elu.h
 
-}
+}  // namespace ckernel
