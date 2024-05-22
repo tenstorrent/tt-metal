@@ -77,7 +77,7 @@ def _pad_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
     golden_function=_golden_function,
     preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
     postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
-    allow_to_fallback_to_golden_function_on_failure=True,
+    allow_to_fallback_to_golden_function_on_failure=False,
 )
 def pad(
     input_tensor: ttnn.Tensor,
