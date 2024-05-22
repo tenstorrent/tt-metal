@@ -20,21 +20,21 @@ std::map<string, string> get_defines(
     BinaryOpType op_type, const std::optional<std::vector<UnaryWithParam>> fused_activations) {
     std::map<string, string> defines;
     string op_name = "sub_tiles";
-    string op_code = "1";
+    string op_binary_type = "EltwiseBinaryType::ELWSUB";
     string idst = "i";
 
     switch (op_type) {
         case BinaryOpType::ADD:
             op_name = "add_tiles";
-            op_code = "0";
+            op_binary_type = "EltwiseBinaryType::ELWADD";
             break;
         case BinaryOpType::SUB:
             op_name = "sub_tiles";
-            op_code = "1";
+            op_binary_type = "EltwiseBinaryType::ELWSUB";
             break;
         case BinaryOpType::MUL:
             op_name = "mul_tiles";
-            op_code = "2";
+            op_binary_type = "EltwiseBinaryType::ELWMUL";
             break;
         case BinaryOpType::GT:
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst));
@@ -59,12 +59,12 @@ std::map<string, string> get_defines(
             break;
         case BinaryOpType::LOGICAL_AND:
             op_name = "mul_tiles";
-            op_code = "2";
+            op_binary_type = "EltwiseBinaryType::ELWMUL";
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst));
             break;
         case BinaryOpType::BIAS_GELU:
             op_name = "add_tiles";
-            op_code = "0";
+            op_binary_type = "EltwiseBinaryType::ELWADD";
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GELU, std::vector<float>{0}, "0", idst));
             break;
         case BinaryOpType::LOGADDEXP:
@@ -73,39 +73,39 @@ std::map<string, string> get_defines(
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN0_0"));
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN1_0"));
             op_name = "add_tiles";
-            op_code = "0";
+            op_binary_type = "EltwiseBinaryType::ELWADD";
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LOG, std::nullopt, "0", idst));
             break;
         case BinaryOpType::DIV_FAST:
             // Divide by a non-zero tensor
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::RECIP, std::nullopt, "PRE_IN1_0"));
             op_name = "mul_tiles";
-            op_code = "2";
+            op_binary_type = "EltwiseBinaryType::ELWMUL";
             break;
         case BinaryOpType::LOGICAL_OR:
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0"));
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN1_0"));
             op_name = "add_tiles";
-            op_code = "0";
+            op_binary_type = "EltwiseBinaryType::ELWADD";
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst));
             break;
         case BinaryOpType::LDEXP:
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
             op_name = "mul_tiles";
-            op_code = "2";
+            op_binary_type = "EltwiseBinaryType::ELWMUL";
             break;
         case BinaryOpType::LOGADDEXP2:
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN0_0"));
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
             op_name = "add_tiles";
-            op_code = "0";
+            op_binary_type = "EltwiseBinaryType::ELWADD";
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LOG2, std::nullopt, "0", idst));
             break;
         default: TT_ASSERT(false && "Undefined op type");
     }
 
     defines["ELTWISE_OP"] = op_name.c_str();
-    defines["ELTWISE_OP_CODE"] = op_code.c_str();
+    defines["ELTWISE_OP_TYPE"] = op_binary_type.c_str();
     if (fused_activations.has_value()) {
         if (op_type == BinaryOpType::ADD and fused_activations.value().size() == 1 and
             fused_activations.value().at(0).op_type == UnaryOpType::RELU) {

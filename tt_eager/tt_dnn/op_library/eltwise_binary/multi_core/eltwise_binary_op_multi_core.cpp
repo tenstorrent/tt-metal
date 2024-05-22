@@ -373,7 +373,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
 
     auto eltwise_binary_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_binary.cpp",
+        "tt_eager/tt_dnn/op_library/eltwise_binary/kernels/compute/eltwise_binary.cpp",
         all_device_cores,
         tt_metal::ComputeConfig{.defines = eltwise_defines}
     );

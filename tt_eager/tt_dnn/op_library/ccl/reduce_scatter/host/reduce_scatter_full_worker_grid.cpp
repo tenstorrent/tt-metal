@@ -475,7 +475,7 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
         std::map<string, string> eltwise_defines = eltwise_binary_op_utils::get_defines(binary_math_op, std::nullopt);
         KernelHandle worker_reduce_kernel_id = tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/compute/eltwise_binary.cpp",
+            "tt_eager/tt_dnn/op_library/eltwise_binary/kernels/compute/eltwise_binary.cpp",
             worker_core,
             tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,

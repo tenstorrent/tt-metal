@@ -37,15 +37,15 @@ struct BinaryOpType {
 std::map<string, string> get_defines(BinaryOpType::Enum op_type){
     std::map<string, string> defines;
     // TODO(AP): remove duplication
-    string op_name, op_code;
+    string op_name, op_binary_type;
     switch (op_type) {
-        case BinaryOpType::ADD: op_name = "add_tiles"; op_code = "0"; break;
-        case BinaryOpType::SUB: op_name = "sub_tiles"; op_code = "1"; break;
-        case BinaryOpType::MUL: op_name = "mul_tiles"; op_code = "2"; break;
+        case BinaryOpType::ADD: op_name = "add_tiles"; op_binary_type = "EltwiseBinaryType::ELWADD"; break;
+        case BinaryOpType::SUB: op_name = "sub_tiles"; op_binary_type = "EltwiseBinaryType::ELWSUB"; break;
+        case BinaryOpType::MUL: op_name = "mul_tiles"; op_binary_type = "EltwiseBinaryType::ELWMUL"; break;
         default: TT_ASSERT(false && "Undefined op type");
     }
     defines["ELTWISE_OP"] = op_name.c_str();
-    defines["ELTWISE_OP_CODE"] = op_code.c_str();
+    defines["ELTWISE_OP_TYPE"] = op_binary_type.c_str();
     return defines;
 }
 

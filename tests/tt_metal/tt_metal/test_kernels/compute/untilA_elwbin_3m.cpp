@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#define ELTWISE_OP_CODE 0 // TODO(AP): temporary - refactor
+#define ELTWISE_OP_TYPE EltwiseBinaryType::ELWADD // TODO(AP): temporary - refactor
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
