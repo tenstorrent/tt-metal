@@ -597,7 +597,7 @@ void SSM1DSumReduce::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL((input_tensor_a.get_layout() == Layout::TILE), "Inputs to ssm_1d_sum_reduce must be tilized");
 
-    // TODO: Uplift to support BFLOAT8_B and mixed precision
+    // TODO: Uplift to support mixed precision
     TT_FATAL(
         input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to ssm_1d_sum_reduce need to be on device!");
     TT_FATAL(
@@ -606,12 +606,12 @@ void SSM1DSumReduce::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(
         input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Unsupported memory layout for input a!");
-    TT_FATAL(input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format for input a!");
+    TT_FATAL(input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format for input a!");
 
     TT_FATAL(
         this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Unsupported memory layout for output!");
-    TT_FATAL(this->output_dtype == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format for output!");
+    TT_FATAL(this->output_dtype == tt::tt_metal::DataType::BFLOAT16 || this->output_dtype == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format for output!");
 
     constexpr uint32_t latent = 32;
     const auto ashape = input_tensor_a.get_legacy_shape();
