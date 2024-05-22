@@ -51,6 +51,6 @@ def test_sum_global(device, batch_size, h, w):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = output_tensor[0, 0, 0, 0]
+    output_tensor = output_tensor[0, 0, 0]
 
     assert_with_pcc(torch_output_tensor, output_tensor)
