@@ -1603,6 +1603,7 @@ void noc_semaphore_inc(uint64_t addr, uint32_t incr) {
   */
     DEBUG_STATUS("NSIW");
     DEBUG_SANITIZE_NOC_ADDR(addr, 4);
+    DEBUG_INSERT_DELAY(TransactionAtomic);
     noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, addr, NOC_UNICAST_WRITE_VC, incr, 31 /*wrap*/, false /*linked*/, false /*posted*/);
     DEBUG_STATUS("NSID");
 }

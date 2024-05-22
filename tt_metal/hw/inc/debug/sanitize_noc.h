@@ -262,7 +262,7 @@ void debug_sanitize_noc_and_worker_addr(
         NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
 
 // Delay for debugging purposes
-inline void debug_sanitize_insert_debug_delay(uint8_t transaction_type) {
+inline void debug_insert_delay(uint8_t transaction_type) {
 #if defined(WATCHER_DEBUG_DELAY)
     debug_insert_delays_msg_t tt_l1_ptr *v = GET_MAILBOX_ADDRESS_DEV(debug_insert_delays);
 
