@@ -130,8 +130,10 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> reader_compile_time_args;
-    std::vector<uint32_t> writer_compile_time_args;
+    std::vector<uint32_t> reader_compile_time_args =
+    { static_cast<uint32_t>(is_dram(output_grad)) };
+    std::vector<uint32_t> writer_compile_time_args =
+    { static_cast<uint32_t>(is_dram(input_grad)) };
     const auto reader_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/reader_moreh_sum_backward.cpp";
     const auto writer_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/writer_moreh_sum_backward.cpp";
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
@@ -140,7 +142,7 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
+    const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1, need_bcast_dim[0], need_bcast_dim[1]};
     std::map<string, string> compute_defines;
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
@@ -154,7 +156,7 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2};
+        const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2, need_bcast_dim[0], need_bcast_dim[1]};
         compute_kernel_2_id = CreateComputeKernel(
             program,
             compute_kernel_file,
@@ -184,7 +186,6 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
         reader_rt_args.push_back(output_grad.buffer()->address());
         reader_rt_args.push_back(num_tiles_per_core);
         reader_rt_args.push_back(tile_offset);
-        reader_rt_args.push_back(static_cast<uint32_t>(is_dram(output_grad)));
         reader_rt_args.insert(reader_rt_args.end(), output_grad_dim.begin(), output_grad_dim.end());
         reader_rt_args.insert(reader_rt_args.end(), input_grad_dim.begin(), input_grad_dim.end());
         reader_rt_args.insert(reader_rt_args.end(), need_bcast_dim.begin(), need_bcast_dim.end());
@@ -202,29 +203,10 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
             core,
             {input_grad.buffer()->address(),
              num_tiles_per_core,
-             tile_offset,
-             static_cast<uint32_t>(is_dram(input_grad))});
+             tile_offset
+            }
+        );
 
-        std::vector<uint32_t> compute_rt_args;
-        compute_rt_args.push_back(num_tiles_per_core);
-        compute_rt_args.insert(compute_rt_args.end(), need_bcast_dim.begin(), need_bcast_dim.end());
-
-        if (core_group_1.core_coord_in_core_ranges(core)) {
-            SetRuntimeArgs(
-                program,
-                compute_kernel_1_id,
-                core,
-                {num_tiles_per_core, need_bcast_dim[0], need_bcast_dim[1]});
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
-            TT_ASSERT(compute_kernel_2_id.has_value());
-            SetRuntimeArgs(
-                program,
-                compute_kernel_2_id.value(),
-                core,
-                {num_tiles_per_core, need_bcast_dim[0], need_bcast_dim[1]});
-        } else {
-            TT_ASSERT(false, "Core not in specified core ranges.");
-        }
         tile_offset += num_tiles_per_core;
     }
 

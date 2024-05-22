@@ -21,11 +21,14 @@ inline uint32_t get_output_grad_tile(uint32_t idx, uint32_t* output_grad_dim, ui
 }
 
 void kernel_main() {
+    // compile-time args
+    constexpr bool output_grad_is_dram = (get_compile_time_arg_val(0) == 1);
+
+    // runtime args
     ArgFetcher arg_fetcher;
     const auto output_grad_addr = arg_fetcher.get_next_arg_val<uint32_t>();
     const auto num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
     const auto start_id = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto output_grad_is_dram = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
 
     uint32_t output_grad_dim[MAX_NUM_DIMENSIONS];
     for (auto i = 0; i < MAX_NUM_DIMENSIONS;++i) {
@@ -69,11 +72,7 @@ void kernel_main() {
     uint32_t l1_write_addr_in0;
     uint32_t output_grad_tile_bytes = get_tile_size(cb_id_in0);
     const auto output_grad_data_format = get_dataformat(cb_id_in0);
-    const InterleavedAddrGenFast<true> dram_output_grad_addrg = {
-        .bank_base_address = output_grad_addr,
-        .page_size = output_grad_tile_bytes,
-        .data_format = output_grad_data_format};
-    const InterleavedAddrGenFast<false> l1_output_grad_addrg = {
+    const InterleavedAddrGenFast<output_grad_is_dram> output_grad_addrg = {
         .bank_base_address = output_grad_addr,
         .page_size = output_grad_tile_bytes,
         .data_format = output_grad_data_format};
@@ -83,11 +82,7 @@ void kernel_main() {
 
         cb_reserve_back(cb_id_in0, onetile);
         l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-        if (output_grad_is_dram) {
-            noc_async_read_tile(read_tile_id, dram_output_grad_addrg, l1_write_addr_in0);
-        } else {
-            noc_async_read_tile(read_tile_id, l1_output_grad_addrg, l1_write_addr_in0);
-        }
+        noc_async_read_tile(read_tile_id, output_grad_addrg, l1_write_addr_in0);
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, onetile);
     }

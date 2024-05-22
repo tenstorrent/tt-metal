@@ -103,8 +103,10 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> reader_compile_time_args;
-    std::vector<uint32_t> writer_compile_time_args;
+    std::vector<uint32_t> reader_compile_time_args =
+             {static_cast<uint32_t>(is_dram(input))} ;
+    std::vector<uint32_t> writer_compile_time_args =
+             {static_cast<uint32_t>(is_dram(output))} ;
     const auto reader_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc_impl/kernels/reader_moreh_sum_nc.cpp";
     const auto writer_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc_impl/kernels/writer_moreh_sum_nc.cpp";
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
@@ -113,7 +115,7 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
+    const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1, num_reduce_input_tile};
     std::map<string, string> compute_defines;
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
@@ -127,7 +129,7 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2};
+        const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2, num_reduce_input_tile};
         compute_kernel_2_id = CreateComputeKernel(
             program,
             compute_kernel_file,
@@ -161,7 +163,6 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
              num_reduce_input_tile,
              num_tiles_per_core,
              tile_offset,
-             static_cast<uint32_t>(is_dram(input)),
              static_cast<uint32_t>(dim),
              reduce_tile_size,
              inner_tile_size
@@ -171,16 +172,9 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
             program,
             writer_kernel_id,
             core,
-            {output.buffer()->address(), num_tiles_per_core, tile_offset, static_cast<uint32_t>(is_dram(output))});
+            { output.buffer()->address(), num_tiles_per_core, tile_offset
+            });
 
-        if (core_group_1.core_coord_in_core_ranges(core)) {
-            SetRuntimeArgs(program, compute_kernel_1_id, core, {num_reduce_input_tile, num_tiles_per_core});
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
-            TT_ASSERT(compute_kernel_2_id.has_value());
-            SetRuntimeArgs(program, compute_kernel_2_id.value(), core, {num_reduce_input_tile, num_tiles_per_core});
-        } else {
-            TT_ASSERT(false, "Core not in specified core ranges.");
-        }
         tile_offset += num_tiles_per_core;
     }
 
