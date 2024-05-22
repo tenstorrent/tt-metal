@@ -54,6 +54,24 @@ std::map<string, string> get_defines(
         case BinaryOpType::NE:
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst));
             break;
+        case BinaryOpType::GTI:
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst));
+            break;
+        case BinaryOpType::LTI:
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst));
+            break;
+        case BinaryOpType::GEI:
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst));
+            break;
+        case BinaryOpType::LEI:
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst));
+            break;
+        case BinaryOpType::EQI:
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst));
+            break;
+        case BinaryOpType::NEI:
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst));
+            break;
         case BinaryOpType::SQUARED_DIFFERENCE:
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::SQUARE, std::nullopt, "0", idst));
             break;
@@ -146,6 +164,9 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
         "Inputs to eltwise binary must be tilized");
     if (this->in_place) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout);
+        // log_debug(tt::LogOp, "input_tensor_a.memory_config().buffer_type {} ",
+        // input_tensor_a.memory_config().buffer_type); log_debug(tt::LogOp, "output_mem_config.buffer_type {} ",
+        // output_mem_config.buffer_type);
         TT_FATAL(input_tensor_a.memory_config().buffer_type == this->output_mem_config.buffer_type);
         TT_FATAL(input_tensor_a.get_dtype() == this->output_dtype);
     }

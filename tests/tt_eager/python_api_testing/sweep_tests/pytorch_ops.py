@@ -912,12 +912,32 @@ def lte(x, y, *args, **kwargs):
         return x <= y
 
 
+def lei(x, y, *args, **kwargs):
+    if "scalar" in kwargs:
+        scalar = kwargs.pop("scalar")
+        x.copy_(x <= scalar)
+        return x
+    else:
+        x.copy_(x <= y)
+        return x
+
+
 def lt(x, y, *args, **kwargs):
     if "scalar" in kwargs:
         scalar = kwargs.pop("scalar")
         return x < scalar
     else:
         return x < y
+
+
+def lti(x, y, *args, **kwargs):
+    if "scalar" in kwargs:
+        scalar = kwargs.pop("scalar")
+        x.copy_(x < scalar)
+        return x
+    else:
+        x.copy_(x < y)
+        return x
 
 
 def gte(x, y, *args, **kwargs):
@@ -928,12 +948,32 @@ def gte(x, y, *args, **kwargs):
         return x >= y
 
 
+def gei(x, y, *args, **kwargs):
+    if "scalar" in kwargs:
+        scalar = kwargs.pop("scalar")
+        x.copy_(x >= scalar)
+        return x
+    else:
+        x.copy_(x >= y)
+        return x
+
+
 def gt(x, y, *args, **kwargs):
     if "scalar" in kwargs:
         scalar = kwargs.pop("scalar")
         return x > scalar
     else:
         return x > y
+
+
+def gti(x, y, *args, **kwargs):
+    if "scalar" in kwargs:
+        scalar = kwargs.pop("scalar")
+        x.copy_(x > scalar)
+        return x
+    else:
+        x.copy_(x > y)
+        return x
 
 
 def eq(x, y, *args, **kwargs):
@@ -944,12 +984,32 @@ def eq(x, y, *args, **kwargs):
         return x == y
 
 
+def eqi(x, y, *args, **kwargs):
+    if "scalar" in kwargs:
+        scalar = kwargs.pop("scalar")
+        x.copy_(x == scalar)
+        return x
+    else:
+        x.copy_(x == y)
+        return x
+
+
 def ne(x, y, *args, **kwargs):
     if "scalar" in kwargs:
         scalar = kwargs.pop("scalar")
         return x != scalar
     else:
         return x != y
+
+
+def nei(x, y, *args, **kwargs):
+    if "scalar" in kwargs:
+        scalar = kwargs.pop("scalar")
+        x.copy_(x != scalar)
+        return x
+    else:
+        x.copy_(x != y)
+        return x
 
 
 def unary_gt(x, *args, **kwargs):

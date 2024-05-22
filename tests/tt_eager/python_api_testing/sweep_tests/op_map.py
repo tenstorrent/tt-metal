@@ -597,6 +597,10 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_ne,
         "pytorch_op": pytorch_ops.ne,
     },
+    "eltwise-nei": {
+        "tt_op": tt_lib_ops.eltwise_ne,
+        "pytorch_op": pytorch_ops.nei,
+    },
     "eltwise-bias_gelu": {
         "tt_op": tt_lib_ops.eltwise_bias_gelu,
         "pytorch_op": pytorch_ops.bias_gelu,
@@ -605,21 +609,41 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_eq,
         "pytorch_op": pytorch_ops.eq,
     },
+    "eltwise-eqi": {
+        "tt_op": tt_lib_ops.eltwise_eqi,
+        "pytorch_op": pytorch_ops.eqi,
+    },
     "eltwise-lt": {
         "tt_op": tt_lib_ops.eltwise_lt,
         "pytorch_op": pytorch_ops.lt,
+    },
+    "eltwise-lti": {
+        "tt_op": tt_lib_ops.eltwise_lti,
+        "pytorch_op": pytorch_ops.lti,
     },
     "eltwise-gt": {
         "tt_op": tt_lib_ops.eltwise_gt,
         "pytorch_op": pytorch_ops.gt,
     },
+    "eltwise-gti": {
+        "tt_op": tt_lib_ops.eltwise_gti,
+        "pytorch_op": pytorch_ops.gti,
+    },
     "eltwise-gte": {
         "tt_op": tt_lib_ops.eltwise_gte,
         "pytorch_op": pytorch_ops.gte,
     },
+    "eltwise-gei": {
+        "tt_op": tt_lib_ops.eltwise_gei,
+        "pytorch_op": pytorch_ops.gei,
+    },
     "eltwise-lte": {
         "tt_op": tt_lib_ops.eltwise_lte,
         "pytorch_op": pytorch_ops.lte,
+    },
+    "eltwise-lei": {
+        "tt_op": tt_lib_ops.eltwise_lei,
+        "pytorch_op": pytorch_ops.lei,
     },
     "eltwise-add": {
         "tt_op": tt_lib_ops.eltwise_add,

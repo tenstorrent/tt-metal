@@ -1026,6 +1026,53 @@ def eltwise_addalpha(
     return tt2torch_tensor(t2)
 
 
+def make_inplace_binary_op(ttl_tensor_binop):
+    @setup_host_and_device
+    def binary_op(
+        x,
+        y,
+        *args,
+        device,
+        dtype,
+        layout,
+        input_mem_config,
+        output_mem_config,
+        **kwargs,
+    ):
+        t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+        t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+        t2 = ttl_tensor_binop(t0, t1, output_mem_config=output_mem_config)
+
+        return tt2torch_tensor(t2)
+
+    return binary_op
+
+
+eltwise_nei = make_inplace_binary_op(ttl.tensor.nei)
+eltwise_eqi = make_inplace_binary_op(ttl.tensor.eqi)
+eltwise_gti = make_inplace_binary_op(ttl.tensor.gti)
+eltwise_lti = make_inplace_binary_op(ttl.tensor.lti)
+eltwise_gei = make_inplace_binary_op(ttl.tensor.gei)
+eltwise_lei = make_inplace_binary_op(ttl.tensor.lei)
+
+# @setup_host_and_device
+# def eltwise_gei(
+#     x,
+#     y,
+#     *args,
+#     device,
+#     dtype,
+#     layout,
+#     input_mem_config,
+#     output_mem_config,
+#     **kwargs,
+# ):
+#     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+#     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+#     ttl.tensor.gei(t0, t1, output_mem_config=output_mem_config)
+#     return tt2torch_tensor(t0)
+
+
 @setup_host_and_device
 def eltwise_div(
     x,
