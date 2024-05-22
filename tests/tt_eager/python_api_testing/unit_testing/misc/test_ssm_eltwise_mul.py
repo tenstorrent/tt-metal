@@ -45,7 +45,7 @@ def run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, in0_mem_config, in1_mem_config
     else:
         raise Exception("Input shapes invalid, use eltwise_mul for same input shapes,", in0_W, in1_W)
 
-    passing_pcc, output_pcc = comp_pcc(out, ref_out, 0.9999)
+    passing_pcc, output_pcc = comp_pcc(out, ref_out, 0.9995)
     logger.debug(f"Out passing={passing_pcc}")
     logger.debug(f"Output pcc={output_pcc}")
 
@@ -75,7 +75,7 @@ def run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, in0_mem_config, in1_mem_config
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT16,),
+    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B),
 )
 @pytest.mark.parametrize(
     "in0_W, in1_W",
