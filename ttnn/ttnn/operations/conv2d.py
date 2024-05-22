@@ -481,7 +481,7 @@ def conv2d(
     debug=False,
     run_new_conv=False,
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
-    # run_new_conv = True
+    run_new_conv = True
     if run_new_conv:
         conv_config_ = ttnn._ttnn.operations.conv2d.Conv2dConfig(
             math_fidelity=conv_config.math_fidelity,
