@@ -31,7 +31,14 @@ run_async_mode_T3000_test(){
     if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
     then
         echo "No verification as test was skipped"
+    else
+        echo "Verifying test results"
+        runDate=$(ls $PROFILER_OUTPUT_DIR/)
+        LINE_COUNT=1000 # Smoke test to see at least 1000 ops are reported
+        res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
+        echo $res
     fi
+    cat $PROFILER_ARTIFACTS_DIR/test_out.log
 }
 
 run_profiling_test(){
