@@ -16,7 +16,9 @@ if os.getenv("CI") == "true":
 import ttnn
 from ttnn import ConcatMeshToTensor
 import tt_lib
-from tracy import signpost
+
+if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    from tracy import signpost
 
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     prepare_inputs_ttnn,
@@ -104,7 +106,8 @@ def test_mixtral_model_perf(
     profiler.end("TtMistral_model_setup")
 
     # Call the function
-    signpost("Model warmup")
+    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+        signpost("Model warmup")
     profiler.start(f"end_to_end_inference_with_compile")
     run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length, rot_mat)
     profiler.end(f"end_to_end_inference_with_compile")
@@ -114,7 +117,8 @@ def test_mixtral_model_perf(
     for device_id in t3k_device_mesh.get_device_ids():
         tt_lib.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
 
-    signpost("Model perf run")
+    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+        signpost("Model perf run")
     profiler.clear()
     profiler.start(f"end_to_end_inference")
     run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length, rot_mat)
