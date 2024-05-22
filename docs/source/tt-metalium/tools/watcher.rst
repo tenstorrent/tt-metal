@@ -201,3 +201,26 @@ watcher log:
          0x00000020,0x0000001f,0x0000001e,0x0000001d,0x0000001c,0x0000001b,0x0000001a,0x00000019,
          0x00000018,0x00000017,0x00000016,0x00000015,0x00000014,0x00000013,0x00000012,0x00000011,
          0x00000010,0x0000000f,0x0000000e,0x0000000d,0x0000000c,0x0000000b,0x0000000a]
+
+
+Debug Delays
+------------
+  It is possible to add a delay to the watcher sanitization routines to which can be useful for debugging
+race conditions.
+  The delay can be set using the environment variable `TT_METAL_WATCHER_DELAY` which
+specifies the number of iterations of a spin loop. The delay can be set for all cores, or a subset of cores
+with the environment variable `TT_METAL_DEBUG_DELAY_CORES`: x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all.
+  The delay can also be set per NOC transaction type using `TT_METAL_DEBUG_DELAY_TRANSACTION_MASK`
+which can be one or more of: READ, WRITE, ATOMIC; if not set, the delay is applied to all transaction types.
+  Finally, the delay can be set of specific RISCs (BRISC, NCRISC, TRISC0, TRISC1, TRISC2) through the
+environment variable `TT_METAL_DEBUG_DELAY_RISCVS` (one of: BR,NC,TR0,TR1,TR2); if not set, the delay
+is applied to all RISCs.
+  Note that `TT_METAL_WATCHER` must be set and `TT_METAL_WATCHER_DISABLE_NOC_SANITIZE` must not be
+set.
+
+  For example, the following environment variables will add a delay of 10 iterations for both READ
+and WRITE transactions on BRISC core at location 0,0.
+
+.. code-block::
+
+    TT_METAL_WATCHER=1 TT_METAL_WATCHER_DEBUG_DELAY=10  TT_METAL_DEBUG_DELAY_CORES=0,0 TT_METAL_DEBUG_DELAY_TRANSACTION_MASK="READ WRITE" TT_METAL_DEBUG_DELAY_RISCVS=BR
