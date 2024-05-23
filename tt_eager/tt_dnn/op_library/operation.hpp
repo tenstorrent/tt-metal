@@ -23,8 +23,8 @@ using Hash = tt::stl::hash::hash_t;
 
 template <typename OperationType, typename... Types>
 static Hash hash_operation(const Types&... objects) {
-    auto operation_type_hash = typeid(OperationType).hash_code();
-    return stl::hash::hash_objects(operation_type_hash, objects...);
+    ZoneScoped;
+    return stl::hash::hash_objects_with_default_seed(typeid(OperationType).hash_code(), objects...);
 }
 
 using OverrideAddressesCallback =
@@ -34,15 +34,11 @@ using Tensors = std::vector<Tensor>;
 using OptionalTensors = std::vector<std::optional<Tensor>>;
 using OptionalConstTensors = std::vector<std::optional<const Tensor>>;
 
-template<typename OutputTensors = Tensors>
+template <typename OutputTensors = Tensors>
 using OverrideRuntimeArgumentsCallback = std::function<void(
-    const void* operation,
-    Program&,
-    const Tensors&,
-    const OptionalConstTensors&,
-    const OutputTensors&)>;
+    const void* operation, Program&, const Tensors&, const OptionalConstTensors&, const OutputTensors&)>;
 
-template<typename OutputTensors = Tensors>
+template <typename OutputTensors = Tensors>
 struct CacheableProgram {
     Program program{};
     std::optional<OverrideAddressesCallback> override_addresses_callback = std::nullopt;
@@ -78,22 +74,23 @@ struct function_traits;
 // allows us to then get to TReturn
 template <class T, class TReturn, class... TArgs>
 struct function_traits<fn<TReturn, TArgs...> T::*> {
-  using return_t = TReturn;
-  using last_arg_t = typename last_type<TArgs...>::type;
+    using return_t = TReturn;
+    using last_arg_t = typename last_type<TArgs...>::type;
 };
 
-//Just grab the last arg from the function_traits
+// Just grab the last arg from the function_traits
 template <class FnPtr>
 using last_arg_of_function_t = typename function_traits<FnPtr>::last_arg_t;
 
 template <class FnPtr>
 using return_arg_of_function_t = typename function_traits<FnPtr>::return_t;
 
-template<typename, typename = std::void_t<>>
+template <typename, typename = std::void_t<>>
 struct has_create_program : std::false_type {};
 
-template<typename ConcreteOperation>
-struct has_create_program<ConcreteOperation, std::void_t<decltype(&ConcreteOperation::create_program)>> : std::true_type {};
+template <typename ConcreteOperation>
+struct has_create_program<ConcreteOperation, std::void_t<decltype(&ConcreteOperation::create_program)>>
+    : std::true_type {};
 
 template <typename ConcreteOperation, bool HasCreateProgram = has_create_program<ConcreteOperation>::value>
 struct program_output_helper;
@@ -101,7 +98,8 @@ struct program_output_helper;
 // If we have create_program, then we need to use the last argument for the OutputTensors
 template <typename ConcreteOperation>
 struct program_output_helper<ConcreteOperation, true> {
-    using type = std::remove_const_t<std::remove_reference_t<last_arg_of_function_t<decltype(&std::remove_reference<ConcreteOperation>::type::create_program)>>>;
+    using type = std::remove_const_t<std::remove_reference_t<
+        last_arg_of_function_t<decltype(&std::remove_reference<ConcreteOperation>::type::create_program)>>>;
 };
 
 // If create_program does not exist on the ConcreteOperation this specialization will fallback to Tensors
@@ -113,7 +111,6 @@ struct program_output_helper<ProgramType, false> {
 template <typename ProgramType>
 using ProgramOutputTensors = typename program_output_helper<ProgramType>::type;
 
-
 struct OpPerformanceModel {
     int ideal_compute_cycles = 1;
     int ideal_compute_ns = 1;
@@ -123,7 +120,6 @@ struct OpPerformanceModel {
     std::vector<int> outputs_bytes = {};
 
     OpPerformanceModel(Tensors input_tensors, Tensors output_tensors, int ideal_compute_cycles) {
-
         const auto& t = input_tensors.at(0);
         const auto arch = t.storage_type() == StorageType::DEVICE ? t.device()->arch() : ARCH::WORMHOLE_B0;
 
@@ -153,22 +149,22 @@ struct OpPerformanceModel {
             if (t.memory_config().is_dram()) {
                 return size_bytes / peak_dram_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
             } else if (t.memory_config().is_l1()) {
-                return 1.0f; // TODO: figure out better modelling scheme for L1->L1 Transfers
-                //return size_bytes / noc_l1_bisection_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
+                return 1.0f;  // TODO: figure out better modelling scheme for L1->L1 Transfers
+                // return size_bytes / noc_l1_bisection_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
             }
             return 0.0f;
         };
 
-        for(const auto & t: input_tensors) {
+        for (const auto& t : input_tensors) {
             this->inputs_bytes.push_back(t.volume() * t.element_size());
-            if(tensor_ns(t) > this->ideal_bandwidth_ns) {
+            if (tensor_ns(t) > this->ideal_bandwidth_ns) {
                 this->ideal_bandwidth_ns = tensor_ns(t);
             }
         }
 
-        for(const auto & t: output_tensors) {
+        for (const auto& t : output_tensors) {
             this->outputs_bytes.push_back(t.volume() * t.element_size());
-            if(tensor_ns(t) > this->ideal_bandwidth_ns) {
+            if (tensor_ns(t) > this->ideal_bandwidth_ns) {
                 this->ideal_bandwidth_ns = tensor_ns(t);
             }
         }
@@ -178,41 +174,34 @@ struct OpPerformanceModel {
     OpPerformanceModel() = default;
     ~OpPerformanceModel() = default;
 
-    int get_compute_ns() const {
-        return this->ideal_compute_ns;
-    }
-    int get_ideal_ns() const {
-        return this->ideal_ns;
-    }
-    int get_bandwidth_ns() const {
-        return this->ideal_bandwidth_ns;
-    }
+    int get_compute_ns() const { return this->ideal_compute_ns; }
+    int get_ideal_ns() const { return this->ideal_ns; }
+    int get_bandwidth_ns() const { return this->ideal_bandwidth_ns; }
     std::vector<float> get_input_bws() const {
         std::vector<float> input_bws(inputs_bytes.size());
         TT_ASSERT(this->ideal_ns > 0);
-        std::transform(inputs_bytes.cbegin(), inputs_bytes.cend(), input_bws.begin(),
-                   [this](float c) { return (float)c / this->ideal_ns; });
+        std::transform(inputs_bytes.cbegin(), inputs_bytes.cend(), input_bws.begin(), [this](float c) {
+            return (float)c / this->ideal_ns;
+        });
         return input_bws;
     }
     std::vector<float> get_output_bws() const {
         std::vector<float> output_bws(outputs_bytes.size());
         TT_ASSERT(this->ideal_ns > 0);
-        std::transform(outputs_bytes.cbegin(), outputs_bytes.cend(), output_bws.begin(),
-                   [this](float c) { return (float)c / this->ideal_ns; });
+        std::transform(outputs_bytes.cbegin(), outputs_bytes.cend(), output_bws.begin(), [this](float c) {
+            return (float)c / this->ideal_ns;
+        });
         return output_bws;
     }
 
     static int fidelity_multiplier(MathFidelity f) {
         if (MathFidelity::LoFi == f) {
             return 1;
-        }
-        else if (MathFidelity::HiFi2 == f) {
+        } else if (MathFidelity::HiFi2 == f) {
             return 2;
-        }
-        else if (MathFidelity::HiFi3 == f) {
+        } else if (MathFidelity::HiFi3 == f) {
             return 3;
-        }
-        else if (MathFidelity::HiFi4 == f) {
+        } else if (MathFidelity::HiFi4 == f) {
             return 4;
         }
 
@@ -237,7 +226,7 @@ namespace detail {
 // TODO: move 'NotImplemented' to a library file
 class NotImplemented : public std::logic_error {
    public:
-    NotImplemented(const std::string& message) : std::logic_error(message){};
+    NotImplemented(const std::string& message) : std::logic_error(message) {};
 };
 
 template <class T, class... Args>
@@ -585,9 +574,12 @@ struct DeviceOperation final {
                 } else if constexpr (detail::implements_validate_with_output_tensors_and_optional_input_tensors<T>()) {
                     TT_FATAL(not optional_input_tensors.empty());
                     TT_FATAL(not optional_output_tensors.empty());
-                    operation.validate_with_output_tensors(input_tensors, optional_input_tensors, optional_output_tensors);
-                }else{
-                    static_assert(tt::stl::concepts::always_false_v<T>, "Operation must implement either validate or validate_with_output_tensors");
+                    operation.validate_with_output_tensors(
+                        input_tensors, optional_input_tensors, optional_output_tensors);
+                } else {
+                    static_assert(
+                        tt::stl::concepts::always_false_v<T>,
+                        "Operation must implement either validate or validate_with_output_tensors");
                 }
             }},
         compute_output_shapes_impl_{
@@ -631,7 +623,8 @@ struct DeviceOperation final {
                 if constexpr (detail::implements_create_op_performance_model<T>()) {
                     return operation.create_op_performance_model(input_tensors, optional_input_tensors, output_tensors);
                 } else {
-                    return OpPerformanceModel(input_tensors, output_tensors, 1); // TODO: account for optional_input_tensors
+                    return OpPerformanceModel(
+                        input_tensors, output_tensors, 1);  // TODO: account for optional_input_tensors
                 }
             }},
         override_runtime_arguments_impl_{
@@ -649,6 +642,7 @@ struct DeviceOperation final {
             [](const storage_t& storage,
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors) -> const Hash {
+                ZoneScoped;
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
 
                 if constexpr (detail::implements_compute_program_hash<T>()) {
@@ -714,20 +708,17 @@ struct DeviceOperation final {
 
     const std::string (*get_type_name_impl_)(const storage_t& value);
     void (*validate_impl_)(
-        const storage_t& value, const Tensors&, const std::vector<std::optional<const Tensor>>&, const OptionalTensors&);
+        const storage_t& value,
+        const Tensors&,
+        const std::vector<std::optional<const Tensor>>&,
+        const OptionalTensors&);
     const std::vector<Shape> (*compute_output_shapes_impl_)(const storage_t& value, const Tensors&);
     const OutputTensors (*create_output_tensors_impl_)(const storage_t& value, const Tensors&, const OptionalTensors&);
 
     CacheableProgram<OutputTensors> (*create_program_impl_)(
-        const storage_t& value,
-        const Tensors&,
-        const std::vector<std::optional<const Tensor>>&,
-        OutputTensors&);
+        const storage_t& value, const Tensors&, const std::vector<std::optional<const Tensor>>&, OutputTensors&);
     OpPerformanceModel (*create_op_performance_model_impl_)(
-        const storage_t& value,
-        const Tensors&,
-        const std::vector<std::optional<const Tensor>>&,
-        OutputTensors&);
+        const storage_t& value, const Tensors&, const std::vector<std::optional<const Tensor>>&, OutputTensors&);
     void (*override_runtime_arguments_impl_)(
         const storage_t& value,
         OverrideRuntimeArgumentsCallback<OutputTensors>&,
@@ -751,12 +742,15 @@ struct ExternalOperation {
     const tt::stl::reflection::Attributes attributes() const { return this->attributes_; }
 };
 
-
 using ProgramWithCallbacks = CacheableProgram<Tensors>;
 using ProgramWithOptionalOutputTensors = CacheableProgram<OptionalTensors>;
 
-
-using Operation = std::variant<HostOperation<Tensors>, HostOperation<OptionalTensors>, DeviceOperation<Tensors>, DeviceOperation<OptionalTensors>, ExternalOperation>;
+using Operation = std::variant<
+    HostOperation<Tensors>,
+    HostOperation<OptionalTensors>,
+    DeviceOperation<Tensors>,
+    DeviceOperation<OptionalTensors>,
+    ExternalOperation>;
 
 }  // namespace operation
 }  // namespace tt_metal

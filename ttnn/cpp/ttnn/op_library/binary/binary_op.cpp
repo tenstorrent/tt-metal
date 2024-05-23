@@ -291,16 +291,10 @@ operation::ProgramWithCallbacks Binary<binary_op_type, in_place>::create_program
                     false /* in-place */);
             case BinaryProgramType::BroadcastHeightMultiCore:
                 return bcast_multi_core_h(
-                    input_tensor_a,
-                    input_tensor_b,
-                    output_tensor,
-                    binary_op_type_to_bcast_op_math<binary_op_type>());
+                    input_tensor_a, input_tensor_b, output_tensor, binary_op_type_to_bcast_op_math<binary_op_type>());
             case BinaryProgramType::BroadcastWidthMultiCore:
                 return bcast_multi_core_w(
-                    input_tensor_a,
-                    input_tensor_b,
-                    output_tensor,
-                    binary_op_type_to_bcast_op_math<binary_op_type>());
+                    input_tensor_a, input_tensor_b, output_tensor, binary_op_type_to_bcast_op_math<binary_op_type>());
             default: TT_THROW("Invalid program type");
         }
     } else {
@@ -319,7 +313,7 @@ const operation::Hash Binary<binary_op_type, in_place>::compute_program_hash(
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     auto program_type = get_program_type(*this, input_tensors);
-    operation::Hash hash = tt::stl::hash::hash_objects(
+    operation::Hash hash = tt::stl::hash::hash_objects_with_default_seed(
         typeid(*this).hash_code(),
         this->program_config,
         program_type,

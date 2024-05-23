@@ -73,7 +73,14 @@ inline Shape compute_output_shape(
     get_tensor_dim(other_dim, other_shape);
 
     int32_t output_rank = std::max(input_shape.rank(), other_shape.rank());
-    log_debug(LogOp, "{}:{} input, other, output rank {}, {}, {}", __func__, __LINE__, input_shape.rank(), other_shape.rank(), output_rank);
+    log_debug(
+        LogOp,
+        "{}:{} input, other, output rank {}, {}, {}",
+        __func__,
+        __LINE__,
+        input_shape.rank(),
+        other_shape.rank(),
+        output_rank);
 
     std::vector<uint32_t> output_dim(output_rank);
     // batch dims
@@ -97,7 +104,7 @@ inline Shape compute_output_shape(
 
 }  // namespace
 
-void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
+void get_tensor_dim(std::vector<uint32_t>& dim, const Shape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -105,8 +112,7 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
         // last 2-dim
         if (idx == rank - 1 || idx == rank - 2) {
             dim[i] = shape[idx] / TILE_HEIGHT;
-        }
-        else {
+        } else {
             dim[i] = shape[idx];
         }
     }
@@ -137,10 +143,10 @@ std::vector<int64_t> find_reduce_dim(const Shape& a_shape, const Shape& b_shape)
     return dims;
 }
 
-bool is_same_batch_dim(const Tensor &tensor_a, const Tensor &tensor_b) {
+bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b) {
     // check batch dims
-    const auto &a_shape = tensor_a.get_legacy_shape();
-    const auto &b_shape = tensor_b.get_legacy_shape();
+    const auto& a_shape = tensor_a.get_legacy_shape();
+    const auto& b_shape = tensor_b.get_legacy_shape();
     std::vector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     std::vector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
@@ -164,14 +170,8 @@ operation::ProgramWithCallbacks MorehMatmul::create_program(
     const auto& output_tensor = output_tensors.at(0);
     const auto& bias_tensor = optional_input_tensors.at(0);
     return moreh_matmul_multi_core(
-        input_tensor,
-        other_tensor,
-        output_tensor,
-        bias_tensor,
-        this->transpose_input,
-        this->transpose_other);
+        input_tensor, other_tensor, output_tensor, bias_tensor, this->transpose_input, this->transpose_other);
 }
-
 
 // Must be provided in the case where an optional output tensor was not provided
 std::vector<Shape> MorehMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -194,7 +194,7 @@ std::vector<Tensor> MorehMatmul::create_output_tensors(
 
 void MorehMatmul::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<std::optional<Tensor>>& output_tensors) const {
     log_debug(LogOp, "{}:{}", __func__, __LINE__);
 
@@ -228,7 +228,10 @@ void MorehMatmul::validate_with_output_tensors(
     get_tensor_dim(other_dim, other_shape);
     for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
         if (input_dim[i] != other_dim[i]) {
-            TT_FATAL(input_dim[i] == 1 || other_dim[i] ==1, fmt::format("one of dim must be one. {}th dim input_dim {}, other_dim {}", i, input_dim[i], other_dim[i]));
+            TT_FATAL(
+                input_dim[i] == 1 || other_dim[i] == 1,
+                fmt::format(
+                    "one of dim must be one. {}th dim input_dim {}, other_dim {}", i, input_dim[i], other_dim[i]));
         }
     }
 
@@ -245,7 +248,13 @@ void MorehMatmul::validate_with_output_tensors(
         get_tensor_dim(output_dim, output_shape);
 
         for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
-            TT_FATAL(std::max(input_dim[i], other_dim[i]) == output_dim[i], fmt::format("{}th max(input_dim[i], other_dim[i]) {} must be the same as output_dim[i] {}", i, std::max(input_dim[i], other_dim[i]), output_dim[i]));
+            TT_FATAL(
+                std::max(input_dim[i], other_dim[i]) == output_dim[i],
+                fmt::format(
+                    "{}th max(input_dim[i], other_dim[i]) {} must be the same as output_dim[i] {}",
+                    i,
+                    std::max(input_dim[i], other_dim[i]),
+                    output_dim[i]));
         }
     }
 
@@ -255,7 +264,9 @@ void MorehMatmul::validate_with_output_tensors(
         uint32_t bias_rank = bias_wo_shape.rank();
         uint32_t bias_w = bias_wo_shape[-1];
         TT_FATAL(bias_rank == 2, fmt::format("bias rank {} must be 2 (tilized).", bias_rank));
-        TT_FATAL(bias_w == 1 || bias_w == other_n, fmt::format("bias_w must be one or the same as other_n. bias_w {}, other_n {}", bias_w, other_n));
+        TT_FATAL(
+            bias_w == 1 || bias_w == other_n,
+            fmt::format("bias_w must be one or the same as other_n. bias_w {}, other_n {}", bias_w, other_n));
     }
 }
 
@@ -266,14 +277,8 @@ const operation::Hash MorehMatmul::compute_program_hash(
     const auto& other = input_tensors.at(1);
     const auto& bias = optional_input_tensors.at(0);
 
-    operation::Hash hash = tt::stl::hash::hash_objects(
-        0,
-        typeid(*this).hash_code(),
-        input,
-        other,
-        bias,
-        this->transpose_input,
-        this->transpose_other);
+    operation::Hash hash = tt::stl::hash::hash_objects_with_default_seed(
+        typeid(*this).hash_code(), input, other, bias, this->transpose_input, this->transpose_other);
     return hash;
 }
 
@@ -282,25 +287,19 @@ Tensor moreh_matmul_(
     const Tensor& other,
     bool transpose_input,
     bool transpose_other,
-    const std::optional<Tensor> &output,
-    const std::optional<Tensor> &bias,
+    const std::optional<Tensor>& output,
+    const std::optional<Tensor>& bias,
     const MemoryConfig& output_mem_config) {
-        log_debug(
-            LogOp,
-            "{}:{} run matmul {} {}",
-            __func__,
-            __LINE__,
-            transpose_input,
-            transpose_other);
-        return operation::run(
-            MorehMatmul{
-                .output_mem_config = output_mem_config,
-                .transpose_input = transpose_input,
-                .transpose_other = transpose_other },
-            { input, other},
-            { bias},
-            { output})
-            .at(0);
+    log_debug(LogOp, "{}:{} run matmul {} {}", __func__, __LINE__, transpose_input, transpose_other);
+    return operation::run(
+               MorehMatmul{
+                   .output_mem_config = output_mem_config,
+                   .transpose_input = transpose_input,
+                   .transpose_other = transpose_other},
+               {input, other},
+               {bias},
+               {output})
+        .at(0);
 }
 
 Tensor moreh_matmul(
@@ -311,7 +310,6 @@ Tensor moreh_matmul(
     const std::optional<const Tensor> output,
     const std::optional<const Tensor> bias,
     const MemoryConfig& output_mem_config) {
-
     // TODO(seunghwan100): Add the argument "output_tensor" to moreh_dot.
     if (is_dot_forward(input, other, transpose_input, transpose_other)) {
         TT_ASSERT(!bias.has_value());
