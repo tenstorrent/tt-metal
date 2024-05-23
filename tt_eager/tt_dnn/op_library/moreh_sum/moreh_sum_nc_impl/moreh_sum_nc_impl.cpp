@@ -97,7 +97,7 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
         {
             {CB::c_in0, in0_t},              // input
             {CB::c_in1, in1_t},              // zero
-            {CB::c_intermed0, intermed0_t},
+            {CB::c_intermed0, intermed0_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32: cb_data_format},
             {CB::c_out0, out0_t},            // output
         });
     ////////////////////////////////////////////////////////////////////////////
