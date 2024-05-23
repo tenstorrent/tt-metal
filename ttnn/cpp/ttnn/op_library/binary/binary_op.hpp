@@ -30,17 +30,20 @@ namespace binary {
 using BinaryOpType = tt::tt_metal::BinaryOpType;
 
 struct BinaryProgramConfig {
+    BinaryOpType binary_op_type;
+    bool in_place;
     const std::optional<std::vector<std::string>> activations;
     const MemoryConfig memory_config;
     const DataType dtype;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("activations", "memory_config", "dtype");
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("binary_op_type", "in_place", "activations", "memory_config", "dtype");
     const auto attribute_values() const {
-        return std::forward_as_tuple(this->activations, this->memory_config, this->dtype);
+        return std::forward_as_tuple(
+            this->binary_op_type, this->in_place, this->activations, this->memory_config, this->dtype);
     }
 };
 
-template <BinaryOpType binary_op_type, bool in_place>
 struct Binary {
     const BinaryProgramConfig program_config;
     std::optional<DeviceComputeKernelConfig> compute_kernel_config;
@@ -62,7 +65,10 @@ struct Binary {
     const auto attribute_values() const {
         return std::forward_as_tuple(this->program_config, this->compute_kernel_config);
     }
+};
 
+template <BinaryOpType binary_op_type, bool in_place>
+struct ExecuteBinary {
     static inline const std::array<TensorSchema, 2> input_tensor_schemas() {
         return {
             ttnn::TensorSchema{
@@ -120,7 +126,11 @@ struct Binary {
 
         return operation::run(
                    Binary{BinaryProgramConfig{
-                       activations, output_memory_config, dtype.value_or(input_tensor_a.get_dtype())}},
+                       binary_op_type,
+                       in_place,
+                       activations,
+                       output_memory_config,
+                       dtype.value_or(input_tensor_a.get_dtype())}},
                    {input_tensor_a, input_tensor_b})
             .at(0);
     }
@@ -148,7 +158,7 @@ struct Binary {
             Layout::TILE);
         Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.device());
         // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
-        return Binary::execute(
+        return ExecuteBinary::execute(
             input_tensor_a, scalar_tensor_device, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, activations);
     }
 };
