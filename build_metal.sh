@@ -1,6 +1,31 @@
 #!/bin/bash
 set -eo pipefail
 
+# Function to display help
+show_help() {
+    echo "Usage: $0 [-h] [-e]"
+    echo "  -h  Show this help message."
+    echo "  -e  Enable CMAKE_EXPORT_COMPILE_COMMANDS."
+}
+
+# Parse CLI options
+export_compile_commands="OFF"
+while getopts "he" opt; do
+    case ${opt} in
+        h )
+            show_help
+            exit 0
+            ;;
+        e )
+            export_compile_commands="ON"
+            ;;
+        \? )
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
 if [ -z "$PYTHON_ENV_DIR" ]; then
     PYTHON_ENV_DIR=$(pwd)/python_env
 fi
@@ -18,7 +43,7 @@ else
 fi
 
 echo "Building tt-metal"
-cmake -B build -G Ninja
+cmake -B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands
 cmake --build build --target install
 
 ./scripts/build_scripts/create_venv.sh
