@@ -38,7 +38,7 @@ inline auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args
     return std::forward_as_tuple(input_tensor);
 }
 
-inline Tensor execute(
+inline Tensor execute_on_worker_thread(
     const Tensor& input_tensor,
     const std::vector<tt::tt_metal::UnaryWithParam>& op_chain,
     const std::optional<MemoryConfig>& memory_config = std::nullopt) {
@@ -61,8 +61,9 @@ struct ExecuteUnary {
         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
     }
 
-    static Tensor execute(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return detail::execute(input_tensor, {UnaryWithParam{unary_op_types}...}, memory_config);
+    static Tensor execute_on_worker_thread(
+        const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+        return detail::execute_on_worker_thread(input_tensor, {UnaryWithParam{unary_op_types}...}, memory_config);
     }
 };
 
@@ -75,11 +76,11 @@ struct ExecuteUnaryWithFastAndApproximateMode {
         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
     }
 
-    static Tensor execute(
+    static Tensor execute_on_worker_thread(
         const Tensor& input_tensor,
         const bool parameter = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return detail::execute(
+        return detail::execute_on_worker_thread(
             input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config);
     }
 };
@@ -93,11 +94,11 @@ struct ExecuteUnaryWithFloatParameter {
         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
     }
 
-    static Tensor execute(
+    static Tensor execute_on_worker_thread(
         const Tensor& input_tensor,
         const float parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return detail::execute(
+        return detail::execute_on_worker_thread(
             input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config);
     }
 };
@@ -110,7 +111,7 @@ struct Softplus {
         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
     }
 
-    static Tensor execute(
+    static Tensor execute_on_worker_thread(
         const Tensor& input,
         const float beta,
         const float threshold,

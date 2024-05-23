@@ -236,7 +236,8 @@ struct ExecuteConcatenateHeads {
         return std::forward_as_tuple(input_tensor);
     }
 
-    static inline ttnn::Tensor execute(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+    static inline ttnn::Tensor execute_on_worker_thread(
+        const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
         return operation::run(ConcatenateHeads{memory_config.value_or(input_tensor.memory_config())}, {input_tensor})
             .at(0);
     }
@@ -251,7 +252,7 @@ struct ExecuteRotaryEmbedding {
                 4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false}};
     }
 
-    static inline ttnn::Tensor execute(
+    static inline ttnn::Tensor execute_on_worker_thread(
         const Tensor& input_tensor,
         const Tensor& cos_cache,
         const Tensor& sin_cache,
@@ -291,7 +292,7 @@ struct ExecuteAttentionSoftmax {
         return std::forward_as_tuple(input_tensor, attention_mask);
     }
 
-    static ttnn::Tensor execute(
+    static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
         const std::optional<int>& head_size_arg = std::nullopt,
         const std::optional<const ttnn::Tensor>& attention_mask = std::nullopt,

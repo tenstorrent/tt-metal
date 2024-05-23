@@ -25,7 +25,7 @@ struct Softmax {
         return std::forward_as_tuple(input_tensor);
     }
 
-    static ttnn::Tensor execute(
+    static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
         const int dim_arg,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
@@ -103,7 +103,7 @@ struct LayerNorm {
         return std::forward_as_tuple(input_tensor, weight, bias, residual_input_tensor);
     }
 
-    static inline ttnn::Tensor execute(
+    static inline ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
         float epsilon = 1e-12,
         const std::optional<const ttnn::Tensor>& weight = std::nullopt,
@@ -152,7 +152,7 @@ struct RMSNorm {
         return std::forward_as_tuple(input_tensor, weight);
     }
 
-    static inline ttnn::Tensor execute(
+    static inline ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight,
         float epsilon = 1e-12,
@@ -173,7 +173,7 @@ struct GroupNorm {
             2, 4, {ttnn::bfloat16}, {ttnn::TILE_LAYOUT, ttnn::ROW_MAJOR_LAYOUT}, true, false, false, false}};
     }
 
-    static inline ttnn::Tensor execute(
+    static inline ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
         const int num_groups,
         const float epsilon,

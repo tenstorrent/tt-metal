@@ -24,8 +24,9 @@ inline bool use_multicore_device_tilize(
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
 
     uint32_t output_single_tile_size =
-        output_dtype.has_value() ? tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
-                                 : input_single_tile_size;
+        output_dtype.has_value()
+            ? tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
+            : input_single_tile_size;
 
     uint32_t num_tiles_in_row = input.get_shape()[-1] / TILE_WIDTH;
     uint32_t max_l1_size = input.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
@@ -35,7 +36,7 @@ inline bool use_multicore_device_tilize(
 }
 
 template <typename T>
-Tensor execute(
+Tensor execute_on_worker_thread(
     const ttnn::Tensor& tensor_arg,
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
@@ -138,7 +139,8 @@ Tensor execute(
                 output_tensor_end.push_back(tensor.get_shape()[index] - 1);
             }
 
-            tensor = tt::tt_metal::untilize_with_unpadding(tensor, output_tensor_end, output_memory_config, use_multicore_untilize);
+            tensor = tt::tt_metal::untilize_with_unpadding(
+                tensor, output_tensor_end, output_memory_config, use_multicore_untilize);
             return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape}));
 
         } else if (layout == ttnn::TILE_LAYOUT) {
@@ -183,22 +185,22 @@ Tensor execute(
 }
 }  // namespace detail
 
-/* static */ Tensor ToLayout::execute(
+/* static */ Tensor ToLayout::execute_on_worker_thread(
     const ttnn::Tensor& tensor_arg,
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     Device* device) {
-    return detail::execute(tensor_arg, layout, dtype, memory_config, device);
+    return detail::execute_on_worker_thread(tensor_arg, layout, dtype, memory_config, device);
 }
 
-/* static */ Tensor ToLayout::execute(
+/* static */ Tensor ToLayout::execute_on_worker_thread(
     const ttnn::Tensor& tensor_arg,
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     DeviceMesh* device) {
-    return detail::execute(tensor_arg, layout, dtype, memory_config, device);
+    return detail::execute_on_worker_thread(tensor_arg, layout, dtype, memory_config, device);
 }
 
 }  // namespace core

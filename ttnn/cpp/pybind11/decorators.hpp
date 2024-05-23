@@ -125,7 +125,8 @@ auto bind_registered_operation(
                     [&py_operation](auto&&... args) {
                         py_operation.def(
                             "__call__",
-                            resolve_call_method<registered_operation_t>(&concrete_operation_t::execute),
+                            resolve_call_method<registered_operation_t>(
+                                &concrete_operation_t::execute_on_worker_thread),
                             args...);
                     },
                     overload.value);

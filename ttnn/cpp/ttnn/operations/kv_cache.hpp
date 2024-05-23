@@ -41,7 +41,8 @@ struct UpdateKVCache {
 };
 
 struct ExecuteFillCache {
-    static ttnn::Tensor execute(const ttnn::Tensor& cache, const ttnn::Tensor& input, const uint32_t batch_index) {
+    static ttnn::Tensor execute_on_worker_thread(
+        const ttnn::Tensor& cache, const ttnn::Tensor& input, const uint32_t batch_index) {
         operation::run(
             tt::tt_metal::UpdateCache{batch_index, 0, 0, tt::tt_metal::UpdateCacheOpType::FILL},
             std::vector<ttnn::Tensor>{cache, input});
@@ -50,7 +51,7 @@ struct ExecuteFillCache {
 };
 
 struct ExecuteUpdateCache {
-    static ttnn::Tensor execute(
+    static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& cache,
         const ttnn::Tensor& input,
         const uint32_t update_index,
