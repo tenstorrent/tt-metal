@@ -42,4 +42,4 @@ class TtResidualBlock(torch.nn.Module):
         ttnn.deallocate(rms_norm_weights)
         mamba_x = self.tt_mamba_block(mamba_x)
 
-        return ttnn.add(residual, mamba_x)
+        return ttnn.add(residual, mamba_x, dtype=self.configs["dtype"]["activations"])
