@@ -308,8 +308,9 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
                 starting_idx_h = calculate_starting_idx_h(input_tensors.at(0), num_slices, runtime_slice_index);
             }
 
+            auto& runtime_args_by_core = GetRuntimeArgs(program, unary_reader_kernel_id);
             for (const auto& core : cores) {
-                auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = src_buffer->address();
                 if (partial_op) {
                     runtime_args[7] = starting_idx_h;
