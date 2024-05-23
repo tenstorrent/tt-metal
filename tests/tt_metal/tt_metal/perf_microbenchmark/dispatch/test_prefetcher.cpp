@@ -637,24 +637,27 @@ void gen_host_test(Device *device,
                    vector<uint32_t>& cmd_sizes,
                    DeviceData& device_data) {
 
-    constexpr uint32_t data_size = 614400;
+    constexpr uint32_t max_data_size = DEVICE_DATA_SIZE;
 
     // Read data from a worker so we can get reasonable BW measurements
     // TODO: extend the DRAM mechanism for pre-fill to workers
     vector<uint32_t>data;
-    for (uint32_t i = 0; i < data_size / sizeof(uint32_t); i++) {
+    for (uint32_t i = 0; i < max_data_size / sizeof(uint32_t); i++) {
         data.push_back(i);
     }
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(first_worker_g);
     llrt::write_hex_vec_to_core(device->id(), phys_worker_core, data, l1_buf_base_g);
     tt::Cluster::instance().l1_barrier(device->id());
 
-    for (int count = 0; count < 50; count++) {
+    for (int count = 1; count < 100; count++) {
+        uint32_t data_size_words = std::rand() % ((max_data_size / 100 / sizeof(uint32_t)) * count) + 1;
+        uint32_t data_size_bytes = data_size_words * sizeof(uint32_t);
+
         std::vector<uint32_t> dispatch_cmds;
-        gen_bare_dispatcher_host_write_cmd(dispatch_cmds, data_size);
+        gen_bare_dispatcher_host_write_cmd(dispatch_cmds, data_size_bytes);
         add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
         auto prior_end = prefetch_cmds.size();
-        add_prefetcher_linear_read_cmd(device, prefetch_cmds, cmd_sizes, first_worker_g, l1_buf_base_g, data_size);
+        add_prefetcher_linear_read_cmd(device, prefetch_cmds, cmd_sizes, first_worker_g, l1_buf_base_g, data_size_bytes);
         uint32_t new_size = (prefetch_cmds.size() - prior_end) * sizeof(uint32_t);
         cmd_sizes.push_back(new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE);
 
@@ -662,7 +665,8 @@ void gen_host_test(Device *device,
         for (auto datum : dispatch_cmds) {
             device_data.push_one(device_data.get_host_core(), 0, datum);
         }
-        for (auto datum : data) {
+        for (int i = 0; i < data_size_words; i++) {
+            uint32_t datum = data[i];
             device_data.push_one(device_data.get_host_core(), 0, datum);
         }
         pad_host_data(device_data);
@@ -1055,30 +1059,47 @@ void gen_smoke_test(Device *device,
 
     // Test host
     if (!use_dram_exec_buf_g) {
-        dispatch_cmds.resize(0);
-        gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, 32);
-        add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
-        pad_host_data(device_data);
+        for (int multiplier = 1; multiplier <= 3; multiplier++) {
+            dispatch_cmds.resize(0);
+            gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, multiplier * 32);
+            add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+            pad_host_data(device_data);
 
-        dispatch_cmds.resize(0);
-        gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, 36);
-        add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
-        pad_host_data(device_data);
+            dispatch_cmds.resize(0);
+            gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, multiplier * 36);
+            add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+            pad_host_data(device_data);
 
-        dispatch_cmds.resize(0);
-        gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, 1024);
-        add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
-        pad_host_data(device_data);
+            dispatch_cmds.resize(0);
+            gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, multiplier * 1024);
+            add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+            pad_host_data(device_data);
 
-        dispatch_cmds.resize(0);
-        gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, dispatch_buffer_page_size_g - sizeof(CQDispatchCmd));
-        add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
-        pad_host_data(device_data);
+            dispatch_cmds.resize(0);
+            gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, multiplier * dispatch_buffer_page_size_g - 2 * sizeof(CQDispatchCmd));
+            add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+            pad_host_data(device_data);
 
-        dispatch_cmds.resize(0);
-        gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, 16384);
-        add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
-        pad_host_data(device_data);
+            dispatch_cmds.resize(0);
+            gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, multiplier * dispatch_buffer_page_size_g - sizeof(CQDispatchCmd));
+            add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+            pad_host_data(device_data);
+
+            dispatch_cmds.resize(0);
+            gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, multiplier * dispatch_buffer_page_size_g);
+            add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+            pad_host_data(device_data);
+
+            dispatch_cmds.resize(0);
+            gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, multiplier * dispatch_buffer_page_size_g + sizeof(CQDispatchCmd));
+            add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+            pad_host_data(device_data);
+
+            dispatch_cmds.resize(0);
+            gen_dispatcher_host_write_cmd(dispatch_cmds, device_data, multiplier * dispatch_buffer_page_size_g + sizeof(CQDispatchCmd));
+            add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
+            pad_host_data(device_data);
+        }
     }
 
     // Test Paged DRAM Write and Read. FIXME - Needs work - hits asserts.
