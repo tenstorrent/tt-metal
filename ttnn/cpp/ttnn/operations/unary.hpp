@@ -52,7 +52,7 @@ inline Tensor execute(
 }
 }  // namespace detail
 
-template <UnaryOpType unary_op_type>
+template <UnaryOpType... unary_op_types>
 struct ExecuteUnary {
     static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
 
@@ -62,7 +62,7 @@ struct ExecuteUnary {
     }
 
     static Tensor execute(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return detail::execute(input_tensor, {UnaryWithParam{unary_op_type}}, memory_config);
+        return detail::execute(input_tensor, {UnaryWithParam{unary_op_types}...}, memory_config);
     }
 };
 
@@ -180,6 +180,10 @@ REGISTER_UNARY_OPERATION(sqrt, SQRT);
 REGISTER_UNARY_OPERATION(square, SQUARE);
 REGISTER_UNARY_OPERATION(tan, TAN);
 REGISTER_UNARY_OPERATION(tanh, TANH);
+
+constexpr auto log_sigmoid = ttnn::register_operation<ttnn::operations::unary::ExecuteUnary<
+    ttnn::operations::unary::UnaryOpType::SIGMOID,
+    ttnn::operations::unary::UnaryOpType::LOG>>("ttnn::log_sigmoid");
 
 // Unaries with fast_and_approximate_mode
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP);
