@@ -372,7 +372,8 @@ inline bool DeviceData::validate_one_core(Device *device,
 bool DeviceData::validate_host(std::unordered_set<CoreCoord> &validated_cores,
                                const one_core_data_t& host_data) {
 
-    log_info(tt::LogTest, "Validating data from hugepage");
+    uint32_t size_bytes = host_data.data.size() * sizeof(uint32_t);
+    log_info(tt::LogTest, "Validating {} bytes from hugepage", size_bytes);
 
     bool failed = false;
 
@@ -383,7 +384,7 @@ bool DeviceData::validate_host(std::unordered_set<CoreCoord> &validated_cores,
     bool done = false;
     for (int data_index = 0; data_index < host_data.data.size(); data_index++) {
         validated_cores.insert(this->host_core);
-        if (host_data.data[data_index] != results[host_data_index] && fail_count < 5000) {
+        if (host_data.data[data_index] != results[host_data_index] && fail_count < 20) {
             if (!failed) {
                 log_fatal(tt::LogTest, "Data mismatch - First 20 host data failures: [idx] expected->read");
             }
