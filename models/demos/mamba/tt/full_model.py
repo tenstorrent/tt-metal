@@ -4,6 +4,7 @@
 
 import torch
 import ttnn
+import tt_lib as ttl
 
 from loguru import logger
 
@@ -63,7 +64,12 @@ class TtTensorLoader:
 
 class MambaTT(torch.nn.Module):
     def __init__(
-        self, reference_model, device: ttnn.Device, configs, tt_cache_path: Optional[str] = None, num_layers=None
+        self,
+        reference_model,
+        device: ttnn.Device,
+        configs,
+        tt_cache_path: Optional[str] = None,
+        num_layers=None,
     ):
         super().__init__()
         self.args = reference_model.args
@@ -95,6 +101,11 @@ class MambaTT(torch.nn.Module):
             lambda x: x.transpose(-1, -2),
             tt_dtype=ttnn.bfloat16,
         )
+        self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+        )
 
     def forward(self, x):
         assert len(x.shape) == 2, f"Mamba expects inputs to be rank 2 (was {len(x.shape)})"
@@ -109,7 +120,7 @@ class MambaTT(torch.nn.Module):
             device=self.device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
+            dtype=self.configs["dtype"]["activations"],
         )
 
         for layer in self.layers:
@@ -129,7 +140,8 @@ class MambaTT(torch.nn.Module):
             self.lm_head_weights,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             use_1d_systolic_array=True,
-            core_grid=ttnn.CoreGrid(y=7, x=8),
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=self.configs["dtype"]["activations"],
         )
 
         x = ttnn.to_torch(x).to(torch.float32)  # (1, 1, B, E)

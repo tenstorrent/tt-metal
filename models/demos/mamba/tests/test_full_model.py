@@ -87,7 +87,7 @@ def run_inference(
         (
             "state-spaces/mamba-2.8b",
             32,
-            0.984,
+            0.98,
             64,
             1,
         ),

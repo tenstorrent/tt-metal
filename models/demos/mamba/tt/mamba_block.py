@@ -82,8 +82,6 @@ class TtMambaBlock(torch.nn.Module):
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
-        self.core_grid_row = 4
-        self.core_grid_col = 8
 
     def forward(self, x):
         assert len(x.shape) == 4, "Mamba block expects inputs to be rank 4"
@@ -96,7 +94,7 @@ class TtMambaBlock(torch.nn.Module):
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             use_1d_systolic_array=True,
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            dtype=self.configs["dtype"]["activations"],
         )
 
         # shift the states leftward
@@ -111,24 +109,38 @@ class TtMambaBlock(torch.nn.Module):
         # do the convolution
         conv1d_wt = ttnn.to_memory_config(self.conv1d_weights[0], memory_config=self.configs["sharded_d"])
         conv_state = ttnn.to_memory_config(self.conv_states[0], memory_config=self.configs["sharded_d"])
-        conv_accumulator = ttnn.mul(conv_state, conv1d_wt, memory_config=self.configs["sharded_d"])
+        conv_accumulator = ttnn.mul(
+            conv_state, conv1d_wt, memory_config=self.configs["sharded_d"], dtype=self.configs["dtype"]["activations"]
+        )
         ttnn.deallocate(conv1d_wt)
         ttnn.deallocate(conv_state)
 
         for i in range(1, 4):
             conv1d_wt = ttnn.to_memory_config(self.conv1d_weights[i], memory_config=self.configs["sharded_d"])
             conv_state = ttnn.to_memory_config(self.conv_states[i], memory_config=self.configs["sharded_d"])
-            prod = ttnn.mul(conv_state, conv1d_wt, memory_config=self.configs["sharded_d"])
+            prod = ttnn.mul(
+                conv_state,
+                conv1d_wt,
+                memory_config=self.configs["sharded_d"],
+                dtype=self.configs["dtype"]["activations"],
+            )
             ttnn.deallocate(conv1d_wt)
             ttnn.deallocate(conv_state)
 
-            conv_out = ttnn.add(conv_accumulator, prod, memory_config=self.configs["sharded_d"])
+            conv_out = ttnn.add(
+                conv_accumulator,
+                prod,
+                memory_config=self.configs["sharded_d"],
+                dtype=self.configs["dtype"]["activations"],
+            )
             ttnn.deallocate(conv_accumulator)
             ttnn.deallocate(prod)
             conv_accumulator = conv_out
 
         conv1d_bias = ttnn.to_memory_config(self.conv1d_bias, memory_config=self.configs["sharded_d"])
-        conv_out_with_bias = ttnn.add(conv_out, conv1d_bias, memory_config=self.configs["sharded_d"])
+        conv_out_with_bias = ttnn.add(
+            conv_out, conv1d_bias, memory_config=self.configs["sharded_d"], dtype=self.configs["dtype"]["activations"]
+        )
         ttnn.deallocate(conv_out)
         ttnn.deallocate(conv1d_bias)
 
@@ -142,16 +154,21 @@ class TtMambaBlock(torch.nn.Module):
             residual_connection,
             self.mlp_proj_weights,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=ttnn.CoreGrid(y=4, x=8),
             compute_kernel_config=self.compute_kernel_config,
             use_1d_systolic_array=True,
+            dtype=self.configs["dtype"]["activations"],
         )
         ttnn.deallocate(residual_connection)
 
         residual_with_silu = ttnn.silu(residual, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(residual)
 
-        out = ttnn.mul(ssm_output, residual_with_silu, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.mul(
+            ssm_output,
+            residual_with_silu,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=self.configs["dtype"]["activations"],
+        )
         ttnn.deallocate(residual_with_silu)
         ttnn.deallocate(ssm_output)
 
@@ -159,9 +176,9 @@ class TtMambaBlock(torch.nn.Module):
             out,
             self.out_proj_weights,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=ttnn.CoreGrid(y=4, x=8),
             compute_kernel_config=self.compute_kernel_config,
             use_1d_systolic_array=True,
+            dtype=self.configs["dtype"]["activations"],
         )
         ttnn.deallocate(out)
 
