@@ -97,7 +97,7 @@ tt_metal/hw/firmware/riscv/common/dataflow_internals.h @davorchap @mywoodstock
 tt_metal/hw/firmware/src/*erisc* @aliuTT
 tt_metal/hw/inc/ethernet/ @aliuTT
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT
-tt_metal/third_party/tt_llk_* @rtawfik01 @ttmtrajkovic
+tt_metal/third_party/tt_llk_* @rtawfik01 @ttmtrajkovic @rdjogoTT
 
 # metal - profiler
 tt_metal/**/profiler/ @mo-tenstorrent
