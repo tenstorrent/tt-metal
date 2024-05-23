@@ -143,12 +143,12 @@ class CMakeBuild(build_ext):
 
         subprocess.check_call(["ls", "-hal"], cwd=source_dir, env=build_env)
         subprocess.check_call(["ls", "-hal", "build/lib"], cwd=source_dir, env=build_env)
-        subprocess.check_call(["ls", "-hal", "build/hw"], cwd=source_dir, env=build_env)
+        subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
         tt_build_dir = self.build_lib + "/tt_lib/build"
         os.makedirs(tt_build_dir, exist_ok=True)
         self.copy_tree(source_dir / "build/lib", tt_build_dir + "/lib")
-        self.copy_tree(source_dir / "build/hw", tt_build_dir + "/hw")
+        self.copy_tree(source_dir / "runtime", self.build_lib + "/runtime")
         arch_name_file = self.build_lib + "/tt_lib/.ARCH_NAME"
         subprocess.check_call(f"echo {metal_build_config.arch_name} > {arch_name_file}", shell=True)
 
