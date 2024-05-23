@@ -126,16 +126,14 @@ def calculate_query_key_values(config, hidden_states, *, parameters):
 def whisper_attention(config, hidden_states, attention_mask, key_value_states=None, *, parameters):
     head_size = config.d_model // config.encoder_attention_heads
     scaling = head_size**-0.5
-    bsz, *_, tgt_len, _ = hidden_states.shape
+    bsz, *_, tgt_len, tgt_wid = hidden_states.shape
 
     is_cross_attention = key_value_states is not None
     if is_cross_attention:
         query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
-        dtype = query_states.dtype
-        device = query_states.device()
-        query_states = ttnn.to_torch(query_states)
-        query_states = torch.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
-        query_states = ttnn.from_torch(query_states, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        query_states = ttnn.to_layout(query_states, layout=ttnn.ROW_MAJOR_LAYOUT)
+        query_states = ttnn.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
+        query_states = ttnn.to_layout(query_states, layout=ttnn.TILE_LAYOUT)
         query_states = ttnn.permute(query_states, (0, 2, 1, 3))
         key_states, value_states = calculate_key_values(config, key_value_states, parameters=parameters)
     else:
@@ -195,8 +193,14 @@ def encoder_layer(config, hidden_states, *, parameters):
     return hidden_states
 
 
-def encoder(config, inputs_embeds, *, parameters):
-    hidden_states = inputs_embeds + parameters.embed_positions.weight
+def encoder(config, inputs_embeds, *, parameters, device, batch_size):
+    # issue #7872
+    # Add op is not supported for batched inputs (broadcasting not happening)
+    # hidden_states = inputs_embeds + parameters.embed_positions.weight
+    weights = ttnn.to_torch(parameters.embed_positions.weight)
+    embeds = ttnn.to_torch(inputs_embeds)
+    hidden_states = torch.add(weights, embeds)
+    hidden_states = ttnn.from_torch(hidden_states, device=device, layout=ttnn.TILE_LAYOUT)
     hidden_states = dropout(hidden_states, p=0, training=False)
 
     for encoder_layer_parameter in parameters.layers:
@@ -396,8 +400,19 @@ def preprocess_inputs(
     return input_embeds, decoder_hidden_states, attention_mask
 
 
-def whisper(config, encoder_hidden_states, decoder_hidden_states, decoder_attention_mask, *, parameters):
-    encoder_hidden_states = encoder(config, encoder_hidden_states, parameters=parameters.encoder)
+def whisper(
+    config,
+    encoder_hidden_states,
+    decoder_hidden_states,
+    decoder_attention_mask,
+    *,
+    parameters,
+    batch_size=None,
+    device=None,
+):
+    encoder_hidden_states = encoder(
+        config, encoder_hidden_states, parameters=parameters.encoder, device=device, batch_size=batch_size
+    )
     last_hidden_state = decoder(
         config,
         decoder_hidden_states,
@@ -406,6 +421,26 @@ def whisper(config, encoder_hidden_states, decoder_hidden_states, decoder_attent
         parameters=parameters.decoder,
     )
     return last_hidden_state
+
+
+def whisper_for_audio_classification(config, inputs_embeds, *, parameters, device, batch_size):
+    encoder_outputs = encoder(
+        config=config,
+        inputs_embeds=inputs_embeds,
+        parameters=parameters.encoder,
+        device=device,
+        batch_size=batch_size,
+    )
+
+    hidden_states = ttnn.matmul(encoder_outputs, parameters.projector.weight)
+    hidden_states = ttnn.add(hidden_states, parameters.projector.bias)
+
+    pooled_output = ttnn.mean(hidden_states, dim=-2, keepdim=True)
+
+    logits = ttnn.matmul(pooled_output, parameters.classifier.weight)
+    logits = ttnn.add(logits, parameters.classifier.bias)
+
+    return logits
 
 
 def custom_preprocessor(torch_model, name):

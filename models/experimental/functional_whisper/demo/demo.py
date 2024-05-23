@@ -30,6 +30,7 @@ from os.path import isfile, join
 
 from transformers import AutoFeatureExtractor, WhisperForAudioClassification
 from datasets import load_dataset
+from sklearn.metrics import accuracy_score
 
 
 def load_input_paths(folder_path):
@@ -109,9 +110,9 @@ def run_generate(
     return ttnn_transcription
 
 
-def run_demo_functional_whisper_for_audio_classification_inference(input_path, ttnn_model, device, num_inputs):
-    torch.manual_seed(1234)
-
+def run_demo_functional_whisper_for_audio_classification_inference(
+    reset_seeds, input_path, ttnn_model, device, batch_size
+):
     feature_extractor = AutoFeatureExtractor.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
     model = WhisperForAudioClassification.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
 
@@ -124,10 +125,11 @@ def run_demo_functional_whisper_for_audio_classification_inference(input_path, t
         custom_preprocessor=ttnn_model.custom_preprocessor,
         device=device,
     )
-    if len(input_data) < num_inputs:
-        assert False, "num_inputs exceeds number of audio files available in folder"
+    if len(input_data) < batch_size:
+        assert False, "batch_size exceeds number of audio files available in folder"
 
-    for i in range(num_inputs):
+    batched_inputs = []
+    for i in range(batch_size):
         input_file_path = input_data[i]
         samplerate, data = wavfile.read(input_file_path)
 
@@ -138,30 +140,33 @@ def run_demo_functional_whisper_for_audio_classification_inference(input_path, t
         )
 
         input_features = inputs.input_features
+        if i == 0:
+            batched_inputs = input_features
+        else:
+            batched_inputs = torch.cat((batched_inputs, input_features), dim=0)
 
-        config = model.config
-        input_embedding = ttnn_model.preprocess_encoder_inputs(
-            input_features=input_features, parameters=parameters.encoder, device=device
-        )
+    config = model.config
+    input_embedding = ttnn_model.preprocess_encoder_inputs(
+        input_features=batched_inputs, parameters=parameters.encoder, device=device
+    )
 
-        encoder_outputs = ttnn_model.encoder(
-            config=config, inputs_embeds=input_embedding, parameters=parameters.encoder
-        )
+    out_logits = ttnn_model.whisper_for_audio_classification(
+        config=config,
+        inputs_embeds=input_embedding,
+        parameters=parameters,
+        device=device,
+        batch_size=batch_size,
+    )
 
-        hidden_states = ttnn.matmul(encoder_outputs, parameters.projector.weight)
-        hidden_states = ttnn.add(hidden_states, parameters.projector.bias)
-
-        pooled_output = ttnn.mean(hidden_states, dim=-2, keepdim=True)
-
-        logits = ttnn.matmul(pooled_output, parameters.classifier.weight)
-        logits = ttnn.add(logits, parameters.classifier.bias)
-
-        logits_torch = ttnn.to_torch(logits)
-        predicted_class_ids = torch.argmax(logits_torch).item()
+    logits_torch = ttnn.to_torch(out_logits)
+    predicted_list = []
+    for i in range(batch_size):
+        single_logits_torch = logits_torch[i].squeeze(0)
+        predicted_class_ids = torch.argmax(single_logits_torch).item()
         predicted_label = model.config.id2label[predicted_class_ids]
-
-        logger.info("predicted_label")
-        logger.info(predicted_label)
+        logger.info(f"predicted_label: {predicted_label}")
+        predicted_list.append(predicted_label)
+    return predicted_list
 
 
 def run_demo_functional_whisper_for_conditional_generation_inference(input_path, ttnn_model, device, num_inputs):
@@ -235,28 +240,19 @@ def run_demo_functional_whisper_for_conditional_generation_inference(input_path,
         logger.info(output_list[i])
 
 
-def run_demo_functional_whisper_for_audio_classification_dataset(ttnn_model, device):
-    torch.manual_seed(1234)
-
+def run_demo_functional_whisper_for_audio_classification_dataset(
+    reset_seeds, ttnn_model, device, batch_size=8, n_iterations=1
+):
     feature_extractor = AutoFeatureExtractor.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
     model = WhisperForAudioClassification.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
 
     model.eval()
-
     ds = load_dataset("google/fleurs", "all", split="validation", streaming=True)
-    sample = next(iter(ds))
+    ds_iter = iter(ds)
 
-    inputs = feature_extractor(
-        sample["audio"]["array"],
-        sampling_rate=sample["audio"]["sampling_rate"],
-        return_tensors="pt",
-    )
-
-    input_features = inputs.input_features
-
-    logger.debug("Input audio language:")
-    logger.debug(sample["language"])
-
+    reference_labels = []
+    predicted_labels = []
+    config = model.config
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
@@ -264,27 +260,50 @@ def run_demo_functional_whisper_for_audio_classification_dataset(ttnn_model, dev
         device=device,
     )
 
-    config = model.config
-    input_embedding = ttnn_model.preprocess_encoder_inputs(
-        input_features=input_features, parameters=parameters.encoder, device=device
-    )
+    for _ in range(n_iterations):
+        batch_input = []
+        # prepare the batched audio inputs
+        for bs in range(batch_size):
+            sample = next(ds_iter)
+            inputs = feature_extractor(
+                sample["audio"]["array"],
+                sampling_rate=sample["audio"]["sampling_rate"],
+                return_tensors="pt",
+            )
+            input_features = inputs.input_features
+            if bs == 0:
+                batch_input = input_features
+            else:
+                batch_input = torch.cat((batch_input, input_features), dim=0)
+            reference_labels.append(sample["language"])
 
-    encoder_outputs = ttnn_model.encoder(config=config, inputs_embeds=input_embedding, parameters=parameters.encoder)
+        # preprocess the inputs
+        input_embedding = ttnn_model.preprocess_encoder_inputs(
+            input_features=batch_input, parameters=parameters.encoder, device=device
+        )
 
-    hidden_states = ttnn.matmul(encoder_outputs, parameters.projector.weight)
-    hidden_states = ttnn.add(hidden_states, parameters.projector.bias)
+        # run the model
+        out_logits = ttnn_model.whisper_for_audio_classification(
+            config=config,
+            inputs_embeds=input_embedding,
+            parameters=parameters,
+            device=device,
+            batch_size=batch_size,
+        )
 
-    pooled_output = ttnn.mean(hidden_states, dim=-2, keepdim=True)
+        # postprocessing the outputs
+        logits_torch = ttnn.to_torch(out_logits)
+        for i in range(batch_size):
+            single_logits_torch = logits_torch[i].squeeze(0)
+            predicted_class_ids = torch.argmax(single_logits_torch).item()
+            predicted_label = model.config.id2label[predicted_class_ids]
+            predicted_labels.append(predicted_label)
 
-    logits = ttnn.matmul(pooled_output, parameters.classifier.weight)
-    logits = ttnn.add(logits, parameters.classifier.bias)
-
-    logits_torch = ttnn.to_torch(logits)
-    predicted_class_ids = torch.argmax(logits_torch).item()
-    predicted_label = model.config.id2label[predicted_class_ids]
-
-    logger.info("predicted_label")
-    logger.info(predicted_label)
+    accuracy = accuracy_score(reference_labels, predicted_labels)
+    logger.info(f"reference labels: {reference_labels}")
+    logger.info(f"predicted labels: {predicted_labels}")
+    logger.info(f"Accuracy: {accuracy}")
+    return accuracy
 
 
 def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, device):
@@ -353,13 +372,15 @@ def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, d
     (ttnn_optimized_functional_whisper, ttnn_functional_whisper),
 )
 @pytest.mark.parametrize(
-    "num_inputs",
-    ((1),),
+    "batch_size",
+    ((8),),
 )
-def test_demo_for_audio_classification(input_path, ttnn_model, device, num_inputs):
+def test_demo_for_audio_classification(reset_seeds, input_path, ttnn_model, device, batch_size):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
-    return run_demo_functional_whisper_for_audio_classification_inference(input_path, ttnn_model, device, num_inputs)
+    return run_demo_functional_whisper_for_audio_classification_inference(
+        reset_seeds, input_path, ttnn_model, device, batch_size
+    )
 
 
 @pytest.mark.parametrize(
@@ -380,10 +401,20 @@ def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inp
     "ttnn_model",
     (ttnn_optimized_functional_whisper, ttnn_functional_whisper),
 )
-def test_demo_for_audio_classification_dataset(ttnn_model, device):
+@pytest.mark.parametrize(
+    "batch_size",
+    ((8),),
+)
+@pytest.mark.parametrize(
+    "n_iterations",
+    ((5),),
+)
+def test_demo_for_audio_classification_dataset(reset_seeds, ttnn_model, device, batch_size, n_iterations):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
-    return run_demo_functional_whisper_for_audio_classification_dataset(ttnn_model, device)
+    return run_demo_functional_whisper_for_audio_classification_dataset(
+        reset_seeds, ttnn_model, device, batch_size=batch_size, n_iterations=n_iterations
+    )
 
 
 @pytest.mark.parametrize(
