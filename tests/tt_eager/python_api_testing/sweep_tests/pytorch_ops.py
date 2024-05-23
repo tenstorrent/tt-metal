@@ -600,6 +600,10 @@ def unary_floor(x, *args, **kwargs):
     return torch.floor(x)
 
 
+def trunc(x, *args, **kwargs):
+    return torch.trunc(x)
+
+
 def sin(x, *args, **kwargs):
     return torch.sin(x)
 

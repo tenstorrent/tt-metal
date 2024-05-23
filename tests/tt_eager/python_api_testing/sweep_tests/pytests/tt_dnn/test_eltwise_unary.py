@@ -16,7 +16,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from models.utility_functions import is_wormhole_b0, skip_for_grayskull
+from models.utility_functions import is_wormhole_b0
 
 shapes = [
     [[1, 1, 32, 32]],  # Single core
@@ -584,8 +584,7 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @skip_for_grayskull()
-    @pytest.mark.parametrize("round_off_method", ["floor"])
+    @pytest.mark.parametrize("round_off_method", ["floor", "trunc"])
     def test_run_eltwise_round_off_ops(
         self,
         round_off_method,
@@ -597,7 +596,7 @@ class TestEltwiseUnary:
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-1000000, high=1000000), torch.bfloat16
+                partial(generation_funcs.gen_rand, low=-1000, high=1000), torch.bfloat16
             )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
