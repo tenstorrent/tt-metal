@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import copy
 import datetime
 import json
@@ -22,6 +23,19 @@ def pytest_make_parametrize_id(config, val, argname):
     if isinstance(val, ModuleType):
         val = val.__name__
     return f"{argname}={val}"
+
+
+def pytest_collection_modifyitems(config, items):
+    if not ttnn.CONFIG.enable_fast_runtime_mode:
+        return
+
+    logger.warning("Fast Runtime Mode is ON. Skipping tests tagged with @pytest.mark.requires_fast_runtime_mode_off")
+    skip_unmarked = pytest.mark.skip(reason="Skipping test with requires_fast_runtime_mode_off")
+    for item in items:
+        logger.warning(item.keywords)
+        if "requires_fast_runtime_mode_off" in item.keywords:
+            logger.warning(f"Skipping {item}")
+            item.add_marker(skip_unmarked)
 
 
 @pytest.fixture(autouse=True)

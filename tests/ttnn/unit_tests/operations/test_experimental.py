@@ -12,6 +12,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("height", [32])
 @pytest.mark.parametrize("width", [32])
 def test_ttnn_experimental_tensor_exp(device, height, width):
@@ -69,6 +70,7 @@ def test_ttnn_experimental_operations_primary_moreh_matmul(device, m_size, k_siz
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("input_a_is_sharded", [True, False])
 @pytest.mark.parametrize("output_is_sharded", [True, False])
 @pytest.mark.parametrize("m_size, num_cores", [[25088, 98]])

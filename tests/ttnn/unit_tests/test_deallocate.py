@@ -11,6 +11,7 @@ import ttnn
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [2 * 32])
+@pytest.mark.requires_fast_runtime_mode_off
 def test_deallocate(device, h, w):
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
 

@@ -12,6 +12,7 @@ from models.utility_functions import torch_random
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])

@@ -17,7 +17,7 @@ struct Config {
     std::string model_cache_path = "/home/.cache/ttnn/models";
     std::string tmp_dir = "/tmp/ttnn";
     bool enable_model_cache = false;
-    bool enable_fast_runtime_mode = false;
+    bool enable_fast_runtime_mode = true;
     bool throw_exception_on_fallback = false;
     bool enable_logging = false;
     bool enable_graph_report = false;

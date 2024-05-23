@@ -464,6 +464,7 @@ def test_split_query_key_value_and_split_heads_when_head_size_is_not_a_multiple_
     assert_with_pcc(torch_value_tensor, value_tensor, 0.999)
 
 
+@pytest.mark.requires_fast_runtime_mode_off
 def test_concatenate_heads_when_head_size_is_not_a_multiple_of_32(device):
     """
     This test is to check that the concatenate_heads function raises an error when the head size is not a multiple of 32
@@ -496,10 +497,11 @@ def test_concatenate_heads_when_head_size_is_not_a_multiple_of_32(device):
 
     with pytest.raises(RuntimeError) as e:
         output_tensor = ttnn.transformer.concatenate_heads(input_tensor)
-        assert (
-            "Head size must be a multiple of 32!  Update matmul that uses the output of this operation to have the padding in the weights!"
-            in str(e.value)
-        )
+
+    assert (
+        "Head size must be a multiple of 32!  Update matmul that uses the output of this operation to have the padding in the weights!"
+        in str(e.value)
+    )
 
     input_tensor = torch.nn.functional.pad(torch_input_tensor, (0, padded_head_size - head_size), "constant", 0)
     input_tensor = ttnn.from_torch(
