@@ -66,10 +66,12 @@ class TtTransformer(torch.nn.Module):
         x,
         start_pos,
         current_pos,
+        attn_masks,
         rot_mats,
     ):
         for i, layer in enumerate(self.layers):
-            x = layer(x, start_pos, current_pos, rot_mats)
+            x = layer(x, start_pos, current_pos, attn_masks, rot_mats)
+        attn_masks.deallocate(True)
 
         x_norm = self.norm(x)
         outputs = ttnn.linear(
