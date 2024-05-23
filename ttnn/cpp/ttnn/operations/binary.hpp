@@ -41,6 +41,21 @@ constexpr auto logical_or =
     ttnn::register_operation<ttnn::operations::binary::ExecuteBinary<BinaryOpType::LOGICAL_OR, false>>(
         "ttnn::logical_or");
 
+constexpr auto ldexp =
+    ttnn::register_operation<ttnn::operations::binary::ExecuteBinary<BinaryOpType::LDEXP, false>>("ttnn::ldexp");
+
+constexpr auto logaddexp =
+    ttnn::register_operation<ttnn::operations::binary::ExecuteBinary<BinaryOpType::LOGADDEXP, false>>(
+        "ttnn::logaddexp");
+
+constexpr auto logaddexp2 =
+    ttnn::register_operation<ttnn::operations::binary::ExecuteBinary<BinaryOpType::LOGADDEXP2, false>>(
+        "ttnn::logaddexp2");
+
+constexpr auto squared_difference =
+    ttnn::register_operation<ttnn::operations::binary::ExecuteBinary<BinaryOpType::SQUARED_DIFFERENCE, false>>(
+        "ttnn::squared_difference");
+
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
     return add(input_tensor_a, scalar);
@@ -54,6 +69,36 @@ ttnn::Tensor operator-(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
 template <typename InputBType>
 ttnn::Tensor operator*(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
     return multiply(input_tensor_a, scalar);
+}
+
+template <typename InputBType>
+ttnn::Tensor operator==(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
+    return eq(input_tensor_a, scalar);
+}
+
+template <typename InputBType>
+ttnn::Tensor operator!=(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
+    return ne(input_tensor_a, scalar);
+}
+
+template <typename InputBType>
+ttnn::Tensor operator>(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
+    return gt(input_tensor_a, scalar);
+}
+
+template <typename InputBType>
+ttnn::Tensor operator>=(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
+    return ge(input_tensor_a, scalar);
+}
+
+template <typename InputBType>
+ttnn::Tensor operator<(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
+    return lt(input_tensor_a, scalar);
+}
+
+template <typename InputBType>
+ttnn::Tensor operator<=(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
+    return le(input_tensor_a, scalar);
 }
 
 }  // namespace ttnn
