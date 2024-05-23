@@ -37,6 +37,9 @@ namespace hash {
 constexpr bool DEBUG_HASH_OBJECT_FUNCTION = false;
 
 using hash_t = std::uint64_t;
+constexpr hash_t DEFAULT_SEED = 1234;
+
+namespace detail {
 
 template <typename T, std::size_t N>
 inline hash_t hash_object(const std::array<T, N>&) noexcept;
@@ -52,6 +55,8 @@ inline hash_t hash_object(const T&) noexcept;
 
 template <typename... Types>
 inline hash_t hash_objects(hash_t, const Types&...) noexcept;
+
+}  // namespace detail
 
 }  // namespace hash
 
@@ -92,7 +97,7 @@ struct Attribute final {
             },
             .to_hash_impl_ = [](const storage_t& storage) -> const std::size_t {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
-                return hash::hash_object(object);
+                return hash::detail::hash_object(object);
             }} {
         static_assert(sizeof(BaseType) <= sizeof(storage_t));
         static_assert(ALIGNMENT % alignof(BaseType) == 0);
@@ -524,11 +529,8 @@ struct is_specialization<Ref<Args...>, Ref> : std::true_type {};
 template <typename Test, template <typename...> class Ref>
 constexpr bool is_specialization_v = is_specialization<Test, Ref>::value;
 
-}  // namespace detail
-
 template <typename T, std::size_t N>
 inline hash_t hash_object(const std::array<T, N>& array) noexcept {
-    ZoneScoped;
     if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
         fmt::print("Hashing std::array<{}, {}>: {}\n", get_type_name<T>(), N, array);
     }
@@ -546,7 +548,6 @@ inline hash_t hash_object(const std::array<T, N>& array) noexcept {
 
 template <typename... Ts>
 inline hash_t hash_object(const std::variant<Ts...>& variant) noexcept {
-    ZoneScoped;
     if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
         fmt::print("Hashing std::variant: {}\n", variant);
     }
@@ -555,7 +556,6 @@ inline hash_t hash_object(const std::variant<Ts...>& variant) noexcept {
 
 template <typename... Ts>
 inline hash_t hash_object(const std::reference_wrapper<Ts...>& reference) noexcept {
-    ZoneScoped;
     if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
         fmt::print("Hashing std::reference_wrapper: {}\n", reference.get());
     }
@@ -641,23 +641,24 @@ inline hash_t hash_object(const T& object) noexcept {
     }
 }
 
-namespace detail {
-
-template <typename Type, typename... Types>
-inline hash_t hash_objects(hash_t seed, const Type& object, const Types&... objects) noexcept {
-    ZoneScoped;
-    seed = hash_object(object) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    if constexpr (sizeof...(objects) > 0) {
-        seed = hash_objects(seed, objects...);
-    }
+template <typename... Types>
+inline hash_t hash_objects(hash_t seed, const Types&... args) noexcept {
+    ([&seed](const auto& arg) { seed ^= hash_object(arg) + 0x9e3779b9 + (seed << 6) + (seed >> 2); }(args), ...);
     return seed;
 }
+
 }  // namespace detail
 
 template <typename... Types>
-inline hash_t hash_objects(hash_t seed, const Types&... objects) noexcept {
+inline hash_t hash_objects(hash_t seed, const Types&... args) noexcept {
     ZoneScoped;
-    return detail::hash_objects(seed, objects...);
+    return detail::hash_objects(seed, args...);
+}
+
+template <typename... Types>
+inline hash_t hash_objects_with_default_seed(const Types&... args) noexcept {
+    ZoneScoped;
+    return detail::hash_objects(DEFAULT_SEED, args...);
 }
 
 }  // namespace hash
