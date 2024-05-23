@@ -107,6 +107,19 @@ class CMakeBuild(build_ext):
             **os.environ.copy(),
             "TT_METAL_HOME": Path(__file__).parent,
             "TT_METAL_ENV": "production",
+            # Need to create static lib for tt_metal runtime because currently
+            # we package it with the wheel at the moment
+            # Update:
+            # If use dynamic link, then the code of README.md#using-tt-nn-ops-and-tensors
+            # will hang on `output = ttnn.to_torch(output)`
+            # I think the root cause is because `ttnn.manage_device`
+            # directly binding the libtt_metal from _ttnn.so,
+            # but the ttnn.from_torch is calling the tt_lib python API,
+            # and it call the libtt_metal from libtt_lib_csrc.so
+            # If both libtt_lib_csrc.so and _ttnn.so use static link,
+            # then they both has its own libtt_metal,
+            # which may cause problem of some singleton design
+            "TT_METAL_CREATE_STATIC_LIB": "0",
         }
 
     # This should only run when building the wheel. Should not be running for any dev flow
@@ -122,7 +135,6 @@ class CMakeBuild(build_ext):
             ), f"Editable install detected in a non-srcdir environment, aborting"
             return
 
-        ext = self.extensions[0]
         build_env = CMakeBuild.get_build_env()
         source_dir = Path(os.environ.get("TT_METAL_HOME"))
         build_dir = Path(os.environ.get("TT_METAL_HOME") + "/build")
@@ -141,6 +153,12 @@ class CMakeBuild(build_ext):
 
         subprocess.check_call(["ls", "-hal"], cwd=source_dir, env=build_env)
         subprocess.check_call(["ls", "-hal", "build/lib"], cwd=source_dir, env=build_env)
+        subprocess.check_call(["ls", "-hal", "build/hw"], cwd=source_dir, env=build_env)
+
+        tt_build_dir = self.build_lib + "/tt_lib/build"
+        os.makedirs(tt_build_dir, exist_ok=True)
+        self.copy_tree(source_dir / "build/lib", tt_build_dir + "/lib")
+        self.copy_tree(source_dir / "build/hw", tt_build_dir + "/hw")
 
         # Move built SOs into appropriate locations
         for ext in self.extensions:
