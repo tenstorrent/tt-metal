@@ -1,6 +1,7 @@
 .cache
 .vscode
 .idea
+runtime
 *.log
 *.csv
 *.xlsx
