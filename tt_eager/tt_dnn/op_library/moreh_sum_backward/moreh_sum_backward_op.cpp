@@ -90,8 +90,7 @@ Tensor moreh_sum_backward(
     const MemoryConfig &input_grad_mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({output_grad, input}))};
-    auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config);
-
+    auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
     operation::launch_op(
         [dims, input_grad_mem_config, kernel_config_val](
             const std::vector<Tensor> &input_tensors,
