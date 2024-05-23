@@ -12,6 +12,7 @@ import ttnn
 import ttnn.database
 
 
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("height", [1024])
 @pytest.mark.parametrize("width", [1024])
 def test_enable_logging(device, height, width):
@@ -45,6 +46,7 @@ def test_enable_logging(device, height, width):
     assert len(operations) == 5
 
 
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("height", [1024])
 @pytest.mark.parametrize("width", [1024])
 def test_enable_logging_and_enable_graph_report(device, height, width):
@@ -67,6 +69,7 @@ def test_enable_logging_and_enable_graph_report(device, height, width):
         ttnn.to_torch(output_tensor)
 
 
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("height", [1024])
 @pytest.mark.parametrize("width", [1024])
 def test_enable_logging_and_enable_detailed_buffer_report(device, height, width):
@@ -107,6 +110,7 @@ def test_enable_logging_and_enable_detailed_buffer_report(device, height, width)
     assert len(buffer_pages) > 0
 
 
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("height", [1024])
 @pytest.mark.parametrize("width", [1024])
 def test_enable_logging_and_enable_comparison_mode(device, height, width):
@@ -139,6 +143,7 @@ def test_enable_logging_and_enable_comparison_mode(device, height, width):
     assert len(operations) > 0
 
 
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("height", [1024])
 @pytest.mark.parametrize("width", [1024])
 def test_enable_logging_and_enable_detailed_tensor_report(device, height, width):

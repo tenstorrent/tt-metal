@@ -24,7 +24,7 @@ class Config:
     model_cache_path: pathlib.Path = cache_path / "models"
     tmp_dir: pathlib.Path = pathlib.Path("/") / "tmp" / "ttnn"
     enable_model_cache: bool = False
-    enable_fast_runtime_mode: bool = False
+    enable_fast_runtime_mode: bool = True
     throw_exception_on_fallback: bool = False
     enable_logging: bool = False
     enable_graph_report: bool = False

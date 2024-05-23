@@ -26,6 +26,7 @@ def collect_tutorials():
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("notebook_path", collect_tutorials())
 def test_tutorials(notebook_path):
     with open(notebook_path) as f:
