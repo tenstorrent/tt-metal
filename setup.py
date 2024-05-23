@@ -159,6 +159,8 @@ class CMakeBuild(build_ext):
         os.makedirs(tt_build_dir, exist_ok=True)
         self.copy_tree(source_dir / "build/lib", tt_build_dir + "/lib")
         self.copy_tree(source_dir / "build/hw", tt_build_dir + "/hw")
+        arch_name_file = self.build_lib + "/tt_lib/.ARCH_NAME"
+        subprocess.check_call(f"echo {metal_build_config.arch_name} > {arch_name_file}", shell=True)
 
         # Move built SOs into appropriate locations
         for ext in self.extensions:
