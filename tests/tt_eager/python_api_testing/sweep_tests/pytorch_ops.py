@@ -604,6 +604,23 @@ def trunc(x, *args, **kwargs):
     return torch.trunc(x)
 
 
+def floor_div(x, y, *args, **kwargs):
+    result = torch.floor_divide(x, y)
+    return result
+
+
+def unary_floor_div(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.floor_divide(x, value)
+    return result
+
+
+def round(x, *args, **kwargs):
+    decimals = kwargs.pop("decimals")
+    result = torch.round(x, decimals=decimals)
+    return result
+
+
 def sin(x, *args, **kwargs):
     return torch.sin(x)
 
@@ -681,17 +698,6 @@ def silu(x, *args, **kwargs):
 
 def div(x, y, *args, accurate_mode, **kwargs):
     result = torch.div(x, y)
-    return result
-
-
-def floor_div(x, y, *args, **kwargs):
-    result = torch.floor_divide(x, y)
-    return result
-
-
-def unary_floor_div(x, *args, **kwargs):
-    value = kwargs.pop("value")
-    result = torch.floor_divide(x, value)
     return result
 
 

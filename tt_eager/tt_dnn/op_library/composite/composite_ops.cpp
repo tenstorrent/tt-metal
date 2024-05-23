@@ -869,6 +869,42 @@ Tensor trunc(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _trunc)(input_a, output_mem_config);
 }
 
+Tensor is_odd(const Tensor& input_a, const MemoryConfig& output_mem_config) {
+    Tensor result = div_unary(input_a, 2.0f);
+    Tensor floor_res = unary_floor(result);
+    return ne(result, floor_res);
+}
+
+Tensor _round(const Tensor& input_a, int64_t decimals, const MemoryConfig& output_mem_config) {
+    Tensor floor_res = unary_floor(input_a, output_mem_config);
+    if (decimals != 0) {
+        // Need to work on this
+        Tensor power_10 =
+            pow(full_like(input_a, 10.0f, output_mem_config), static_cast<float>(decimals), output_mem_config);
+        Tensor rounded_non_half = unary_floor(
+            add_unary(mul(input_a, power_10, std::nullopt, output_mem_config), 0.5, output_mem_config),
+            output_mem_config);
+        rounded_non_half = div(rounded_non_half, power_10);
+        return rounded_non_half;
+    } else {  // Bankers' Rounding
+        Tensor rounded_non_half = unary_floor(
+            add(input_a,
+                where(logical_and(gte_unary(input_a, 0.4), lte_unary(input_a, 0.5)), 0.4f, 0.5f, output_mem_config),
+                std::nullopt,
+                output_mem_config),
+            output_mem_config);
+        Tensor fractional_part = sub(input_a, floor_res, std::nullopt, output_mem_config);
+        Tensor is_half = eq_unary(fractional_part, 0.5);
+        Tensor rounded_half =
+            add(floor_res, tt::tt_metal::is_odd(floor_res, output_mem_config), std::nullopt, output_mem_config);
+        return where(is_half, rounded_half, rounded_non_half, output_mem_config);
+    }
+}
+
+Tensor round(const Tensor& input_a, int64_t decimals, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _round)(input_a, decimals, output_mem_config);
+}
+
 Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     Tensor temp = div(input_a, input_b, true);
     // floor(nan, inf, -inf) = nan, inf, -inf

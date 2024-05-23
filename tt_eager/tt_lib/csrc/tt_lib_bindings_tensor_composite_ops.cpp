@@ -1151,6 +1151,27 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
         )doc");
 
     m_tensor.def(
+        "round",
+        &round,
+        py::arg("input_a").noconvert(),
+        py::arg("decimals"),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+            Performs the element-wise trunc operation on ``input_a`` , to the given number of ``decimals`` places.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input_a", "Input Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "decimals", "Number of decimal places to round to", "int", "default to 0", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+    m_tensor.def(
         "div_no_nan",
         py::overload_cast<const Tensor&, const Tensor&, const MemoryConfig&>(&div_no_nan),
         py::arg("input_a").noconvert(),

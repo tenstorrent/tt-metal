@@ -185,6 +185,11 @@ Tensor div(
 
 Tensor trunc(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor round(
+    const Tensor& input_a,
+    int64_t decimals = 0,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 Tensor floor_div(
     const Tensor& input_a,
     const Tensor& input_b,
