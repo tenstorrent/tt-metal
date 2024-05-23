@@ -9,7 +9,7 @@ from loguru import logger
 
 def _has_not_found(target_so):
     if not os.path.exists(target_so):
-        logger.trace(f"Shared library {target_so} not exists")
+        logger.trace(f"Shared library {target_so} does not exists")
         return False
     cmd = f"ldd {target_so}"
     result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
@@ -27,7 +27,7 @@ def _check_so_rpath(so_name, new_rpath):
             target_so = directory / f
             break
     if not target_so:
-        logger.trace(f"Cannot found shared library which name starts with {so_name}")
+        logger.trace(f"Cannot find shared library which name starts with {so_name}")
         return
 
     if _has_not_found(target_so):
@@ -39,7 +39,7 @@ def _check_so_rpath_in_build_lib():
     directory = Path(__file__).parent / "build/lib"
     check_f = directory / ".rpath_checked"
     if not os.path.exists(directory):
-        logger.trace(f"Direcory {directory} not exists")
+        logger.trace(f"Directory {directory} does not exists")
         return
     if os.path.exists(check_f):
         return
