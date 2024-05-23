@@ -40,7 +40,7 @@ struct UpdateKVCache {
     }
 };
 
-struct FillCache : public UpdateKVCache {
+struct ExecuteFillCache {
     static ttnn::Tensor execute(const ttnn::Tensor& cache, const ttnn::Tensor& input, const uint32_t batch_index) {
         operation::run(
             tt::tt_metal::UpdateCache{batch_index, 0, 0, tt::tt_metal::UpdateCacheOpType::FILL},
@@ -49,7 +49,7 @@ struct FillCache : public UpdateKVCache {
     }
 };
 
-struct UpdateCache : public UpdateKVCache {
+struct ExecuteUpdateCache {
     static ttnn::Tensor execute(
         const ttnn::Tensor& cache,
         const ttnn::Tensor& input,
@@ -69,8 +69,8 @@ struct UpdateCache : public UpdateKVCache {
 }  // namespace operations
 
 constexpr auto fill_cache_for_user_ =
-    ttnn::register_operation<ttnn::operations::kv_cache::FillCache>("ttnn::fill_cache_for_user_");
+    ttnn::register_operation<ttnn::operations::kv_cache::ExecuteFillCache>("ttnn::fill_cache_for_user_");
 constexpr auto update_cache_for_token_ =
-    ttnn::register_operation<ttnn::operations::kv_cache::UpdateCache>("ttnn::update_cache_for_token_");
+    ttnn::register_operation<ttnn::operations::kv_cache::ExecuteUpdateCache>("ttnn::update_cache_for_token_");
 
 }  // namespace ttnn
