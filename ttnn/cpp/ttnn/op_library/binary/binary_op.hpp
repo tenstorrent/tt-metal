@@ -96,7 +96,7 @@ struct ExecuteBinary {
         return std::forward_as_tuple(input_tensor_a, input_tensor_b);
     }
 
-    static Tensor execute(
+    static Tensor execute_on_worker_thread(
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
@@ -142,7 +142,7 @@ struct ExecuteBinary {
 
     // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
     // Currently, this is exactly how tt::tt_metal::add_unary works
-    static Tensor execute(
+    static Tensor execute_on_worker_thread(
         const ttnn::Tensor &input_tensor_a,
         const float scalar,
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
@@ -158,7 +158,7 @@ struct ExecuteBinary {
             Layout::TILE);
         Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.device());
         // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
-        return ExecuteBinary::execute(
+        return ExecuteBinary::execute_on_worker_thread(
             input_tensor_a, scalar_tensor_device, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, activations);
     }
 };

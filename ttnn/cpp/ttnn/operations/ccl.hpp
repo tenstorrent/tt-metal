@@ -29,7 +29,7 @@ struct ExecuteAllGather {
         return std::forward_as_tuple(input_tensor);
     }
 
-    static ttnn::Tensor execute_async(
+    static ttnn::Tensor execute_on_main_thread(
         const ttnn::Tensor& input_tensor,
         const uint32_t dim,
         const uint32_t num_links = 1,
