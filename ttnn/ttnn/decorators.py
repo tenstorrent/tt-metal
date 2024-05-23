@@ -379,7 +379,6 @@ class Operation:
     postprocess_golden_function_outputs: callable
     is_cpp_function: bool
     is_experimental: bool
-    allow_to_fallback_to_golden_function_on_failure: bool
 
     def __gt__(self, other):
         return self.python_fully_qualified_name < other.python_fully_qualified_name
@@ -397,9 +396,6 @@ class Operation:
             self.postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
         )
 
-        self.will_fallback_to_golden_function_on_failure = (
-            self.allow_to_fallback_to_golden_function_on_failure and self.golden_function is not None
-        )
         if self.validate_input_tensors is not None:
             document_input_tensors(self.python_fully_qualified_name, function, self.validate_input_tensors)
 
@@ -685,9 +681,6 @@ class Operation:
 
             return call_wrapper
 
-        if self.will_fallback_to_golden_function_on_failure:
-            function = fallback_to_golden_function_decorator(function)
-
         function = runtime_decorator(function)
         self.decorated_function = function
 
@@ -748,7 +741,6 @@ def register_operation(
     golden_function=None,
     preprocess_golden_function_inputs=None,
     postprocess_golden_function_outputs=None,
-    allow_to_fallback_to_golden_function_on_failure=False,
     doc=None,
 ):
     def operation_decorator(function: callable):
@@ -803,7 +795,6 @@ def register_operation(
             postprocess_golden_function_outputs=postprocess_golden_function_outputs,
             is_cpp_function=is_cpp_function or is_experimental,
             is_experimental=is_experimental,
-            allow_to_fallback_to_golden_function_on_failure=allow_to_fallback_to_golden_function_on_failure,
         )
 
         if is_method:

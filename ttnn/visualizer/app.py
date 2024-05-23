@@ -134,7 +134,6 @@ def apis():
         is_experimental: bool
         is_cpp_function: bool
         golden_function: callable
-        allow_to_fallback_to_golden_function_on_failure: bool
 
         @classmethod
         def from_registered_operation(cls, operation):
@@ -143,7 +142,6 @@ def apis():
                 is_experimental=operation.is_experimental,
                 is_cpp_function=operation.is_cpp_function,
                 golden_function=operation.golden_function,
-                allow_to_fallback_to_golden_function_on_failure=operation.allow_to_fallback_to_golden_function_on_failure,
             )
 
     apis = [Api.from_registered_operation(api) for api in ttnn.query_registered_operations(include_experimental=True)]
@@ -151,9 +149,6 @@ def apis():
     df = pd.DataFrame(apis)
     df.sort_values(by=["is_experimental", "is_cpp_function", "python_fully_qualified_name"], inplace=True)
     df["has_fallback"] = df["golden_function"].apply(lambda golden_function: golden_function is not None)
-    df["will_fallback"] = df[["has_fallback", "allow_to_fallback_to_golden_function_on_failure"]].apply(
-        lambda row: row.has_fallback and row.allow_to_fallback_to_golden_function_on_failure, axis=1
-    )
     return render_template(
         "apis.html",
         apis=df.to_html(
@@ -164,7 +159,6 @@ def apis():
                 "is_cpp_function",
                 "is_experimental",
                 "has_fallback",
-                "will_fallback",
             ],
         ),
     )

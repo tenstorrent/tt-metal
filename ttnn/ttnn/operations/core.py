@@ -39,7 +39,6 @@ def _golden_function(input_tensor: ttnn.Tensor, slices):
     validate_input_tensors=_getitem_validate_input_tensors,
     is_method=True,
     golden_function=_golden_function,
-    allow_to_fallback_to_golden_function_on_failure=False,
 )
 def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     input_rank = len(input_tensor.shape)
@@ -187,7 +186,6 @@ reshape = ttnn.register_operation(
     golden_function=_golden_function,
     preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
     postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
-    allow_to_fallback_to_golden_function_on_failure=False,
     doc=doc,
 )(ttnn._ttnn.operations.core.reshape)
 
