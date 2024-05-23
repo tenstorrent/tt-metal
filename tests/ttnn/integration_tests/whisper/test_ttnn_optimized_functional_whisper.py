@@ -302,6 +302,7 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 def test_ttnn_whisper(tmp_path, device, ttnn_model):
     torch.manual_seed(0)

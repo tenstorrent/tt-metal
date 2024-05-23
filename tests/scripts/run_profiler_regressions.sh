@@ -105,6 +105,9 @@ run_post_proc_test(){
 
 cd $TT_METAL_HOME
 
+#
+TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false}'
+
 if [[ $1 == "PROFILER" ]]; then
     run_profiling_test
 elif [[ $1 == "PROFILER_NO_RESET" ]]; then
