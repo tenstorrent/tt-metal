@@ -249,7 +249,7 @@ Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations
 11. Visualize using Web Browser
 -------------------------------
 
-Set the following environment variables as needed
+Set the following environment variables as needed.
 
 .. code-block:: bash
 
@@ -286,6 +286,11 @@ Set the following environment variables as needed
     # Additionally, a json file can be used to override the config values
     export TTNN_CONFIG_PATH=<path to the file>
 
+If you want the graph report enabled, you must also install graphviz
+
+.. code-block:: bash
+
+    sudo apt-get install graphviz
 
 Run the code. i.e.:
 
@@ -317,6 +322,10 @@ Open the visualizer by running the following command:
 
     python ttnn/visualizer/app.py
 
+After opening up a report, there is a Performance Trace Report tab at the top of the page.
+This report is only generated if the profiler is enabled along with the TTNN_CONFIG_OVERRIDES environment variable being set.
+Currently, the profiler is only enabled to run on pytests.
+Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations>` for instructions on how to profile operations.
 
 
 12. Register pre- and/or post-operation hooks

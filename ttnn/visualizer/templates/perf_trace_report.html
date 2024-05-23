@@ -1,0 +1,112 @@
+{% extends "report_layout.html" %}
+{% block content %}
+
+<!DOCTYPE html>
+<style>
+table, th, td {
+  border: 1px solid black;
+  border-collapse: collapse;
+  padding: 5px;
+}
+</style>
+<h1 id="header"></h1>
+<h2>Summary</h2>
+<div id="summary">
+<p>
+<table>
+  <tr>
+    <td>Batch Size</td>
+    <td><input id="batch_size" value="1"></td>
+  </tr>
+  <tr>
+    <td>Clock</td>
+    <td><input id="clock" value="1e9"></td>
+  </tr>
+</table>
+</p>
+
+<p>
+<table>
+  <tr>
+    <th>Type</th>
+    <th>FPS</th>
+  </tr>
+  <tr>s
+    <td>Device</td>
+    <td id="device_fps"></td>
+  </tr>
+  <tr>
+    <td>Host</td>
+    <td id="host_fps"></td>
+  </tr>
+<table>
+</p>
+</div>
+<div id="container" style="width: 100%;"></div>
+<script src="https://d3js.org/d3.v5.min.js"></script>
+<script type="module">
+// import fss from "/fss/fss.js";
+import * as Plot from "https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6/+esm";
+
+const header = document.querySelector("#header");
+const input_batch_size = document.querySelector("#batch_size");
+const input_clock = document.querySelector("#clock");
+const output_device_fps = document.querySelector("#device_fps");
+const output_host_fps = document.getElementById("host_fps");
+const div = document.querySelector("#container");
+const rect = div.getBoundingClientRect();
+
+const pr = {{perf_report|tojson}}
+
+const data = d3.csvParse({{perf_report|tojson}}, d => {
+  return {
+    op_code: d["OP CODE"],
+    op_type: d["OP TYPE"],
+    global_id: parseInt(d["GLOBAL CALL COUNT"]),
+    host_duration: parseInt(d["HOST DURATION [ns]"]),
+    kernel_duration: parseInt(d["DEVICE KERNEL DURATION [ns]"]),
+  };
+});
+
+const device_data = data.filter(e => e.op_type === "tt_dnn_device");
+
+let host_elapsed = data.reduce((a, e) => a + e.host_duration, 0.0);
+let device_elapsed = device_data.reduce((a, e) => a + e.kernel_duration, 0.0);
+
+const calc_fps = () => {
+  let device_fps = (parseFloat(input_clock.value) * parseFloat(input_batch_size.value)) / device_elapsed;
+  let host_fps = (parseFloat(input_clock.value) * parseFloat(input_batch_size.value)) / host_elapsed;
+  output_device_fps.innerHTML = device_fps.toFixed(4);
+  output_host_fps.innerHTML = host_fps.toFixed(4);
+};
+
+input_batch_size.addEventListener('input', calc_fps);
+input_clock.addEventListener('input', calc_fps);
+calc_fps();
+
+
+div.append(
+  Plot.plot({
+    marginLeft: 60,
+    title: "Total Execution",
+    width: rect.width,
+    color: {legend: true},
+    marks: [
+      Plot.rectX(device_data, {y: "global_id", x: "kernel_duration", fill: "op_code"})
+    ]
+  })
+);
+
+div.append(
+  Plot.plot({
+    marginLeft: 200,
+    title: "By op_code",
+    color: {legend: true},
+    marks: [
+      Plot.rectX(device_data, {y: "op_code", x: "kernel_duration", fill: "op_code"})
+    ]
+  })
+);
+</script>
+
+{% endblock %}

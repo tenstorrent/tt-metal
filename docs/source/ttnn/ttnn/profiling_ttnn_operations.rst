@@ -7,7 +7,10 @@ The following set of commands will generate perf reports for ``resnet`` as an ex
 
     cd $TT_METAL_HOME
     scripts/build_scripts/build_with_profiler_opt.sh
-    ./tt_metal/tools/profiler/profile_this.py -n resnet -c "pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_bare_metal[20-0.0185-25]"
+    # For grayskull
+    ./tt_metal/tools/profiler/profile_this.py -c "pytest tests/ttnn/integration_tests/resnet/test_performance.py::test_performance"
+    # For wormhole
+    ./tt_metal/tools/profiler/profile_this.py -c "pytest tests/ttnn/unit_tests/operations/test_add.py::test_add_2D_tensors"
 
 After the commands finish, the location of the generated csv will be printed on console similar to the image below:
 
@@ -33,6 +36,14 @@ The headers for the CSV are explained under `Perf Report Headers`_.
   For example for resnet with around 120 ops for a single inference layer, if the test calls the layer more than 8 times, ``ttl.device.DumpDeviceProfiler(device)`` should be called at least every eighth layer run.
   If profiling data is dropped, you will receive warning messages in the execution log mentioning which RISC of what core of what device dropped profiling data. Note that dispatch
   cores fill up their profiling buffers faster and if only those cores are giving warnings your OP analysis is not affected.
+
+
+Visualization
+-------------
+
+If you would like to see a visualization of the performance trace report, please refer to the :doc:`Using ttnn </ttnn/usage>` on how to set it up and instead of running the example code, run the profiler command from above. Then, run the command to display the visualizer in the browser.
+To see the performance trace report visualization, the generated csv needs to be in the correct folder.
+This is automatically configured if the visualization environment variables are set up and the profiler command is run without an output folder being set.
 
 Perf Report Headers
 -------------------
