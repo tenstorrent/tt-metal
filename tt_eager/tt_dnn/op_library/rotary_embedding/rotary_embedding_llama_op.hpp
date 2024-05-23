@@ -56,7 +56,7 @@ inline Tensor rotary_embedding_llama(
             auto& cos = input_tensors.at(1);
             auto& sin = input_tensors.at(2);
             auto& trans_mat = input_tensors.at(3);
-            TT_FATAL(input_tensor.get_legacy_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
+            TT_FATAL(input_tensor.get_legacy_shape()[-1] % TILE_WIDTH == 0, "Input X dim must be divisible into tiles");
             uint32_t seq_len = input_tensor.get_legacy_shape()[-2];
             uint32_t B = input_tensor.get_legacy_shape()[0];
             uint32_t head_dim = input_tensor.get_legacy_shape()[-1];

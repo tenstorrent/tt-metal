@@ -33,6 +33,8 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(9);
     constexpr uint32_t HtWt = get_compile_time_arg_val(10);
     constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(11);
+    constexpr uint32_t num_sin_cos_rows_per_core = get_compile_time_arg_val(12);
+
 
     constexpr uint32_t onetile = 1;
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
@@ -93,14 +95,17 @@ void kernel_main() {
             Ht = 4
             Wt = 4
     */
-    cb_reserve_back(sin_cb_id, Wt);
-    cb_reserve_back(cos_cb_id, Wt);
+    cb_reserve_back(sin_cb_id, Wt * num_sin_cos_rows_per_core);
+    cb_reserve_back(cos_cb_id, Wt * num_sin_cos_rows_per_core);
     uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
     uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
 
 
     // To make sure the sin/cos row are read only once
+    uint32_t sin_cos_row_cnt = 0;
     bool done_sin_cos = false;
+
+    uint32_t input_row_cnt = 0;
 
     for (uint32_t i = 0; i < num_rows_per_core; ++i) {
         cb_reserve_back(input_cb_id, Wt);
@@ -127,15 +132,23 @@ void kernel_main() {
 
         noc_async_read_barrier();
         cb_push_back(input_cb_id, Wt);
+        input_row_cnt++;
 
         if (!done_sin_cos) {
             cb_push_back(sin_cb_id, Wt);
             cb_push_back(cos_cb_id, Wt);
 
-            done_sin_cos = true;
+            // Update sin_cos_row_cnt
+            sin_cos_row_cnt++;
+
+            if (sin_cos_row_cnt == num_sin_cos_rows_per_core) {
+                done_sin_cos = true;
+            }
         }
         // Update input_curr_idx to stride the correct amount to the next row
-        input_curr_idx += (Ht - 1) * Wt;
+        if (input_row_cnt % num_sin_cos_rows_per_core == 0) {
+            input_curr_idx += (Ht - num_sin_cos_rows_per_core) * Wt;
+        }
     }
 
 }

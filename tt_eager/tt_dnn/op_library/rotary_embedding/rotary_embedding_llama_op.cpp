@@ -29,7 +29,7 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
         TT_FATAL((input.get_layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
     }
 
-    TT_FATAL(input_tensor.get_legacy_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
+    TT_FATAL(input_tensor.get_legacy_shape()[-1] % TILE_WIDTH  == 0, "Input X dim must be divisible into tiles");
     uint32_t seq_len = input_tensor.get_legacy_shape()[-2];
     uint32_t B = input_tensor.get_legacy_shape()[0];
     uint32_t head_dim = input_tensor.get_legacy_shape()[-1];

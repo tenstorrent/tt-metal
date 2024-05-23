@@ -163,6 +163,10 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     bool cos_is_dram = cos_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool sin_is_dram = sin_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool trans_mat_is_dram = trans_mat_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+
+    uint32_t num_sin_cos_rows_per_core = max((uint32_t) 1, (uint32_t) (Ht / num_cores));
+
+
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_cb_index,
         (std::uint32_t)cos_cb_index,
@@ -175,11 +179,12 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         (std::uint32_t)Ht,
         (std::uint32_t)Wt,
         (std::uint32_t)HtWt,
-        (std::uint32_t)num_rows_per_core
+        (std::uint32_t)num_rows_per_core,
+        (std::uint32_t)num_sin_cos_rows_per_core
     };
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram, (std::uint32_t)num_rows_per_core, Wt, Ht};
+        (std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram, (std::uint32_t)num_rows_per_core, (std::uint32_t)num_sin_cos_rows_per_core, Wt, Ht};
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -203,6 +208,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         (std::uint32_t)sin_interm_cb_index,
         (std::uint32_t)output_cb_index,
         (std::uint32_t)num_rows_per_core,
+        (std::uint32_t)num_sin_cos_rows_per_core,
         (std::uint32_t)Wt,
         };
 
@@ -214,15 +220,16 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
     const auto &cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
-    uint32_t num_cores_per_sin_cos_row = num_cores / Ht; // since sin/cos matrices have Ht rows
+    uint32_t num_cores_per_sin_cos_row = max((uint32_t) 1, (uint32_t)(num_cores / Ht)); // since sin/cos matrices have Ht rows
     uint32_t core_idx = 0;
     /*
-        Outer loop: Ht iterations
+        Outer loop: Ht / num_sin_cos_rows_per_core iterations
         Inner loop: # total cores / Ht iterations
 
         Overall: # total cores iterations
     */
-    for (uint32_t sin_cos_row = 0; sin_cos_row < Ht; sin_cos_row++) {
+
+    for (uint32_t sin_cos_row = 0; sin_cos_row < Ht; sin_cos_row+=num_sin_cos_rows_per_core) {
         uint32_t anchor_row = sin_cos_row;
         for (uint32_t i = 0; i < num_cores_per_sin_cos_row; i++) {
             const CoreCoord &core = cores.at(core_idx);

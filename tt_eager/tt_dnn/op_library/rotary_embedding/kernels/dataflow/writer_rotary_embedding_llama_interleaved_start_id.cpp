@@ -12,8 +12,9 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t num_rows_per_core =  get_compile_time_arg_val(2);
-    constexpr uint32_t Wt =  get_compile_time_arg_val(3);
-    constexpr uint32_t Ht =  get_compile_time_arg_val(4);
+    constexpr uint32_t num_sin_cos_rows_per_core = get_compile_time_arg_val(3);
+    constexpr uint32_t Wt =  get_compile_time_arg_val(4);
+    constexpr uint32_t Ht =  get_compile_time_arg_val(5);
 
 
     // single-tile ublocks
@@ -28,6 +29,8 @@ void kernel_main() {
         .data_format = data_format
     };
 
+    uint32_t output_row_cnt = 0;
+
     uint32_t tile_idx = start_row_idx * Wt; // start index in tiles, instead of rows
     for (uint32_t i = 0; i < num_rows_per_core; i++) {
         cb_wait_front(cb_id_out, Wt);
@@ -41,7 +44,10 @@ void kernel_main() {
         }
         noc_async_write_barrier();
         cb_pop_front(cb_id_out, Wt);
+        output_row_cnt++;
 
-        tile_idx += (Ht - 1) * Wt; // Increment by stride
+        if (output_row_cnt % num_sin_cos_rows_per_core == 0) {
+            tile_idx += (Ht - num_sin_cos_rows_per_core) * Wt; // Increment by stride
+        }
     }
 }
