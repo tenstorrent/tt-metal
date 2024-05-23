@@ -53,7 +53,7 @@ inline Tensor execute(
 }  // namespace detail
 
 template <UnaryOpType unary_op_type>
-struct Unary {
+struct ExecuteUnary {
     static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
 
     template <typename... Args>
@@ -67,7 +67,7 @@ struct Unary {
 };
 
 template <UnaryOpType unary_op_type>
-struct UnaryWithFastAndApproximateMode {
+struct ExecuteUnaryWithFastAndApproximateMode {
     static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
 
     template <typename... Args>
@@ -85,7 +85,7 @@ struct UnaryWithFastAndApproximateMode {
 };
 
 template <UnaryOpType unary_op_type>
-struct UnaryWithFloatParameter : public EltwiseUnary {
+struct ExecuteUnaryWithFloatParameter {
     static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
 
     template <typename... Args>
@@ -129,19 +129,19 @@ struct Softplus {
 }  // namespace unary
 }  // namespace operations
 
-#define REGISTER_UNARY_OPERATION(operation_name, operation_type)                               \
-    constexpr auto operation_name = ttnn::register_operation<                                  \
-        ttnn::operations::unary::Unary<ttnn::operations::unary::UnaryOpType::operation_type>>( \
+#define REGISTER_UNARY_OPERATION(operation_name, operation_type)                                      \
+    constexpr auto operation_name = ttnn::register_operation<                                         \
+        ttnn::operations::unary::ExecuteUnary<ttnn::operations::unary::UnaryOpType::operation_type>>( \
         "ttnn::" #operation_name);
 
-#define REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(operation_name, operation_type)                        \
-    constexpr auto operation_name = ttnn::register_operation<ttnn::operations::unary::UnaryWithFastAndApproximateMode< \
+#define REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(operation_name, operation_type)   \
+    constexpr auto operation_name =                                                               \
+        ttnn::register_operation<ttnn::operations::unary::ExecuteUnaryWithFastAndApproximateMode< \
+            ttnn::operations::unary::UnaryOpType::operation_type>>("ttnn::" #operation_name);
+
+#define REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(operation_name, operation_type)                                 \
+    constexpr auto operation_name = ttnn::register_operation<ttnn::operations::unary::ExecuteUnaryWithFloatParameter< \
         ttnn::operations::unary::UnaryOpType::operation_type>>("ttnn::" #operation_name);
-
-#define REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(operation_name, operation_type)                            \
-    constexpr auto operation_name = ttnn::register_operation<                                                    \
-        ttnn::operations::unary::UnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::operation_type>>( \
-        "ttnn::" #operation_name);
 
 REGISTER_UNARY_OPERATION(abs, ABS);
 REGISTER_UNARY_OPERATION(acos, ACOS);
