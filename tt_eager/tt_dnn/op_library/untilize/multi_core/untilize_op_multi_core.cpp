@@ -412,8 +412,9 @@ operation::ProgramWithCallbacks untilize_multi_core(
         if (src_sharded) {
             UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
         } else {
+            auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
             for (const CoreCoord& core : cores_with_rtargs) {
-                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = src_buffer->address();
             }
         }
@@ -421,8 +422,9 @@ operation::ProgramWithCallbacks untilize_multi_core(
         if (out_sharded) {
             UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
         } else {
+            auto& runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
             for (const CoreCoord& core : cores_with_rtargs) {
-                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = dst_buffer->address();
             }
         }
@@ -546,7 +548,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     uint32_t row_start_id = 0;
     uint32_t ncores_x = grid_size.x;
 
+    const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
     for (uint32_t i = 0; i < ncores; ++i) {
+        const auto& core = cores[i];
         const std::vector<BlockRep>& assignment = core_assignments.at(i);
 
         // writer runtime args
@@ -574,36 +578,34 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
         // reader runtime args
         vector<uint32_t> reader_rt_args = {src0_buffer->address(), num_tiles_per_core, tile_start_id};
 
-        CoreCoord core = {i % ncores_x, i / ncores_x};
-
         SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
 
         tile_start_id += num_tiles_per_core;
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
-                                           writer_kernel_id = unary_writer_kernel_id,
-                                           ncores = ncores,
-                                           ncores_x = ncores_x](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
-        auto dst_buffer = output_buffers.at(0);
+    auto override_runtime_args_callback =
+        [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
+            const Program& program,
+            const std::vector<Buffer*>& input_buffers,
+            const std::vector<Buffer*>& output_buffers) {
+            auto src_buffer = input_buffers.at(0);
+            auto dst_buffer = output_buffers.at(0);
 
-        for (uint32_t i = 0; i < ncores; ++i) {
-            CoreCoord core = {i % ncores_x, i / ncores_x};
-            {
-                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
+            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+
+            for (const auto& core : cores) {
+                {
+                    auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                    runtime_args[0] = src_buffer->address();
+                }
+                {
+                    auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                    runtime_args[0] = dst_buffer->address();
+                }
             }
-            {
-                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
-            }
-        }
-    };
+        };
 
     return {std::move(program), override_runtime_args_callback};
 }
@@ -862,8 +864,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         if (out_sharded) {
             UpdateDynamicCircularBufferAddress(program, cb_sharded_output, *dst_buffer);
         } else {
+            auto& runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
             for (const CoreCoord& core : cores) {
-                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = dst_buffer->address();
             }
         }

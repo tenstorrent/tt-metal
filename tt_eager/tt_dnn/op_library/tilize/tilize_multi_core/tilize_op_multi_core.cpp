@@ -104,8 +104,9 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     uint32_t ncores_x = grid_size.x;
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
+    const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
     for (uint32_t i = 0; i < ncores_full; ++i) {
-        CoreCoord core = {i % ncores_x, i / ncores_x};
+        const CoreCoord& core = cores[i];
 
         // reader runtime args
         vector<uint32_t> reader_rt_args = {
@@ -134,7 +135,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     }
     if (has_cliff) {
         // the last core is a cliff core with nblocks_per_core_cliff blocks
-        CoreCoord core = {ncores_full % ncores_x, ncores_full / ncores_x};
+        const CoreCoord& core = cores.back();
 
         // reader runtime args
         vector<uint32_t> reader_rt_args = {
@@ -159,28 +160,27 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
-                                           writer_kernel_id = unary_writer_kernel_id,
-                                           ncores = ncores,
-                                           ncores_x = ncores_x](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
-        auto dst_buffer = output_buffers.at(0);
+    auto override_runtime_args_callback =
+        [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
+            const Program& program,
+            const std::vector<Buffer*>& input_buffers,
+            const std::vector<Buffer*>& output_buffers) {
+            auto src_buffer = input_buffers.at(0);
+            auto dst_buffer = output_buffers.at(0);
 
-        for (uint32_t i = 0; i < ncores; ++i) {
-            CoreCoord core = {i % ncores_x, i / ncores_x};
-            {
-                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
+            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+            for (const auto& core : cores) {
+                {
+                    auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                    runtime_args[0] = src_buffer->address();
+                }
+                {
+                    auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                    runtime_args[0] = dst_buffer->address();
+                }
             }
-            {
-                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
-            }
-        }
-    };
+        };
 
     return {std::move(program), override_runtime_args_callback};
 }
@@ -256,7 +256,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
     tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, {num_tiles_per_shard});
 
     auto override_runtime_arguments_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cb_output, num_cores, num_cores_x](
+        [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cb_output](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -383,7 +383,9 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     uint32_t row_start_id = 0;
     uint32_t ncores_x = grid_size.x;
 
+    const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
     for (uint32_t i = 0; i < ncores; ++i) {
+        const auto& core = cores[i];
         const std::vector<BlockRep>& assignment = core_assignments.at(i);
 
         // reader runtime args
@@ -412,36 +414,33 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
         // writer runtime args
         vector<uint32_t> writer_rt_args = {dst_buffer->address(), num_tiles_per_core, tile_start_id};
 
-        CoreCoord core = {i % ncores_x, i / ncores_x};
-
         SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
 
         tile_start_id += num_tiles_per_core;
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
-                                           writer_kernel_id = unary_writer_kernel_id,
-                                           ncores = ncores,
-                                           ncores_x = ncores_x](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
-        auto dst_buffer = output_buffers.at(0);
+    auto override_runtime_args_callback =
+        [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
+            const Program& program,
+            const std::vector<Buffer*>& input_buffers,
+            const std::vector<Buffer*>& output_buffers) {
+            auto src_buffer = input_buffers.at(0);
+            auto dst_buffer = output_buffers.at(0);
 
-        for (uint32_t i = 0; i < ncores; ++i) {
-            CoreCoord core = {i % ncores_x, i / ncores_x};
-            {
-                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
+            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+            for (const auto& core : cores) {
+                {
+                    auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                    runtime_args[0] = src_buffer->address();
+                }
+                {
+                    auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                    runtime_args[0] = dst_buffer->address();
+                }
             }
-            {
-                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
-            }
-        }
-    };
+        };
 
     return {std::move(program), override_runtime_args_callback};
 }
@@ -582,9 +581,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
                                                    const std::vector<Tensor>& output_tensors) {
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
-
-        bool src_sharded = input_tensors.at(0).memory_config().is_sharded();
-        bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
