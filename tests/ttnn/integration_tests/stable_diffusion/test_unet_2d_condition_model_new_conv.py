@@ -23,7 +23,7 @@ from models.experimental.functional_stable_diffusion.custom_preprocessing import
 from models.experimental.functional_stable_diffusion.tt.ttnn_functional_unet_2d_condition_model import (
     UNet2DConditionModel,
 )
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_2d_condition_model import (
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
 import math
@@ -31,7 +31,11 @@ from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility
     post_process_output,
 )
 from ttnn.operations.core import unsqueeze_to_4D
+import sys
+from loguru import logger
 
+logger.remove()
+logger.add(sys.stderr, level="INFO")
 scheduler = LMSDiscreteScheduler(
     beta_start=0.00085,
     beta_end=0.012,
@@ -144,8 +148,6 @@ def test_unet_2d_condition_model_256x256(device, batch_size, in_channels, input_
     ],
 )
 def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width):
-    device.enable_program_cache()
-
     # setup envvar if testing on N300
     wh_arch_yaml_org = None
     if device.core_grid.y == 7:
@@ -212,13 +214,6 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     model = UNet2D(device, parameters, batch_size, input_height, input_width, reader_patterns_cache)
 
     first_iter = time.time()
-    use_signpost = True
-    try:
-        from tracy import signpost
-    except ModuleNotFoundError:
-        use_signpost = False
-    if use_signpost:
-        signpost(header="start")
     ttnn_output = model(
         input,
         timestep=ttnn_timestep,
@@ -229,12 +224,8 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         return_dict=return_dict,
         config=config,
     )
-    if use_signpost:
-        signpost(header="stop")
     first_iter = time.time() - first_iter
-    ttnn_output = ttnn_to_torch(ttnn_output)
     print(f"First iteration took {first_iter} seconds")
-
     # times = []
     # for i in range(50):
     #     start = time.time()
@@ -248,9 +239,6 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     #         return_dict=return_dict,
     #         config=config,
     #     )
-    #     ttnn_output = ttnn_to_torch(ttnn_output)
-    #     passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.99)
-    #     print(output)
     #     end = time.time()
     #     times.append(end - start)
     #     print(f"Current iteration took {end - start} seconds")
@@ -260,6 +248,7 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     #     print(iter)
     # print(f"Time taken for 50 iterations: {total_time}")
     # print(f"Samples per second: {50 / total_time}")
+    ttnn_output = ttnn_to_torch(ttnn_output)
     passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.99)
     print(output)
     assert passing

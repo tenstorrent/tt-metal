@@ -53,10 +53,11 @@ def constant_prop_time_embeddings(timesteps, sample, time_proj):
     return t_emb
 
 
-def tt_guide(noise_pred, guidance_scale):  # will return latents
-    noise_pred_uncond, noise_pred_text = ttnn.split(noise_pred, noise_pred.shape[0] // 2, dim=0)
+def tt_guide(noise_pred_, guidance_scale):  # will return latents
+    noise_pred = ttnn.to_torch(noise_pred_)
+    noise_pred_uncond, noise_pred_text = torch.split(noise_pred, noise_pred.shape[0] // 2, dim=0)
     noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-    return noise_pred
+    return ttnn.from_torch(noise_pred, dtype=noise_pred_.dtype, layout=noise_pred_.layout, device=noise_pred_.device())
 
 
 def _save_image_and_latents(latents, iter, vae, pre_fix="", pre_fix2=""):
@@ -237,6 +238,7 @@ def run_demo_inference_diffusiondb(
     disable_persistent_kernel_cache()
     device.enable_program_cache()
 
+    experiment_name = "exp1"
     # 0. Load a sample prompt from the dataset
     dataset = load_dataset("poloclub/diffusiondb", "2m_random_1k")
     data_1k = dataset["train"]

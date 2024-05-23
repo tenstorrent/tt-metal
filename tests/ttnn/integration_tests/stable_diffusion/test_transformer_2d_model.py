@@ -13,7 +13,8 @@ from models.utility_functions import (
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.experimental.functional_stable_diffusion.tt.ttnn_functional_transformer_2d import transformer_2d_model
+
+# from models.experimental.functional_stable_diffusion.tt.ttnn_functional_transformer_2d import transformer_2d_model
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_transformer_2d import (
     transformer_2d_model as transformer_2d_model_tt2,
 )
@@ -174,7 +175,7 @@ def test_transformer_2d_model_512x512(
     input_shape, index1, index2, block, attention_head_dim, model_name, device, reset_seeds
 ):
     # TODO
-    pytest.skip()
+    # pytest.skip()
     torch.manual_seed(0)
     encoder_hidden_states = [1, 2, 77, 768]
     timestep = (None,)

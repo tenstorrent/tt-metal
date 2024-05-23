@@ -12,6 +12,8 @@ from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     run_ttnn_conv_with_pre_and_post_tensor_formatting,
 )
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import conv_cache
+
 import math
 
 
@@ -54,42 +56,47 @@ class downsample_2d:
             parameters.conv.weight, parameters.conv.bias
         )
         parameters.conv.bias = torch.reshape(parameters.conv.bias, (1, 1, 1, parameters.conv.bias.shape[-1]))
-        tt_weight_tensor = ttnn.from_torch(parameters.conv.weight, ttnn.float32)
-        tt_bias_tensor = ttnn.from_torch(parameters.conv.bias, ttnn.float32)
 
-        out_channels = parameters.conv.weight.shape[0]
-        in_channels = parameters.conv.weight.shape[1]
-        conv_config_override = {}
-        if (out_channels, in_channels, input_height, input_width) in config_override:
-            conv_config_override = config_override[(out_channels, in_channels, input_height, input_width)]
+        self.conv_weights = ttnn.from_torch(parameters.conv.weight, ttnn.float32)
+        self.conv_bias = ttnn.from_torch(parameters.conv.bias, ttnn.float32)
+        self.input_height = input_height
+        self.input_width = input_width
+        self.batch_size = batch_size
+        self.out_channels = parameters.conv.weight.shape[0]
+        self.in_channels = parameters.conv.weight.shape[1]
+        self.conv_config_override = {}
+        if (self.out_channels, self.in_channels, input_height, input_width) in config_override:
+            self.conv_config_override = config_override[
+                (self.out_channels, self.in_channels, input_height, input_width)
+            ]
 
-        stride = 2
-        self.conv = ttnn.Conv2d(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=(3, 3),
-            stride=(stride, stride),
-            padding=(1, 1),
-            dtype=ttnn.bfloat8_b,
-            device=device,
-            use_1d_systolic_array=True if in_channels < 320 else False,
-            batch_size=batch_size,
-            input_height=input_height,
-            input_width=input_width,
-            reader_patterns_cache=reader_patterns_cache,
-            weight=tt_weight_tensor,
-            bias=tt_bias_tensor,
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            weights_dtype=ttnn.bfloat8_b,
-            conv_blocking_and_parallelization_config_override=conv_config_override,
-            use_shallow_conv_variant=False,
-            # enable_auto_formatting=True,
-            compute_kernel_config=compute_kernel_config,
-            transpose_mcast=False,
-        )
+        self.stride = 2
+        # self.conv = ttnn.Conv2d(
+        #     in_channels=self.in_channels,
+        #     out_channels=self.out_channels,
+        #     kernel_size=(3, 3),
+        #     stride=(self.stride, self.stride),
+        #     padding=(1, 1),
+        #     dtype=ttnn.bfloat8_b,
+        #     device=device,
+        #     use_1d_systolic_array=True if self.in_channels < 320 else False,
+        #     batch_size=batch_size,
+        #     input_height=input_height,
+        #     input_width=input_width,
+        #     reader_patterns_cache=reader_patterns_cache,
+        #     weight=self.conv_weights,
+        #     bias=self.conv_bias,
+        #     math_fidelity=ttnn.MathFidelity.LoFi,
+        #     weights_dtype=ttnn.bfloat8_b,
+        #     conv_blocking_and_parallelization_config_override=self.conv_config_override,
+        #     use_shallow_conv_variant=False,
+        #     # enable_auto_formatting=True,
+        #     compute_kernel_config=compute_kernel_config,
+        # )
 
-        self.output_height = self.conv.output_height
-        self.output_width = self.conv.output_width
+        self.output_height = ttnn.get_conv_output_dim(input_height, 3, self.stride, 1)
+        self.output_width = ttnn.get_conv_output_dim(input_width, 3, self.stride, 1)
+        print(f"Downsample Input = {input_height}x{input_width} Output = {self.output_height}x{self.output_width}")
 
     def __call__(
         self,
@@ -109,9 +116,38 @@ class downsample_2d:
             pad = (0, 1, 0, 1)
             hidden_states = ttnn.pad(hidden_states, pad, value=0)
 
-        if ttnn.get_memory_config(hidden_states) != self.conv.conv.input_sharded_memory_config:
-            hidden_states = ttnn.to_memory_config(hidden_states, self.conv.conv.input_sharded_memory_config)
-        hidden_states = self.conv(hidden_states)
+        # if ttnn.get_memory_config(hidden_states) != self.conv.conv.input_sharded_memory_config:
+        #     hidden_states = ttnn.to_memory_config(hidden_states, self.conv.conv.input_sharded_memory_config)
+        # hidden_states = self.conv(hidden_states)
+        conv_config = ttnn.Conv2dConfig(
+            dtype=ttnn.bfloat8_b,
+            weights_dtype=ttnn.bfloat8_b,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            activation=None,
+            height_sharding=True if self.in_channels < 320 else False,
+            input_channels_alignment=32,
+        )
+        if self.conv_config_override and "act_block_h" in self.conv_config_override:
+            print("Setting Act Block H to ", self.conv_config_override["act_block_h"])
+            conv_config.act_block_h = self.conv_config_override["act_block_h"]
+
+        [hidden_states, _out_height, _out_width, _dev_weights, _dev_bias] = ttnn.conv2d(
+            input_tensor=hidden_states,
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            kernel_size=(3, 3),
+            stride=(self.stride, self.stride),
+            padding=(1, 1),
+            device=self.device,
+            batch_size=self.batch_size,
+            input_height=self.input_height,
+            input_width=self.input_width,
+            weight_tensor=self.conv_weights,
+            bias_tensor=self.conv_bias,
+            conv_config=conv_config,
+            conv_op_cache=conv_cache,
+            reshard_if_not_optimal=True,
+        )
         # hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
         #     self.device,
         #     self.conv,

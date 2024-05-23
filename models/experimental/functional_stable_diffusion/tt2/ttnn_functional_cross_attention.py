@@ -701,7 +701,14 @@ class cross_attention:
     ):
         assert dim_head in self.scales
         original_seq_len = hidden_states.shape[-2] // 2  # 2 is the batch size
-
+        print(
+            "Cross Attention Input ",
+            hidden_states.shape,
+            hidden_states.layout,
+            hidden_states.memory_config(),
+            "sharded = ",
+            hidden_states.is_sharded(),
+        )
         if not hidden_states.is_sharded():
             grid_size = self.grid_sizes[hidden_states.shape[-2]]
             hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
@@ -736,14 +743,18 @@ class cross_attention:
             )
             # TODO: Output sharded once https://github.com/tenstorrent/tt-metal/issues/6775 is fixed
             interleaved_out = hidden_states.shape[-2] == 8192 or hidden_states.shape[-2] == 2048
-            qkv_out = ttnn.experimental.operations.primary.matmul(
+            if interleaved_out:
+                hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
+                    hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
+                )
+            qkv_out = ttnn.matmul(
                 hidden_states,
                 self.parameters.qkv.weight,
                 program_config=program_config,
-                output_mem_config=self.l1_interleaved_memory_config
+                memory_config=self.l1_interleaved_memory_config
                 if interleaved_out
                 else self.block_sharded_memory_config,
-                output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                dtype=ttnn.bfloat8_b,
                 compute_kernel_config=self.compute_kernel_config,
             )
             ttnn.deallocate(hidden_states)

@@ -19,20 +19,23 @@ from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import is_grayskull
 
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_embeddings import TtTimestepEmbedding
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_mid_block_2d_cross_attn import (
+
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_mid_block_2d_cross_attn_new_conv import (
     unet_mid_block_2d_cross_attn,
 )
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attention_down_block_2d import (
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attention_down_block_2d_new_conv import (
     cross_attention_down_block_2d,
 )
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attn_upblock import (
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attn_upblock_new_conv import (
     cross_attention_upblock2d,
 )
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downblock_2d import downblock2d
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upblock_2d import upblock_2d
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downblock_2d_new_conv import downblock2d
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upblock_2d_new_conv import upblock_2d
+
 from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
     pad_group_norm_weight,
     pre_process_input,
+    conv_cache,
 )
 
 fp32_accum = True
@@ -103,44 +106,44 @@ class UNet2DConditionModel:
         self.batch_size = batch_size
         self.input_height = input_height
         self.input_width = input_width
-
         parameters.conv_in.weight, parameters.conv_in.bias = permute_conv_weights(
             parameters.conv_in.weight, parameters.conv_in.bias
         )
         parameters.conv_in.bias = torch.reshape(parameters.conv_in.bias, (1, 1, 1, parameters.conv_in.bias.shape[-1]))
-        tt_weight_tensor = ttnn.from_torch(parameters.conv_in.weight, ttnn.float32)
-        tt_bias_tensor = ttnn.from_torch(parameters.conv_in.bias, ttnn.float32)
+        self.conv_in_weights = ttnn.from_torch(parameters.conv_in.weight, ttnn.float32)
+        self.conv_in_bias = ttnn.from_torch(parameters.conv_in.bias, ttnn.float32)
+
         # breakpoint()
         out_channels = parameters.conv_in.weight.shape[0]
         in_channels = parameters.conv_in.weight.shape[1]
 
-        logger.info(f"CIN: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
-        self.conv_in = ttnn.Conv2d(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=(3, 3),
-            stride=(1, 1),
-            padding=(1, 1),
-            dtype=ttnn.bfloat8_b,
-            device=device,
-            use_1d_systolic_array=True if in_channels < 320 else False,
-            batch_size=batch_size,
-            input_height=input_height,
-            input_width=input_width,
-            reader_patterns_cache=reader_patterns_cache,
-            weight=tt_weight_tensor,
-            bias=tt_bias_tensor,
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            weights_dtype=ttnn.bfloat8_b,
-            conv_blocking_and_parallelization_config_override={},
-            use_shallow_conv_variant=False,
-            compute_kernel_config=conv_compute_kernel_config,
-        )
+        print(f"CIN: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
+        # self.conv_in = ttnn.Conv2d(
+        #     in_channels=in_channels,
+        #     out_channels=out_channels,
+        #     kernel_size=(3, 3),
+        #     stride=(1, 1),
+        #     padding=(1, 1),
+        #     dtype=ttnn.bfloat8_b,
+        #     device=device,
+        #     use_1d_systolic_array=True if in_channels < 320 else False,
+        #     batch_size=batch_size,
+        #     input_height=input_height,
+        #     input_width=input_width,
+        #     reader_patterns_cache=reader_patterns_cache,
+        #     weight=self.conv_in_weights,
+        #     bias=self.conv_in_bias,
+        #     math_fidelity=ttnn.MathFidelity.LoFi,
+        #     weights_dtype=ttnn.bfloat8_b,
+        #     conv_blocking_and_parallelization_config_override={},
+        #     use_shallow_conv_variant=False,
+        #     compute_kernel_config=conv_compute_kernel_config,
+        # )
         # breakpoint()
         self.down_blocks = []
-        input_height = self.conv_in.output_height
-        input_width = self.conv_in.output_height
-        logger.info(f"D-1: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
+        input_height = ttnn.get_conv_output_dim(input_height, 3, 1, 1)
+        input_width = ttnn.get_conv_output_dim(input_width, 3, 1, 1)
+        print(f"D-1: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
         self.down_block_types = down_block_types
         for i, down_block_type in enumerate(down_block_types):
             if down_block_type == "CrossAttnDownBlock2D":
@@ -169,7 +172,7 @@ class UNet2DConditionModel:
             self.down_blocks.append(down_block)
             input_height = down_block.output_height
             input_width = down_block.output_width
-            logger.info(f"D{i}:  height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
+            print(f"D{i}:  height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
 
         assert mid_block_type == "UNetMidBlock2DCrossAttn"
         self.mid_block = unet_mid_block_2d_cross_attn(
@@ -183,7 +186,7 @@ class UNet2DConditionModel:
         )
         input_height = self.mid_block.output_height
         input_width = self.mid_block.output_width
-        logger.info(f"MID: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
+        print(f"MID: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
 
         self.up_blocks = []
         self.up_block_types = up_block_types
@@ -214,7 +217,7 @@ class UNet2DConditionModel:
             self.up_blocks.append(up_block)
             input_height = up_block.output_height
             input_width = up_block.output_width
-            logger.info(f"UP{i}: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
+            print(f"UP{i}: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
 
         parameters.conv_out.weight, parameters.conv_out.bias = permute_conv_weights(
             parameters.conv_out.weight, parameters.conv_out.bias
@@ -222,35 +225,38 @@ class UNet2DConditionModel:
         parameters.conv_out.bias = torch.reshape(
             parameters.conv_out.bias, (1, 1, 1, parameters.conv_out.bias.shape[-1])
         )
-        tt_weight_tensor = ttnn.from_torch(parameters.conv_out.weight, ttnn.float32)
-        tt_bias_tensor = ttnn.from_torch(parameters.conv_out.bias, ttnn.float32)
-        out_channels = parameters.conv_out.weight.shape[0]
-        in_channels = parameters.conv_out.weight.shape[1]
+        self.conv_out_weights = ttnn.from_torch(parameters.conv_out.weight, ttnn.float32)
+        self.conv_out_bias = ttnn.from_torch(parameters.conv_out.bias, ttnn.float32)
 
-        logger.info(f"COU: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
-        self.conv_out = ttnn.Conv2d(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=(3, 3),
-            stride=(1, 1),
-            padding=(1, 1),
-            dtype=ttnn.bfloat8_b,
-            device=device,
-            use_1d_systolic_array=True,
-            batch_size=batch_size,
-            input_height=input_height,
-            input_width=input_width,
-            reader_patterns_cache=reader_patterns_cache,
-            weight=tt_weight_tensor,
-            bias=tt_bias_tensor,
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            weights_dtype=ttnn.bfloat8_b,
-            conv_blocking_and_parallelization_config_override={"act_block_h": 64},
-            use_shallow_conv_variant=False,
-            # enable_auto_formatting=True,
-            deallocate_activation=True,
-            compute_kernel_config=conv_compute_kernel_config,
-        )
+        self.conv_out_out_channels = parameters.conv_out.weight.shape[0]
+        self.conv_out_in_channels = parameters.conv_out.weight.shape[1]
+        self.conv_out_input_height = input_height
+        self.conv_out_input_width = input_width
+
+        print(f"COU: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
+        # self.conv_out = ttnn.Conv2d(
+        #     in_channels=in_channels,
+        #     out_channels=out_channels,
+        #     kernel_size=(3, 3),
+        #     stride=(1, 1),
+        #     padding=(1, 1),
+        #     dtype=ttnn.bfloat8_b,
+        #     device=device,
+        #     use_1d_systolic_array=True,
+        #     batch_size=batch_size,
+        #     input_height=input_height,
+        #     input_width=input_width,
+        #     reader_patterns_cache=reader_patterns_cache,
+        #     weight=self.conv_out_weights,
+        #     bias=self.conv_out_bias,
+        #     math_fidelity=ttnn.MathFidelity.LoFi,
+        #     weights_dtype=ttnn.bfloat8_b,
+        #     conv_blocking_and_parallelization_config_override={"act_block_h": 64},
+        #     use_shallow_conv_variant=False,
+        #     # enable_auto_formatting=True,
+        #     deallocate_activation=True,
+        #     compute_kernel_config=conv_compute_kernel_config,
+        # )
 
         self.fallback_on_groupnorm = os.environ.get("FALLBACK_ON_GROUPNORM", "0") == "1"
         self.norm_num_groups = 32
@@ -259,7 +265,7 @@ class UNet2DConditionModel:
             self.group_norm_core_grid,
         ) = ttnn.determine_expected_group_norm_sharded_config_and_grid_size(
             device=self.device,
-            num_channels=in_channels,
+            num_channels=self.conv_out_in_channels,
             num_groups=self.norm_num_groups,
             input_nhw=batch_size * input_height * input_width,
             is_height_sharded=False,
@@ -280,10 +286,10 @@ class UNet2DConditionModel:
                 num_cores_across_channel = int(self.group_norm_core_grid.x * self.group_norm_core_grid.y)
 
             self.parameters.conv_norm_out.weight = ttnn.create_group_norm_weight_bias_rm(
-                ttnn.to_torch(self.parameters.conv_norm_out.weight), self.conv_out.in_channels, num_cores_across_channel
+                ttnn.to_torch(self.parameters.conv_norm_out.weight), self.conv_out_in_channels, num_cores_across_channel
             )
             self.parameters.conv_norm_out.bias = ttnn.create_group_norm_weight_bias_rm(
-                ttnn.to_torch(self.parameters.conv_norm_out.bias), self.conv_out.in_channels, num_cores_across_channel
+                ttnn.to_torch(self.parameters.conv_norm_out.bias), self.conv_out_in_channels, num_cores_across_channel
             )
             self.parameters.conv_norm_out.weight = ttnn.from_torch(
                 self.parameters.conv_norm_out.weight,
@@ -300,7 +306,7 @@ class UNet2DConditionModel:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             self.norm_input_mask_torch_tensor = ttnn.create_group_norm_input_mask(
-                self.conv_out.in_channels, self.norm_num_groups, num_cores_across_channel
+                self.conv_out_in_channels, self.norm_num_groups, num_cores_across_channel
             )
             self.norm_input_mask = ttnn.from_torch(
                 self.norm_input_mask_torch_tensor,
@@ -414,8 +420,37 @@ class UNet2DConditionModel:
         sample = ttnn.reshape(sample, (1, 1, sample.shape[0] * sample.shape[1] * sample.shape[2], sample.shape[3]))
         # sample in l1 interelaved and tiled and nhwc
 
-        sample = ttnn.to_memory_config(sample, self.conv_in.conv.input_sharded_memory_config)
-        sample = self.conv_in(sample)
+        # sample = ttnn.to_memory_config(sample, self.conv_in.conv.input_sharded_memory_config)
+        # sample = self.conv_in(sample)
+        out_channels = self.parameters.conv_in.weight.shape[0]
+        in_channels = self.parameters.conv_in.weight.shape[1]
+
+        conv_config = ttnn.Conv2dConfig(
+            dtype=ttnn.bfloat8_b,
+            weights_dtype=ttnn.bfloat8_b,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            activation=None,
+            height_sharding=True if in_channels < 320 else False,
+            input_channels_alignment=32,
+        )
+
+        [sample, _out_height, _out_width, _dev_weights, _dev_bias] = ttnn.conv2d(
+            input_tensor=sample,
+            weight_tensor=self.conv_in_weights,
+            bias_tensor=self.conv_in_bias,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=(3, 3),
+            stride=(1, 1),
+            padding=(1, 1),
+            device=self.device,
+            batch_size=self.batch_size,
+            input_height=self.input_height,
+            input_width=self.input_width,
+            conv_config=conv_config,
+            conv_op_cache=conv_cache,
+            reshard_if_not_optimal=True,
+        )
         sample = ttnn.reallocate(sample)  # TODO: Test remove
 
         # con_in completes
@@ -432,7 +467,7 @@ class UNet2DConditionModel:
         output_channel = block_out_channels[0]
         for i, (down_block_type, down_block) in enumerate(zip(self.down_block_types, self.down_blocks)):
             ttl.device.DumpDeviceProfiler(self.device)
-            logger.info(f"Down block {i}")
+            print(f"Down block {i}")
             input_channel = output_channel
             output_channel = block_out_channels[i]
             is_final_block = i == len(block_out_channels) - 1
@@ -486,7 +521,7 @@ class UNet2DConditionModel:
             down_block_res_samples += res_samples
 
         # 4.mid
-        logger.info("Mid block")
+        print("Mid block")
         sample = self.mid_block(
             hidden_states=sample,
             temb=emb,
@@ -517,7 +552,7 @@ class UNet2DConditionModel:
         output_channel = reversed_block_out_channels[0]
         for i, (up_block_type, up_block) in enumerate(zip(self.up_block_types, self.up_blocks)):
             ttl.device.DumpDeviceProfiler(self.device)
-            logger.info(f"Up block {i}")
+            print(f"Up block {i}")
             is_final_block = i == len(block_out_channels) - 1
 
             prev_output_channel = output_channel
@@ -538,6 +573,10 @@ class UNet2DConditionModel:
 
             if not is_final_block and forward_upsample_size:
                 upsample_size = down_block_res_samples[-1].shape[2:]
+
+            print(f"Sample Shape = {sample.shape}")
+            for _this in res_samples:
+                print(f"Res Sample Shape = {_this.shape}")
 
             if up_block_type == "CrossAttnUpBlock2D":
                 # sample = ttnn.reallocate(sample)
@@ -591,6 +630,8 @@ class UNet2DConditionModel:
                 ), f"CrossAttnUpBlock2D, and UpBlock2D are the only up blocks implemented! you requested {up_block_type}"
 
         # 6.post-process
+        # print(sample.shape)
+        # print(sample.memory_config())
         sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
         if self.fallback_on_groupnorm:
             assert self.norm_num_groups == norm_num_groups
@@ -598,10 +639,10 @@ class UNet2DConditionModel:
             sample = ttnn.reshape(
                 sample,
                 (
-                    self.conv_out.batch_size,
-                    self.conv_out.input_height,
-                    self.conv_out.input_width,
-                    self.conv_out.in_channels,
+                    self.batch_size,
+                    self.conv_out_input_height,
+                    self.conv_out_input_width,
+                    self.conv_out_in_channels,
                 ),
             )
             sample = ttnn.permute(sample, (0, 3, 1, 2))
@@ -620,10 +661,10 @@ class UNet2DConditionModel:
             sample = ttnn.reshape(
                 sample,
                 (
-                    self.conv_out.batch_size,
+                    self.batch_size,
                     1,
-                    self.conv_out.input_height * self.conv_out.input_width,
-                    self.conv_out.in_channels,
+                    self.conv_out_input_height * self.conv_out_input_width,
+                    self.conv_out_in_channels,
                 ),
             )
             sample = ttnn.group_norm(
@@ -641,23 +682,50 @@ class UNet2DConditionModel:
             (
                 1,
                 1,
-                self.conv_out.batch_size * self.conv_out.input_height * self.conv_out.input_width,
-                self.conv_out.in_channels,
+                self.batch_size * self.conv_out_input_height * self.conv_out_input_width,
+                self.conv_out_in_channels,
             ),
         )
-        if ttnn.get_memory_config(sample) != self.conv_out.conv.input_sharded_memory_config:
-            sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
-            sample = ttnn.to_memory_config(sample, self.conv_out.conv.input_sharded_memory_config)
+        # if ttnn.get_memory_config(sample) != self.conv_out_conv.input_sharded_memory_config:
+        #     sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
+        #     sample = ttnn.to_memory_config(sample, self.conv_out_conv.input_sharded_memory_config)
         sample = ttnn.silu(sample, memory_config=ttnn.get_memory_config(sample))
-        sample = self.conv_out(sample)
+        sample = ttnn.experimental.tensor.sharded_to_interleaved(sample, ttnn.L1_MEMORY_CONFIG, sample.dtype)
+        # sample = self.conv_out(sample)
+        conv_config = ttnn.Conv2dConfig(
+            dtype=ttnn.bfloat8_b,
+            weights_dtype=ttnn.bfloat8_b,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            activation=None,
+            height_sharding=True,
+            input_channels_alignment=32,
+            act_block_h=64,
+        )
+        [sample, _out_height, _out_width, _dev_weights, _dev_bias] = ttnn.conv2d(
+            input_tensor=sample,
+            in_channels=self.conv_out_in_channels,
+            out_channels=self.conv_out_out_channels,
+            kernel_size=(3, 3),
+            stride=(1, 1),
+            padding=(1, 1),
+            device=self.device,
+            batch_size=self.batch_size,
+            input_height=self.conv_out_input_height,
+            input_width=self.conv_out_input_width,
+            weight_tensor=self.conv_out_weights,
+            bias_tensor=self.conv_out_bias,
+            reshard_if_not_optimal=True,
+            conv_config=conv_config,
+            conv_op_cache=conv_cache,
+        )
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.clone(sample, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
         sample = ttnn.reshape(
             sample,
             (
-                self.conv_out.batch_size,
-                self.conv_out.input_height,
-                self.conv_out.input_width,
+                self.batch_size,
+                self.conv_out_input_height,
+                self.conv_out_input_width,
                 32,  # Padded to tile dim
             ),
         )

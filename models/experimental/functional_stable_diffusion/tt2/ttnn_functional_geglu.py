@@ -85,6 +85,15 @@ class geglu:
     def __call__(self, config, hidden_states):
         # TODO: Output sharded once https://github.com/tenstorrent/tt-metal/issues/6775 is fixed
         interleaved_output = False
+        print(
+            "Geglu Input ",
+            hidden_states.shape,
+            hidden_states.layout,
+            hidden_states.memory_config(),
+            "sharded = ",
+            hidden_states.is_sharded(),
+        )
+
         size = hidden_states.shape[-2]
         grid_size = self.grid_sizes[size]
         M, K, N = hidden_states.shape[-2], hidden_states.shape[-1], self.parameters.proj.proj_weight.shape[-1]

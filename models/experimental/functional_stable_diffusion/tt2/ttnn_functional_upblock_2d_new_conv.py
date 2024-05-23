@@ -5,8 +5,8 @@
 import torch
 import ttnn
 
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_resnetblock2d import resnetBlock2D
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upsample_2d import upsample2d
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
+from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upsample_2d_new_conv import upsample2d
 
 
 class upblock_2d:
@@ -33,6 +33,7 @@ class upblock_2d:
 
         self.output_height = self.upsample_2d.output_height
         self.output_width = self.upsample_2d.output_width
+        print(f"Upblock Input = {input_height}x{input_width} Output = {self.output_height}x{self.output_width}")
 
     def __call__(
         self,
