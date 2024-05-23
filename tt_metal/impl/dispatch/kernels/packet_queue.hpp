@@ -410,6 +410,7 @@ protected:
     uint16_t curr_packet_src;
     uint16_t curr_packet_dest;
     uint32_t curr_packet_size_words;
+    uint32_t end_of_cmd;
     uint32_t curr_packet_words_sent;
     uint32_t curr_packet_tag;
     uint16_t curr_packet_flags;
@@ -423,7 +424,9 @@ protected:
                     (this->queue_start_addr_words + this->get_queue_rptr_sent_offset_words())*PACKET_WORD_SIZE_BYTES
                 );
             this->curr_packet_header_ptr = next_packet_header_ptr;
-            uint32_t packet_size_bytes = next_packet_header_ptr->packet_size_bytes;
+            uint32_t packet_size_and_flags = next_packet_header_ptr->packet_size_bytes;
+            uint32_t packet_size_bytes = packet_size_and_flags & 0xFFFFFFFE;
+            this->end_of_cmd = !(packet_size_and_flags & 1);
             this->curr_packet_size_words = packet_size_bytes/PACKET_WORD_SIZE_BYTES;
             if (packet_size_bytes % PACKET_WORD_SIZE_BYTES) {
                 this->curr_packet_size_words++;
@@ -487,6 +490,10 @@ public:
         this->reset_queue_local_rptr_cleared();
         this->reset_queue_local_wptr();
         this->reset_ready_flag();
+    }
+
+    inline uint32_t get_end_of_cmd() const {
+        return this->end_of_cmd;
     }
 
     inline bool is_packetizer_input() const {
@@ -863,7 +870,7 @@ public:
         return num_words_to_forward;
     }
 
-    inline uint32_t forward_data_from_input(uint32_t input_queue_index, bool& full_packet_sent) {
+    inline uint32_t forward_data_from_input(uint32_t input_queue_index, bool& full_packet_sent, uint32_t end_of_cmd) {
 
         packet_input_queue_state_t* input_queue_ptr = &(this->input_queue_status.input_queue_array[input_queue_index]);
         uint32_t num_words_to_forward = this->get_num_words_to_send(input_queue_index);
@@ -894,7 +901,7 @@ public:
             this->remote_wptr_update(num_words_to_forward);
         } else {
             this->unpacketizer_page_words_sent += num_words_to_forward;
-            if (full_packet_sent) {
+            if (full_packet_sent && end_of_cmd) {
                 uint32_t unpacketizer_page_words_sent_past_page_bound =
                     this->unpacketizer_page_words_sent & (this->cb_mode_page_size_words - 1);
                 if (unpacketizer_page_words_sent_past_page_bound > 0) {

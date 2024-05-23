@@ -59,11 +59,15 @@ run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 
 
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -x -spre" # Smoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -x -spre -sdis" # Smoke Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 5 -x -spre -sdis" # Random Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 6 -i 5 -x -spre -sdis" # Host Test
 
 if [[ $ARCH_NAME == "wormhole_b0" ]]; then
     # packetized path used only on multi-chip WH
     run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 5 -spre -sdis -packetized_en" # TrueSmoke Test with packetized path
     run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -spre -sdis -packetized_en" # Smoke Test with packetized path
+    run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 5 -spre -sdis -packetized_en" # Random Test with packetized path
+    run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 6 -i 5 -spre -sdis -packetized_en" # Host Test with packetized path
 fi
 
 

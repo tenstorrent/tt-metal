@@ -185,7 +185,7 @@ void kernel_main() {
         }
         if (input_queues[curr_input].get_curr_packet_valid()) {
             bool full_packet_sent;
-            uint32_t words_sent = output_queue.forward_data_from_input(curr_input, full_packet_sent);
+            uint32_t words_sent = output_queue.forward_data_from_input(curr_input, full_packet_sent, input_queues[curr_input].get_end_of_cmd());
             data_words_sent += words_sent;
             if ((words_sent > 0) && (timeout_cycles > 0)) {
                 progress_timestamp = get_timestamp_32b();
