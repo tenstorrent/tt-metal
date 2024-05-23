@@ -92,15 +92,16 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         split_work_to_cores(compute_with_storage_grid_size, num_rows, row_major);
 
     num_rows_per_core = num_rows_per_core_group_1; // Will always find equal split
+    uint32_t num_sin_cos_rows_per_core = max((uint32_t) 1, (uint32_t) (Ht / num_cores));
 
     uint32_t input_cb_index = CB::c_in0;
     tt_metal::CircularBufferConfig cb_input_config =
         tt_metal::CircularBufferConfig(
-            num_input_tiles * input_single_tile_size, {{input_cb_index, input_cb_data_format}})
+            num_sin_cos_rows_per_core * num_input_tiles * input_single_tile_size, {{input_cb_index, input_cb_data_format}})
             .set_page_size(input_cb_index, input_single_tile_size);
     auto cb_input = tt_metal::CreateCircularBuffer(program, all_cores, cb_input_config);
 
-    uint32_t num_cos_sin_tiles = 2 * Wt;
+    uint32_t num_cos_sin_tiles = 2 * Wt * num_sin_cos_rows_per_core;
 
     uint32_t cos_cb_index = CB::c_in1;
     tt_metal::CircularBufferConfig cb_cos_config =
@@ -164,7 +165,6 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     bool sin_is_dram = sin_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool trans_mat_is_dram = trans_mat_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 
-    uint32_t num_sin_cos_rows_per_core = max((uint32_t) 1, (uint32_t) (Ht / num_cores));
 
 
     std::vector<uint32_t> reader_compile_time_args = {

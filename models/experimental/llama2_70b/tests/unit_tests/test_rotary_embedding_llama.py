@@ -195,7 +195,7 @@ def run_test_rotary_embedding_llamma(
         (1, 512),
         (1, 2048),
         (1, 4096),
-        # (1, 8192),
+        (1, 8192),
     ),
     ids=(
         "prefill_128",
@@ -203,7 +203,7 @@ def run_test_rotary_embedding_llamma(
         "prefill_512",
         "prefill_2k",
         "prefill_4k",
-        # "prefill_8k",
+        "prefill_8k",
     ),
 )
 @pytest.mark.parametrize(
