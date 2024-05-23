@@ -117,7 +117,7 @@ inline ttnn::Tensor empty_like(
 }
 
 struct Full {
-    static ttnn::Tensor execute(
+    static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Shape& shape,
         const float fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
@@ -127,7 +127,7 @@ struct Full {
         return full(shape, fill_value, dtype, layout, device, memory_config);
     }
 
-    static ttnn::Tensor execute(
+    static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Shape& shape,
         const int fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
@@ -139,7 +139,7 @@ struct Full {
 };
 
 struct FullLike {
-    static ttnn::Tensor execute(
+    static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& tensor,
         const float fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
@@ -149,7 +149,7 @@ struct FullLike {
         return full_like(tensor, fill_value, dtype, layout, device, memory_config);
     }
 
-    static ttnn::Tensor execute(
+    static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& tensor,
         const int fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
@@ -161,15 +161,15 @@ struct FullLike {
 };
 
 struct Arange {
-    static ttnn::Tensor execute(
+    static ttnn::Tensor execute_on_worker_thread(
         const int64_t stop,
         const DataType dtype = ttnn::bfloat16,
         const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
         const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
-        return Arange::execute(0, stop, 1, dtype, device, memory_config);
+        return Arange::execute_on_worker_thread(0, stop, 1, dtype, device, memory_config);
     }
 
-    static ttnn::Tensor execute(
+    static ttnn::Tensor execute_on_worker_thread(
         const int64_t start,
         const int64_t stop,
         const int64_t step = 1,

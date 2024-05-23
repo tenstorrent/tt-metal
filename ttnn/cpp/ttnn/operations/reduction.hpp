@@ -38,7 +38,7 @@ struct Reduce {
         return std::forward_as_tuple(input_tensor);
     }
 
-    static Tensor execute(
+    static Tensor execute_on_worker_thread(
         const Tensor& input_tensor_arg,
         const std::optional<std::variant<int, std::vector<int>>>& dim_arg,
         const bool keepdim,

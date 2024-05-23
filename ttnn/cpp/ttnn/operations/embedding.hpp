@@ -31,7 +31,7 @@ struct Embedding {
         return std::forward_as_tuple(input_tensor, weight);
     }
 
-    static Tensor execute(
+    static Tensor execute_on_worker_thread(
         const Tensor& input_tensor_arg,
         const Tensor& weight_arg,
         const std::optional<int>& pad_token = std::nullopt,

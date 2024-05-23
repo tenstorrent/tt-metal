@@ -46,7 +46,7 @@ struct ToMemoryConfig {
     }
 
     // TODO: Move to cpp once we merge with tt_eager
-    static Tensor execute(
+    static Tensor execute_on_worker_thread(
         const ttnn::Tensor& tensor, const ttnn::MemoryConfig& memory_config, std::optional<ttnn::DataType> dtype) {
         // Temporary until we see why buffer data not being populated
         const auto original_shape = tensor.get_shape();
