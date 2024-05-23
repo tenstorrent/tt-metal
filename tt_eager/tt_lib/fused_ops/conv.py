@@ -8,11 +8,6 @@ from ..utils import _nearest_32, _nearest_y
 import torch
 from loguru import logger
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_equal,
-    comp_pcc,
-)
-
 
 def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
     """

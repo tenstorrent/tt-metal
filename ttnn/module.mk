@@ -1,4 +1,8 @@
+ifeq ($(TT_METAL_CREATE_STATIC_LIB), 1)
 TTNN_LIB = $(LIBDIR)/libttnn.a
+else
+TTNN_LIB = $(LIBDIR)/libttnn.so
+endif
 TTNN_PYBIND11_LIB = $(LIBDIR)/_ttnn.so
 TTNN_PYBIND11_LOCAL_SO = ttnn/ttnn/_ttnn.so
 
@@ -37,9 +41,16 @@ endif
 
 ttnn: $(TTNN_LIBS_TO_BUILD)
 
-$(TTNN_LIB): $(TTNN_OBJS) $(TT_DNN_LIB) $(TENSOR_LIB) $(TT_METAL_LIB) $(TT_LIB_LIB)
+ifeq ($(TT_METAL_CREATE_STATIC_LIB), 1)
+# If production build, release all of ttnn as a full static library for later build with Eager wheel
+$(TTNN_LIB): $(TTNN_OBJS) $(TT_DNN_LIB) $(TENSOR_LIB) $(DTX_LIB) $(TT_METAL_LIB) tt_eager/tt_lib
 	@mkdir -p $(LIBDIR)
 	ar rcs -o $@ $(TTNN_OBJS)
+else
+$(TTNN_LIB): $(TTNN_OBJS) $(TT_DNN_LIB) $(TENSOR_LIB) $(DTX_LIB) $(TT_METAL_LIB) tt_eager/tt_lib
+	@mkdir -p $(LIBDIR)
+	$(CXX) $(TTNN_CFLAGS) $(CXXFLAGS) $(SHARED_LIB_FLAGS) -o $@ $(TTNN_OBJS) $(TTNN_LDFLAGS)
+endif
 
 $(TTNN_PYBIND11_LIB): $(TTNN_PYBIND11_OBJS) $(TTNN_LIB)
 	@mkdir -p $(LIBDIR)
