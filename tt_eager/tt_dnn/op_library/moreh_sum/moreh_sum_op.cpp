@@ -54,7 +54,7 @@ Tensor _moreh_sum(
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE);
-    auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config);
+    auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
     operation::launch_op(
         [dim, output_mem_config, kernel_config_val](
