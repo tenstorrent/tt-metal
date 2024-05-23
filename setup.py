@@ -107,18 +107,18 @@ class CMakeBuild(build_ext):
             **os.environ.copy(),
             "TT_METAL_HOME": Path(__file__).parent,
             "TT_METAL_ENV": "production",
-            # Need to create static lib for tt_metal runtime because currently
-            # we package it with the wheel at the moment
-            # Update:
-            # If use dynamic link, then the code of README.md#using-tt-nn-ops-and-tensors
-            # will hang on `output = ttnn.to_torch(output)`
-            # I think the root cause is because `ttnn.manage_device`
-            # directly binding the libtt_metal from _ttnn.so,
-            # but the ttnn.from_torch is calling the tt_lib python API,
-            # and it call the libtt_metal from libtt_lib_csrc.so
-            # If both libtt_lib_csrc.so and _ttnn.so use static link,
-            # then they both has its own libtt_metal,
-            # which may cause problem of some singleton design
+            # Currently, the ttnn (ttnn/_ttnn.so) and tt_lib (tt_lib/_C.so)
+            # both link to the tt_metal runtime. The specific thing in
+            # ttnn linking to tt_metal is likely the implementation of
+            # ttnn.manage_device.
+            # However, because of the singleton design of
+            # tt_cluster in tt_metal, both tt_lib and ttnn will have a
+            # copy of the cluster object, causing a hang during
+            # device operations in ttnn, such as calling
+            # output = ttnn.to_torch(output).
+            # Ultimately, we will not statically build tt_metal, and
+            # opt to dynamically set rpath of the bindings to the
+            # packaged libs for now.
             "TT_METAL_CREATE_STATIC_LIB": "0",
         }
 

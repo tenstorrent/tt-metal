@@ -8,7 +8,8 @@
     "libboost-all-dev=1.71.0.0ubuntu2",
     "libsndfile1=1.0.28-7ubuntu0.2",
     "libhwloc-dev",
-    "graphviz"
+    "graphviz",
+    "patchelf"
   ],
   "ubuntu-22.04": [
     "software-properties-common",
@@ -18,6 +19,7 @@
     "libboost-all-dev",
     "libsndfile1",
     "libhwloc-dev",
-    "graphviz"
+    "graphviz",
+    "patchelf"
   ]
 }
