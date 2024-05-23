@@ -114,9 +114,7 @@ Tensor selu(
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 Tensor celu(
-    const Tensor& x,
-    float alpha,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const Tensor& x, float alpha, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // Function Swish = same as SILU
 // use transformation y = x * sigmoid( x ) by broadcast
@@ -185,6 +183,8 @@ Tensor div(
     bool accurate_mode = false,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor trunc(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 Tensor floor_div(
     const Tensor& input_a,
     const Tensor& input_b,
@@ -223,13 +223,12 @@ Tensor logical_noti(
     float immediate,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-//prod
+// prod
 Tensor prod(
     const Tensor& input_a,
     bool all_dimensions = false,
     int64_t dim = 0,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 
 /*
 Returns a new tensor with the signed angles in radians between vectors
