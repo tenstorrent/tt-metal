@@ -584,6 +584,10 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_floor,
         "pytorch_op": pytorch_ops.unary_floor,
     },
+    "eltwise-trunc": {
+        "tt_op": tt_lib_ops.eltwise_trunc,
+        "pytorch_op": pytorch_ops.trunc,
+    },
     "eltwise-rpow": {
         "tt_op": tt_lib_ops.eltwise_rpow,
         "pytorch_op": pytorch_ops.eltwise_rpow,
