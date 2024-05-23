@@ -239,15 +239,21 @@ void TensorModule(py::module& m_tensor) {
     auto pyCoreRange = py::class_<CoreRange>(m_tensor, "CoreRange", R"doc(
         Class defining a range of cores)doc");
     pyCoreRange.def(py::init<>([](const CoreCoord& start, const CoreCoord& end) { return CoreRange{start, end}; }))
-        .def("__repr__", [](const CoreRange& core_range) -> std::string { return fmt::format("{}", core_range); });
+        .def("__repr__", [](const CoreRange& core_range) -> std::string { return fmt::format("{}", core_range); })
+        .def_readonly("start", &CoreRange::start)
+        .def_readonly("end", &CoreRange::end)
+        .def("grid_size", &CoreRange::grid_size);
 
     auto pyCoreRangeSet = py::class_<CoreRangeSet>(m_tensor, "CoreRangeSet", R"doc(
         Class defining a set of CoreRanges required for sharding)doc");
     pyCoreRangeSet.def(py::init<>([](const std::set<CoreRange>& core_ranges) { return CoreRangeSet(core_ranges); }))
-        .def("__repr__", [](const CoreRangeSet& core_range_set) -> std::string {
-            return fmt::format("{}", core_range_set);
-        })
-        .def("bounding_box", &CoreRangeSet::bounding_box, "Returns a CoreRange i.e. bounding box covering all the core ranges in the CoreRangeSet")
+        .def(
+            "__repr__",
+            [](const CoreRangeSet& core_range_set) -> std::string { return fmt::format("{}", core_range_set); })
+        .def(
+            "bounding_box",
+            &CoreRangeSet::bounding_box,
+            "Returns a CoreRange i.e. bounding box covering all the core ranges in the CoreRangeSet")
         .def("num_cores", &CoreRangeSet::num_cores, "Returns total number of cores in the CoreRangeSet");
 
     m_tensor.def(
