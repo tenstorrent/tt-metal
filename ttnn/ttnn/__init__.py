@@ -8,6 +8,7 @@ import json
 import os
 import pathlib
 import pprint
+import subprocess
 from typing import Optional
 
 from loguru import logger
@@ -125,34 +126,6 @@ if CONFIG_PATH is not None:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         save_config_to_json_file(CONFIG_PATH)
 
-
-def _check__ttnn_so_rpath():
-    directory = pathlib.Path(__file__).parent
-    check_f = directory / ".rpath_checked"
-    if os.path.exists(check_f):
-        return
-    target_so = None
-    for f in os.listdir(directory):
-        if f.startswith("_ttnn") and f.endswith(".so"):
-            target_so = directory / f
-            break
-    if not target_so:
-        return
-    import subprocess
-
-    def has_not_found(target_so):
-        if not os.path.exists(target_so):
-            return False
-        cmd = f"ldd {target_so}"
-        result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
-        return "not found" in result.stdout
-
-    if has_not_found(target_so):
-        new_rpath = directory / ".." / "tt_lib" / "build" / "lib"
-        subprocess.check_call(f"patchelf --set-rpath {new_rpath} {target_so}", shell=True)
-    subprocess.check_call(f"touch {check_f}", shell=True)
-
-
 if CONFIG_OVERRIDES is not None:
     logger.debug(f"Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES")
     load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
@@ -160,7 +133,7 @@ if CONFIG_OVERRIDES is not None:
 
 import tt_lib as _tt_lib
 
-_check__ttnn_so_rpath()
+_tt_lib._check_so_rpath("_ttnn", pathlib.Path(__file__).parent.parent / "tt_lib" / "build" / "lib")
 import ttnn._ttnn
 
 logger.debug(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))}")
