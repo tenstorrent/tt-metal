@@ -59,7 +59,10 @@ def _check_so_rpath_in_build_lib():
 site_pkgs_tt_lib = Path(__file__).parent
 
 if "ARCH_NAME" not in os.environ or os.environ["ARCH_NAME"] == "":
-    os.environ["ARCH_NAME"] = "grayskull"
+    arch_name_file = site_pkgs_tt_lib / ".ARCH_NAME"
+    if os.path.isfile(arch_name_file):
+        with open(arch_name_file) as f:
+            os.environ["ARCH_NAME"] = f.readline().strip()
 if "TT_METAL_HOME" not in os.environ or os.environ["TT_METAL_HOME"] == "":
     # Workaround: treat $SITE_PACKAGES as TT_METAL_HOME
     os.environ["TT_METAL_HOME"] = str(site_pkgs_tt_lib.parent)
