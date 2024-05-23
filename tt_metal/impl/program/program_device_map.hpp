@@ -39,7 +39,3 @@ struct ProgramTransferInfo {
     std::unordered_map<uint32_t, vector<transfer_info_2>> unicast_semaphores;      // WritePacked, sorted by dst
     vector<kernel_bins_transfer_info> kernel_bins;                                 // RelayPaged, WriteLinear
 };
-
-struct ProgramCommandIndices {
-    std::uint32_t cb_configs_payload_start;    // device_commands
-};

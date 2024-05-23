@@ -29,9 +29,10 @@ Add `tt_eager/tt_dnn/op_library/<new_operation>/<new_operation>.hpp`:
         std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
         operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
 
-        static constexpr auto attribute_names = std::make_tuple();
+        // This is needed until we get C++20
+        static constexpr auto attribute_names = std::forward_as_tuple("some_arg");
         const auto attribute_values() const {
-            return std::make_tuple();
+            return std::forward_as_tuple(this->some_arg);
         }
     };
 
@@ -154,14 +155,6 @@ Add `tests/ttnn/sweep_tests/sweeps/ttl_<new_operation>.py`:
         "height": [384, 1024],
         "width": [1024, 4096],
     }
-
-
-    def skip(**_) -> Tuple[bool, Optional[str]]:
-        return False, None
-
-
-    def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
-        return False, None
 
 
     def run(

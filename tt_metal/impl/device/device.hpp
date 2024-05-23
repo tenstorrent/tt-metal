@@ -238,7 +238,8 @@ class Device {
     void set_worker_mode(const WorkExecutorMode& mode);
     void enable_async(bool enable);
     WorkExecutorMode get_worker_mode() { return work_executor.get_worker_mode(); }
-
+    void set_worker_queue_mode(const WorkerQueueMode& mode) { this->work_executor.set_worker_queue_mode(mode); }
+    WorkerQueueMode get_worker_queue_mode() { return this->work_executor.get_worker_queue_mode(); }
     // TODO: Uplift usage of friends. Buffer and Program just need access to allocator
     friend class Buffer;
     friend class Program;

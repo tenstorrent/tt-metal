@@ -31,7 +31,7 @@ run_perf_models_llm_javelin() {
     local tt_arch=$1
     local test_marker=$2
 
-    env pytest models/demos/falcon7b/tests -m $test_marker
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon7b/tests -m $test_marker
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
         env pytest models/demos/mamba/tests -m $test_marker
@@ -65,7 +65,7 @@ run_device_perf_models() {
     if [ "$tt_arch" == "grayskull" ]; then
         #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
         #Model Device perf regression tests to make sure thy run on no-soft-reset BMs
-        tests/scripts/run_profiler_regressions.sh PROFILER
+        tests/scripts/run_profiler_regressions.sh PROFILER_NO_RESET
 
         env pytest models/demos/metal_BERT_large_11/tests -m $test_marker
 

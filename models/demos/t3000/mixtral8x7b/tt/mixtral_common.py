@@ -5,6 +5,7 @@
 from loguru import logger
 import torch
 import ttnn
+from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 def precompute_freqs(dim: int, end: int, theta: float = 1000000.0):
@@ -48,7 +49,7 @@ def get_rotation_mat(dhead, end):
     return rot_mat
 
 
-def prepare_inputs_ttnn(x_bsh, hidden_size, devices):
+def prepare_inputs_ttnn(x_bsh, hidden_size, device_mesh):
     """
     Prepare inputs for decode mode.
     x: (batch, seq, hidden_dim)
@@ -64,25 +65,35 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, devices):
     assert seq_len == 1, "Only supporting decode mode"
 
     x_1SBH = x_bsh.view(1, seq_len, batch, hidden_size)
-    xs_1SBH = []
-    for device in devices:
-        xs_1SBH.append(ttnn.from_torch(x_1SBH, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
+
+    xs_1SBH = ttnn.from_torch(
+        x_1SBH,
+        device=device_mesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+    )
+    xs_1SBH = ttnn.to_device(xs_1SBH, device_mesh)
     return xs_1SBH
 
 
-def prepare_rotation_mat_ttnn(head_dim, max_seq_len, devices):
+def prepare_rotation_mat_ttnn(head_dim, max_seq_len, device_mesh):
     """
     Prepare rotation matricies for decode mode.
     """
     rot_mat = get_rotation_mat(dhead=head_dim, end=max_seq_len * 2)
-    rot_mats = []
-    for device in devices:
-        rot_mats.append(
-            [
-                ttnn.from_torch(rot_mat_i, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                for rot_mat_i in rot_mat
-            ]
+    rot_mats = [
+        ttnn.from_torch(
+            rot_mat_i,
+            device=device_mesh,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ReplicateTensorToMesh(device_mesh),
         )
+        for rot_mat_i in rot_mat
+    ]
+    rot_mats = [ttnn.to_device(rot_mat, device_mesh) for rot_mat in rot_mats]
+
     return rot_mats
 
 
@@ -110,22 +121,21 @@ def sample(logits: torch.Tensor, temperature: float, top_p: float):
     return next_token
 
 
-def cache_attention(devices, state_dict, model_args, rot_emb_matrix_list, seq_start, seq_len, dtype):
+def cache_attention(device_mesh, state_dict, model_args, rot_emb_matrix_list, seq_start, seq_len, dtype):
     logger.info(f"Caching attention ops for iterations {seq_start} to {seq_start + seq_len}...")
     from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
 
-    attention_inputs = [
-        ttnn.from_torch(
-            torch.randn(1, 1, 32, 4096),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        for device in devices
-    ]
+    attention_inputs = ttnn.from_torch(
+        torch.randn(1, 1, 32, 4096),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+    )
+
     tt_attn = TtMixtralAttention(
-        devices,
+        device_mesh,
         state_dict,
         model_args,
         layer_num=0,

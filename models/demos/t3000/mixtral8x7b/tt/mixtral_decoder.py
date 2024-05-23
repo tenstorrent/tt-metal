@@ -12,7 +12,7 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_moe import TtMoeLayer
 class TtTransformerBlock(torch.nn.Module):
     def __init__(
         self,
-        devices,
+        device_mesh,
         state_dict,
         args,
         layer_num,
@@ -21,25 +21,13 @@ class TtTransformerBlock(torch.nn.Module):
         super().__init__()
 
         self.state_dict = state_dict
-        self.devices = devices
-        self.num_devices = len(devices)
+        self.device_mesh = device_mesh
 
         self.args = args
-        self.hidden_size = args.dim
-        self.n_heads = args.n_heads
-        self.head_dim = self.hidden_size // self.n_heads
-        self.max_seq_len = args.max_seq_len
-        self.dim = args.dim
-        self.max_batch_size = args.max_batch_size
-        self.n_kv_heads = args.n_kv_heads
-        self.sliding_window = args.sliding_window
 
         self.layer_num = layer_num
-        self.n_local_heads = self.n_heads // len(devices)
-        self.n_local_kv_heads = self.n_kv_heads // len(devices)
-
         self.attention = TtMixtralAttention(
-            devices=devices,
+            device_mesh=device_mesh,
             state_dict=state_dict,
             args=args,
             layer_num=layer_num,
@@ -47,49 +35,40 @@ class TtTransformerBlock(torch.nn.Module):
         )
 
         self.feed_forward = TtMoeLayer(
-            devices=devices,
+            device_mesh=device_mesh,
             state_dict=state_dict,
-            experts=[
-                TtMixtralMLP(
-                    device=devices[i],
-                    state_dict=state_dict,
-                    args=args,
-                    layer_num=layer_num,
-                    expert_num=i,
-                    dtypes={
-                        "w1": ttnn.bfloat4_b,
-                        "w2": ttnn.bfloat8_b,
-                        "w3": ttnn.bfloat4_b,
-                    },
-                )
-                for i in range(args.num_experts)
-            ],
+            experts=TtMixtralMLP(
+                device_mesh=device_mesh,
+                state_dict=state_dict,
+                args=args,
+                layer_num=layer_num,
+                dtypes={
+                    "w1": ttnn.bfloat4_b,
+                    "w2": ttnn.bfloat8_b,
+                    "w3": ttnn.bfloat4_b,
+                },
+            ),
             args=args,
             layer_num=layer_num,
             dtype=dtype,
         )
-        self.attention_norm = [
-            TtRMSNormSharded(
-                device=dev,
-                state_dict=state_dict,
-                args=args,
-                dtype=ttnn.bfloat16,
-                layer_num=layer_num,
-                weight_key="attention_norm",
-            )
-            for dev in self.devices
-        ]
-        self.ffn_norm = [
-            TtRMSNormSharded(
-                device=dev,
-                state_dict=state_dict,
-                args=args,
-                dtype=ttnn.bfloat16,
-                layer_num=layer_num,
-                weight_key="ffn_norm",
-            )
-            for dev in self.devices
-        ]
+        self.attention_norm = TtRMSNormSharded(
+            device_mesh=device_mesh,
+            state_dict=state_dict,
+            args=args,
+            dtype=ttnn.bfloat16,
+            layer_num=layer_num,
+            weight_key="attention_norm",
+        )
+
+        self.ffn_norm = TtRMSNormSharded(
+            device_mesh=device_mesh,
+            state_dict=state_dict,
+            args=args,
+            dtype=ttnn.bfloat16,
+            layer_num=layer_num,
+            weight_key="ffn_norm",
+        )
 
     def forward(
         self,
@@ -105,9 +84,7 @@ class TtTransformerBlock(torch.nn.Module):
         1: unary dim
         H: hidden dim (4096)
         """
-        assert isinstance(xs_1SBH, list)
-
-        attn_norm_1SBH = [self.attention_norm[i](xs_1SBH[i]) for i in range(self.num_devices)]
+        attn_norm_1SBH = self.attention_norm(xs_1SBH)
 
         attn_1SBH = self.attention(
             attn_norm_1SBH,
@@ -115,10 +92,8 @@ class TtTransformerBlock(torch.nn.Module):
             current_pos,
             rot_mats,
         )
-        hs_1SBH = [ttnn.add(xs_1SBH[i], attn_1SBH[i]) for i in range(self.num_devices)]
-
-        ffn_norm_1SBH = [self.ffn_norm[i](hs_1SBH[i]) for i in range(self.num_devices)]
+        hs_1SBH = ttnn.add(xs_1SBH, attn_1SBH)
+        ffn_norm_1SBH = self.ffn_norm(hs_1SBH)
         ffn_1SBH = self.feed_forward(ffn_norm_1SBH)
-        out_1SBH = [ttnn.add(hs_1SBH[i], ffn_1SBH[i]) for i in range(self.num_devices)]
-
+        out_1SBH = ttnn.add(hs_1SBH, ffn_1SBH)
         return out_1SBH

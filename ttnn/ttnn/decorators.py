@@ -379,7 +379,6 @@ class Operation:
     postprocess_golden_function_outputs: callable
     is_cpp_function: bool
     is_experimental: bool
-    allow_to_fallback_to_golden_function_on_failure: bool
 
     def __gt__(self, other):
         return self.python_fully_qualified_name < other.python_fully_qualified_name
@@ -397,9 +396,6 @@ class Operation:
             self.postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
         )
 
-        self.will_fallback_to_golden_function_on_failure = (
-            self.allow_to_fallback_to_golden_function_on_failure and self.golden_function is not None
-        )
         if self.validate_input_tensors is not None:
             document_input_tensors(self.python_fully_qualified_name, function, self.validate_input_tensors)
 
@@ -558,7 +554,6 @@ class Operation:
                         f"{self.python_fully_qualified_name}: falling back to CPU due to {exception_message}"
                     )
                     output = golden_function(*function_args, **function_kwargs)
-
                 if ttnn.CONFIG.throw_exception_on_fallback and ran_golden_function:
                     raise RuntimeError(
                         f"Fallbacks are disabled, but {self.python_fully_qualified_name} used a fallback"
@@ -686,11 +681,7 @@ class Operation:
 
             return call_wrapper
 
-        if self.will_fallback_to_golden_function_on_failure:
-            function = fallback_to_golden_function_decorator(function)
-
         function = runtime_decorator(function)
-
         self.decorated_function = function
 
     def __call__(self, *function_args, **function_kwargs):
@@ -730,10 +721,15 @@ def query_registered_operations(include_experimental=False):
 
 
 OPERATION_TO_GOLDEN_FUNCTION = {}
+OPERATION_TO_FALLBACK_FUNCTION = {}
 
 
 def get_golden_function(operation):
     return OPERATION_TO_GOLDEN_FUNCTION[operation]
+
+
+def get_fallback_function(operation):
+    return OPERATION_TO_FALLBACK_FUNCTION[operation]
 
 
 def register_operation(
@@ -745,15 +741,26 @@ def register_operation(
     golden_function=None,
     preprocess_golden_function_inputs=None,
     postprocess_golden_function_outputs=None,
-    allow_to_fallback_to_golden_function_on_failure=False,
     doc=None,
 ):
     def operation_decorator(function: callable):
         global REGISTERED_APIS
         global OPERATION_TO_GOLDEN_FUNCTION
+        global OPERATION_TO_FALLBACK_FUNCTION
+
+        def fallback_function(*function_args, **function_kwargs):
+            preprocess_inputs = preprocess_golden_function_inputs or default_preprocess_golden_function_inputs
+            postprocess_outputs = postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
+
+            updated_function_args, updated_function_kwargs = preprocess_inputs(function_args, function_kwargs)
+            output = golden_function(*updated_function_args, **updated_function_kwargs)
+            output = postprocess_outputs(output, function_args, function_kwargs)
+
+            return output
 
         if ttnn.CONFIG.enable_fast_runtime_mode:
             OPERATION_TO_GOLDEN_FUNCTION[function] = golden_function
+            OPERATION_TO_FALLBACK_FUNCTION[function] = fallback_function
             return function
 
         is_cpp_function = hasattr(function, "__ttnn__")
@@ -788,7 +795,6 @@ def register_operation(
             postprocess_golden_function_outputs=postprocess_golden_function_outputs,
             is_cpp_function=is_cpp_function or is_experimental,
             is_experimental=is_experimental,
-            allow_to_fallback_to_golden_function_on_failure=allow_to_fallback_to_golden_function_on_failure,
         )
 
         if is_method:
@@ -806,6 +812,7 @@ def register_operation(
         REGISTERED_APIS.add(api)
 
         OPERATION_TO_GOLDEN_FUNCTION[api] = golden_function
+        OPERATION_TO_FALLBACK_FUNCTION[api] = fallback_function
 
         return api
 

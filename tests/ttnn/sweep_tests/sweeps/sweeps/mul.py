@@ -33,10 +33,6 @@ def skip(*, broadcast, input_b_layout, **_) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
 def run(
     batch_sizes,
     height,

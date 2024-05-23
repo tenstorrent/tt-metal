@@ -138,8 +138,12 @@ struct CQDispatchWritePagedCmd {
     uint32_t pages;
 } __attribute__((packed));
 
+
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE      = 0x00;
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST     = 0x01;
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE = 0x02;
 struct CQDispatchWritePackedCmd {
-    uint8_t is_multicast;
+    uint8_t flags;            // see above
     uint16_t count;           // number of sub-cmds (max 1020 unicast, 510 mcast). Max num sub-cmds = (dispatch_constants::TRANSFER_PAGE_SIZE - sizeof(CQDispatchCmd)) / sizeof(CQDispatchWritePacked*castSubCmd)
     uint32_t addr;            // common memory address across all packed SubCmds
     uint16_t size;            // size of each packet, stride is padded to L1 alignment and less than dispatch_cb_page_size
@@ -160,13 +164,13 @@ struct CQDispatchWaitCmd {
     uint8_t clear_count;      // if true, reset count to 0
     uint32_t addr;            // address to read
     uint32_t count;           // wait while address is < count
-};
+} __attribute__((packed));
 
 struct CQDispatchDelayCmd {
     uint8_t pad1;
     uint16_t pad2;
     uint32_t delay;
-};
+} __attribute__((packed));
 
 struct CQDispatchCmd {
     CQDispatchBaseCmd base;

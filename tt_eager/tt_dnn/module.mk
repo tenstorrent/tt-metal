@@ -44,6 +44,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/reduce/multi_core_w/reduce_op_multi_core_w.cpp \
 	tt_eager/tt_dnn/op_library/bcast/bcast_op.cpp \
 	tt_eager/tt_dnn/op_library/bcast/multi_core_h/bcast_op_multi_core_h.cpp \
+	tt_eager/tt_dnn/op_library/bcast/multi_core_h/bcast_op_sharded_h.cpp \
 	tt_eager/tt_dnn/op_library/bcast/multi_core_w/bcast_op_multi_core_w.cpp \
 	tt_eager/tt_dnn/op_library/bcast/multi_core_hw/bcast_op_multi_core_hw.cpp \
 	tt_eager/tt_dnn/op_library/bmm/bmm_op.cpp \
@@ -56,6 +57,8 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_optimized/bmm_op_multi_core_reuse_optimized.cpp \
 	tt_eager/tt_dnn/op_library/downsample/downsample_op.cpp \
 	tt_eager/tt_dnn/op_library/conv/conv_op.cpp \
+	tt_eager/tt_dnn/op_library/sliding_window_op_infra/sliding_window.cpp \
+	tt_eager/tt_dnn/op_library/sliding_window_op_infra/halo_op.cpp \
 	tt_eager/tt_dnn/op_library/conv/optimized_conv_op.cpp \
 	tt_eager/tt_dnn/op_library/conv/multi_core_optimized_conv/optimized_conv_op.cpp \
 	tt_eager/tt_dnn/op_library/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded.cpp \

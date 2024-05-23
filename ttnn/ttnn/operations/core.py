@@ -39,7 +39,6 @@ def _golden_function(input_tensor: ttnn.Tensor, slices):
     validate_input_tensors=_getitem_validate_input_tensors,
     is_method=True,
     golden_function=_golden_function,
-    allow_to_fallback_to_golden_function_on_failure=True,
 )
 def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     input_rank = len(input_tensor.shape)
@@ -69,7 +68,7 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
         if len(slices) > input_rank:
             raise RuntimeError(f"Too many slices for tensor of rank {input_rank}")
 
-    if ttnn.is_tensor_storage_on_device(input_tensor) and input_rank <= 4:
+    if input_rank <= 4:
         input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
 
         while len(slices) != 4:
@@ -89,7 +88,15 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
             output = input_tensor
         else:
             padded_slice_end_minus_1 = [x - 1 for x in padded_slice_end]
-            output = ttl.tensor.unpad(input_tensor, slice_start, padded_slice_end_minus_1)
+            if any([x < 0 for x in padded_slice_end_minus_1]):
+                raise RuntimeError("ttnn.Tensor.__getitem__: cannot return a scalar!")
+
+            if ttnn.is_tensor_storage_on_device(input_tensor):
+                output = ttl.tensor.unpad(input_tensor, slice_start, padded_slice_end_minus_1)
+            else:
+                input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+                output = input_tensor.unpad(slice_start, padded_slice_end_minus_1)
+                output = ttnn.to_layout(output, input_layout)
 
         output_shape = [end - start for (start, end) in zip(slice_start, slice_end)][-input_rank:]
         padded_output_shape = list(output.shape.with_tile_padding())[-input_rank:]
@@ -167,16 +174,20 @@ Example::
 
 """
 
-
+# Unsupported cases, which require a fallback: (found in bert, t5, bloom)
+# Shape([1, 128, 512])  <-> (1, 128, 8, 64)
+# Shape([1, 128, 384])  <-> (1, 128, 6, 64)
+# Shape([1, 384, 1024]) <-> (1, 384, 16, 64)
+# Shape([1, 11, 4096])  <-> (1, 11, 32, 128)
+# Shape([1, 128, 28, 28]) <-> (-1, 128)
+# Shape([1, 11, 32, 128]) <-> (1, 1, 11, -1) in ttnn_functional_attention.py test_mistral_attention_inference
 reshape = ttnn.register_operation(
     name="ttnn.reshape",
     golden_function=_golden_function,
     preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
     postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
-    allow_to_fallback_to_golden_function_on_failure=True,
     doc=doc,
 )(ttnn._ttnn.operations.core.reshape)
-
 
 # TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
 unsqueeze_to_4D = ttnn.register_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)

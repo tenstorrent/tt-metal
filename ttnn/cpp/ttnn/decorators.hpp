@@ -14,10 +14,21 @@ namespace decorators {
 
 namespace detail {
 
-template <typename T, typename = void>
-struct has_validate_api_arguments : std::false_type {};
+template <class T, class... args_t>
+using input_tensors_to_validate_return_t = decltype(T::input_tensors_to_validate(std::declval<args_t>()...));
+
+template <typename T, class... args_t>
+constexpr bool has_input_tensors_to_validate() {
+    return std::experimental::is_detected_v<input_tensors_to_validate_return_t, T, args_t&&...>;
+}
+
+template <class T>
+using input_tensor_schemas_t = decltype(T::input_tensor_schemas);
+
 template <typename T>
-struct has_validate_api_arguments<T, std::void_t<decltype(T::validate_api_arguments)>> : std::true_type {};
+constexpr bool has_input_tensor_schemas() {
+    return std::experimental::is_detected_v<input_tensor_schemas_t, T>;
+}
 
 template <class T, class... args_t>
 using execute_return_t = decltype(T::execute(std::declval<args_t>()...));
@@ -84,29 +95,52 @@ inline Tensors create_async_output_tensors(const Tensors& inputs, const Optional
     }
 }
 
+template <typename T, typename... TypeToCheck>
+constexpr bool is_any_of = (... || std::is_same_v<std::decay_t<T>, TypeToCheck>);
+
+template <typename T, typename... Include>
+constexpr auto conditional_tuple(T&& arg) {
+    if constexpr (is_any_of<T, Include...>) {
+        return std::forward_as_tuple(std::forward<T>(arg));
+    } else {
+        return std::tuple<>();
+    }
+}
+
+template <typename... Include, typename... Args>
+constexpr auto extract_args(Args&&... args) {
+    return std::tuple_cat(conditional_tuple<Args, Include...>(std::forward<Args>(args))...);
+}
+
 template <typename concrete_operation_t, typename... args_t>
 constexpr auto validate(const char* cpp_fully_qualified_name, args_t&&... args) {
-    if (ttnn::CONFIG.enable_fast_runtime_mode) {
-        return;
-    }
+    if constexpr (has_input_tensor_schemas<concrete_operation_t>()) {
+        if (ttnn::CONFIG.enable_fast_runtime_mode) {
+            return;
+        }
 
-    auto tensors_to_validate = concrete_operation_t::input_tensors_to_validate(std::forward<args_t>(args)...);
-    static_assert(
-        std::tuple_size_v<decltype(tensors_to_validate)> ==
-            std::tuple_size_v<decltype(concrete_operation_t::input_tensor_schemas())>,
-        "Number of tensors to validate must match the number of input tensors schemas");
-    if constexpr (std::tuple_size_v<decltype(tensors_to_validate)> > 0) {
-        [cpp_fully_qualified_name, &tensors_to_validate]<auto... Ns>(std::index_sequence<Ns...>) {
-            (ttnn::validate_input_tensor(
-                 cpp_fully_qualified_name,
-                 std::get<Ns>(tensors_to_validate),
-                 concrete_operation_t::input_tensor_schemas().at(Ns)),
-             ...);
-        }(std::make_index_sequence<std::tuple_size_v<decltype(tensors_to_validate)>>{});
-    }
+        constexpr auto input_tensors_to_validate = [](args_t&&... args) {
+            if constexpr (has_input_tensors_to_validate<concrete_operation_t, args_t&&...>()) {
+                return concrete_operation_t::input_tensors_to_validate(std::forward<args_t>(args)...);
+            } else {
+                return extract_args<Tensor, std::optional<const Tensor>>(std::forward<args_t>(args)...);
+            }
+        };
 
-    if constexpr (has_validate_api_arguments<concrete_operation_t>::value) {
-        concrete_operation_t::validate_api_arguments(std::forward<args_t>(args)...);
+        auto tensors_to_validate = input_tensors_to_validate(std::forward<args_t>(args)...);
+        static_assert(
+            std::tuple_size_v<decltype(tensors_to_validate)> ==
+                std::tuple_size_v<decltype(concrete_operation_t::input_tensor_schemas())>,
+            "Number of tensors to validate must match the number of input tensors schemas");
+        if constexpr (std::tuple_size_v<decltype(tensors_to_validate)> > 0) {
+            [cpp_fully_qualified_name, &tensors_to_validate]<auto... Ns>(std::index_sequence<Ns...>) {
+                (ttnn::validate_input_tensor(
+                     cpp_fully_qualified_name,
+                     std::get<Ns>(tensors_to_validate),
+                     concrete_operation_t::input_tensor_schemas().at(Ns)),
+                 ...);
+            }(std::make_index_sequence<std::tuple_size_v<decltype(tensors_to_validate)>>{});
+        }
     }
 }
 
@@ -167,6 +201,7 @@ void log(const std::string& prefix, args_t&&... args) {
     }
     std::apply([&fmt](const auto&... args) { tt::log_debug(tt::LogOp, fmt.c_str(), args...); }, args_tuple);
 }
+
 }  // namespace detail
 
 template <auto id, typename concrete_operation_t>
@@ -178,8 +213,8 @@ struct operation_t {
         ZoneScopedN("ttnn::decorators::operation_t::operator()");
         tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", this->cpp_fully_qualified_name);
 
-        //#8479: Fix and re-enable logging in cpp operation decorator
-        //detail::log("Arguments: ", std::forward<args_t>(args)...);
+        // #8479: Fix and re-enable logging in cpp operation decorator
+        // detail::log("Arguments: ", std::forward<args_t>(args)...);
 
         static_assert(
             detail::has_execute<concrete_operation_t, args_t&&...>() xor
@@ -278,13 +313,6 @@ constexpr auto register_operation(const char* name) {
 
 template <auto function>
 struct operation_without_validation_t {
-    static inline const auto input_tensor_schemas() { return std::make_tuple(); }
-
-    template <typename... args_t>
-    static auto input_tensors_to_validate(args_t&&... args) {
-        return std::make_tuple();
-    }
-
     template <typename... args_t>
     static auto execute_async(args_t&&... args) {
         return function(std::forward<args_t>(args)...);

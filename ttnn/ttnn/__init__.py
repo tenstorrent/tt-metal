@@ -15,7 +15,6 @@ from loguru import logger
 import tt_lib as _tt_lib
 import ttnn._ttnn
 
-
 CPP_CONFIG: ttnn._ttnn.core.Config = ttnn._ttnn.CONFIG
 
 
@@ -146,7 +145,7 @@ def manage_config(name, value):
     logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
 
 
-from ttnn._ttnn.multi_device import get_device_tensors, aggregate_as_tensor
+from ttnn._ttnn.multi_device import get_device_tensor, get_device_tensors, aggregate_as_tensor
 
 from ttnn.types import (
     TILE_SIZE,
@@ -224,6 +223,7 @@ from ttnn.core import (
     is_sharded,
     get_memory_config,
     create_sharded_memory_config,
+    create_sharded_memory_config_,
     dump_memory_config,
     load_memory_config,
     dump_stack_trace_on_segfault,
@@ -240,6 +240,7 @@ from ttnn.decorators import (
     register_pre_operation_hook,
     register_post_operation_hook,
     get_golden_function,
+    get_fallback_function,
 )
 
 import ttnn.experimental
@@ -464,7 +465,7 @@ from ttnn.operations.ccl import all_gather
 
 from ttnn.operations import transformer
 from ttnn.operations import kv_cache
-from ttnn.operations.conv2d import Conv2d
+from ttnn.operations.conv2d import Conv2d, conv2d, Conv2dConfig
 from ttnn.operations.pool import (
     MaxPool2d,
     global_avg_pool2d,

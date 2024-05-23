@@ -19,7 +19,8 @@ def test_rms_norm(device, batch_size, h, w):
 
     torch_input_tensor = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
     torch_weight = torch.rand((w,), dtype=torch.bfloat16)
-    torch_output_tensor = ttnn.rms_norm.golden_function(torch_input_tensor, torch_weight)
+    golden_function = ttnn.get_golden_function(ttnn.rms_norm)
+    torch_output_tensor = golden_function(torch_input_tensor, torch_weight)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
     weight = ttnn.from_torch(torch_weight, device=device, layout=ttnn.TILE_LAYOUT)

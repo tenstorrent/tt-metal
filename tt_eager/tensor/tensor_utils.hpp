@@ -73,7 +73,8 @@ bool is_cpu_tensor(const Tensor& tensor);
 bool is_device_tensor(const Tensor& tensor);
 
 // Given a multi-device tensor and a device, returns the tensor on the given device.
-Tensor get_device_tensor(Device* device, const Tensor& multi_device_tensor);
+Tensor get_device_tensor(const Tensor& multi_device_tensor, const Device* device);
+Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id);
 
 // Returns true has MultiDeviceHost/MultiDevice Storage
 bool is_multi_device_tensor(const Tensor& tensor);
@@ -130,12 +131,12 @@ auto get_device_tensors(Device* device, const TensorContainer& input_tensors) {
     for (const auto& tensor : input_tensors) {
         if constexpr (IsOptional::value) {
             if (tensor.has_value()) {
-                transformed_tensors.emplace_back(get_device_tensor(device, tensor.value()));
+                transformed_tensors.emplace_back(get_device_tensor(tensor.value(), device));
             } else {
                 transformed_tensors.emplace_back(std::nullopt);
             }
         } else {
-            transformed_tensors.emplace_back(get_device_tensor(device, tensor));
+            transformed_tensors.emplace_back(get_device_tensor(tensor, device));
         }
     }
     return transformed_tensors;

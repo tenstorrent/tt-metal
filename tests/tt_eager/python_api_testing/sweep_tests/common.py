@@ -657,7 +657,7 @@ def shapes_and_datagen(
 
             def _gen_tt_nn_rmsnorm_shapes(shape):
                 input_shape = [shape[0], shape[1]]
-                weights_shape = [shape[1]]
+                weights_shape = [1, shape[1]]
 
                 return [input_shape, weights_shape]
 

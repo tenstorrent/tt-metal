@@ -8,6 +8,7 @@
 platformdirs<4.0.0
 pre-commit==3.0.4
 black==23.10.1
+clang-format==18.1.5
 build==0.10.0
 twine==4.0.2
 yamllint==1.32.0
@@ -31,6 +32,7 @@ transformers==4.37.2
 xlsxwriter==3.0.8
 tiktoken==0.3.3
 tqdm==4.65.0
+enlighten==1.12.4
 sentencepiece==0.1.97
 numba>=0.58.1
 librosa==0.10.0
@@ -49,3 +51,4 @@ evaluate==0.4.0
 bert-score==0.3.12
 fsspec==2023.9.2 # Temporary pin to 2023.9.2: https://github.com/tenstorrent/tt-metal/issues/3314
 docopt==0.6.2
+tabulate==0.9.0

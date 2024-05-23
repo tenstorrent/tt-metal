@@ -8,7 +8,7 @@ run_t3000_falcon7b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
-  env pytest models/demos/falcon7b/tests -m "model_perf_t3000"
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon7b/tests -m "model_perf_t3000"
 
   # Record the end time
   end_time=$(date +%s)
@@ -22,7 +22,7 @@ run_t3000_mixtral_tests() {
 
   echo "LOG_METAL: Running run_t3000_mixtral_tests"
 
-  env pytest models/demos/t3000/mixtral8x7b/tests -m "model_perf_t3000"
+  env pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_perf.py::test_mixtral_model_perf[wormhole_b0-True-2048-150-7.5] -m "model_perf_t3000"
 
   # Record the end time
   end_time=$(date +%s)

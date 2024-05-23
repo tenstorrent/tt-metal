@@ -52,8 +52,8 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_square,
         "pytorch_op": pytorch_ops.square,
     },
-    "ttnn-eltwise-softplus": {
-        "tt_op": ttnn_ops.eltwise_softplus,
+    "ttnn-softplus": {
+        "tt_op": ttnn_ops.softplus,
         "pytorch_op": pytorch_ops.softplus,
     },
     "ttnn-eltwise-swish": {
@@ -152,17 +152,21 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_lte,
         "pytorch_op": pytorch_ops.lte,
     },
-    "ttnn-eltwise-minimum": {
-        "tt_op": ttnn_ops.eltwise_minimum,
-        "pytorch_op": pytorch_ops.minimum,
-    },
     "ttnn-min": {
-        "tt_op": ttnn_ops.eltwise_min,
+        "tt_op": ttnn_ops.min,
         "pytorch_op": ttnn_pytorch_ops.min,
+    },
+    "ttnn-max": {
+        "tt_op": ttnn_ops.max,
+        "pytorch_op": ttnn_pytorch_ops.max,
+    },
+    "ttnn-eltwise-min": {
+        "tt_op": ttnn_ops.eltwise_min,
+        "pytorch_op": ttnn_pytorch_ops.eltwise_min,
     },
     "ttnn-eltwise-max": {
         "tt_op": ttnn_ops.eltwise_max,
-        "pytorch_op": pytorch_ops.max,
+        "pytorch_op": ttnn_pytorch_ops.eltwise_max,
     },
     "ttnn-eltwise-rad2deg": {
         "tt_op": ttnn_ops.eltwise_rad2deg,
@@ -380,8 +384,8 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_tanh,
         "pytorch_op": pytorch_ops.tanh,
     },
-    "ttnn-eltwise-softmax": {
-        "tt_op": ttnn_ops.eltwise_softmax,
+    "ttnn-softmax": {
+        "tt_op": ttnn_ops.softmax,
         "pytorch_op": pytorch_ops.softmax_in_place,
     },
     "ttnn-mul": {
@@ -419,7 +423,7 @@ op_map = {
     },
     "ttnn-rmsnorm": {
         "tt_op": ttnn_ops.rmsnorm,
-        "pytorch_op": pytorch_ops.rms_norm,
+        "pytorch_op": ttnn_pytorch_ops.rmsnorm,
     },
     "ttnn-transformer_concatenate_heads": {
         "tt_op": ttnn_ops.transformer_concatenate_heads,
@@ -620,10 +624,6 @@ op_map = {
     "ttnn-nextafter": {
         "tt_op": ttnn_ops.nextafter,
         "pytorch_op": pytorch_ops.nextafter,
-    },
-    "ttnn-max": {
-        "tt_op": ttnn_ops.max,
-        "pytorch_op": pytorch_ops.max,
     },
     "ttnn-empty": {
         "tt_op": ttnn_ops.empty,

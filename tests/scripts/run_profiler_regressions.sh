@@ -23,6 +23,28 @@ run_additional_T3000_test(){
     cat $PROFILER_ARTIFACTS_DIR/test_out.log
 }
 
+run_async_mode_T3000_test(){
+    #Some tests here do not skip grayskull
+    if [ "$ARCH_NAME" != "grayskull" ]; then
+        remove_default_log_locations
+        mkdir -p $PROFILER_ARTIFACTS_DIR
+
+        ./tt_metal/tools/profiler/profile_this.py -c "pytest -svv models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-True-True-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" > $PROFILER_ARTIFACTS_DIR/test_out.log
+
+        if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
+        then
+            echo "No verification as test was skipped"
+        else
+            echo "Verifying test results"
+            runDate=$(ls $PROFILER_OUTPUT_DIR/)
+            LINE_COUNT=1000 # Smoke test to see at least 1000 ops are reported
+            res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
+            echo $res
+        fi
+        cat $PROFILER_ARTIFACTS_DIR/test_out.log
+    fi
+}
+
 run_profiling_test(){
     if [[ -z "$ARCH_NAME" ]]; then
       echo "Must provide ARCH_NAME in environment" 1>&2
@@ -36,7 +58,14 @@ run_profiling_test(){
 
     run_additional_T3000_test
 
-    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py -vvv
+    run_async_mode_T3000_test
+
+    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py::test_custom_cycle_count -vvv
+    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py::test_full_buffer -vvv
+    #TODO(MO): Needed until #6560 is fixed.
+    if [ "$ARCH_NAME" != "grayskull" ]; then
+        TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py::test_multi_op -vvv
+    fi
 
     remove_default_log_locations
 
@@ -47,6 +76,22 @@ run_profiling_test(){
     CORE_COUNT=7
     res=$(verify_perf_column "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$CORE_COUNT" "1" "1")
     echo $res
+
+    remove_default_log_locations
+}
+
+run_profiling_no_reset_test(){
+    if [[ -z "$ARCH_NAME" ]]; then
+      echo "Must provide ARCH_NAME in environment" 1>&2
+      exit 1
+    fi
+
+    echo "Make sure this test runs in a build with ENABLE_PROFILER=1 ENABLE_TRACY=1"
+
+    source build/python_env/bin/activate
+    export PYTHONPATH=$TT_METAL_HOME
+
+    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py::test_multi_op -vvv
 
     remove_default_log_locations
 }
@@ -62,6 +107,8 @@ cd $TT_METAL_HOME
 
 if [[ $1 == "PROFILER" ]]; then
     run_profiling_test
+elif [[ $1 == "PROFILER_NO_RESET" ]]; then
+    run_profiling_no_reset_test
 elif [[ $1 == "POST_PROC" ]]; then
     run_post_proc_test
 else

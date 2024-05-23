@@ -31,10 +31,22 @@ def prelu(x, *args, **kwargs):
     return result
 
 
+def max(x, *args, **kwargs):
+    dim = kwargs.pop("dim")
+    return torch.max(x, dim=dim[0], keepdim=True).values
+
+
 def min(x, *args, **kwargs):
     dim = kwargs.pop("dim")
-    print(f"PT: {dim[0]}")
     return torch.min(x, dim=dim[0], keepdim=True).values
+
+
+def eltwise_max(x, y, *args, **kwargs):
+    return torch.maximum(x, y)
+
+
+def eltwise_min(x, y, *args, **kwargs):
+    return torch.minimum(x, y)
 
 
 def embeddings(x, y, *args, **kwargs):
@@ -63,7 +75,8 @@ def layernorm_noweights(x, *args, **kwargs):
 
 
 def attention_softmax_nomask(x, *args, **kwargs):
-    torch_output_tensor = ttnn.transformer.attention_softmax.golden_function(
+    golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax)
+    torch_output_tensor = golden_function(
         x,
         head_size=None,
         attention_mask=None,
@@ -78,7 +91,8 @@ def attention_softmax(x, y, *args, scalar, **kwargs):
     if scalar < 0:
         scalar = -scalar
 
-    torch_output_tensor = ttnn.transformer.attention_softmax.golden_function(
+    golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax)
+    torch_output_tensor = golden_function(
         x,
         head_size=None,
         attention_mask=y,
@@ -88,7 +102,18 @@ def attention_softmax(x, y, *args, scalar, **kwargs):
 
 
 def transformer_concatenate_heads(x, *args, **kwargs):
-    return ttnn.transformer.concatenate_heads.golden_function(x)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.concatenate_heads)
+    return golden_function(x)
+
+
+def rmsnorm(hidden_states, weight, epsilon=1e-6, *args, **kwargs):
+    variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
+    hidden_states = hidden_states * torch.rsqrt(variance + epsilon)
+
+    if weight.dtype in [torch.float16, torch.bfloat16]:
+        hidden_states = hidden_states.to(weight.dtype)
+
+    return weight * hidden_states
 
 
 def groupnorm(x, y, z, *args, **kwargs):

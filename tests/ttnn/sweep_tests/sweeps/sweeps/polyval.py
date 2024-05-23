@@ -31,14 +31,6 @@ def torch_polyval(input_tensor, coeff):
     return curVal + coeff[len(coeff) - 1]
 
 
-def skip(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
-def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
 def run(
     batch_sizes,
     height,

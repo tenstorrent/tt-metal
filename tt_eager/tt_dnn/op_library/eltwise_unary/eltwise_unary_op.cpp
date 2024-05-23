@@ -22,7 +22,7 @@ union Converter {
     float f;
     uint32_t u;
 
-    Converter(float f_) : f(f_){};
+    Converter(float f_) : f(f_) {};
 
     static std::string to_hex(float f_) {
         Converter obj(f_);
@@ -65,15 +65,9 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::I0: defines["SFPU_OP_I0_INCLUDE"] = "1"; break;
         case UnaryOpType::COS:
         case UnaryOpType::SIN:
-        case UnaryOpType::TAN:
-            defines["SFPU_OP_TRIG_FAMILY_INCLUDE"]="1";
-            break;
-        case UnaryOpType::NEG:
-            defines["SFPU_OP_NEG_INCLUDE"] = "1";
-            break;
-        default:
-            defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"]="1";
-            break;
+        case UnaryOpType::TAN: defines["SFPU_OP_TRIG_FAMILY_INCLUDE"] = "1"; break;
+        case UnaryOpType::NEG: defines["SFPU_OP_NEG_INCLUDE"] = "1"; break;
+        default: defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1"; break;
     };
 }
 
@@ -132,16 +126,43 @@ std::pair<string, string> get_op_init_and_func_parameterized(
                 fmt::format("erfc_tile<{1}u>({0});", idst, std::to_string((uint32_t)param0))};
             break;
         case UnaryOpType::RDIV: op_init_and_name = {}; break;
-        case UnaryOpType::RSUB: op_init_and_name = {"rsub_tile_init();", fmt::format("rsub_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
-        case UnaryOpType::SUB_UNARY_SFPU: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("sub_unary_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
-        case UnaryOpType::ADD_UNARY_SFPU: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("add_unary_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
-        case UnaryOpType::MUL_UNARY_SFPU: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("mul_unary_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
-        case UnaryOpType::DIV_UNARY_SFPU: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("div_unary_tile({}, {}u);", idst, Converter::to_hex(1.0f/param0))}; break;
-        case UnaryOpType::UNARY_NE: op_init_and_name = {"unary_ne_tile_init();", fmt::format("unary_ne_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
-        case UnaryOpType::UNARY_GT: op_init_and_name = {"unary_gt_tile_init();", fmt::format("unary_gt_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
-        case UnaryOpType::UNARY_LT: op_init_and_name = {"unary_lt_tile_init();", fmt::format("unary_lt_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
-        default:
-        TT_ASSERT( false && "unexpected parameterized type");
+        case UnaryOpType::RSUB:
+            op_init_and_name = {
+                "rsub_tile_init();", fmt::format("rsub_tile({}, {}u);", idst, Converter::to_hex(param0))};
+            break;
+        case UnaryOpType::SUB_UNARY_SFPU:
+            op_init_and_name = {
+                "binop_with_scalar_tile_init();",
+                fmt::format("sub_unary_tile({}, {}u);", idst, Converter::to_hex(param0))};
+            break;
+        case UnaryOpType::ADD_UNARY_SFPU:
+            op_init_and_name = {
+                "binop_with_scalar_tile_init();",
+                fmt::format("add_unary_tile({}, {}u);", idst, Converter::to_hex(param0))};
+            break;
+        case UnaryOpType::MUL_UNARY_SFPU:
+            op_init_and_name = {
+                "binop_with_scalar_tile_init();",
+                fmt::format("mul_unary_tile({}, {}u);", idst, Converter::to_hex(param0))};
+            break;
+        case UnaryOpType::DIV_UNARY_SFPU:
+            op_init_and_name = {
+                "binop_with_scalar_tile_init();",
+                fmt::format("div_unary_tile({}, {}u);", idst, Converter::to_hex(1.0f / param0))};
+            break;
+        case UnaryOpType::UNARY_NE:
+            op_init_and_name = {
+                "unary_ne_tile_init();", fmt::format("unary_ne_tile({}, {}u);", idst, Converter::to_hex(param0))};
+            break;
+        case UnaryOpType::UNARY_GT:
+            op_init_and_name = {
+                "unary_gt_tile_init();", fmt::format("unary_gt_tile({}, {}u);", idst, Converter::to_hex(param0))};
+            break;
+        case UnaryOpType::UNARY_LT:
+            op_init_and_name = {
+                "unary_lt_tile_init();", fmt::format("unary_lt_tile({}, {}u);", idst, Converter::to_hex(param0))};
+            break;
+        default: TT_ASSERT(false && "unexpected parameterized type");
     };
     return op_init_and_name;
 }
@@ -234,7 +255,11 @@ bool get_op_approx_mode(UnaryOpType op_type) {
 }
 
 std::map<string, string> get_defines_impl(
-    UnaryOpType op_type, const std::vector<float> &params, std::string idst, std::string init_def, std::string func_def) {
+    UnaryOpType op_type,
+    const std::vector<float>& params,
+    std::string idst,
+    std::string init_def,
+    std::string func_def) {
     std::pair<string, string> op_init_and_name = get_op_init_and_func(op_type, params, idst);
     std::map<string, string> defines = {{init_def, op_init_and_name.first}, {func_def, op_init_and_name.second}};
     update_macro_defines(op_type, defines);
@@ -245,7 +270,8 @@ std::map<string, string> get_defines(
     UnaryOpType op_type, std::optional<std::vector<float>> params, std::string id, std::string idst) {
     std::string init_def = fmt::format("SFPU_OP_INIT_{}", id);
     std::string func_def = fmt::format("SFPU_OP_FUNC_{}", id);
-    return get_defines_impl(op_type, params.has_value() ? params.value() : std::vector<float>{}, idst, init_def, func_def);
+    return get_defines_impl(
+        op_type, params.has_value() ? params.value() : std::vector<float>{}, idst, init_def, func_def);
 }
 
 std::pair<string, string> get_op_init_and_func(UnaryOpType op_type, std::vector<float> params, std::string idst) {
@@ -320,8 +346,7 @@ operation::ProgramWithCallbacks EltwiseUnary::create_program(
         case UnaryOpParallelizationStrategy::SHARDED_MULTI_CORE:
             return eltwise_unary_sharded(input_tensor, output_tensor, this->op_chain, this->fp32_dest_acc_en);
         case UnaryOpParallelizationStrategy::MULTI_CORE:
-        default:
-            return eltwise_unary_multi_core(input_tensor, output_tensor, this->op_chain, this->fp32_dest_acc_en);
+        default: return eltwise_unary_multi_core(input_tensor, output_tensor, this->op_chain, this->fp32_dest_acc_en);
     }
 }
 
@@ -339,7 +364,7 @@ const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tenso
     const auto& input_tensor = input_tensors.at(0);
     const auto& input_shape = input_tensor.get_legacy_shape();
 
-    operation::Hash hash = tt::stl::hash::hash_objects(
+    operation::Hash hash = tt::stl::hash::hash_objects_with_default_seed(
         typeid(*this).hash_code(),
         compute_volume(input_shape),
         input_tensor.get_dtype(),

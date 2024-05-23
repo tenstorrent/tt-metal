@@ -34,7 +34,8 @@ def test_transformer_attention_softmax(
 
     input_shape = (batch_size, num_heads, sequence_size, target_sequence_size)
     torch_input_tensor = torch_random(input_shape, 0, 1.0, dtype=torch.bfloat16)
-    torch_output_tensor = ttnn.transformer.attention_softmax.golden_function(
+    golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax)
+    torch_output_tensor = golden_function(
         torch_input_tensor,
         head_size=None,
         attention_mask=None,
@@ -81,7 +82,8 @@ def test_transformer_attention_softmax_(
         (batch_size, 1, sequence_size, target_sequence_size), 0, 1.0, dtype=torch.bfloat16
     )
 
-    torch_output_tensor = ttnn.transformer.attention_softmax_.golden_function(
+    golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax_)
+    torch_output_tensor = golden_function(
         torch_input_tensor,
         head_size=None,
         attention_mask=torch_attention_mask,
@@ -125,7 +127,8 @@ def test_transformer_concatenate_heads(
 
     input_shape = (batch_size, num_heads, sequence_size, head_size)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
-    torch_output_tensor = ttnn.transformer.concatenate_heads.golden_function(torch_input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.concatenate_heads)
+    torch_output_tensor = golden_function(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -159,13 +162,12 @@ def test_transformer_split_query_key_value_and_split_heads(
     else:
         input_shape = (batch_size, sequence_size, num_heads * 3 * head_size)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.split_query_key_value_and_split_heads)
     (
         torch_query_tensor,
         torch_key_tensor,
         torch_value_tensor,
-    ) = ttnn.transformer.split_query_key_value_and_split_heads.golden_function(
-        torch_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads
-    )
+    ) = golden_function(torch_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -203,13 +205,13 @@ def test_transformer_split_query_key_value_and_split_heads_with_kv_input_tensor(
     kv_input_shape = (batch_size, sequence_size, num_heads * 2 * head_size)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
     torch_kv_input_tensor = torch_random(kv_input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.split_query_key_value_and_split_heads)
+
     (
         torch_query_tensor,
         torch_key_tensor,
         torch_value_tensor,
-    ) = ttnn.transformer.split_query_key_value_and_split_heads.golden_function(
-        torch_input_tensor, torch_kv_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads
-    )
+    ) = golden_function(torch_input_tensor, torch_kv_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -255,13 +257,12 @@ def test_falcon_split_query_key_value_and_split_heads(
     else:
         input_shape = (batch_size, sequence_size, num_heads * 3 * head_size)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.split_query_key_value_and_split_heads)
     (
         torch_query_tensor,
         torch_key_tensor,
         torch_value_tensor,
-    ) = ttnn.transformer.split_query_key_value_and_split_heads.golden_function(
-        torch_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads, transpose_key=False
-    )
+    ) = golden_function(torch_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads, transpose_key=False)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -296,11 +297,12 @@ def test_vit_split_query_key_value_and_split_heads(
 
     input_shape = (batch_size, sequence_size, num_heads * 3 * head_size)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.split_query_key_value_and_split_heads)
     (
         torch_query_tensor,
         torch_key_tensor,
         torch_value_tensor,
-    ) = ttnn.transformer.split_query_key_value_and_split_heads.golden_function(torch_input_tensor, num_heads=num_heads)
+    ) = golden_function(torch_input_tensor, num_heads=num_heads)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -348,11 +350,12 @@ def test_sharded_split_query_key_value_and_split_heads(
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.split_query_key_value_and_split_heads)
     (
         torch_query_tensor,
         torch_key_tensor,
         torch_value_tensor,
-    ) = ttnn.transformer.split_query_key_value_and_split_heads.golden_function(torch_input_tensor, num_heads=num_heads)
+    ) = golden_function(torch_input_tensor, num_heads=num_heads)
 
     # Sharded inputs requires the groups of heads to be interleaved (ie. {q1, k1, v1}, {q2, k2, v2}, ..., {qn, kn, vn})
     (torch_q, torch_k, torch_v) = torch.split(
@@ -405,11 +408,12 @@ def test_split_query_key_value_and_split_heads_when_head_size_is_not_a_multiple_
 
     input_shape = (batch_size, sequence_size, num_heads * 3 * head_size)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.split_query_key_value_and_split_heads)
     (
         torch_query_tensor,
         torch_key_tensor,
         torch_value_tensor,
-    ) = ttnn.transformer.split_query_key_value_and_split_heads.golden_function(
+    ) = golden_function(
         torch_input_tensor,
         num_heads=num_heads,
     )
@@ -479,7 +483,8 @@ def test_concatenate_heads_when_head_size_is_not_a_multiple_of_32(device):
 
     input_shape = (batch_size, num_heads, sequence_size, head_size)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
-    torch_output_tensor = ttnn.transformer.concatenate_heads.golden_function(torch_input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.concatenate_heads)
+    torch_output_tensor = golden_function(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,

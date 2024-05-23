@@ -44,10 +44,7 @@ def test_max_global(device, batch_size, h, w):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tensor = ttnn.max(input_tensor)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-
     output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = output_tensor[0, 0, 0, 0]
+    output_tensor = output_tensor[0, 0, 0]
 
     assert_with_pcc(torch_output_tensor, output_tensor)

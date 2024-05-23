@@ -55,17 +55,27 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
 
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE);
     TT_FATAL(input_tensor_b.get_layout() == Layout::TILE);
-    TT_FATAL(input_tensor_a.get_dtype() == input_tensor_b.get_dtype());
     TT_FATAL(is_floating_point(input_tensor_a.get_dtype()), "Unsupported data format");
     if (this->in_place) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout);
         TT_FATAL(input_tensor_a.memory_config().buffer_type == this->output_mem_config.buffer_type);
     }
-    if (this->dim != BcastOpDim::HW) {
+    if (this->dim == BcastOpDim::W){
         TT_FATAL(
             input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED &&
                 this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+            "Bcast does not currently support input0 sharding, except if dim is W");
+    } else if (this->dim == BcastOpDim::H) {
+        if(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED){
+            TT_FATAL(
+            input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED &&
+                this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
             "Bcast does not currently support input0 sharding, except if dim is HW");
+        }else{
+            TT_FATAL(
+            input_tensor_a.memory_config().is_sharded() && this->output_mem_config.is_sharded(),
+            "Input and output mem layouts must be the same for bcast H op!");
+        }
     } else {
         TT_FATAL(
             input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
@@ -84,8 +94,9 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
     auto num_channels_b = input_shape_b[1];
     auto height_b = input_shape_b[2];
     auto width_b = input_shape_b[3];
-
-    TT_FATAL((batch_size_b * num_channels_b == 1 || (batch_size_b == batch_size_a && num_channels_b == num_channels_a)) && "Broadcast is currently only supported when bN*bC=1 or N & C match");
+    if((input_tensor_a.is_sharded() && this->dim == BcastOpDim::H) == false){
+        TT_FATAL((batch_size_b * num_channels_b == 1 || (batch_size_b == batch_size_a && num_channels_b == num_channels_a)) && "Broadcast is currently only supported when bN*bC=1 or N & C match"); //for H multi-batch weight is supported
+    }
 
     // validate input dimensions
     if (this->dim == BcastOpDim::W)
@@ -128,14 +139,15 @@ operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(const std
     const auto& output_tensor = this->in_place ? input_tensor_a : output_tensors.at(0);
 
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
-
     switch (parallelization_strategy){
+        case BcastOpParallelizationStrategy::MULTI_CORE_H_SHARDED:
+            return bcast_sharded_h(input_tensor_a, input_tensor_b, output_tensor, this->math_op);
         case BcastOpParallelizationStrategy::MULTI_CORE_H:
             return bcast_multi_core_h(input_tensor_a, input_tensor_b, output_tensor, this->math_op);
         case BcastOpParallelizationStrategy::MULTI_CORE_W:
             return bcast_multi_core_w(input_tensor_a, input_tensor_b, output_tensor, this->math_op);
         case BcastOpParallelizationStrategy::MULTI_CORE_HW:
-            return bcast_multi_core_hw(input_tensor_a, input_tensor_b, output_tensor, this->math_op);
+            return bcast_multi_core_hw(input_tensor_a, input_tensor_b, output_tensor, this->math_op, this->in_place);
         default:
             TT_THROW("Unsupported Parallelization Strategy");
     }
@@ -164,7 +176,10 @@ BcastOpParallelizationStrategy EltwiseBinaryBroadcast::get_parallelization_strat
     uint32_t Wt = input_tensor_a.get_legacy_shape()[3] / TILE_WIDTH;
 
     if(this->dim == BcastOpDim::H){
-        return BcastOpParallelizationStrategy::MULTI_CORE_H;
+        if(input_tensor_a.is_sharded())
+            return BcastOpParallelizationStrategy::MULTI_CORE_H_SHARDED;
+        else
+            return BcastOpParallelizationStrategy::MULTI_CORE_H;
     }
     else if(this->dim == BcastOpDim::W){
         return BcastOpParallelizationStrategy::MULTI_CORE_W;

@@ -411,16 +411,17 @@ class cross_attention:
                     self.dram_interleaved_memory_config,
                 )
         num_cores = 16
-        # output = ttnn.experimental.tensor.interleaved_to_sharded(
-        #     self.output_tensors[seq_len],
-        #     (2, 8),
-        #     [
-        #         self.output_tensors[seq_len].volume() // self.output_tensors[seq_len].shape[-1] // num_cores,
-        #         self.output_tensors[seq_len].shape[-1],
-        #     ],
-        #     ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        #     ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
-        # )
+        output = ttnn.experimental.tensor.interleaved_to_sharded(
+            self.output_tensors[seq_len],
+            (8, 2),
+            [
+                self.output_tensors[seq_len].volume() // self.output_tensors[seq_len].shape[-1] // num_cores,
+                self.output_tensors[seq_len].shape[-1],
+            ],
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+        )
+        return output
         return self.output_tensors[seq_len]
 
     def sharded_attention(self, query, key, value, original_seq_len, head_size, index):
@@ -554,9 +555,12 @@ class cross_attention:
             attention_scores,
             v_sharded,
             program_config=program_config,
-            output_mem_config=self.l1_interleaved_memory_config,
+            output_mem_config=self.height_sharded_memory_config,
             output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             compute_kernel_config=self.compute_kernel_config,
+        )
+        attention_scores = self.reshard_to(
+            attention_scores, (8, 2), ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED
         )
         v_sharded.deallocate()
         return ttnn.reshape(attention_scores, (2, 8, attention_scores.shape[-2], attention_scores.shape[-1]))
@@ -568,40 +572,6 @@ class cross_attention:
             return self.time_sharded_attention(query, t_key, value, head_size)
         else:
             return self.sharded_attention(query, t_key, value, original_seq_len, head_size, index)
-
-        print("Legacy path")
-        seq_len = query.shape[-2]
-        key_len = t_key.shape[-1]
-        attention_mask = self.attention_masks[seq_len][key_len]
-        attention_scores = ttnn.matmul(
-            query,
-            t_key,
-        )
-        ttnn.deallocate(query)
-        ttnn.deallocate(t_key)
-        orig_shape = attention_scores.shape
-        attention_scores = ttnn.reshape(
-            attention_scores,
-            (
-                1,
-                attention_scores.shape[-4] * attention_scores.shape[-3],
-                attention_scores.shape[-2],
-                attention_scores.shape[-1],
-            ),
-        )
-        attention_scores = ttnn.transformer.attention_softmax_(
-            attention_scores, attention_mask=attention_mask, head_size=head_size
-        )
-        attention_scores = ttnn.reshape(attention_scores, orig_shape)
-        if attention_scores.shape[-2] > original_seq_len:
-            attention_scores = attention_scores[:, :, :original_seq_len, :]
-        attention_scores = ttnn.matmul(
-            attention_scores,
-            value,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
-        )
-        return attention_scores
 
     def out(self, hidden_states):
         size = hidden_states.shape[-2] // 2  # 2 is the batch size
@@ -923,7 +893,10 @@ class cross_attention:
             index=index,
         )
 
-        hidden_states = ttnn.transformer.concatenate_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
+        hidden_states = ttnn.transformer.concatenate_heads(
+            hidden_states,
+            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        )
 
         if hidden_states.shape.with_tile_padding()[-1] != hidden_states.shape[-1]:
             assert False

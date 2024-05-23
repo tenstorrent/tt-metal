@@ -150,18 +150,18 @@ models/bert_large_performant @tt-aho @TT-BrianLiu
 models/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 functional_*/ @eyonland @arakhmati @cfjchu @xanderchin
 models/demos @eyonland @arakhmati @cfjchu @xanderchin
-models/demos/wormhole @uaydonat
-models/demos/t3000 @uaydonat
-models/demos/falcon7b @skhorasganiTT
-models/demos/mamba @esmalTT
-models/demos/wormhole/falcon7b @skhorasganiTT
-models/demos/wormhole/mistral7b @yieldthought
-models/demos/t3000/falcon40b @johanna-rock-tt
-models/demos/t3000/falcon7b @skhorasganiTT
-models/demos/t3000/llama2_70b @cglagovichTT
-models/demos/t3000/llama3_70b @cglagovichTT
-models/demos/t3000/mixtral8x7b @yieldthought
-models/demos/grayskull @boris-drazic
+models/demos/wormhole @uaydonat @eyonland @AleksKnezevic @nsmithtt
+models/demos/t3000 @uaydonat @AleksKnezevic @nsmithtt
+models/demos/falcon7b @skhorasganiTT @djordje-tt @uaydonat
+models/demos/mamba @esmalTT @uaydonat @kpaigwar
+models/demos/wormhole/falcon7b @skhorasganiTT @djordje-tt @uaydonat @pavlejosipovic @pavlepopovic @s-jovic
+models/demos/wormhole/mistral7b @yieldthought @uaydonat @mtairum
+models/demos/t3000/falcon40b @johanna-rock-tt @uaydonat @s-jovic
+models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat
+models/demos/t3000/llama2_70b @cglagovichTT @caixunshiren @uaydonat
+models/demos/t3000/llama3_70b @cglagovichTT @caixunshiren @uaydonat
+models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
+models/demos/grayskull @boris-drazic @eyonland
 models/experimental/
 models/perf/ @boris-drazic @tt-rkim
 
