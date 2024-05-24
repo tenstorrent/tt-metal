@@ -49,7 +49,7 @@ def get_torch_tensors(shape):
     C = shape[1]
     target_shape = shape[:1] + shape[2:]
 
-    cpu_dtype = torch.bfloat16
+    cpu_dtype = torch.float32
     cpu_index_dtype = torch.long
 
     torch_input = torch.rand(shape, dtype=cpu_dtype).requires_grad_()
