@@ -38,26 +38,26 @@
 
 ## Wormhole (WH) Models
 
-| Model                                                       | Gen. Token [3]     |  Batch               | End-to-end throughput [1]   | Device throughput [2]       | Target         |
-|-------------------------------------------------------------|--------------------|----------------------|-----------------------------|-----------------------------|----------------|
-| [Falcon7B-decode](./models/demos/wormhole/falcon7b)         | 129th              | 32                   | 9.9 t/s/u - 317 t/s         | 13.5 t/s/u - 432 t/s        | 21 t/s/u       |∑
-| [Mistral-7B-decode](./models/demos/wormhole/mistral7b)      |  33rd              | 32                   | 7.9 t/s/u - 253 t/s         | 10.9 t/s/u - 349 t/s        | 21 t/s/u       |
-| [Mamba-2.8B-decode](./models/demos/mamba)                   |  any               | 32                   | 1.7 t/s/u -  54 t/s         | 2.0 t/s/u - 64 t/s          | 17 t/s/u       |
-| [BERT-Large](./models/demos/metal_BERT_large_11/) (sen/s)    | any            |  8                  | 270                          | 340                         | 400                                 |
-| Stable Diffusion 1.4 512x512                                | coming soon        | 1                    |                             |                             |                |
+| Model                                                       | Gen. Token [3]     |  Batch               | End-to-end throughput [1]    | Device throughput [2]       | Target         |
+|-------------------------------------------------------------|--------------------|----------------------|------------------------------|-----------------------------|----------------|
+| [Falcon7B-decode](./models/demos/wormhole/falcon7b)         | 129th              | 32                   | 11.6 t/s/u - 371 t/s         | 15.4 t/s/u - 493 t/s        | 21 t/s/u       |
+| [Mistral-7B-decode](./models/demos/wormhole/mistral7b)      |  33rd              | 32                   | 10.9 t/s/u - 349 t/s         | 13.3 t/s/u - 426 t/s        | 21 t/s/u       |
+| [Mamba-2.8B-decode](./models/demos/mamba)                   |  any               | 32                   | 9.2 t/s/u -  295 t/s         | 13.1 t/s/u - 419 t/s        | 22 t/s/u       |
+| [BERT-Large](./models/demos/metal_BERT_large_11/) (sen/s)   | any                |  8                   | 270                          | 340                         | 400            |
+| Stable Diffusion 1.4 512x512                                | coming soon        | 1                    |                              |                             |                |
 
 [3] - Generating the i'th token in a sequence while the kv_cache is filled with i-1 rows.
 
 ## T3000 (2x4 mesh of WHs) Models
 
-| Model                                                         | Gen. Token [3]     |  Batch               | End-to-end throughput [1]   | Device throughput [2]       | Target         |
-|---------------------------------------------------------------|--------------------|----------------------|-----------------------------|-----------------------------|----------------|
-| [Falcon7B-decode](./models/demos/t3000/falcon7b)              | 1025th             |  256                 | 5.3 t/s/u - 1359 t/s        |  coming soon                |   21 t/s/u     |
-| [LLaMA-2-70B-decode](./models/demos/t3000/llama2_70b)         | 129th              |  32                  | 2.4 t/s/u - 76.0 t/s       |  8.4 t/s/u - 268.8 t/s      |   20 t/s/u     |
-| [LLaMA-3-70B-decode](./models/demos/t3000/llama3_70b)         | 129th              |  32                  | 2.4 t/s/u - 75.4 t/s       |  7.7 t/s/u - 246.4 t/s      |   20 t/s/u     |
-| [Falcon40B-decode](./models/demos/t3000/falcon40b)                  | coming soon        |                      |                             |                             |                |
-| Mixtral7Bx8-decode                                            | coming soon        |                      |                             |                             |                |
-| ResNet50 (data parallel)                                      | coming soon        |                      |                             |                             |                |
+| Model                                                     |   Technique        | Gen. Token [3]      |  Batch                | End-to-end throughput [1]    | Device throughput [2]        | Target          |
+|-----------------------------------------------------------|--------------------|---------------------|-----------------------|------------------------------|------------------------------|-----------------|
+| [Falcon7B-decode](./models/demos/t3000/falcon7b)          | Data Parallel      | 129th               |  256                  | 4.4 t/s/u - 1114 t/s         |  coming soon                 |   21 t/s/u      |
+| [LLaMA-2-70B-decode](./models/demos/t3000/llama2_70b)     | Tensor Parallel    | 129th               |  32                   | 8.4 t/s/u - 269 t/s          |  13.8 t/s/u - 441 t/s        |   20 t/s/u      |
+| [LLaMA-3-70B-decode](./models/demos/t3000/llama3_70b)     | Tensor Parallel    | 129th               |  32                   | 2.4 t/s/u - 75.4 t/s         |  7.7 t/s/u - 246.4 t/s       |   20 t/s/u      |
+| [Falcon40B-decode](./models/demos/t3000/falcon40b)        | Tensor Parallel    | 129th               |  32                   | 1.5 t/s/u - 48 t/s           |  14.0 t/s/u - 448 t/s        |   30 t/s/u      |
+| [Mixtral7Bx8-decode](./models/demos/t3000/mixtral8x7b)    | Tensor Parallel    | 129th               |  32                   | 0.3 t/s/u - 1.0 t/s          |  23.5 t/s/u - 752 t/s        |   28 t/s/u      |
+| ResNet50                                                  | Data Parallel      | coming soon         |                       |                              |                              |                 |
 
 ## Using TT-NN ops and tensors
 
