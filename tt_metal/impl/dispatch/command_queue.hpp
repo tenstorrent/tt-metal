@@ -132,7 +132,7 @@ class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
 class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
    private:
     void add_prefetch_relay(HugepageDeviceCommand& command) override;
-    BufferPageMapping buffer_page_mapping;
+    const CoreCoord core;
 
    public:
     EnqueueReadShardedBufferCommand(
@@ -142,7 +142,7 @@ class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
         void* dst,
         SystemMemoryManager& manager,
         uint32_t expected_num_workers_completed,
-        const BufferPageMapping& buffer_page_mapping,
+        const CoreCoord& core,
         uint32_t src_page_index = 0,
         std::optional<uint32_t> pages_to_read = std::nullopt) :
         EnqueueReadBufferCommand(
@@ -154,7 +154,7 @@ class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
             expected_num_workers_completed,
             src_page_index,
             pages_to_read),
-        buffer_page_mapping(buffer_page_mapping) {}
+        core(core) {}
 };
 
 class EnqueueWriteShardedBufferCommand;
@@ -241,7 +241,6 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
 
     const std::optional<BufferPageMapping>& buffer_page_mapping;
     const CoreCoord core;
-    const bool width_split;
 
    public:
     EnqueueWriteShardedBufferCommand(
@@ -254,8 +253,7 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
         uint32_t expected_num_workers_completed,
         uint32_t bank_base_address,
         const std::optional<BufferPageMapping>& buffer_page_mapping,
-        const CoreCoord core,
-        bool width_split,
+        const CoreCoord& core,
         uint32_t padded_page_size,
         uint32_t dst_page_index = 0,
         std::optional<uint32_t> pages_to_write = std::nullopt) :
@@ -272,8 +270,7 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
             dst_page_index,
             pages_to_write),
         buffer_page_mapping(buffer_page_mapping),
-        core(core),
-        width_split(width_split) {
+        core(core) {
         ;
     }
 };
@@ -416,7 +413,6 @@ struct ReadBufferDescriptor {
     TensorMemoryLayout buffer_layout;
     uint32_t page_size;
     uint32_t padded_page_size;
-    bool linear_page_copy;
     vector<std::optional<uint32_t>> dev_page_to_host_page_mapping;
     void* dst;
     uint32_t dst_offset;
@@ -430,7 +426,7 @@ struct ReadBufferDescriptor {
         uint32_t dst_offset,
         uint32_t num_pages_read,
         uint32_t cur_dev_page_id,
-        bool linear_page_copy = true) :
+        const std::vector<std::optional<uint32_t>>& dev_page_to_host_page_mapping = {}) :
         buffer_layout(buffer.buffer_layout()),
         page_size(this->page_size = buffer.page_size()),
         padded_page_size(padded_page_size),
@@ -438,11 +434,7 @@ struct ReadBufferDescriptor {
         dst_offset(dst_offset),
         num_pages_read(num_pages_read),
         cur_dev_page_id(cur_dev_page_id),
-        linear_page_copy(linear_page_copy) {
-        if (!linear_page_copy and is_sharded(this->buffer_layout)) {
-            this->dev_page_to_host_page_mapping = generate_buffer_page_mapping(buffer).dev_page_to_host_page_mapping_;
-        }
-    }
+        dev_page_to_host_page_mapping(dev_page_to_host_page_mapping) {}
 };
 
 /*
