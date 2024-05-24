@@ -56,7 +56,7 @@
 | [LLaMA-2-70B-decode](./models/demos/t3000/llama2_70b)     | Tensor Parallel    | 129th               |  32                   | 8.4 t/s/u - 269 t/s          |  13.8 t/s/u - 441 t/s        |   20 t/s/u      |
 | [LLaMA-3-70B-decode](./models/demos/t3000/llama3_70b)     | Tensor Parallel    | 129th               |  32                   | 2.4 t/s/u - 75.4 t/s         |  7.7 t/s/u - 246.4 t/s       |   20 t/s/u      |
 | [Falcon40B-decode](./models/demos/t3000/falcon40b)        | Tensor Parallel    | 129th               |  32                   | 1.5 t/s/u - 48 t/s           |  14.0 t/s/u - 448 t/s        |   30 t/s/u      |
-| [Mixtral7Bx8-decode](./models/demos/t3000/mixtral8x7b)    | Tensor Parallel    | 129th               |  32                   | 0.3 t/s/u - 1.0 t/s          |  23.5 t/s/u - 752 t/s        |   28 t/s/u      |
+| [Mixtral7Bx8-decode](./models/demos/t3000/mixtral8x7b)    | Tensor Parallel    | 129th               |  32                   | 3.6 t/s/u - 114 t/s          |  23.5 t/s/u - 752 t/s        |   28 t/s/u      |
 | ResNet50                                                  | Data Parallel      | coming soon         |                       |                              |                              |                 |
 
 ## Using TT-NN ops and tensors
