@@ -40,8 +40,19 @@ uint32_t sums[SUM_COUNT] __attribute__((used));
 uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 }  // namespace kernel_profiler
 
-extern "C" void ncrisc_resume(void);
-extern "C" void notify_brisc_and_halt(uint32_t status);
+inline __attribute__((always_inline)) void set_ncrisc_resume_addr() {
+#ifdef NCRISC_HAS_IRAM
+    extern "C" void ncrisc_resume(void);
+    mailboxes->ncrisc_halt.resume_addr = (uint32_t)ncrisc_resume;
+#endif
+}
+
+inline __attribute__((always_inline)) void halt_ncrisc_with_iram() {
+#ifdef NCRISC_HAS_IRAM
+    extern "C" void notify_brisc_and_halt(uint32_t status);
+    notify_brisc_and_halt(RUN_SYNC_MSG_DONE);
+#endif
+}
 
 int main(int argc, char *argv[]) {
     DEBUG_STATUS("I");
@@ -53,12 +64,15 @@ int main(int argc, char *argv[]) {
 
     risc_init();
 
+    // If NCRISC has IRAM it needs to halt before BRISC copies data from L1 to IRAM
+    // Need to save address to jump to after BRISC resumes NCRISC
+    set_ncrisc_resume_addr();
     mailboxes->ncrisc_halt.resume_addr = (uint32_t)ncrisc_resume;
 
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
         DEBUG_STATUS("W");
-        notify_brisc_and_halt(RUN_SYNC_MSG_DONE);
+        halt_ncrisc_with_iram();
         DeviceZoneScopedMainN("NCRISC-FW");
 
         setup_cb_read_write_interfaces(0, mailboxes->launch.max_cb_index, true, true);

@@ -148,14 +148,14 @@ void set_deassert_addresses() {
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
 
 #ifdef ARCH_BLACKHOLE
-    WRITE_REG(RISCV_DEBUG_REG_NCRISC_RESET_PC, MEM_NCRISC_IRAM_BASE);
+    WRITE_REG(RISCV_DEBUG_REG_NCRISC_RESET_PC, MEM_NCRISC_FIRMWARE_BASE);
     WRITE_REG(RISCV_DEBUG_REG_TRISC0_RESET_PC, MEM_TRISC0_BASE);
     WRITE_REG(RISCV_DEBUG_REG_TRISC1_RESET_PC, MEM_TRISC1_BASE);
     WRITE_REG(RISCV_DEBUG_REG_TRISC2_RESET_PC, MEM_TRISC2_BASE);
     WRITE_REG(RISCV_DEBUG_REG_TRISC_RESET_PC_OVERRIDE, 0b111);
     WRITE_REG(RISCV_DEBUG_REG_NCRISC_RESET_PC_OVERRIDE, 0x1);
 #else
-    cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = MEM_NCRISC_IRAM_BASE;
+    cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = MEM_NCRISC_FIRMWARE_BASE;
     cfg_regs[TRISC_RESET_PC_SEC0_PC_ADDR32] = MEM_TRISC0_BASE;
     cfg_regs[TRISC_RESET_PC_SEC1_PC_ADDR32] = MEM_TRISC1_BASE;
     cfg_regs[TRISC_RESET_PC_SEC2_PC_ADDR32] = MEM_TRISC2_BASE;
@@ -164,14 +164,24 @@ void set_deassert_addresses() {
 #endif
 }
 
-void l1_to_ncrisc_iram_copy(uint32_t src, uint32_t dst, uint16_t size) {
+void l1_to_ncrisc_iram_copy(uint16_t size, uint32_t address_offset = 0) {
+#ifdef NCRISC_HAS_IRAM
+    // Always copy ncrisc even if its size is 0 (save branch)...
     // Copy NCRISC firmware from L1 to local IRAM using tensix DMA
-    tdma_xmov(TDMA_MOVER0, src, dst, size, XMOV_L1_TO_L0);
+    tdma_xmov(
+        TDMA_MOVER0,
+        (MEM_NCRISC_INIT_IRAM_L1_BASE >> 4) + address_offset,
+        MEM_MOVER_VIEW_IRAM_BASE_ADDR + address_offset,
+        size,
+        XMOV_L1_TO_L0);
+#endif
 }
 
 void l1_to_ncrisc_iram_copy_wait() {
+#ifdef NCRISC_HAS_IRAM
     // Wait for DMA to finish
     wait_tdma_movers_done(RISCV_TDMA_STATUS_FLAG_MOVER0_BUSY_MASK);
+#endif
 }
 
 void device_setup() {
@@ -259,7 +269,8 @@ inline void deassert_ncrisc_trisc() {
     uint16_t fw_size16 = mailboxes->launch.ncrisc_kernel_size16;
     ncrisc_kernel_start_offset16 = fw_size16;
 
-    l1_to_ncrisc_iram_copy(MEM_NCRISC_INIT_IRAM_L1_BASE >> 4, MEM_MOVER_VIEW_IRAM_BASE_ADDR, fw_size16);
+    // Copies from L1 to IRAM on chips where NCRISC has IRAM
+    l1_to_ncrisc_iram_copy(fw_size16);
     l1_to_ncrisc_iram_copy_wait();
 
     // Bring ncrisc/triscs out of reset
@@ -267,13 +278,11 @@ inline void deassert_ncrisc_trisc() {
 }
 
 inline void set_ncrisc_kernel_resume_deassert_address() {
+#ifdef NCRISC_HAS_IRAM
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
     DEBUG_STATUS("INW");
     while (mailboxes->ncrisc_halt.resume_addr == 0);
     DEBUG_STATUS("IND");
-#ifdef ARCH_BLACKHOLE
-    WRITE_REG(RISCV_DEBUG_REG_NCRISC_RESET_PC, mailboxes->ncrisc_halt.resume_addr);
-#else
     cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
 #endif
 }
@@ -317,6 +326,8 @@ int main() {
     mailboxes->ncrisc_halt.resume_addr = 0;
     mailboxes->slave_sync.ncrisc = RUN_SYNC_MSG_GO;
     deassert_ncrisc_trisc();
+    // When NCRISC has IRAM, it needs to be halted before data can be copied from L1 to IRAM
+    // This routine allows us to resume NCRISC after the copy is done
     set_ncrisc_kernel_resume_deassert_address();
 
     // Wait for ncrisc to halt
@@ -337,11 +348,8 @@ int main() {
         {
             DeviceZoneScopedMainN("BRISC-FW");
 
-            // Always copy ncrisc even if its size is 0 (save branch)...
-            l1_to_ncrisc_iram_copy(
-                (MEM_NCRISC_INIT_IRAM_L1_BASE >> 4) + ncrisc_kernel_start_offset16,
-                MEM_MOVER_VIEW_IRAM_BASE_ADDR + ncrisc_kernel_start_offset16,
-                mailboxes->launch.ncrisc_kernel_size16);
+            // Copies from L1 to IRAM on chips where NCRISC has IRAM
+            l1_to_ncrisc_iram_copy(mailboxes->launch.ncrisc_kernel_size16, ncrisc_kernel_start_offset16);
 
             // Invalidate the i$ now the kernels have loaded and before running
             volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
