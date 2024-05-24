@@ -126,9 +126,24 @@ def import_tracy_op_logs():
     with open(tracyOpTimesLog, "r") as csvFile:
         csvReader = csv.DictReader(csvFile)
         for op in csvReader:
-            opID = int(op["zone_text"].split(":")[-1])
-            assert opID in ops.keys(), f"Op time for op {opID} must present"
-            ops[opID]["host_time"] = op
+            if "TT_DNN" in op["name"]:
+                opID = int(op["zone_text"].split(":")[-1])
+                assert opID in ops.keys(), f"Op time for op {opID} must present"
+                ops[opID]["host_time"] = op
+
+    with open(tracyOpTimesLog, "r") as csvFile:
+        csvReader = csv.DictReader(csvFile)
+        for op in csvReader:
+            if op["special_parent_text"] and "id:" in op["special_parent_text"]:
+                parentOpID = int(op["special_parent_text"].split(":")[-1])
+
+                if "child_calls" in ops[parentOpID].keys():
+                    if op["name"] in ops[parentOpID]["child_calls"].keys():
+                        ops[parentOpID]["child_calls"][op["name"]] += int(op["exec_time_ns"])
+                    else:
+                        ops[parentOpID]["child_calls"][op["name"]] = int(op["exec_time_ns"])
+                else:
+                    ops[parentOpID]["child_calls"] = {op["name"]: int(op["exec_time_ns"])}
 
     return ops, signposts
 
@@ -300,6 +315,13 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
 
         rowKeys = list(ops.keys()) + list(signposts.keys())
         rowKeys.sort(key=row_compare)
+        childCallKeys = set()
+        for row in rowKeys:
+            if type(row) is int:
+                op = ops[row]
+                if "child_calls" in op.keys():
+                    for childCall in op["child_calls"]:
+                        childCallKeys.add(f"{childCall}_TT_HOST_FUNC [ns]")
         for row in rowKeys:
             rowDict = {}
             if type(row) is str and "sp" in row:
@@ -360,6 +382,11 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
                                 rowDict["OP TO OP LATENCY [ns]"] = 0
                             devicePreOpTime[deviceID] = analysisData[0]["end_cycle"]
 
+                if "child_calls" in opData.keys():
+                    for childCall, duration in opData["child_calls"].items():
+                        headerField = f"{childCall}_TT_HOST_FUNC [ns]"
+                        rowDict[headerField] = f"{duration:.0f}"
+
                 assert "input_tensors" in opData.keys(), "Ops must have input tensors"
                 if "optional_input_tensors" in opData.keys():
                     add_io_data(opData["input_tensors"] + opData["optional_input_tensors"], "INPUT")
@@ -384,6 +411,7 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
             + tensorCSVData["INPUT"]["headers"]
             + tensorCSVData["OUTPUT"]["headers"]
             + OPS_CSV_HEADER[ioHeaderIndex + 2 :]
+            + sorted(list(childCallKeys))
         )
         writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
         writer.writeheader()
