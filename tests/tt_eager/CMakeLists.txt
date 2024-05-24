@@ -5,6 +5,7 @@ target_link_libraries(test_eager_common_libs INTERFACE tt_eager test_common_libs
 set(TT_EAGER_TESTS_OPS
     ops/ccl/test_all_gather_utils
     ops/ccl/test_all_gather_sharded_indexing_helpers
+    ops/ccl/test_ccl_helpers
     ops/test_average_pool
     ops/test_eltwise_binary_op
     ops/test_eltwise_unary_op

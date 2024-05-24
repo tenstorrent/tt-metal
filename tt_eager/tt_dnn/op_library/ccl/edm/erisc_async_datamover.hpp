@@ -14,13 +14,20 @@
 #include "tt_metal/hw/inc/wormhole/noc/noc.h"
 
 using tt::tt_metal::ccl::EriscDataMoverBufferSharingMode;
+using tt::tt_metal::ccl::EriscDataMoverTerminationMode;
+using tt::tt_metal::ccl::EriscDataMoverWorkerSignal;
 
 namespace erisc {
 namespace datamover {
 
-template <EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE>
-struct edm_worker_index {
+template <EriscDataMoverBufferSharingMode buffer_sharing_mode, EriscDataMoverTerminationMode termination_mode>
+struct EriscDatamoverConfig {
+    static constexpr EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE = buffer_sharing_mode;
+    static constexpr EriscDataMoverTerminationMode TERMINATION_MODE = termination_mode;
 };
+
+template <EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE>
+struct edm_worker_index {};
 
 template <>
 struct edm_worker_index<EriscDataMoverBufferSharingMode::ROUND_ROBIN> {
@@ -35,12 +42,16 @@ using tt::tt_metal::ccl::WorkerXY;
  * state for the transaction channel, holds information such as buffer and semaphore addresses, and has helper
  * functions to more easily check semaphore and ack statuses and to send/receive data and/or semaphore updates.
  */
-template <EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE>
+// template <EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE>
+template <typename EDM_CONFIG>
 class ChannelBuffer final {
+    static constexpr EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE = EDM_CONFIG::BUFFER_SHARING_MODE;
+    static constexpr EriscDataMoverTerminationMode TERMINATION_MODE = EDM_CONFIG::TERMINATION_MODE;
     static_assert(
         BUFFER_SHARING_MODE == EriscDataMoverBufferSharingMode::NOT_SHARED ||
-        BUFFER_SHARING_MODE == EriscDataMoverBufferSharingMode::ROUND_ROBIN,
+            BUFFER_SHARING_MODE == EriscDataMoverBufferSharingMode::ROUND_ROBIN,
         "The only BufferSharding modes supported are NOT_SHARED and ROUND_ROBIN");
+
    public:
     enum STATE : uint8_t {
         DONE = 0,
@@ -100,11 +111,12 @@ class ChannelBuffer final {
         channel_bytes_acked_address(&erisc_info->channels[eth_transaction_channel].receiver_ack),
         total_num_messages_to_move(total_num_messages_to_move),
         state(is_sender_side ? STATE::WAITING_FOR_WORKER : STATE::WAITING_FOR_ETH),
-        is_sender_completion_pending(false) {
-
+        is_sender_completion_pending(false),
+        is_sender_side(is_sender_side) {
         clear_local_semaphore();
 
-        if (total_num_messages_to_move != 0) {
+        if (total_num_messages_to_move != 0 ||
+            TERMINATION_MODE != EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
             if (is_sender_side) {
                 // Tell the sender side workers that we're ready to accept data on this channel
                 increment_worker_semaphores();
@@ -130,21 +142,24 @@ class ChannelBuffer final {
                 noc_semaphore_inc(worker_semaphore_address, 1);
             }
         } else if (BUFFER_SHARING_MODE == EriscDataMoverBufferSharingMode::ROUND_ROBIN) {
-                WorkerXY worker_xy = this->worker_coords[this->worker_index.worker_index];
-                uint64_t worker_semaphore_address =
-                    get_noc_addr((uint32_t)worker_xy.x, (uint32_t)worker_xy.y, this->worker_semaphore_l1_address);
+            WorkerXY worker_xy = this->worker_coords[this->worker_index.worker_index];
+            uint64_t worker_semaphore_address =
+                get_noc_addr((uint32_t)worker_xy.x, (uint32_t)worker_xy.y, this->worker_semaphore_l1_address);
 
-                noc_semaphore_inc(worker_semaphore_address, 1);
-                this->worker_index.worker_index++;
-                if (this->worker_index.worker_index >= this->num_workers) {
-                    this->worker_index.worker_index = 0;
-                }
+            noc_semaphore_inc(worker_semaphore_address, 1);
+            this->worker_index.worker_index++;
+            if (this->worker_index.worker_index >= this->num_workers) {
+                this->worker_index.worker_index = 0;
+            }
         } else {
-            ASSERT(false); // Not implemented
+            ASSERT(false);  // Not implemented
         }
     }
 
     [[nodiscard]] FORCE_INLINE bool is_local_semaphore_full() const {
+        if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
+            ASSERT(*(this->local_semaphore_address) <= this->num_workers);
+        }
         return *(this->local_semaphore_address) == this->num_workers;
     }
 
@@ -155,6 +170,7 @@ class ChannelBuffer final {
     [[nodiscard]] STATE get_state() const { return this->state; }
 
     FORCE_INLINE void goto_state(STATE s) { this->state = s; }
+
     [[nodiscard]] FORCE_INLINE bool is_waiting_for_workers_core() const {
         return this->state == STATE::WAITING_FOR_WORKER;
     }
@@ -173,15 +189,13 @@ class ChannelBuffer final {
         ASSERT(this->eth_transaction_channel < eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS);
         return this->eth_transaction_channel;
     }
-    [[nodiscard]] FORCE_INLINE std::size_t get_remote_eth_buffer_address() const {
-        return this->address;
-    }
+    [[nodiscard]] FORCE_INLINE std::size_t get_remote_eth_buffer_address() const { return this->address; }
     [[nodiscard]] FORCE_INLINE std::size_t get_size_in_bytes() const { return this->size_in_bytes; }
     [[nodiscard]] FORCE_INLINE std::size_t get_current_payload_size() const { return this->get_size_in_bytes(); }
 
     [[nodiscard]] FORCE_INLINE std::size_t get_buffer_address() const { return this->address; }
 
-    FORCE_INLINE uint32_t  get_messages_moved() { return this->num_messages_moved; }
+    FORCE_INLINE uint32_t get_messages_moved() { return this->num_messages_moved; }
     FORCE_INLINE void increment_messages_moved() { this->num_messages_moved++; }
 
     [[nodiscard]] FORCE_INLINE bool all_messages_moved() {
@@ -191,9 +205,9 @@ class ChannelBuffer final {
     FORCE_INLINE void set_send_completion_pending(bool value) { this->is_sender_completion_pending = value; }
     [[nodiscard]] FORCE_INLINE bool is_send_completion_pending() const { return this->is_sender_completion_pending; }
 
-    FORCE_INLINE bool eth_is_receiver_channel_send_done() const { return *this->channel_bytes_sent_address == 0;}
-    FORCE_INLINE bool eth_bytes_are_available_on_channel() const { return *this->channel_bytes_sent_address != 0;}
-    FORCE_INLINE bool eth_is_receiver_channel_send_acked() const { return *this->channel_bytes_acked_address != 0;}
+    FORCE_INLINE bool eth_is_receiver_channel_send_done() const { return *this->channel_bytes_sent_address == 0; }
+    FORCE_INLINE bool eth_bytes_are_available_on_channel() const { return *this->channel_bytes_sent_address != 0; }
+    FORCE_INLINE bool eth_is_receiver_channel_send_acked() const { return *this->channel_bytes_acked_address != 0; }
     volatile tt_l1_ptr uint32_t *const get_channel_bytes_sent_address() { return this->channel_bytes_sent_address; }
     volatile tt_l1_ptr uint32_t *const get_channel_bytes_acked_address() { return this->channel_bytes_acked_address; }
 
@@ -213,6 +227,7 @@ class ChannelBuffer final {
     STATE state;
     edm_worker_index<BUFFER_SHARING_MODE> worker_index;
     bool is_sender_completion_pending;
+    bool is_sender_side;
 };
 
 template <typename T = uint8_t>
@@ -267,22 +282,21 @@ class QueueIndexPointer {
 };
 
 FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, bool is_sender) {
+    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[4] = 1;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[5] = 1;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[6] = 0x1c0ffee1;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[7] = 0x1c0ffee2;
 
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[4] = 1;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[5] = 1;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[6] = 0x1c0ffee1;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[7] = 0x1c0ffee2;
-
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[8] = 0;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[9] = 0;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[10] = 0x4c0ffee1;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[11] = 0x5c0ffee2;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[8] = 0;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[9] = 0;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[10] = 0x4c0ffee1;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[11] = 0x5c0ffee2;
     erisc_info->channels[0].receiver_ack = 0;
     for (uint32_t i = 1; i < eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS; i++) {
         erisc_info->channels[i].bytes_sent = 0;
         erisc_info->channels[i].receiver_ack = 0;
     }
-    *(volatile tt_l1_ptr uint32_t*)handshake_register_address = 0;
+    *(volatile tt_l1_ptr uint32_t *)handshake_register_address = 0;
     if (is_sender) {
         eth_wait_receiver_done();
         eth_send_bytes(handshake_register_address, handshake_register_address, 16);
@@ -310,8 +324,8 @@ FORCE_INLINE void initialize_transaction_buffer_addresses(
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
 
-template <EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE>
-FORCE_INLINE bool sender_eth_send_data_sequence(ChannelBuffer<BUFFER_SHARING_MODE> &sender_buffer_channel) {
+template <typename EDM_CONFIG>
+FORCE_INLINE bool sender_eth_send_data_sequence(ChannelBuffer<EDM_CONFIG> &sender_buffer_channel) {
     bool did_something = false;
     if (sender_buffer_channel.eth_is_receiver_channel_send_done()) {
         bool need_to_send_completion = sender_buffer_channel.is_send_completion_pending();
@@ -331,9 +345,10 @@ FORCE_INLINE bool sender_eth_send_data_sequence(ChannelBuffer<BUFFER_SHARING_MOD
         }
 
         if (need_to_send_completion && !eth_txq_is_busy()) {
-            eth_send_payload_complete_signal_over_channel(sender_buffer_channel.get_eth_transaction_channel(), sender_buffer_channel.get_current_payload_size());
+            eth_send_payload_complete_signal_over_channel(
+                sender_buffer_channel.get_eth_transaction_channel(), sender_buffer_channel.get_current_payload_size());
             sender_buffer_channel.set_send_completion_pending(false);
-            sender_buffer_channel.goto_state(ChannelBuffer<BUFFER_SHARING_MODE>::WAITING_FOR_ETH);
+            sender_buffer_channel.goto_state(ChannelBuffer<EDM_CONFIG>::WAITING_FOR_ETH);
             did_something = true;
         }
     }
@@ -341,33 +356,42 @@ FORCE_INLINE bool sender_eth_send_data_sequence(ChannelBuffer<BUFFER_SHARING_MOD
     return did_something;
 }
 
-template <EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE>
+template <typename EDM_CONFIG>
 FORCE_INLINE bool sender_notify_workers_if_buffer_available_sequence(
-    ChannelBuffer<BUFFER_SHARING_MODE> &sender_buffer_channel, uint32_t &num_senders_complete) {
+    ChannelBuffer<EDM_CONFIG> &sender_buffer_channel, uint32_t &num_senders_complete) {
+    bool channel_done = false;
+    if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
+        channel_done = sender_buffer_channel.all_messages_moved();
+    } else if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::WORKER_INITIATED) {
+        // Nothing to do here because in this termination mode, we must check the signal in a different state
+    } else {
+        ASSERT(false);
+    }
 
+    sender_buffer_channel.clear_local_semaphore();
     sender_buffer_channel.increment_worker_semaphores();
 
-    if (!sender_buffer_channel.all_messages_moved()) {
-        sender_buffer_channel.goto_state(ChannelBuffer<BUFFER_SHARING_MODE>::WAITING_FOR_WORKER);
+    if (!channel_done) {
+        sender_buffer_channel.goto_state(ChannelBuffer<EDM_CONFIG>::WAITING_FOR_WORKER);
     } else {
-        sender_buffer_channel.goto_state(ChannelBuffer<BUFFER_SHARING_MODE>::DONE);
+        sender_buffer_channel.goto_state(ChannelBuffer<EDM_CONFIG>::DONE);
         num_senders_complete++;
     }
 
     return true;
 }
 
-template <EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE>
-FORCE_INLINE bool sender_eth_check_receiver_ack_sequence(ChannelBuffer<BUFFER_SHARING_MODE> &sender_buffer_channel, uint32_t &num_senders_complete) {
+template <typename EDM_CONFIG>
+FORCE_INLINE bool sender_eth_check_receiver_ack_sequence(
+    ChannelBuffer<EDM_CONFIG> &sender_buffer_channel, uint32_t &num_senders_complete) {
     bool did_something = false;
 
-    bool transimission_acked_by_receiver =
-        sender_buffer_channel.eth_is_receiver_channel_send_acked() ||
-        sender_buffer_channel.eth_is_receiver_channel_send_done();
+    bool transimission_acked_by_receiver = sender_buffer_channel.eth_is_receiver_channel_send_acked() ||
+                                           sender_buffer_channel.eth_is_receiver_channel_send_done();
     if (transimission_acked_by_receiver) {
         eth_clear_sender_channel_ack(sender_buffer_channel.get_eth_transaction_channel());
         sender_buffer_channel.increment_messages_moved();
-        sender_buffer_channel.goto_state(ChannelBuffer<BUFFER_SHARING_MODE>::SIGNALING_WORKER);
+        sender_buffer_channel.goto_state(ChannelBuffer<EDM_CONFIG>::SIGNALING_WORKER);
         sender_notify_workers_if_buffer_available_sequence(sender_buffer_channel, num_senders_complete);
         did_something = true;
     }
@@ -378,15 +402,25 @@ FORCE_INLINE bool sender_eth_check_receiver_ack_sequence(ChannelBuffer<BUFFER_SH
 /*
  *
  */
-template <EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE>
-FORCE_INLINE bool sender_noc_receive_payload_ack_check_sequence(ChannelBuffer<BUFFER_SHARING_MODE> &sender_channel_buffer) {
+template <typename EDM_CONFIG>
+FORCE_INLINE bool sender_noc_receive_payload_ack_check_sequence(
+    ChannelBuffer<EDM_CONFIG> &sender_channel_buffer, uint32_t &num_senders_complete) {
     bool did_something = false;
+
+    if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::WORKER_INITIATED) {
+        if (*sender_channel_buffer.local_semaphore_address == EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY) {
+            sender_channel_buffer.clear_local_semaphore();
+            sender_channel_buffer.goto_state(ChannelBuffer<EDM_CONFIG>::DONE);
+            num_senders_complete++;
+            return true;
+        }
+    }
 
     bool read_finished = sender_channel_buffer.is_local_semaphore_full();
     if (read_finished) {
         // We can clear the semaphore, and wait for space on receiver
-        sender_channel_buffer.clear_local_semaphore();
-        sender_channel_buffer.goto_state(ChannelBuffer<BUFFER_SHARING_MODE>::READY_FOR_ETH_TRANSFER);
+        // sender_channel_buffer.clear_local_semaphore();
+        sender_channel_buffer.goto_state(ChannelBuffer<EDM_CONFIG>::READY_FOR_ETH_TRANSFER);
         did_something = true;
 
         erisc::datamover::sender_eth_send_data_sequence(sender_channel_buffer);
@@ -399,32 +433,42 @@ FORCE_INLINE bool sender_noc_receive_payload_ack_check_sequence(ChannelBuffer<BU
 //   RECEIVER SIDE HELPERS
 /////////////////////////////////////////////
 
-
 /*
  *
  */
-template <EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE>
-FORCE_INLINE bool receiver_eth_notify_workers_payload_available_sequence(ChannelBuffer<BUFFER_SHARING_MODE> &buffer_channel) {
+template <typename EDM_CONFIG>
+FORCE_INLINE bool receiver_eth_notify_workers_payload_available_sequence(ChannelBuffer<EDM_CONFIG> &buffer_channel) {
+    buffer_channel.clear_local_semaphore();
     buffer_channel.increment_worker_semaphores();
-    buffer_channel.goto_state(ChannelBuffer<BUFFER_SHARING_MODE>::WAITING_FOR_WORKER);
+    buffer_channel.goto_state(ChannelBuffer<EDM_CONFIG>::WAITING_FOR_WORKER);
 
     return true;
 }
-
-
 
 /*
  * If payload received, notify (send ack to) sender so sender knows it can free up its local buffer
  *
  */
-template <EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE>
-FORCE_INLINE bool receiver_eth_accept_payload_sequence(ChannelBuffer<BUFFER_SHARING_MODE> &buffer_channel, uint32_t eth_transaction_ack_word_addr) {
+template <typename EDM_CONFIG>
+FORCE_INLINE bool receiver_eth_accept_payload_sequence(
+    ChannelBuffer<EDM_CONFIG> &buffer_channel,
+    uint32_t &num_receivers_complete,
+    uint32_t eth_transaction_ack_word_addr) {
     bool did_something = false;
+
+    if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::WORKER_INITIATED) {
+        if (*buffer_channel.local_semaphore_address == EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY) {
+            buffer_channel.clear_local_semaphore();
+            buffer_channel.goto_state(ChannelBuffer<EDM_CONFIG>::DONE);
+            num_receivers_complete++;
+            return true;
+        }
+    }
 
     if (buffer_channel.eth_bytes_are_available_on_channel()) {
         if (!eth_txq_is_busy()) {
             eth_receiver_channel_ack(buffer_channel.get_eth_transaction_channel(), eth_transaction_ack_word_addr);
-            buffer_channel.goto_state(ChannelBuffer<BUFFER_SHARING_MODE>::SIGNALING_WORKER);
+            buffer_channel.goto_state(ChannelBuffer<EDM_CONFIG>::SIGNALING_WORKER);
             did_something = true;
 
             // FIXME: Decouple these so we can still signal workers even if eth command queue is busy
@@ -443,30 +487,46 @@ FORCE_INLINE bool receiver_eth_accept_payload_sequence(ChannelBuffer<BUFFER_SHAR
  * - notifies sender it is safe to send next payload
  * - clear local semaphore
  */
-template <EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE>
+template <typename EDM_CONFIG>
 FORCE_INLINE bool receiver_noc_read_worker_completion_check_sequence(
-    ChannelBuffer<BUFFER_SHARING_MODE> &buffer_channel, uint32_t &num_receivers_complete, uint32_t eth_transaction_complete_addr) {
+    ChannelBuffer<EDM_CONFIG> &buffer_channel,
+    uint32_t &num_receivers_complete,
+    uint32_t eth_transaction_complete_addr) {
     bool did_something = false;
 
     bool workers_are_finished_reading = buffer_channel.is_local_semaphore_full();
+
+    if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::WORKER_INITIATED) {
+        // May have already gotten final termination signal by this point so check for that too
+        workers_are_finished_reading =
+            workers_are_finished_reading ||
+            (*buffer_channel.local_semaphore_address == EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
+    }
+
     bool can_notify_sender_of_buffer_available = workers_are_finished_reading;
     if (can_notify_sender_of_buffer_available) {
-
         if (!eth_txq_is_busy()) {
             eth_receiver_channel_done(buffer_channel.get_eth_transaction_channel());
             buffer_channel.increment_messages_moved();
-            buffer_channel.clear_local_semaphore();
 
-            if (!buffer_channel.all_messages_moved()) {
-                buffer_channel.goto_state(ChannelBuffer<BUFFER_SHARING_MODE>::WAITING_FOR_ETH);
+            bool channel_done = false;
+            if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
+                channel_done = buffer_channel.all_messages_moved();
+            } else if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::WORKER_INITIATED) {
+                // Do nothing
             } else {
-                buffer_channel.goto_state(ChannelBuffer<BUFFER_SHARING_MODE>::DONE);
+                ASSERT(false);
+            }
+
+            if (!channel_done) {
+                buffer_channel.goto_state(ChannelBuffer<EDM_CONFIG>::WAITING_FOR_ETH);
+            } else {
+                buffer_channel.goto_state(ChannelBuffer<EDM_CONFIG>::DONE);
                 num_receivers_complete++;
             }
 
             did_something = true;
         }
-
     }
 
     return did_something;

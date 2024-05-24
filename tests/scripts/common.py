@@ -14,7 +14,7 @@ from operator import ne, truth
 
 from loguru import logger
 
-from models.utility_functions import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_grayskull
 
 
 class TestSuiteType(Enum):
@@ -31,6 +31,10 @@ TestEntry = namedtuple("TestEntry", ["test_name", "executable_name", "extra_para
 
 def void_for_whb0(x):
     return (not is_wormhole_b0()) and x or None
+
+
+def void_for_gs(x):
+    return (not is_grayskull()) and x or None
 
 
 def filter_empty(fn):
