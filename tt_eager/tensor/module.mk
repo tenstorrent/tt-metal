@@ -1,5 +1,4 @@
 TENSOR_SRCS = \
-	tt_eager/tensor/tensor_impl_wrapper.cpp \
 	tt_eager/tensor/tensor_impl.cpp \
 	tt_eager/tensor/tensor.cpp \
 	tt_eager/tensor/types.cpp \
