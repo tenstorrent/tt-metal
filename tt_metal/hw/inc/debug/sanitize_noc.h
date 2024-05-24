@@ -253,10 +253,14 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 #if defined(WATCHER_DEBUG_DELAY)
     debug_insert_delays_msg_t tt_l1_ptr *v = GET_MAILBOX_ADDRESS_DEV(debug_insert_delays);
 
-    bool in_riscv_mask = (v[0].debug_delay_riscv_mask & (1 << debug_get_which_riscv())) != 0;
-    bool in_transaction_type_mask = (v[0].debug_delay_transaction_type_mask & (1 << transaction_type)) != 0;
-
-    if (in_riscv_mask && in_transaction_type_mask) {
+    bool delay = false;
+    switch (transaction_type) {
+        case TransactionRead: delay = (v[0].read_delay_riscv_mask & (1 << debug_get_which_riscv())) != 0; break;
+        case TransactionWrite: delay = (v[0].write_delay_riscv_mask & (1 << debug_get_which_riscv())) != 0; break;
+        case TransactionAtomic: delay = (v[0].atomic_delay_riscv_mask & (1 << debug_get_which_riscv())) != 0; break;
+        default: break;
+    }
+    if (delay) {
         // WATCHER_DEBUG_DELAY is a compile time constant passed with -D
         for (volatile uint32_t i = 0; i < WATCHER_DEBUG_DELAY; i++);  // Spin loop
     }

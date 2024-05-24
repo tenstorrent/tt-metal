@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdlib.h>
+#include "rtoptions.hpp"
+
 #include <stdio.h>
+#include <stdlib.h>
+
 #include <cstring>
 
-#include "rtoptions.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "tools/profiler/profiler_state.hpp"
 
@@ -18,7 +20,9 @@ namespace llrt {
 
 const char *RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
     "DPRINT",
-    "DEBUG_DELAY"
+    "READ_DEBUG_DELAY",
+    "WRITE_DEBUG_DELAY",
+    "ATOMIC_DEBUG_DELAY",
 };
 
 // Note: global initialization order is non-deterministic
@@ -27,7 +31,7 @@ const char *RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
 RunTimeOptions OptionsG;
 
 RunTimeOptions::RunTimeOptions() {
-    if (const char* root_dir_ptr = std::getenv("TT_METAL_HOME")) {
+    if (const char *root_dir_ptr = std::getenv("TT_METAL_HOME")) {
         root_dir = string(root_dir_ptr) + "/";
     }
 
@@ -49,22 +53,26 @@ RunTimeOptions::RunTimeOptions() {
         profiler_enabled = true;
     }
 #endif
-    TT_FATAL(!(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()), "Cannot enable both debug printing and profiling");
+    TT_FATAL(
+        !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
+        "Cannot enable both debug printing and profiling");
 
     null_kernels = (std::getenv("TT_METAL_NULL_KERNELS") != nullptr);
 
     clear_l1 = true;
     const char *clear_l1_enabled_str = std::getenv("TT_METAL_CLEAR_L1");
     if (clear_l1_enabled_str != nullptr) {
-        if (clear_l1_enabled_str[0] == '0') clear_l1 = false;
-        if (clear_l1_enabled_str[0] == '1') clear_l1 = true;
+        if (clear_l1_enabled_str[0] == '0')
+            clear_l1 = false;
+        if (clear_l1_enabled_str[0] == '1')
+            clear_l1 = true;
     }
 
     const char *riscv_debug_info_enabled_str = std::getenv("TT_METAL_RISCV_DEBUG_INFO");
     set_riscv_debug_info_enabled(riscv_debug_info_enabled_str != nullptr);
 }
 
-const std::string& RunTimeOptions::get_root_dir() {
+const std::string &RunTimeOptions::get_root_dir() {
     if (root_dir == "") {
         TT_THROW("Env var " + std::string("TT_METAL_HOME") + " is not set.");
     }
@@ -99,12 +107,7 @@ void RunTimeOptions::ParseWatcherEnv() {
 
     // Any watcher features to disabled based on env var.
     std::set all_features = {
-         watcher_status_str,
-         watcher_noc_sanitize_str,
-         watcher_assert_str,
-         watcher_pause_str,
-         watcher_ring_buffer_str
-    };
+        watcher_status_str, watcher_noc_sanitize_str, watcher_assert_str, watcher_pause_str, watcher_ring_buffer_str};
     for (std::string feature : all_features) {
         std::string env_var("TT_METAL_WATCHER_DISABLE_");
         env_var += feature;
@@ -116,11 +119,12 @@ void RunTimeOptions::ParseWatcherEnv() {
     const char *watcher_debug_delay_str = getenv("TT_METAL_WATCHER_DEBUG_DELAY");
     if (watcher_debug_delay_str != nullptr) {
         sscanf(watcher_debug_delay_str, "%u", &watcher_debug_delay);
-        set_feature_enabled(RunTimeDebugFeatureDebugDelay, true);
         // Assert watcher is also enabled (TT_METAL_WATCHER=1)
         TT_ASSERT(watcher_enabled, "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER");
         // Assert TT_METAL_WATCHER_DISABLE_NOC_SANITIZE is either not set or set to 0
-        TT_ASSERT(watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(), "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=0");
+        TT_ASSERT(
+            watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(),
+            "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=0");
     }
 }
 
@@ -133,7 +137,6 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
     ParseFeatureChipIds(feature, feature_env_prefix + "_CHIPS");
     ParseFeatureRiscvMask(feature, feature_env_prefix + "_RISCVS");
     ParseFeatureFileName(feature, feature_env_prefix + "_FILE");
-    ParseFeatureTransactionMask(feature, feature_env_prefix + "_TRANSACTION_MASK");
 
     // Set feature enabled if the user asked for any dprint cores
     feature_targets[feature].enabled = false;
@@ -149,7 +152,8 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
         dprint_noc_transfer_data = true;
 };
 
-void RunTimeOptions::ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string &env_var, CoreType core_type) {
+void RunTimeOptions::ParseFeatureCoreRange(
+    RunTimeDebugFeatures feature, const std::string &env_var, CoreType core_type) {
     char *str = std::getenv(env_var.c_str());
     vector<CoreCoord> cores;
 
@@ -191,8 +195,9 @@ void RunTimeOptions::ParseFeatureCoreRange(RunTimeDebugFeatures feature, const s
                     }
                     cores.push_back({x, y});
                     str = strchr(str, ',');
-                    str = strchr(str+1, ',');
-                    if (str != nullptr) str++;
+                    str = strchr(str + 1, ',');
+                    if (str != nullptr)
+                        str++;
                 }
             }
         } else {
@@ -216,7 +221,8 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
         }
         chips.push_back(chip);
         env_var_str = strchr(env_var_str, ',');
-        if (env_var_str != nullptr) env_var_str++;
+        if (env_var_str != nullptr)
+            env_var_str++;
     }
 
     // Default is no chips are specified is chip 0.
@@ -249,25 +255,9 @@ void RunTimeOptions::ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const s
 
 void RunTimeOptions::ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string &env_var) {
     char *env_var_str = std::getenv(env_var.c_str());
-    feature_targets[feature].file_name = (env_var_str != nullptr)? std::string(env_var_str) : "";
+    feature_targets[feature].file_name = (env_var_str != nullptr) ? std::string(env_var_str) : "";
 }
 
-void RunTimeOptions::ParseFeatureTransactionMask(RunTimeDebugFeatures feature, const std::string &env_var) {
-    char *env_var_str = std::getenv(env_var.c_str());
-    if (env_var_str == nullptr) {
-        feature_targets[feature].transaction_mask = (1 << TransactionNumTypes) - 1;
-        return;
-    }
-    const char *transaction_type_names[TransactionNumTypes] = { "READ", "WRITE", "ATOMIC" };
+}  // namespace llrt
 
-    for (int i = 0; i < TransactionNumTypes; i++) {
-        if (strcasestr(env_var_str, transaction_type_names[i]) != nullptr) {
-            feature_targets[feature].transaction_mask |= (1 << i);
-        }
-    }
-}
-
-
-} // namespace llrt
-
-} // namespace tt
+}  // namespace tt

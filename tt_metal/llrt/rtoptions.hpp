@@ -25,7 +25,9 @@ namespace llrt {
 // allow for more fine-grained control over which cores, chips, etc. the feature is enabled for.
 enum RunTimeDebugFeatures {
     RunTimeDebugFeatureDprint,
-    RunTimeDebugFeatureDebugDelay,
+    RunTimeDebugFeatureReadDebugDelay,
+    RunTimeDebugFeatureWriteDebugDelay,
+    RunTimeDebugFeatureAtomicDebugDelay,
     // NOTE: Update RunTimeDebugFeatureNames if adding new features
     RunTimeDebugFeatureCount
 };
@@ -43,7 +45,6 @@ struct TargetSelection {
     bool all_chips = false;
     uint32_t riscv_mask = 0;
     std::string file_name;  // File name to write output to.
-    uint32_t transaction_mask = 0;
 };
 
 class RunTimeOptions {
@@ -158,12 +159,6 @@ class RunTimeOptions {
     inline void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {
         feature_targets[feature].file_name = file_name;
     }
-    inline uint32_t get_feature_transaction_mask(RunTimeDebugFeatures feature) {
-        return feature_targets[feature].transaction_mask;
-    }
-    inline void set_feature_transaction_mask(RunTimeDebugFeatures feature, uint32_t transaction_mask) {
-        feature_targets[feature].transaction_mask = transaction_mask;
-    }
 
     inline bool get_dprint_noc_transfers() { return dprint_noc_transfer_data; }
     inline void set_dprint_noc_transfers(bool val) { dprint_noc_transfer_data = val; }
@@ -172,7 +167,9 @@ class RunTimeOptions {
     inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) {
         switch (feature) {
             case RunTimeDebugFeatureDprint: return std::to_string(get_feature_enabled(feature));
-            case RunTimeDebugFeatureDebugDelay:
+            case RunTimeDebugFeatureReadDebugDelay:
+            case RunTimeDebugFeatureWriteDebugDelay:
+            case RunTimeDebugFeatureAtomicDebugDelay:
                 if (get_feature_enabled(feature)) {
                     return std::to_string(get_watcher_debug_delay());
                 } else {
@@ -211,7 +208,6 @@ class RunTimeOptions {
     void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string &env_var);
     void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string &env_var);
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string &env_var);
-    void ParseFeatureTransactionMask(RunTimeDebugFeatures feature, const std::string &env_var);
 
     // Helper function to parse watcher-specific environment variables.
     void ParseWatcherEnv();
