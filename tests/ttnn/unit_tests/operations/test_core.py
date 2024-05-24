@@ -198,6 +198,175 @@ from enum import Enum
             (32, 64),
             (32, 96),
         ),
+        (
+            15680,
+            512,
+            ttnn.TILE_LAYOUT,
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(11, 7)
+                        ),
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 8), ttnn.experimental.tensor.CoreCoord(1, 8)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+            ),
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(11, 7)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.COL_MAJOR,
+            ),
+            (160, 512),
+            (64, 1312),
+        ),
+        (
+            2560,
+            512,
+            ttnn.TILE_LAYOUT,
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(3, 3)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+            ),
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 7)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.COL_MAJOR,
+            ),
+            (160, 512),
+            (64, 1312),
+        ),
+        (
+            2560,
+            128,
+            ttnn.TILE_LAYOUT,
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(3, 3)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+            ),
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 1)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.COL_MAJOR,
+            ),
+            (160, 128),
+            (64, 1312),
+        ),
+        (
+            192,
+            128,
+            ttnn.TILE_LAYOUT,
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+            ),
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 1)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.BLOCK,
+            ),
+            (96, 128),
+            (128, 64),
+        ),
+        (
+            128,
+            128,
+            ttnn.TILE_LAYOUT,
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+            ),
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 1)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.BLOCK,
+            ),
+            (64, 128),
+            (96, 64),
+        ),
+        (
+            96,
+            128,
+            ttnn.TILE_LAYOUT,
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 2)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+            ),
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 1)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                # orientation=ttnn.ShardOrientation.COL_MAJOR,
+            ),
+            (32, 128),
+            (64, 64),
+        ),
     ],
 )
 def test_reshard(
