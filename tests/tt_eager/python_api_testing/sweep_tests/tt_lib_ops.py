@@ -1027,6 +1027,33 @@ def eltwise_addalpha(
 
 
 @setup_host_and_device
+def eltwise_addalpha_optional(
+    x,
+    y,
+    z,
+    *args,
+    alpha,
+    device,
+    dtype,
+    layout,
+    queue_id,
+    input_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
+    cq_id = 0
+
+    if queue_id:
+        ttl.tensor.addalpha(cq_id, t0, t1, alpha, output_tensor=t2)
+    else:
+        ttl.tensor.addalpha(t0, t1, alpha, output_tensor=t2)
+
+    return tt2torch_tensor(t2)
+
+
+@setup_host_and_device
 def eltwise_div(
     x,
     y,
