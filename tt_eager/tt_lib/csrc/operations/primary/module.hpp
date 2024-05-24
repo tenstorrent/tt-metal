@@ -634,6 +634,7 @@ void py_module(py::module& m_primary) {
         py::arg("bias").noconvert() = std::nullopt,
         py::arg("output").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
         "Performs a moreh_linear operation.
     )doc");
