@@ -35,7 +35,7 @@ struct GlobalAveragePool2D {
         return std::forward_as_tuple(input_tensor);
     }
 
-    static Tensor execute(
+    static Tensor execute_on_worker_thread(
         const Tensor& input,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<DataType>& output_dtype = std::nullopt) {
@@ -44,8 +44,10 @@ struct GlobalAveragePool2D {
         return result;
     }
 };
-constexpr auto global_avg_pool2d =
-    ttnn::register_operation<ttnn::operations::pool::GlobalAveragePool2D>("ttnn::pool::global_avg_pool2d");
 }  // namespace pool
 }  // namespace operations
+
+constexpr auto global_avg_pool2d =
+    ttnn::register_operation<ttnn::operations::pool::GlobalAveragePool2D>("ttnn::pool::global_avg_pool2d");
+
 }  // namespace ttnn

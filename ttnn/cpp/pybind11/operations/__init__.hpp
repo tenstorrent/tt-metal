@@ -8,8 +8,9 @@
 #include <pybind11/stl.h>
 
 #include "ccl.hpp"
-#include "core.hpp"
 #include "conv2d.hpp"
+#include "core.hpp"
+#include "creation.hpp"
 #include "data_movement.hpp"
 #include "embedding.hpp"
 #include "kv_cache.hpp"
@@ -19,6 +20,7 @@
 #include "pool.hpp"
 #include "pybind11/operations/binary.hpp"
 #include "reduction.hpp"
+#include "ternary.hpp"
 #include "transformer.hpp"
 #include "unary.hpp"
 
@@ -35,8 +37,14 @@ void py_module(py::module& module) {
     auto m_binary = module.def_submodule("binary", "binary operations");
     binary::py_module(m_binary);
 
+    auto m_ternary = module.def_submodule("ternary", "ternary operations");
+    ternary::py_module(m_ternary);
+
     auto m_core = module.def_submodule("core", "core operations");
     core::py_module(m_core);
+
+    auto m_creation = module.def_submodule("creation", "creation operations");
+    creation::py_module(m_creation);
 
     auto m_embedding = module.def_submodule("embedding", "embedding operations");
     embedding::py_module(m_embedding);

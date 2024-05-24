@@ -15,6 +15,7 @@ if os.getenv("CI") == "true":
     os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
+    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
@@ -209,14 +210,16 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
         current_pos = start_pos % model_args.sliding_window
 
         if embed_on_host:
-            decode_input_11BH = prepare_inputs_ttnn(
+            decode_input_11BH, attn_mask = prepare_inputs_ttnn(
                 pt_decode_input,
                 model_args.dim,
+                start_pos,
+                model_args.sliding_window,
                 tt_model.device_mesh,
             )
 
         # Run ttnn mixtral model
-        tt_out_11BH = tt_model(decode_input_11BH, start_pos, current_pos, rot_mats)
+        tt_out_11BH = tt_model(decode_input_11BH, start_pos, current_pos, attn_mask, rot_mats)
 
         if embed_on_host:
             # Convert ttnn tensor to torch tensor

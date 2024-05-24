@@ -202,7 +202,7 @@ struct ToDtype {
     }
 
     // TODO: Move to cpp once we merge with tt_eager
-    static Tensor execute(const ttnn::Tensor& input_tensor, const ttnn::DataType& dtype) {
+    static Tensor execute_on_worker_thread(const ttnn::Tensor& input_tensor, const ttnn::DataType& dtype) {
         auto input_layout = input_tensor.get_layout();
         auto input_dtype = input_tensor.get_dtype();
 

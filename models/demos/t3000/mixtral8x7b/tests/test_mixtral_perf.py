@@ -11,9 +11,14 @@ if os.getenv("CI") == "true":
     os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
+    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ConcatMeshToTensor
+import tt_lib
+
+if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    from tracy import signpost
 
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     prepare_inputs_ttnn,
@@ -101,12 +106,19 @@ def test_mixtral_model_perf(
     profiler.end("TtMistral_model_setup")
 
     # Call the function
+    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+        signpost("Model warmup")
     profiler.start(f"end_to_end_inference_with_compile")
     run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length, rot_mat)
     profiler.end(f"end_to_end_inference_with_compile")
     profiler.print()
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
+    for device_id in t3k_device_mesh.get_device_ids():
+        tt_lib.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
+
+    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+        signpost("Model perf run")
     profiler.clear()
     profiler.start(f"end_to_end_inference")
     run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length, rot_mat)
@@ -135,7 +147,6 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
     pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
-    tt_decode_input = pt_decode_input
     profiler.end(f"torch_embed_initial")
 
     for i in range(generation_length):
@@ -143,16 +154,18 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
         current_pos = start_pos % tt_model.args.sliding_window
 
         profiler.start(f"prepare_inputs_for_inference_{i}")
-        decode_input = prepare_inputs_ttnn(
-            tt_decode_input,
+        decode_input, attn_mask = prepare_inputs_ttnn(
+            pt_decode_input,
             tt_model.args.dim,
+            start_pos,
+            tt_model.args.sliding_window,
             tt_model.device_mesh,
         )
         profiler.end(f"prepare_inputs_for_inference_{i}")
 
         # Run TT model
         profiler.start(f"model_run_for_inference_{i}")
-        tt_out = tt_model(decode_input, start_pos, current_pos, rot_mat)
+        tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask, rot_mat)
 
         # Convert ttnn tensor to torch tensor
         profiler.start(f"result_wait_for_inference_{i}")
@@ -172,3 +185,8 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
         tt_token_batch = tt_output_torch.squeeze().argmax(axis=-1)
         tt_decode_input = embd(tt_token_batch).view(batch, seqlen, -1)
         profiler.end(f"torch_argmax_and_embed_{i}")
+
+        profiler.start(f"deallocate_tt_tensors_{i}")
+        decode_input.deallocate(force=True)
+        tt_out.deallocate(force=True)
+        profiler.end(f"deallocate_tt_tensors_{i}")

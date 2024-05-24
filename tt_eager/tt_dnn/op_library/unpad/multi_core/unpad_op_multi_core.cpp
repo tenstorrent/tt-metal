@@ -319,7 +319,6 @@ inline __attribute__((always_inline)) void set_unpad_runtime_args_tile(
     uint32_t* num_padded_tiles_per_dim = num_unpadded_tiles_per_dim + num_dims;
     if constexpr (!initialize_args) {
         set_common_reader_args(reader_common_args.data(), num_unpadded_tiles_per_dim, num_padded_tiles_per_dim);
-        SetCommonRuntimeArgs(program, unary_reader_kernel_id, reader_common_args);
     }
 
     uint32_t start_offset = get_tiled_start_offset(input_tensor, output_tensor_start);

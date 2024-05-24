@@ -220,6 +220,44 @@ ttnn.Tensor.__lt__ = lambda self, *args, **kwargs: lt(self, *args, **kwargs)
 ttnn.Tensor.__le__ = lambda self, *args, **kwargs: le(self, *args, **kwargs)
 
 
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.ldexp(input_tensor_a, input_tensor_b)
+
+
+ldexp = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.ldexp)
+
+
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.logaddexp(input_tensor_a, input_tensor_b)
+
+
+logaddexp = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.logaddexp)
+
+
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.logaddexp2(input_tensor_a, input_tensor_b)
+
+
+logaddexp2 = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.logaddexp2)
+
+
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.squared_difference(input_tensor_a, input_tensor_b)
+
+
+squared_difference = ttnn.register_operation(golden_function=_golden_function)(
+    ttnn._ttnn.operations.binary.squared_difference
+)
+
+
 def torch_squared_difference(x, y, *args, **kwargs):
     import torch
 
@@ -231,16 +269,12 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
         import torch
 
         name_to_torch_function = {
-            "ldexp": torch.ldexp,
-            "logaddexp": torch.logaddexp,
-            "logaddexp2": torch.logaddexp2,
             "logical_xor": torch.logical_xor,
             "xlogy": torch.xlogy,
             "maximum": torch.maximum,
             "minimum": torch.minimum,
             "atan2": torch.atan2,
             "hypot": torch.hypot,
-            "squared_difference": torch_squared_difference,
         }
         torch_function = name_to_torch_function[name]
         return torch_function(input_tensor_a, input_tensor_b)
@@ -318,16 +352,12 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
 
 
 TTL_BINARY_ELTWISE_FUNCTIONS = [
-    ("ldexp", ttl.tensor.ldexp, "ldexp (input_a * 2**input_b)"),
-    ("logaddexp", ttl.tensor.logaddexp, "logaddexp (log(exp(input_a) + exp(input_b)))"),
-    ("logaddexp2", ttl.tensor.logaddexp2, "logaddexp2 (log2(2^(input_a) + 2^(input_b)))"),
     ("logical_xor", ttl.tensor.logical_xor, "logical XOR (input_a ^ input_b) "),
     ("xlogy", ttl.tensor.xlogy, "xlogy (input_a * log( input_b ))"),
     ("maximum", ttl.tensor.max, "maximum "),
     ("minimum", ttl.tensor.min, "minimum "),
     ("atan2", ttl.tensor.atan2, "atan2"),
     ("hypot", ttl.tensor.hypot, "hypotenuse"),
-    ("squared_difference", ttl.tensor.squared_difference, "squared_difference (input_a - input_b)^2"),
 ]
 
 

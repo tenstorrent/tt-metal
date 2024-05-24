@@ -83,7 +83,7 @@ class Kernel : public JitBuildSettings {
     std::vector< std::vector< std::vector<uint32_t>> > & runtime_args();
     std::vector< std::vector< RuntimeArgsData > > & runtime_args_data();
     std::vector<uint32_t> & common_runtime_args();
-    std::vector<RuntimeArgsData> & common_runtime_args_data();
+    RuntimeArgsData & common_runtime_args_data();
 
     std::map<std::string, std::string> defines() const { return defines_; }
 
@@ -106,7 +106,6 @@ class Kernel : public JitBuildSettings {
     void validate_runtime_args_size(size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core);
     void set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
     void set_common_runtime_args(const std::vector<uint32_t> &runtime_args);
-    void set_common_runtime_args(const RuntimeArgsData& common_runtime_args);
 
     int get_watcher_kernel_id() { return watcher_kernel_id_; }
 
@@ -131,7 +130,7 @@ class Kernel : public JitBuildSettings {
     std::vector< std::vector< std::vector<uint32_t>> > core_to_runtime_args_;
     std::vector< std::vector< RuntimeArgsData> > core_to_runtime_args_data_;
     std::vector<uint32_t> common_runtime_args_;
-    std::vector<RuntimeArgsData> common_runtime_args_data_;
+    RuntimeArgsData common_runtime_args_data_;
     std::set<CoreCoord> core_with_runtime_args_;
     std::size_t max_runtime_args_per_core_;             // For validation
     CoreCoord core_with_max_runtime_args_;              // For validation

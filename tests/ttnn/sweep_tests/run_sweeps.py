@@ -16,16 +16,26 @@ def convert_string_to_set(string):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--include", type=str, help="Comma separated list of sweep names to include")
+    parser.add_argument(
+        "--include", type=str, help="Comma separated list of sweep names to include eg) --include sweep1.py,sweep2.py"
+    )
+    parser.add_argument(
+        "--collect-only", action="store_true", help="Print the sweeps that will be run but do not run them"
+    )
 
-    include = parser.parse_args().include
+    args = parser.parse_args()
+    include = convert_string_to_set(args.include)
+    device = None
+    if not args.collect_only:
+        device = ttnn.open_device(device_id=0)
+        print("Running sweeps...")
+    else:
+        print("Collecting sweeps to run...")
 
-    include = convert_string_to_set(include)
-
-    device = ttnn.open_device(device_id=0)
     table_names = run_sweeps(device=device, include=include)
-    ttnn.close_device(device)
-    print_report(table_names=table_names)
+    if not args.collect_only:
+        ttnn.close_device(device)
+        print_report(table_names=table_names)
 
 
 if __name__ == "__main__":
