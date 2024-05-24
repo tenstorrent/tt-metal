@@ -6,6 +6,7 @@
 
 #pragma once
 #include "tensor/tensor.hpp"
+#include "tt_dnn/op_library/compute_kernel_config.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 
 #include <optional>
@@ -26,12 +27,14 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     const Tensor &output,
     const std::optional<const Tensor> &bias,
     bool transpose_input,
-    bool transpose_other);
+    bool transpose_other,
+    const DeviceComputeKernelConfig &compute_kernel_config);
 
 struct MorehMatmul {
     const MemoryConfig output_mem_config;
     bool transpose_input;
     bool transpose_other;
+    const DeviceComputeKernelConfig compute_kernel_config;
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
@@ -47,11 +50,12 @@ struct MorehMatmul {
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
     static constexpr auto attribute_names = std::make_tuple(
-        "transpose_input", "transpose_other");
+        "transpose_input", "transpose_other", "compute_kernel_config");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->transpose_input),
-            std::cref(this->transpose_other));
+            std::cref(this->transpose_other),
+            std::cref(this->compute_kernel_config));
     }
 };
 
@@ -62,7 +66,8 @@ Tensor moreh_matmul(
     bool transpose_other = false,
     const std::optional<const Tensor> output = std::nullopt,
     const std::optional<const Tensor> bias = std::nullopt,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 
