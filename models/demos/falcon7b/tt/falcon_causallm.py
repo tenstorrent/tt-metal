@@ -5,7 +5,7 @@
 from typing import Optional, Tuple
 
 import torch
-import tt_lib
+import ttnn
 from models.demos.falcon7b.tt.falcon_lm_head import falcon_lm_head_matmul_2d
 from models.demos.falcon7b.tt.falcon_model import TtFalconModelShared
 from models.demos.falcon7b.tt.model_utils import get_weights_cached
@@ -69,7 +69,7 @@ class TtFalconCausalLM(TtFalconModelShared):
 
             tt_paddings = torch_tensors_to_tt_tensors(
                 [padding.detach().clone() for _ in range(self.num_devices)],
-                tt_lib.tensor.Layout.TILE,
+                ttnn.experimental.tensor.Layout.TILE,
                 self.model_config["LM_HEAD_MM_INPUT_DTYPE"],
                 self.model_config["LM_HEAD_MM_INPUT_MEMCFG"],
                 self.devices,
@@ -87,14 +87,14 @@ class TtFalconCausalLM(TtFalconModelShared):
 
     def forward(
         self,
-        input_ids: tt_lib.tensor.Tensor,
+        input_ids: ttnn.experimental.tensor.Tensor,
         llm_mode: str,
-        attention_mask: tt_lib.tensor.Tensor = None,
+        attention_mask: ttnn.experimental.tensor.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.experimental.tensor.Tensor:
         hidden_states, presents = super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -119,7 +119,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             ]
         else:
             lm_logits = [
-                tt_lib.tensor.falcon_lm_head_matmul(
+                ttnn.experimental.tensor.falcon_lm_head_matmul(
                     hidden_states[device_id],
                     self.lm_head_weights[device_id],
                     bias=None,

@@ -4,9 +4,8 @@
 
 from typing import Optional, Tuple
 
-import pytest
 import torch
-import tt_lib
+import ttnn
 from models.demos.falcon7b.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
 from models.demos.falcon7b.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
 from models.demos.falcon7b.tt.model_utils import get_weights_cached
@@ -116,16 +115,16 @@ class TtFalconDecoderLayer(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.experimental.tensor.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
         llm_mode: str,
         user_id: int = 0,
-        layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """Input shape: [batch, 1, seq_len, hidden_size]"""
 
         assert not output_attentions
@@ -133,26 +132,26 @@ class TtFalconDecoderLayer(nn.Module):
         layernorm_output = []
         for i in range(self.num_devices):
             layernorm_output.append(
-                tt_lib.tensor.layernorm(
+                ttnn.experimental.tensor.layernorm(
                     hidden_states[i],
                     self.layernorm_eps,
                     output_mem_config=self.model_config["INPUT_LAYERNORM_OUTPUT_MEMCFG"],
                 )
             )
         for i in range(self.num_devices):
-            layernorm_output[i] = tt_lib.tensor.bcast(
+            layernorm_output[i] = ttnn.experimental.tensor.bcast(
                 layernorm_output[i],
                 self.layernorm_gamma[i],
-                tt_lib.tensor.BcastOpMath.MUL,
-                tt_lib.tensor.BcastOpDim.H,
+                ttnn.experimental.tensor.BcastOpMath.MUL,
+                ttnn.experimental.tensor.BcastOpDim.H,
                 output_mem_config=self.model_config["INPUT_LAYERNORM_OUTPUT_MEMCFG"],
             )
         for i in range(self.num_devices):
-            layernorm_output[i] = tt_lib.tensor.bcast(
+            layernorm_output[i] = ttnn.experimental.tensor.bcast(
                 layernorm_output[i],
                 self.layernorm_beta[i],
-                tt_lib.tensor.BcastOpMath.ADD,
-                tt_lib.tensor.BcastOpDim.H,
+                ttnn.experimental.tensor.BcastOpMath.ADD,
+                ttnn.experimental.tensor.BcastOpDim.H,
                 output_mem_config=self.model_config["INPUT_LAYERNORM_OUTPUT_MEMCFG"],
             )
 
@@ -196,7 +195,7 @@ class TtFalconDecoderLayer(nn.Module):
         output = []
         for i in range(self.num_devices):
             output.append(
-                tt_lib.tensor.add(
+                ttnn.experimental.tensor.add(
                     mlp_output[i],
                     attention_output[i],
                     output_mem_config=self.model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"],
@@ -208,7 +207,7 @@ class TtFalconDecoderLayer(nn.Module):
         # dropout_add
         # For inference, this is just add
         for i in range(self.num_devices):
-            output[i] = tt_lib.tensor.add(
+            output[i] = ttnn.experimental.tensor.add(
                 output[i],
                 residual[i],
                 output_mem_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],

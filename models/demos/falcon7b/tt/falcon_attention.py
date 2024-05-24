@@ -7,7 +7,7 @@ import math
 from torch import nn
 from typing import List, Optional, Tuple
 
-import tt_lib
+import ttnn
 
 from models.utility_functions import (
     tt2torch_tensor,
@@ -88,14 +88,16 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
             if not overwrite_sin:
                 break
 
-    def forward(self, layer: tt_lib.tensor.Tensor, token_idx: Optional[int] = None) -> tt_lib.tensor.Tensor:
+    def forward(
+        self, layer: ttnn.experimental.tensor.Tensor, token_idx: Optional[int] = None
+    ) -> ttnn.experimental.tensor.Tensor:
         seq_len = layer[0].get_legacy_shape()[2]
         assert seq_len <= self.max_seq_len_cached, "seq_len exceeds max_seq_len_cached in RotaryEmbedding!"
 
         output = []
         for i in range(len(layer)):
             output.append(
-                tt_lib.tensor.rotary_embedding(
+                ttnn.experimental.tensor.rotary_embedding(
                     layer[i],
                     self.tt_cos_cached[i],
                     self.tt_sin_cached[i],
@@ -190,8 +192,8 @@ class TtFalconAttentionPrefill(nn.Module):
 
                 tt_tensors = torch_tensors_to_tt_tensors(
                     [tensor.detach().clone() for _ in range(self.num_devices)],
-                    tt_lib.tensor.Layout.TILE,
-                    tt_lib.tensor.DataType.BFLOAT16,
+                    ttnn.experimental.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.DataType.BFLOAT16,
                     self.model_config["ATTN_OPTIMIZED_MEMCFG"],
                     self.devices,
                 )
@@ -199,16 +201,16 @@ class TtFalconAttentionPrefill(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.experimental.tensor.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
         llm_mode: str,
         user_id: int = 0,
-        layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: bool = False,
         use_cache: bool = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, Optional[Tuple[tt_lib.tensor.Tensor]]]:
+    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[ttnn.experimental.tensor.Tensor]]]:
         """
         Prefill input shape: [1, 1, seq_len, hidden_size]
         """
@@ -236,7 +238,7 @@ class TtFalconAttentionPrefill(nn.Module):
         fused_query_key_value = []
         for i in range(self.num_devices):
             fused_query_key_value.append(
-                tt_lib.tensor.falcon_fused_qkv_matmul(
+                ttnn.experimental.tensor.falcon_fused_qkv_matmul(
                     hidden_states[i],
                     self.query_key_value_weights[i],
                     output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
@@ -249,7 +251,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ###########
         query_layer, key_layer, value_layer = [], [], []
         for i in range(self.num_devices):
-            query_layer_i, key_layer_i, value_layer_i = tt_lib.tensor.nlp_create_qkv_heads_falcon7b(
+            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(
                 fused_query_key_value[i],
                 output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
             )
@@ -268,7 +270,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ### K CACHE UPDATE ###
         ######################
         for i in range(self.num_devices):
-            tt_lib.tensor.fill_cache(layer_past[i][0], key_layer[i], user_id)
+            ttnn.experimental.tensor.fill_cache(layer_past[i][0], key_layer[i], user_id)
 
         ######################
         ### PRE-SOFTMAX MM ###
@@ -276,15 +278,16 @@ class TtFalconAttentionPrefill(nn.Module):
         key_layer_transposed = []
         for i in range(self.num_devices):
             key_layer_transposed.append(
-                tt_lib.tensor.transpose(
+                ttnn.experimental.tensor.transpose(
                     key_layer[i],
                     -2,
                     -1,
                     output_mem_config=(
                         self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"]
                         if llm_mode == "prefill" or self.model_config["l1_sharded"] == False
-                        else tt_lib.tensor.MemoryConfig(
-                            tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
+                        else ttnn.experimental.tensor.MemoryConfig(
+                            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                            ttnn.experimental.tensor.BufferType.L1,
                         )
                     ),
                 ),
@@ -294,7 +297,7 @@ class TtFalconAttentionPrefill(nn.Module):
         attn_weights = []
         for i in range(self.num_devices):
             attn_weights.append(
-                tt_lib.tensor.matmul(
+                ttnn.experimental.tensor.matmul(
                     query_layer[i],
                     key_layer_transposed[i],
                     output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
@@ -304,17 +307,17 @@ class TtFalconAttentionPrefill(nn.Module):
             key_layer_transposed[i].deallocate()
 
         for i in range(self.num_devices):
-            attn_weights[i] = tt_lib.tensor.bcast(
+            attn_weights[i] = ttnn.experimental.tensor.bcast(
                 attn_weights[i],
                 self.scalar[i],
-                tt_lib.tensor.BcastOpMath.MUL,
-                tt_lib.tensor.BcastOpDim.HW,
+                ttnn.experimental.tensor.BcastOpMath.MUL,
+                ttnn.experimental.tensor.BcastOpDim.HW,
                 output_mem_config=self.model_config["PRE_SOFTMAX_SCALE_OUTPUT_MEMCFG"],
             )
 
         if attention_mask is not None:
             for i in range(self.num_devices):
-                attn_weights[i] = tt_lib.tensor.add(
+                attn_weights[i] = ttnn.experimental.tensor.add(
                     attn_weights[i],
                     attention_mask[i],
                     output_mem_config=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"],
@@ -323,13 +326,15 @@ class TtFalconAttentionPrefill(nn.Module):
         ### SOFTMAX ###
         ###############
         for i in range(self.num_devices):
-            attn_weights[i] = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(attn_weights[i])
+            attn_weights[i] = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
+                attn_weights[i]
+            )
 
         ######################
         ### V CACHE UPDATE ###
         ######################
         for i in range(self.num_devices):
-            tt_lib.tensor.fill_cache(layer_past[i][1], value_layer[i], user_id)
+            ttnn.experimental.tensor.fill_cache(layer_past[i][1], value_layer[i], user_id)
 
         layer_present = layer_past if use_cache else None
 
@@ -339,7 +344,7 @@ class TtFalconAttentionPrefill(nn.Module):
         attn_output = []
         for i in range(self.num_devices):
             attn_output.append(
-                tt_lib.tensor.matmul(
+                ttnn.experimental.tensor.matmul(
                     attn_weights[i],
                     value_layer[i],
                     output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
@@ -352,13 +357,13 @@ class TtFalconAttentionPrefill(nn.Module):
         ### ATTENTION SELFOUT ###
         #########################
         for i in range(self.num_devices):
-            attn_output[i] = tt_lib.tensor.nlp_concat_heads(
+            attn_output[i] = ttnn.experimental.tensor.nlp_concat_heads(
                 attn_output[i],
                 output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )
 
         for i in range(self.num_devices):
-            attn_output[i] = tt_lib.tensor.falcon_selfout_matmul(
+            attn_output[i] = ttnn.experimental.tensor.falcon_selfout_matmul(
                 attn_output[i],
                 self.dense_weights[i],
                 output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
@@ -369,12 +374,12 @@ class TtFalconAttentionPrefill(nn.Module):
 
     def _optimized_forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.experimental.tensor.Tensor,
         attention_mask: torch.Tensor,
         user_id: int = 0,
-        layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
         use_cache: bool = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, Optional[Tuple[tt_lib.tensor.Tensor]]]:
+    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[ttnn.experimental.tensor.Tensor]]]:
         seq_len = hidden_states[0].get_legacy_shape()[2]
 
         #################
@@ -382,19 +387,19 @@ class TtFalconAttentionPrefill(nn.Module):
         #################
         if seq_len == 2048:
             fused_query_key_value = [
-                tt_lib.operations.primary.matmul(
+                ttnn.experimental.operations.primary.matmul(
                     hidden_states[device_id],
                     self.query_key_value_weights[device_id],
                     program_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_PROGCFG"],
                     output_mem_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_MEMCFG"],
-                    output_dtype=tt_lib.tensor.DataType.BFLOAT16,
+                    output_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
                     compute_kernel_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_KERNEL_CONFIG"],
                 )
                 for device_id in range(self.num_devices)
             ]
         else:
             fused_query_key_value = [
-                tt_lib.tensor.falcon_fused_qkv_matmul(
+                ttnn.experimental.tensor.falcon_fused_qkv_matmul(
                     hidden_states[device_id],
                     self.query_key_value_weights[device_id],
                     output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
@@ -408,7 +413,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ###########
         query_layer, key_layer, value_layer = [], [], []
         for i in range(self.num_devices):
-            query_layer_i, key_layer_i, value_layer_i = tt_lib.tensor.nlp_create_qkv_heads_falcon7b(
+            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(
                 fused_query_key_value[i],
                 output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
             )
@@ -427,7 +432,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ### K CACHE UPDATE ###
         ######################
         for i in range(self.num_devices):
-            tt_lib.tensor.fill_cache(layer_past[i][0], key_layer[i], user_id)
+            ttnn.experimental.tensor.fill_cache(layer_past[i][0], key_layer[i], user_id)
 
         ######################
         ### PRE-SOFTMAX MM ###
@@ -435,7 +440,7 @@ class TtFalconAttentionPrefill(nn.Module):
         key_layer_transposed = []
         for i in range(self.num_devices):
             key_layer_transposed.append(
-                tt_lib.tensor.transpose(
+                ttnn.experimental.tensor.transpose(
                     key_layer[i],
                     -2,
                     -1,
@@ -458,14 +463,14 @@ class TtFalconAttentionPrefill(nn.Module):
         # Slice inputs and operate on each slice separately
         for i in range(num_slices):
             slices = [
-                tt_lib.tensor.interleaved_to_sharded_partial(
+                ttnn.experimental.tensor.interleaved_to_sharded_partial(
                     query_layer[device_id],
                     grid_size,
                     mm_activations_height_shard_spec,
                     num_slices,  # num_slices
                     i,  # slice_index
-                    tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                    tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                    ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
                 )
                 for device_id in range(self.num_devices)
             ]
@@ -479,12 +484,12 @@ class TtFalconAttentionPrefill(nn.Module):
 
             ### QKT MATMUL ###
             mm_slices = [
-                tt_lib.operations.primary.matmul(
+                ttnn.experimental.operations.primary.matmul(
                     slices[device_id],
                     key_layer_transposed[device_id],
                     program_config=qkt_prg_cfg,
                     output_mem_config=self.model_config["QKTV_MM_OPTIMIZED_MEMCFG"],
-                    output_dtype=tt_lib.tensor.DataType.BFLOAT16,
+                    output_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
                     compute_kernel_config=self.model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"],
                 )
                 for device_id in range(self.num_devices)
@@ -495,7 +500,7 @@ class TtFalconAttentionPrefill(nn.Module):
             )
             ### SOFTMAX ###
             mm_slices = [
-                tt_lib.operations.primary.transformers.scale_causal_mask_hw_dims_softmax_in_place(
+                ttnn.experimental.operations.primary.transformers.scale_causal_mask_hw_dims_softmax_in_place(
                     mm_slices[device_id],
                     self.scalar_for_optimized_prefill,
                     attention_mask[device_id][i],
@@ -508,19 +513,19 @@ class TtFalconAttentionPrefill(nn.Module):
             ### QKTV MATMUL ###
             qktv_prg_cfg = self.model_config["QKTV_MM_OPTIMIZED_PROGCFG"](tiles_per_shard, seq_len, subblock_h)
             attn_out_slices = [
-                tt_lib.operations.primary.matmul(
+                ttnn.experimental.operations.primary.matmul(
                     mm_slices[device_id],
                     value_layer[device_id],
                     program_config=qktv_prg_cfg,
                     output_mem_config=self.model_config["QKTV_MM_OPTIMIZED_MEMCFG"],
-                    output_dtype=tt_lib.tensor.DataType.BFLOAT16,
+                    output_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
                     compute_kernel_config=self.model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"],
                 )
                 for device_id in range(self.num_devices)
             ]
 
             for device_id in range(self.num_devices):
-                tt_lib.tensor.sharded_to_interleaved_partial(
+                ttnn.experimental.tensor.sharded_to_interleaved_partial(
                     attn_out_slices[device_id],
                     attention_outputs_concatenated[device_id],
                     num_slices,
@@ -534,12 +539,12 @@ class TtFalconAttentionPrefill(nn.Module):
 
         # V cache update
         for device_id in range(self.num_devices):
-            tt_lib.tensor.fill_cache(layer_past[device_id][1], value_layer[device_id], user_id)
+            ttnn.experimental.tensor.fill_cache(layer_past[device_id][1], value_layer[device_id], user_id)
 
         layer_present = layer_past if use_cache else None
 
         attn_outputs = [
-            tt_lib.tensor.nlp_concat_heads(
+            ttnn.experimental.tensor.nlp_concat_heads(
                 attention_outputs_concatenated[device_id],
                 output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )
@@ -547,7 +552,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ]
 
         attn_outputs = [
-            tt_lib.tensor.falcon_selfout_matmul(
+            ttnn.experimental.tensor.falcon_selfout_matmul(
                 attn_outputs[device_id],
                 self.dense_weights[device_id],
                 output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
@@ -632,16 +637,16 @@ class TtFalconAttentionDecode(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.experimental.tensor.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
         llm_mode: str,
         user_id: int = 0,
-        layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: bool = False,
         use_cache: bool = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, Optional[Tuple[tt_lib.tensor.Tensor]]]:
+    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[ttnn.experimental.tensor.Tensor]]]:
         """
         Prefill input shape: [batch, 1, seq_len, hidden_size]
         Decode input shape: [seq_len, 1, batch, hidden_size]
@@ -664,7 +669,7 @@ class TtFalconAttentionDecode(nn.Module):
         fused_query_key_value = []
         for i in range(self.num_devices):
             fused_query_key_value.append(
-                tt_lib.tensor.falcon_fused_qkv_matmul(
+                ttnn.experimental.tensor.falcon_fused_qkv_matmul(
                     hidden_states[i],
                     self.query_key_value_weights[i],
                     output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
@@ -677,7 +682,7 @@ class TtFalconAttentionDecode(nn.Module):
         ###########
         query_layer, key_layer, value_layer = [], [], []
         for i in range(self.num_devices):
-            query_layer_i, key_layer_i, value_layer_i = tt_lib.tensor.nlp_create_qkv_heads_falcon7b(
+            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(
                 fused_query_key_value[i],
                 output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
             )
@@ -697,10 +702,10 @@ class TtFalconAttentionDecode(nn.Module):
         ######################
         for i in range(self.num_devices):
             # Update kv_cache in place
-            tt_lib.tensor.update_cache(layer_past[i][0], key_layer[i], layer_past_len)
+            ttnn.experimental.tensor.update_cache(layer_past[i][0], key_layer[i], layer_past_len)
         for i in range(self.num_devices):
             # key and value layers will have kv_seq_len padded to nearest 32
-            key_layer[i] = tt_lib.tensor.unpad(
+            key_layer[i] = ttnn.experimental.tensor.unpad(
                 layer_past[i][0],
                 [0, 0, 0, 0],
                 [batch - 1, 0, nearest_32(layer_past_len + 1) - 1, self.head_dim - 1],
@@ -709,7 +714,7 @@ class TtFalconAttentionDecode(nn.Module):
 
         if self.model_config["l1_sharded"]:
             for i in range(self.num_devices):
-                key_layer[i] = tt_lib.tensor.interleaved_to_sharded(
+                key_layer[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                     key_layer[i],
                     sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](
                         padded_layer_past_len, self.head_dim
@@ -718,19 +723,19 @@ class TtFalconAttentionDecode(nn.Module):
 
             # Pad and transpose Q for batched matmul
             for i in range(self.num_devices):
-                query_layer[i] = tt_lib.tensor.pad(
+                query_layer[i] = ttnn.experimental.tensor.pad(
                     query_layer[i], [1, self.padded_local_heads, batch, self.head_dim], [0, 0, 0, 0], 0.0
                 )
 
             for i in range(self.num_devices):
-                query_layer[i] = tt_lib.tensor.transpose(
+                query_layer[i] = ttnn.experimental.tensor.transpose(
                     query_layer[i],
                     -2,
                     -3,
                 )
 
             for i in range(self.num_devices):
-                query_layer[i] = tt_lib.tensor.reshape(
+                query_layer[i] = ttnn.experimental.tensor.reshape(
                     query_layer[i],
                     batch,
                     1,
@@ -739,7 +744,7 @@ class TtFalconAttentionDecode(nn.Module):
                 )
 
             for i in range(self.num_devices):
-                query_layer[i] = tt_lib.tensor.interleaved_to_sharded(
+                query_layer[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                     query_layer[i],
                     sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](
                         self.padded_local_heads, self.head_dim
@@ -752,15 +757,16 @@ class TtFalconAttentionDecode(nn.Module):
         key_layer_transposed = []
         for i in range(self.num_devices):
             key_layer_transposed.append(
-                tt_lib.tensor.transpose(
+                ttnn.experimental.tensor.transpose(
                     key_layer[i],
                     -2,
                     -1,
                     output_mem_config=(
                         self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"]
                         if self.model_config["l1_sharded"] == False
-                        else tt_lib.tensor.MemoryConfig(
-                            tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
+                        else ttnn.experimental.tensor.MemoryConfig(
+                            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                            ttnn.experimental.tensor.BufferType.L1,
                         )
                     ),
                 ),
@@ -771,7 +777,7 @@ class TtFalconAttentionDecode(nn.Module):
         if self.model_config["l1_sharded"]:
             for i, device in enumerate(self.devices):
                 attn_weights.append(
-                    tt_lib.operations.primary.matmul(
+                    ttnn.experimental.operations.primary.matmul(
                         query_layer[i],
                         key_layer_transposed[i],
                         program_config=self.model_config["ATTN_BATCHED_MM_PROGCFG"](
@@ -789,7 +795,7 @@ class TtFalconAttentionDecode(nn.Module):
         elif is_wormhole_b0():
             for i, device in enumerate(self.devices):
                 attn_weights.append(
-                    tt_lib.operations.primary.transformers.attn_matmul(
+                    ttnn.experimental.operations.primary.transformers.attn_matmul(
                         query_layer[i],
                         key_layer_transposed[i],
                         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -802,7 +808,7 @@ class TtFalconAttentionDecode(nn.Module):
         else:
             for i, device in enumerate(self.devices):
                 attn_weights.append(
-                    tt_lib.operations.primary.transformers.group_attn_matmul(
+                    ttnn.experimental.operations.primary.transformers.group_attn_matmul(
                         query_layer[i],
                         key_layer_transposed[i],
                         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -815,17 +821,17 @@ class TtFalconAttentionDecode(nn.Module):
 
         if self.model_config["l1_sharded"] == False:
             for i in range(self.num_devices):
-                attn_weights[i] = tt_lib.tensor.bcast(
+                attn_weights[i] = ttnn.experimental.tensor.bcast(
                     attn_weights[i],
                     self.scalar[i],
-                    tt_lib.tensor.BcastOpMath.MUL,
-                    tt_lib.tensor.BcastOpDim.HW,
+                    ttnn.experimental.tensor.BcastOpMath.MUL,
+                    ttnn.experimental.tensor.BcastOpDim.HW,
                     output_mem_config=self.model_config["PRE_SOFTMAX_SCALE_OUTPUT_MEMCFG"],
                 )
 
             if attention_mask is not None:
                 for i in range(self.num_devices):
-                    attn_weights[i] = tt_lib.tensor.add(
+                    attn_weights[i] = ttnn.experimental.tensor.add(
                         attn_weights[i],
                         attention_mask[i],
                         output_mem_config=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"],
@@ -834,17 +840,19 @@ class TtFalconAttentionDecode(nn.Module):
             ### SOFTMAX ###
             ###############
             for i in range(self.num_devices):
-                attn_weights[i] = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(attn_weights[i])
+                attn_weights[i] = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
+                    attn_weights[i]
+                )
         else:
             ###############
             ### SOFTMAX ###
             ###############
             for i in range(self.num_devices):
-                attn_weights[i] = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
+                attn_weights[i] = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
                     attn_weights[i],
                     scale=self.scale,
                     mask=attention_mask[i],
-                    program_config=tt_lib.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+                    program_config=ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
                         compute_with_storage_grid_size=(8, 4),
                         subblock_w=1,
                         block_h=self.padded_local_heads // 32,
@@ -858,9 +866,9 @@ class TtFalconAttentionDecode(nn.Module):
         ######################
         for i in range(self.num_devices):
             # Update kv_cache in place
-            tt_lib.tensor.update_cache(layer_past[i][1], value_layer[i], layer_past_len)
+            ttnn.experimental.tensor.update_cache(layer_past[i][1], value_layer[i], layer_past_len)
         for i in range(self.num_devices):
-            value_layer[i] = tt_lib.tensor.unpad(
+            value_layer[i] = ttnn.experimental.tensor.unpad(
                 layer_past[i][1],
                 [0, 0, 0, 0],
                 [batch - 1, 0, nearest_32(layer_past_len + 1) - 1, self.head_dim - 1],
@@ -868,7 +876,7 @@ class TtFalconAttentionDecode(nn.Module):
             )
         if self.model_config["l1_sharded"]:
             for i in range(self.num_devices):
-                value_layer[i] = tt_lib.tensor.interleaved_to_sharded(
+                value_layer[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                     value_layer[i],
                     sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](
                         padded_layer_past_len, self.head_dim
@@ -884,7 +892,7 @@ class TtFalconAttentionDecode(nn.Module):
         if self.model_config["l1_sharded"]:
             for i in range(self.num_devices):
                 attn_output.append(
-                    tt_lib.operations.primary.matmul(
+                    ttnn.experimental.operations.primary.matmul(
                         attn_weights[i],
                         value_layer[i],
                         program_config=self.model_config["ATTN_BATCHED_MM_PROGCFG"](
@@ -904,17 +912,19 @@ class TtFalconAttentionDecode(nn.Module):
                 value_layer[i].deallocate()
 
             for i in range(self.num_devices):
-                attn_output[i] = tt_lib.tensor.sharded_to_interleaved(
+                attn_output[i] = ttnn.experimental.tensor.sharded_to_interleaved(
                     attn_output[i], output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"]
                 )
 
             # Get batch in dim 1
             for i in range(self.num_devices):
-                attn_output[i] = tt_lib.tensor.reshape(attn_output[i], 1, batch, self.padded_local_heads, self.head_dim)
+                attn_output[i] = ttnn.experimental.tensor.reshape(
+                    attn_output[i], 1, batch, self.padded_local_heads, self.head_dim
+                )
 
             # Get batch in dim 2
             for i in range(self.num_devices):
-                attn_output[i] = tt_lib.tensor.transpose(
+                attn_output[i] = ttnn.experimental.tensor.transpose(
                     attn_output[i],
                     -2,
                     -3,
@@ -923,7 +933,7 @@ class TtFalconAttentionDecode(nn.Module):
             # UNPAD
             attn_output_shape = attn_output[0].get_legacy_shape()
             for i in range(self.num_devices):
-                attn_output[i] = tt_lib.tensor.unpad(
+                attn_output[i] = ttnn.experimental.tensor.unpad(
                     attn_output[i],
                     [0, 0, 0, 0],
                     [
@@ -939,7 +949,7 @@ class TtFalconAttentionDecode(nn.Module):
                 # TODO: switch to group_attn_matmul once multiple q heads is supported (issue #5318)
                 if is_wormhole_b0():
                     attn_output.append(
-                        tt_lib.operations.primary.transformers.attn_matmul(
+                        ttnn.experimental.operations.primary.transformers.attn_matmul(
                             attn_weights[i],
                             value_layer[i],
                             compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -949,7 +959,7 @@ class TtFalconAttentionDecode(nn.Module):
                     )
                 else:
                     attn_output.append(
-                        tt_lib.operations.primary.transformers.group_attn_matmul(
+                        ttnn.experimental.operations.primary.transformers.group_attn_matmul(
                             attn_weights[i],
                             value_layer[i],
                             compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -964,13 +974,13 @@ class TtFalconAttentionDecode(nn.Module):
         ### ATTENTION SELFOUT ###
         #########################
         for i in range(self.num_devices):
-            attn_output[i] = tt_lib.tensor.nlp_concat_heads(
+            attn_output[i] = ttnn.experimental.tensor.nlp_concat_heads(
                 attn_output[i],
                 output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )
 
         for i in range(self.num_devices):
-            attn_output[i] = tt_lib.tensor.falcon_selfout_matmul(
+            attn_output[i] = ttnn.experimental.tensor.falcon_selfout_matmul(
                 attn_output[i],
                 self.dense_weights[i],
                 output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
