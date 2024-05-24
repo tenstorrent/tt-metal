@@ -65,6 +65,10 @@ inline __attribute__((always_inline)) bool ncrisc_noc_reads_flushed(uint32_t noc
     return (NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED) == noc_reads_num_issued[noc]);
 }
 
+inline __attribute__((always_inline)) bool ncrisc_noc_read_with_transaction_id_flushed(uint32_t noc, uint32_t transcation_id) {
+  return (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(transcation_id)) == 0);
+}
+
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -344,4 +348,23 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     if (!posted) {
         noc_nonposted_atomics_acked[noc] += 1;
     }
+}
+
+// issue noc reads while wait for outstanding transactions done
+inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction_id(uint32_t noc, uint32_t cmd_buf, uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid) {
+    uint32_t src_addr_;
+    src_addr_ = src_base_addr + src_addr;
+
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    while (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(trid)) > ((NOC_MAX_TRANSACTION_ID_COUNT+1)/2));
+
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr_);      // (uint32_t)src_addr
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    noc_reads_num_issued[noc] += 1;
+}
+
+// set transaction id for a noc read
+inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(uint32_t noc, uint32_t cmd_buf, uint32_t trid) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
 }
