@@ -9,6 +9,7 @@
 #include <functional>
 
 #include "tensor/tensor.hpp"
+#include "tt_dnn/op_library/compute_kernel_config.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 
 namespace tt {
@@ -22,7 +23,8 @@ Tensor moreh_linear(
     const Tensor& weight,
     std::optional<const Tensor> bias = std::nullopt,
     std::optional<const Tensor> output = std::nullopt,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 
 }  // namespace primary

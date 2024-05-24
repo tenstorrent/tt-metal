@@ -18,7 +18,7 @@ inline void moreh_linear_validate(
     const Tensor& weight) {
     const auto& weight_shape = weight.get_legacy_shape();
     const auto& weight_rank = weight_shape.rank();
-    TT_FATAL(weight_rank == 2, fmt::format("weight rank {} must be 2.", weight_rank));
+    TT_FATAL(weight_rank == 2, "weight rank {} must be 2.", weight_rank);
 }
 
 Tensor _moreh_linear(
@@ -26,7 +26,8 @@ Tensor _moreh_linear(
     const Tensor& weight,
     const std::optional<const Tensor>& bias,
     std::optional<Tensor> output,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& output_mem_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     moreh_linear_validate(weight);
     output = moreh_matmul(input, weight, false, true, output, bias, output_mem_config);
     return output.value();
@@ -37,8 +38,9 @@ Tensor moreh_linear(
     const Tensor& weight,
     std::optional<const Tensor> bias,
     std::optional<const Tensor> output,
-    const MemoryConfig& output_mem_config) {
-    return _moreh_linear(input, weight, bias, output, output_mem_config);
+    const MemoryConfig& output_mem_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    return _moreh_linear(input, weight, bias, output, output_mem_config, compute_kernel_config);
 }
 
 }  // namespace primary
