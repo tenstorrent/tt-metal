@@ -45,16 +45,16 @@ struct MorehGroupNorm {
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple(
+    static constexpr auto attribute_names = std::forward_as_tuple(
         "num_groups", "eps", "are_required_outputs", "output_mem_config", "mean_mem_config", "rstd_mem_config");
     const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->num_groups),
-            std::cref(this->eps),
-            std::cref(this->are_required_outputs),
-            std::cref(this->output_mem_config),
-            std::cref(this->mean_mem_config),
-            std::cref(this->rstd_mem_config));
+        return std::forward_as_tuple(
+            this->num_groups,
+            this->eps,
+            this->are_required_outputs,
+            this->output_mem_config,
+            this->mean_mem_config,
+            this->rstd_mem_config);
     }
 };
 

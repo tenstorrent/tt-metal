@@ -7,8 +7,8 @@
 #include <iostream>
 
 #include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "tt_metal/host_api.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -23,8 +23,12 @@ void SplitTiled::boiler_plate_asserts(const Tensor &a) const {
     TT_FATAL(
         a.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || a.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
-    TT_FATAL(a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Split does not currently support sharding");
-    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Split does not currently support sharding");
+    TT_FATAL(
+        a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        "Split does not currently support sharding");
+    TT_FATAL(
+        this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        "Split does not currently support sharding");
 }
 
 void SplitTiled::shape_asserts(const Tensor &a) const {
@@ -68,8 +72,7 @@ void SplitTiled::validate(const std::vector<Tensor> &input_tensors) const {
     shape_asserts((const Tensor &)input_tensor);
 }
 
-std::vector<Shape> SplitTiled::compute_output_shapes(
-    const std::vector<Tensor> &input_tensors) const {
+std::vector<Shape> SplitTiled::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto &input_tensor = input_tensors.at(0);
     auto input_shape = input_tensor.get_legacy_shape();
     auto output_shape = get_single_output_shape(input_tensor.get_legacy_shape());
@@ -77,23 +80,15 @@ std::vector<Shape> SplitTiled::compute_output_shapes(
     return {output_shape, output_shape};
 }
 
-std::vector<Tensor> SplitTiled::create_output_tensors(
-    const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
+std::vector<Tensor> SplitTiled::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+    const auto &input_tensor = input_tensors.at(0);
+    return operation::generic_create_output_tensors(
+        *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks SplitTiled::create_program(
     const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const {
     return {};
-}
-
-tt::stl::reflection::Attributes SplitTiled::attributes() const {
-    return {
-        {"dim", this->dim},
-        {"num_chunks", this->num_chunks},
-        {"output_mem_config", this->output_mem_config},
-    };
 }
 
 }  // namespace tt_metal

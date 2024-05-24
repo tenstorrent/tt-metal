@@ -36,9 +36,9 @@ struct Scan {
         return ScanOpParallelizationStrategy::SHARDED_MULTI_CORE;
     }
 
-    static constexpr auto attribute_names = std::make_tuple("direction", "n_tile_columns");
+    static constexpr auto attribute_names = std::forward_as_tuple("direction", "n_tile_columns");
 
-    const auto attribute_values() const { return std::make_tuple(direction, n_tile_columns); }
+    const auto attribute_values() const { return std::forward_as_tuple(direction, n_tile_columns); }
 };
 
 Tensor scan(Tensor &a);

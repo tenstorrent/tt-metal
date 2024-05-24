@@ -29,9 +29,8 @@ struct Fold {
 
     FoldOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple("stride_h", "stride_w", "is_sharded");
-
-    const auto attribute_values() const { return std::make_tuple(stride_h, stride_w, is_sharded); }
+    static constexpr auto attribute_names = std::forward_as_tuple("stride_h", "stride_w", "is_sharded");
+    const auto attribute_values() const { return std::forward_as_tuple(stride_h, stride_w, is_sharded); }
 };
 
 operation::ProgramWithCallbacks fold_single_core(

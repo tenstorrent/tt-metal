@@ -7,10 +7,9 @@
 #pragma once
 #include <optional>
 
+#include "tt_dnn/op_library/compute_kernel_config.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_eager/tensor/tensor.hpp"
-
-#include "tt_dnn/op_library/compute_kernel_config.hpp"
 
 namespace tt {
 namespace operations {
@@ -19,10 +18,10 @@ namespace primary {
 using namespace tt_metal;
 
 operation::ProgramWithCallbacks moreh_sgd_(
-    const Tensor& param_in,
-    const Tensor& grad,
+    const Tensor &param_in,
+    const Tensor &grad,
     std::optional<const Tensor> momentum_buffer_in,
-    const Tensor& param_out,
+    const Tensor &param_out,
     std::optional<const Tensor> momentum_buffer_out,
     float lr,
     float momentum,
@@ -56,19 +55,27 @@ struct MorehSGD {
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors) const;
-    static constexpr auto attribute_names =
-        std::make_tuple("lr", "momentum", "dampening", "weight_decay", "nesterov", "momentum_initialized", "param_out_mem_config", "momentum_buffer_out_mem_config", "compute_kernel_config");
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "lr",
+        "momentum",
+        "dampening",
+        "weight_decay",
+        "nesterov",
+        "momentum_initialized",
+        "param_out_mem_config",
+        "momentum_buffer_out_mem_config",
+        "compute_kernel_config");
     const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->lr),
-            std::cref(this->momentum),
-            std::cref(this->dampening),
-            std::cref(this->weight_decay),
-            std::cref(this->nesterov),
-            std::cref(this->momentum_initialized),
-            std::cref(this->param_out_mem_config),
-            std::cref(this->momentum_buffer_out_mem_config),
-            std::cref(this->compute_kernel_config));
+        return std::forward_as_tuple(
+            this->lr,
+            this->momentum,
+            this->dampening,
+            this->weight_decay,
+            this->nesterov,
+            this->momentum_initialized,
+            this->param_out_mem_config,
+            this->momentum_buffer_out_mem_config,
+            this->compute_kernel_config);
     }
 };
 

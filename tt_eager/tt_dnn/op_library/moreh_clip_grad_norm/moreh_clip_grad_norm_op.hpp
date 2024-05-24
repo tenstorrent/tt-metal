@@ -40,9 +40,9 @@ struct MorehClipGradNormStep1 {
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &) const;
 
-    static constexpr auto attribute_names = std::make_tuple("norm_type", "tile_offset_of_tmp_pow_sum");
+    static constexpr auto attribute_names = std::forward_as_tuple("norm_type", "tile_offset_of_tmp_pow_sum");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->norm_type), std::cref(this->tile_offset_of_tmp_pow_sum));
+        return std::forward_as_tuple(this->norm_type, this->tile_offset_of_tmp_pow_sum);
     }
 };
 
@@ -60,8 +60,8 @@ struct MorehClipGradNormStep2 {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &) const;
 
-    static constexpr auto attribute_names = std::make_tuple("norm_type");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->norm_type)); }
+    static constexpr auto attribute_names = std::forward_as_tuple("norm_type");
+    const auto attribute_values() const { return std::forward_as_tuple(this->norm_type); }
 };
 
 operation::ProgramWithCallbacks moreh_clip_grad_norm_step2_impl(
@@ -80,8 +80,8 @@ struct MorehClipGradNormStep3 {
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &) const;
 
-    static constexpr auto attribute_names = std::make_tuple();
-    const auto attribute_values() const { return std::make_tuple(); }
+    static constexpr auto attribute_names = std::forward_as_tuple();
+    const auto attribute_values() const { return std::forward_as_tuple(); }
 };
 
 operation::ProgramWithCallbacks moreh_clip_grad_norm_step3_impl(

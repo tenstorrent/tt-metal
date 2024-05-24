@@ -5,10 +5,10 @@
  */
 
 #pragma once
+#include <optional>
+
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
-
-#include <optional>
 
 namespace tt {
 namespace operations {
@@ -16,8 +16,8 @@ namespace primary {
 
 using namespace tt_metal;
 
-void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape);
-std::vector<int64_t> find_reduce_dim(const Shape& a_shape, const Shape& b_shape);
+void get_tensor_dim(std::vector<uint32_t> &dim, const Shape &shape);
+std::vector<int64_t> find_reduce_dim(const Shape &a_shape, const Shape &b_shape);
 bool is_same_batch_dim(const Tensor &tensor_a, const Tensor &tensor_b);
 
 operation::ProgramWithCallbacks moreh_matmul_multi_core(
@@ -46,13 +46,8 @@ struct MorehMatmul {
     const operation::Hash compute_program_hash(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple(
-        "transpose_input", "transpose_other");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->transpose_input),
-            std::cref(this->transpose_other));
-    }
+    static constexpr auto attribute_names = std::forward_as_tuple("transpose_input", "transpose_other");
+    const auto attribute_values() const { return std::forward_as_tuple(this->transpose_input, this->transpose_other); }
 };
 
 Tensor moreh_matmul(

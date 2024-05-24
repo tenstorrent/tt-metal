@@ -22,22 +22,54 @@ namespace tt_metal {
 // H, W are expected to be multiples of 32
 // The 'any' Tensor arg is only used to pass the device and resulting tensor dtype
 // val_hi/lo are expected to be uint16 encodings of bfloat16 numbers, so 0x3f80 for 1.0 etc.
-struct FillRM  {
+struct FillRM {
     uint32_t N, C, H, W, hFill, wFill;
     float val_hi, val_lo;
     const MemoryConfig output_mem_config;
 
-    void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+    void validate(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("N", "C", "H", "W", "hFill", "wFill", "val_hi", "val_lo", "output_mem_config");
+    const auto attribute_values() const {
+        return std::forward_as_tuple(
+            this->N,
+            this->C,
+            this->H,
+            this->W,
+            this->hFill,
+            this->wFill,
+            this->val_hi,
+            this->val_lo,
+            this->output_mem_config);
+    }
 };
 
-Tensor fill_rm (uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, const Tensor& any, float val_hi, float val_lo, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor fill_rm(
+    uint32_t N,
+    uint32_t C,
+    uint32_t H,
+    uint32_t W,
+    uint32_t hFill,
+    uint32_t wFill,
+    const Tensor& any,
+    float val_hi,
+    float val_lo,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-inline
-Tensor fill_ones_rm (uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hOnes, uint32_t wOnes, const Tensor& any, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+inline Tensor fill_ones_rm(
+    uint32_t N,
+    uint32_t C,
+    uint32_t H,
+    uint32_t W,
+    uint32_t hOnes,
+    uint32_t wOnes,
+    const Tensor& any,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     // 0x3f80 is 1.0 in BF16
     return fill_rm(N, C, H, W, hOnes, wOnes, any, 1.0, 0.0, output_mem_config);
 }

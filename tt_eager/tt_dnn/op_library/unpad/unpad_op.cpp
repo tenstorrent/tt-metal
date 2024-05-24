@@ -18,14 +18,15 @@ namespace tt {
 
 namespace tt_metal {
 
-inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const Shape& shape) {
+inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const Shape &shape) {
     return std::accumulate(shape.begin(), shape.end() - 2, 1, std::multiplies<uint32_t>{});
 }
 
-inline __attribute__((always_inline)) uint32_t get_upper_start_offset(const Tensor &tensor, const Shape &output_tensor_start) {
+inline __attribute__((always_inline)) uint32_t
+get_upper_start_offset(const Tensor &tensor, const Shape &output_tensor_start) {
     // offset for every dim except last 2
     uint32_t start_offset = 0;
-    const auto& shape = tensor.get_legacy_shape();
+    const auto &shape = tensor.get_legacy_shape();
 
     uint32_t num_pages = tensor.volume();
     if (tensor.get_layout() == Layout::TILE) {
@@ -47,10 +48,9 @@ inline __attribute__((always_inline)) uint32_t get_upper_start_offset(const Tens
 
 uint32_t get_tiled_start_offset(const Tensor &input_tensor, const Shape &output_tensor_start) {
     uint32_t num_input_pages = input_tensor.volume() / (TILE_HW);
-    const auto& shape = input_tensor.get_legacy_shape();
+    const auto &shape = input_tensor.get_legacy_shape();
     uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
-    uint32_t num_pages_width =
-        num_input_pages / (upper_dims_compressed * (shape[-2] / TILE_HEIGHT));
+    uint32_t num_pages_width = num_input_pages / (upper_dims_compressed * (shape[-2] / TILE_HEIGHT));
 
     // offset for every dim except last 2
     uint32_t start_offset = get_upper_start_offset(input_tensor, output_tensor_start);
@@ -63,7 +63,7 @@ uint32_t get_rm_start_offset(const Tensor &tensor, const Shape &output_tensor_st
     uint32_t start_offset = 0;
 
     if (tensor.get_legacy_shape().rank() >= 2) {
-        const auto& shape = tensor.get_legacy_shape();
+        const auto &shape = tensor.get_legacy_shape();
         uint32_t num_pages = tensor.volume() / shape[-1];
         uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
         start_offset = get_upper_start_offset(tensor, output_tensor_start);
@@ -128,21 +128,12 @@ operation::ProgramWithCallbacks Unpad::create_program(
     auto &output_tensor = output_tensors.at(0);
     switch (this->get_parallelization_strategy(input_tensors)) {
         case UnpadOpParallelizationStrategy::MULTI_CORE:
-        default:
-            return unpad_multi_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
+        default: return unpad_multi_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
     };
 }
 
 UnpadOpParallelizationStrategy Unpad::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     return UnpadOpParallelizationStrategy::MULTI_CORE;
-}
-
-tt::stl::reflection::Attributes Unpad::attributes() const {
-    return {
-        {"output_tensor_start", this->output_tensor_start},
-        {"output_tensor_end", this->output_tensor_end},
-        {"output_mem_config", this->output_mem_config},
-    };
 }
 
 const operation::Hash Unpad::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
@@ -184,7 +175,7 @@ Tensor unpad(
         [output_tensor_start, output_tensor_end, output_mem_config](
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            const std::vector<std::optional<Tensor>> &optional_output_tensors) mutable -> std::vector<Tensor> {
             auto &input_tensor_a = input_tensors.at(0);
             auto input_tensor_shape = input_tensor_a.get_legacy_shape();
             const Shape output_tensor_shape = {
@@ -242,13 +233,6 @@ std::vector<Tensor> UnpadOnHost::compute_output_tensors(const std::vector<Tensor
     } else {
         return {input_tensor.unpad(this->output_tensor_start, this->output_tensor_end)};
     }
-}
-
-tt::stl::reflection::Attributes UnpadOnHost::attributes() const {
-    return {
-        {"output_tensor_start", this->output_tensor_start},
-        {"output_tensor_end", this->output_tensor_end},
-    };
 }
 
 Tensor unpad_on_host(

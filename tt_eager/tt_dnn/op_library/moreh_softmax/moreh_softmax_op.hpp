@@ -6,10 +6,11 @@
 
 #pragma once
 
+#include <optional>
+
+#include "tt_dnn/op_library/compute_kernel_config.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_eager/tensor/tensor.hpp"
-#include "tt_dnn/op_library/compute_kernel_config.hpp"
-#include <optional>
 
 namespace tt {
 namespace operations {
@@ -36,15 +37,36 @@ bool is_moreh_softmax_w_small_available(const Tensor &tensor);
 bool is_moreh_softmax_h_small_available(const Tensor &tensor);
 
 operation::ProgramWithCallbacks moreh_softmax_w_small(
-    const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const DeviceComputeKernelConfig compute_kernel_config);
+    const Tensor &input,
+    const Tensor &output,
+    const CoreRange core_range,
+    const MorehSoftmaxOp op,
+    const DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks moreh_softmax_w_large(
-    const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const DeviceComputeKernelConfig compute_kernel_config);
+    const Tensor &input,
+    const Tensor &output,
+    const CoreRange core_range,
+    const MorehSoftmaxOp op,
+    const DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks moreh_softmax_h_small(
-    const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const DeviceComputeKernelConfig compute_kernel_config);
+    const Tensor &input,
+    const Tensor &output,
+    const CoreRange core_range,
+    const MorehSoftmaxOp op,
+    const DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks moreh_softmax_h_large(
-    const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const DeviceComputeKernelConfig compute_kernel_config);
+    const Tensor &input,
+    const Tensor &output,
+    const CoreRange core_range,
+    const MorehSoftmaxOp op,
+    const DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks moreh_softmax_c_large(
-    const Tensor &input, const Tensor &output, uint32_t dim, const CoreRange core_range, const MorehSoftmaxOp op, const DeviceComputeKernelConfig compute_kernel_config);
+    const Tensor &input,
+    const Tensor &output,
+    uint32_t dim,
+    const CoreRange core_range,
+    const MorehSoftmaxOp op,
+    const DeviceComputeKernelConfig compute_kernel_config);
 
 struct MorehSoftmax {
     const uint32_t dim;
@@ -54,14 +76,19 @@ struct MorehSoftmax {
     const MemoryConfig output_mem_config;
     const DeviceComputeKernelConfig compute_kernel_config;
 
-    void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
+    void validate_with_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    std::vector<Tensor> create_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     MorehSoftmaxOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple("dim", "op", "strategy", "output_mem_config", "compute_kernel_config");
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("dim", "op", "strategy", "output_mem_config", "compute_kernel_config");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->dim), std::cref(this->op), std::cref(this->strategy), std::cref(this->output_mem_config), std::cref(this->compute_kernel_config));
+        return std::forward_as_tuple(
+            this->dim, this->op, this->strategy, this->output_mem_config, this->compute_kernel_config);
     }
 };
 

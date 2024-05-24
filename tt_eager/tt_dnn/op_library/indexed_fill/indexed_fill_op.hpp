@@ -5,12 +5,12 @@
 #pragma once
 
 #include <optional>
+
 #include "tensor/tensor.hpp"
-#include "tt_metal/host_api.hpp"
+#include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
-
-#include "tt_dnn/op_library/run_operation.hpp"
+#include "tt_metal/host_api.hpp"
 
 using namespace tt::constants;
 
@@ -24,15 +24,22 @@ struct IndexedFill {
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("output_mem_config", "dim");
+    const auto attribute_values() const { return std::forward_as_tuple(output_mem_config, dim); }
 };
 
-operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids, const Tensor &input_a, const Tensor& input_b, const Tensor &output);
+operation::ProgramWithCallbacks indexed_fill_multi_core(
+    const Tensor &batch_ids, const Tensor &input_a, const Tensor &input_b, const Tensor &output);
 
-
-Tensor indexed_fill(const Tensor &batch_ids, const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config, std::int64_t dim=0);
-
+Tensor indexed_fill(
+    const Tensor &batch_ids,
+    const Tensor &input_a,
+    const Tensor &input_b,
+    const MemoryConfig &output_mem_config,
+    std::int64_t dim = 0);
 
 }  // namespace tt_metal
 

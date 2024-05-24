@@ -34,7 +34,9 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
     uint32_t X = input_tensor.get_legacy_shape()[-1];
     TT_FATAL(cos.get_dtype() == sin.get_dtype(), "Cos and Sin dtypes must match");
     TT_FATAL(cos.get_legacy_shape() == sin.get_legacy_shape(), "Cos and Sin dims must match");
-    TT_FATAL(cos.get_legacy_shape()[0] == 1 && cos.get_legacy_shape()[1] == 1 && cos.get_legacy_shape()[-1] == X, "Cos dims must match input dims");
+    TT_FATAL(
+        cos.get_legacy_shape()[0] == 1 && cos.get_legacy_shape()[1] == 1 && cos.get_legacy_shape()[-1] == X,
+        "Cos dims must match input dims");
     if (this->token_idx.has_value()) {
         TT_FATAL(cos.get_legacy_shape()[-2] >= token_idx, "Cos dims must match input dims");
     } else {
@@ -45,7 +47,9 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.get_legacy_shape()[-1]);
         // Require even work division for now
         TT_FATAL(
-            (input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) % input_tensor.shard_spec().value().shape[0] == 0);
+            (input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) %
+                input_tensor.shard_spec().value().shape[0] ==
+            0);
         if (this->output_mem_config.is_sharded()) {
             TT_FATAL(this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
         }
@@ -92,14 +96,14 @@ std::vector<Tensor> RotaryEmbedding::create_output_tensors(const std::vector<Ten
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;
         return {create_device_tensor(
+            output_shape, input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), mem_config)};
+    } else {
+        return {create_device_tensor(
             output_shape,
             input_tensor.get_dtype(),
             input_tensor.get_layout(),
             input_tensor.device(),
-            mem_config)};
-    } else {
-        return {create_device_tensor(
-            output_shape, input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), this->output_mem_config)};
+            this->output_mem_config)};
     }
 }
 
@@ -113,21 +117,14 @@ operation::ProgramWithCallbacks RotaryEmbedding::create_program(
     switch (this->get_parallelization_strategy(input_tensors)) {
         case RotaryEmbeddingOpParallelizationStrategy::MULTI_CORE:
         default:
-            return rotary_embedding_multi_core(input_tensor, cos, sin, output_tensor, this->token_idx, this->compute_kernel_config);
+            return rotary_embedding_multi_core(
+                input_tensor, cos, sin, output_tensor, this->token_idx, this->compute_kernel_config);
     }
 }
 
 RotaryEmbeddingOpParallelizationStrategy RotaryEmbedding::get_parallelization_strategy(
     const std::vector<Tensor>& input_tensors) const {
     return RotaryEmbeddingOpParallelizationStrategy::MULTI_CORE;
-}
-
-tt::stl::reflection::Attributes RotaryEmbedding::attributes() const {
-    return {
-        {"seq_len", this->seq_len},
-        {"token_idx", this->token_idx},
-        {"output_mem_config", this->output_mem_config},
-    };
 }
 
 const operation::Hash RotaryEmbedding::compute_program_hash(const std::vector<Tensor>& input_tensors) const {

@@ -21,14 +21,15 @@ struct SplitTiled {
     void shape_asserts(const Tensor &a) const;
     Shape get_single_output_shape(const Shape &input_shape) const;
     void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Shape> compute_output_shapes(
-        const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(
-        const std::vector<Tensor> &input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors,
-        std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("dim", "num_chunks", "output_mem_config");
+    const auto attribute_values() const {
+        return std::forward_as_tuple(this->dim, this->num_chunks, this->output_mem_config);
+    }
 };
 
 }  // namespace tt_metal

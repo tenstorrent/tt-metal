@@ -6,9 +6,9 @@
 
 #include <functional>
 #include <optional>
+#include <tuple>
 #include <utility>
 #include <vector>
-#include <tuple>
 
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_eager/tensor/tensor.hpp"
@@ -21,8 +21,7 @@ namespace primary {
 
 using namespace tt_metal;
 
-inline
-std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const Shape& shape) {
+inline std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const Shape &shape) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");
@@ -34,7 +33,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const Shape& shape
         other_dims_product *= shape[i];
     }
 
-    return { W, H, other_dims_product};
+    return {W, H, other_dims_product};
 }
 
 struct MorehSum {
@@ -47,11 +46,9 @@ struct MorehSum {
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &inputs, std::vector<Tensor> &outputs) const;
-    stl::reflection::Attributes attributes() const;
-    static constexpr auto attribute_names = std::make_tuple("dim", "output_mem_config");
-    const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->dim), std::cref(this->output_mem_config));
-    }
+
+    static constexpr auto attribute_names = std::forward_as_tuple("dim", "output_mem_config");
+    const auto attribute_values() const { return std::forward_as_tuple(this->dim, this->output_mem_config); }
 };
 
 operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Tensor &output, int64_t dim);

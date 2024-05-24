@@ -33,9 +33,9 @@ struct MorehLayerNormBackwardInputGrad {
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple("normalized_dims", "output_mem_config");
+    static constexpr auto attribute_names = std::forward_as_tuple("normalized_dims", "output_mem_config");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->normalized_dims), std::cref(this->output_mem_config));
+        return std::forward_as_tuple(this->normalized_dims, this->output_mem_config);
     }
 };
 
@@ -52,9 +52,9 @@ struct MorehLayerNormBackwardGammaBetaGrad {
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple("normalized_dims", "output_mem_config");
+    static constexpr auto attribute_names = std::forward_as_tuple("normalized_dims", "output_mem_config");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->normalized_dims), std::cref(this->output_mem_config));
+        return std::forward_as_tuple(this->normalized_dims, this->output_mem_config);
     }
 };
 

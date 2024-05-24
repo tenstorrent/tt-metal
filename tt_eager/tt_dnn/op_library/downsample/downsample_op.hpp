@@ -19,18 +19,19 @@ struct Downsample {
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple("downsample_params", "output_dtype");
-    const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->downsample_params), std::cref(this->output_dtype));
-    }
+    static constexpr auto attribute_names = std::forward_as_tuple("downsample_params", "output_dtype");
+    const auto attribute_values() const { return std::forward_as_tuple(this->downsample_params, this->output_dtype); }
 };
 
-//operation::ProgramWithCallbacks downsample_multi_core(const Tensor &a, Tensor& output);
-operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::array<uint32_t, 5> downsample_params, Tensor& output);
+// operation::ProgramWithCallbacks downsample_multi_core(const Tensor &a, Tensor& output);
+operation::ProgramWithCallbacks downsample_single_core(
+    const Tensor &a, std::array<uint32_t, 5> downsample_params, Tensor &output);
 
-Tensor downsample (const Tensor &a, std::array<uint32_t, 5> downsample_params, std::optional<DataType> output_dtype=std::nullopt);
+Tensor downsample(
+    const Tensor &a, std::array<uint32_t, 5> downsample_params, std::optional<DataType> output_dtype = std::nullopt);
 
 // namespace downsample_helpers {
 // uint32_t get_num_cores(CoreCoord grid_size, uint32_t nblocks);

@@ -39,7 +39,8 @@ void MorehDotBackward::validate(
     TT_ASSERT(is_1d_tensor(other));
     TT_ASSERT(is_same_shape(input, other));
 
-    TT_ASSERT(input.get_dtype() == DataType::BFLOAT16 || input.get_dtype() == DataType::BFLOAT8_B, "Unsupported data format");
+    TT_ASSERT(
+        input.get_dtype() == DataType::BFLOAT16 || input.get_dtype() == DataType::BFLOAT8_B, "Unsupported data format");
     TT_ASSERT(
         output_grad.storage_type() == StorageType::DEVICE and input.storage_type() == StorageType::DEVICE and
             other.storage_type() == StorageType::DEVICE,
@@ -84,8 +85,6 @@ operation::ProgramWithCallbacks MorehDotBackward::create_program(
     const auto& other_grad = optional_inputs.at(1);
     return moreh_dot_backward_single_core(output_grad, input, other, input_grad, other_grad);
 }
-
-tt::stl::reflection::Attributes MorehDotBackward::attributes() const { return {}; }
 
 std::vector<std::optional<Tensor>> moreh_dot_backward(
     const Tensor& output_grad,

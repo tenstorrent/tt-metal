@@ -24,10 +24,9 @@ struct Repeat {
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     RepeatOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple("repeat_dim", "num_repeats", "output_mem_config");
+    static constexpr auto attribute_names = std::forward_as_tuple("repeat_dim", "num_repeats", "output_mem_config");
     const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->repeat_dim), std::cref(this->num_repeats), std::cref(this->output_mem_config));
+        return std::forward_as_tuple(this->repeat_dim, this->num_repeats, this->output_mem_config);
     }
 };
 

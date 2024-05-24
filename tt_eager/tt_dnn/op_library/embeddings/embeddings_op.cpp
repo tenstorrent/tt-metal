@@ -87,13 +87,11 @@ operation::ProgramWithCallbacks embeddings_tilized(
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
     EmbeddingsIndexType embeddings_index_type;
-    if(a.get_dtype() == DataType::BFLOAT16) {
+    if (a.get_dtype() == DataType::BFLOAT16) {
         embeddings_index_type = EmbeddingsIndexType::BFP16;
-    }
-    else{
+    } else {
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
-
 
     tt::DataFormat weights_cb_data_format = tt_metal::datatype_to_dataformat_converter(weights.get_dtype());
     uint32_t weights_single_tile_size = tt_metal::detail::TileSize(weights_cb_data_format);
@@ -157,15 +155,15 @@ operation::ProgramWithCallbacks embeddings_tilized(
         (std::uint32_t)num_tiles_per_block,
         (std::uint32_t)TILE_HEIGHT * input_element_size_bytes};
 
-    std::map<string, string> embedding_defines = {{magic_enum::enum_name(embeddings_type).data(), "1"}, {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
+    std::map<string, string> embedding_defines = {
+        {magic_enum::enum_name(embeddings_type).data(), "1"},
+        {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/embeddings/kernels/dataflow/embeddings_tilize.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(
-            embedding_compile_time_args,
-             embedding_defines));
+        tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
     if (num_blocks_per_core_group_1 > 0) {
         vector<uint32_t> compute_args_1 = {
@@ -198,8 +196,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(
-            writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     uint32_t input_offset = 0;
     uint32_t weight_offset = 0;
@@ -395,22 +392,21 @@ operation::ProgramWithCallbacks embeddings_rm(
         (std::uint32_t)block_height * input_element_size_bytes};
 
     EmbeddingsIndexType embeddings_index_type;
-    if(a.get_dtype() == DataType::BFLOAT16) {
+    if (a.get_dtype() == DataType::BFLOAT16) {
         embeddings_index_type = EmbeddingsIndexType::BFP16;
-    }
-    else{
+    } else {
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    std::map<string, string> embedding_defines = {{magic_enum::enum_name(embeddings_type).data(), "1"}, {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
+    std::map<string, string> embedding_defines = {
+        {magic_enum::enum_name(embeddings_type).data(), "1"},
+        {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/embeddings/kernels/dataflow/embeddings.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(
-            embedding_compile_time_args,
-            embedding_defines));
+        tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
     bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_page_size);
     uint32_t output_log2_stick_size = output_stick_size_is_power_of_two ? (std::uint32_t)log2(output_page_size) : 0;
@@ -515,20 +511,32 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     const auto &weights = input_tensors.at(1);
     TT_FATAL(a.get_layout() == Layout::ROW_MAJOR);
     TT_FATAL(weights.get_layout() == Layout::ROW_MAJOR);
-    TT_FATAL(a.get_dtype() == DataType::UINT32 or a.get_dtype() == DataType::BFLOAT16, "Input must be UINT32 or BFLOAT16");
+    TT_FATAL(
+        a.get_dtype() == DataType::UINT32 or a.get_dtype() == DataType::BFLOAT16, "Input must be UINT32 or BFLOAT16");
     TT_FATAL(weights.get_dtype() == DataType::BFLOAT16);
-    TT_FATAL(a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
-    TT_FATAL(weights.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
-    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
+    TT_FATAL(
+        a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        "Embedding does not currently support sharding");
+    TT_FATAL(
+        weights.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        "Embedding does not currently support sharding");
+    TT_FATAL(
+        this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        "Embedding does not currently support sharding");
 
-    TT_FATAL(weights.get_legacy_shape()[0] == 1 && weights.get_legacy_shape()[1] == 1, "First two dimensions for the weights must be 1");
+    TT_FATAL(
+        weights.get_legacy_shape()[0] == 1 && weights.get_legacy_shape()[1] == 1,
+        "First two dimensions for the weights must be 1");
     if (this->tilized) {
         TT_FATAL(a.get_legacy_shape()[-1] % TILE_HEIGHT == 0);
-        TT_FATAL(weights.get_legacy_shape()[-1] % TILE_WIDTH == 0, "Number of columns in table must be factor of tile width");
+        TT_FATAL(
+            weights.get_legacy_shape()[-1] % TILE_WIDTH == 0,
+            "Number of columns in table must be factor of tile width");
     } else {
         TT_FATAL(this->output_dtype != DataType::BFLOAT8_B);
     }
-    TT_FATAL(a.get_legacy_shape()[1] == 1 && a.get_legacy_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
+    TT_FATAL(
+        a.get_legacy_shape()[1] == 1 && a.get_legacy_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
     switch (this->embeddings_type) {
         case EmbeddingsType::PADDED: TT_FATAL(this->pad_token.has_value()); break;
         case EmbeddingsType::BINARY: TT_FATAL(weights.get_legacy_shape()[-2] == 2);
@@ -564,15 +572,6 @@ operation::ProgramWithCallbacks Embeddings::create_program(
     const auto &weights = input_tensors.at(1);
     auto &output_tensor = output_tensors.at(0);
     return embeddings_(a, weights, output_tensor, this->tilized, this->embeddings_type, this->pad_token);
-}
-
-tt::stl::reflection::Attributes Embeddings::attributes() const {
-    return {
-        {"output_mem_config", this->output_mem_config},
-        {"tilized", this->tilized},
-        {"embeddings_type", this->embeddings_type},
-        {"pad_token", this->pad_token},
-        {"output_dtype", this->output_dtype}};
 }
 
 }  // namespace tt_metal

@@ -43,10 +43,8 @@ struct MorehGetitem {
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple("index_dims", "output_mem_config");
-    const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->index_dims), std::cref(this->output_mem_config));
-    }
+    static constexpr auto attribute_names = std::forward_as_tuple("index_dims", "output_mem_config");
+    const auto attribute_values() const { return std::forward_as_tuple(this->index_dims, this->output_mem_config); }
 };
 
 Tensor moreh_getitem(
