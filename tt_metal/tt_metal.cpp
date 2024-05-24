@@ -814,9 +814,6 @@ void UpdateCircularBufferPageSize(Program &program, CBHandle cb_handle, uint8_t 
 }
 
 void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, const Buffer &buffer) {
-    if (not buffer.is_l1()) {
-        TT_FATAL("Only L1 buffers can have an associated circular buffer!");
-    }
     auto circular_buffer = detail::GetCircularBuffer(program, cb_handle);
     circular_buffer->config().set_globally_allocated_address(buffer);
     circular_buffer->assign_global_address();
@@ -841,7 +838,6 @@ uint32_t CreateSemaphore(
             for (const auto &core_range : crs.ranges()) {
                 CoreCoord start_core = core_range.start;
                 CoreCoord end_core = core_range.end;
-                TT_FATAL(start_core == end_core or start_core < end_core && "Invalid core range!");
                 std::optional<uint32_t> addr_candidate = get_semaphore_address(program, core_range);
                 if (!address.has_value()) {
                     address = addr_candidate;
