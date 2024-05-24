@@ -311,6 +311,51 @@ struct operation_t {
     }
 };
 
+template <auto id, typename lambda_t>
+struct lambda_operation_t {
+    const char* cpp_fully_qualified_name;  // TODO: move this to template args when C++20 is available
+    const lambda_t lambda;
+
+    constexpr lambda_operation_t(const char* cpp_fully_qualified_name, const lambda_t& lambda) :
+        cpp_fully_qualified_name{cpp_fully_qualified_name}, lambda{lambda} {}
+
+    template <typename... args_t>
+    auto operator()(args_t&&... args) const {
+        ZoneScopedN("ttnn::decorators::lambda_operation_t::operator()");
+        tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", this->cpp_fully_qualified_name);
+        auto output = this->lambda(std::forward<decltype(args)>(args)...);
+        tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", this->cpp_fully_qualified_name);
+        return output;
+    }
+
+    // Get "add" from "ttnn::add"
+    const std::string name() const {
+        auto cpp_fully_qualified_name = std::string(this->cpp_fully_qualified_name);
+        auto last_token = cpp_fully_qualified_name.substr(cpp_fully_qualified_name.rfind("::") + 2);
+        return last_token;
+    }
+
+    // Convert "ttnn::add" to "ttnn_add_t"
+    const std::string class_name() const { return this->name() + "_t"; }
+
+    // Convert "ttnn::add" to "ttnn.add"
+    const std::string python_fully_qualified_name() const {
+        auto replace = [](const std::string& input, const std::string& from, const std::string& to) {
+            if (from.empty()) {
+                return input;
+            }
+            auto output = input;
+            size_t start = 0;
+            while ((start = output.find(from, start)) != std::string::npos) {
+                output.replace(start, from.length(), to);
+                start += to.length();  // In case 'to' contains 'from', like replacing 'x' with 'yx'
+            };
+            return output;
+        };
+        return replace(std::string{this->cpp_fully_qualified_name}, "::", ".");
+    }
+};
+
 template <typename concrete_operation_t>
 constexpr auto register_operation(const char* name) {
     return operation_t<__COUNTER__, concrete_operation_t>{name};
@@ -328,6 +373,13 @@ template <auto function>
 constexpr auto register_operation(const char* name) {
     using concrete_operation_t = operation_without_validation_t<function>;
     return operation_t<__COUNTER__, concrete_operation_t>{name};
+}
+
+#define TO_LAMBDA(function) ([](auto&&... args) { return function(std::forward<decltype(args)>(args)...); })
+
+template <typename lambda_t>
+constexpr auto register_operation(const char* name, const lambda_t& lambda) {
+    return lambda_operation_t<__COUNTER__, lambda_t>{name, lambda};
 }
 
 }  // namespace decorators
