@@ -701,12 +701,52 @@ Tensor subalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const
 }
 
 // addalpha(input, other, alpha) = input + (alpha * other)
-Tensor _addalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config) {
-    Tensor result = add(mul_unary(input_b, alpha, output_mem_config), input_a, std::nullopt, output_mem_config);
-    return result;
+Tensor _addalpha(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    float alpha,
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    if (output_tensor.has_value()) {
+        add(mul_unary(input_b, alpha, output_mem_config), input_a, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, output_tensor.value());
+        return output_tensor.value();
+    }
+
+    return add(mul_unary(input_b, alpha, output_mem_config), input_a, std::nullopt, output_mem_config);
 }
-Tensor addalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _addalpha)(input_a, input_b, alpha, output_mem_config);
+Tensor addalpha(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    float alpha,
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    return operation::decorate_as_composite(__func__, _addalpha)(
+        input_a, input_b, alpha, output_mem_config, output_tensor);
+}
+
+Tensor _addalpha_overload(
+    uint8_t cq_id,
+    const Tensor& input_a,
+    const Tensor& input_b,
+    float alpha,
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    if (output_tensor.has_value()) {
+        add(mul_unary(input_b, alpha, output_mem_config), input_a, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, output_tensor.value());
+        return output_tensor.value();
+    }
+
+    return add(mul_unary(input_b, alpha, output_mem_config), input_a, std::nullopt, output_mem_config);
+}
+Tensor addalpha(
+    uint8_t cq_id,
+    const Tensor& input_a,
+    const Tensor& input_b,
+    float alpha,
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    return operation::decorate_as_composite(__func__, _addalpha_overload)(
+        cq_id, input_a, input_b, alpha, output_mem_config, output_tensor);
 }
 
 // repeat interleave supports repeats as 1 to inf, dim between 0 to 2
