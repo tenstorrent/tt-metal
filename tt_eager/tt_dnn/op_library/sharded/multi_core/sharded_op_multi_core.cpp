@@ -667,7 +667,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
                     // first get a single stride, go through the number of consecutive pages in the same core
                     auto consecutive_it = it + 1;
                     auto last_it_consec = it;
-                    while (consecutive_it != end) {
+                    while (consecutive_it != end and consecutive_it->has_value()) {
                         auto next_input_page = *(consecutive_it);
                         auto curr_input_page = *(last_it_consec);
                         // diff core , not consecutive
@@ -678,21 +678,25 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
                         else if ((curr_input_page.value().second + 1) != next_input_page.value().second) {
                             break;
                         }
-                        last_it_consec = consecutive_it;
+                        // next page is padding
                         consecutive_it = consecutive_it + 1;
+                        last_it_consec = consecutive_it;
                     }
-                    uint32_t stride_size = std::distance(it, last_it_consec) + 1;
+                    uint32_t stride_size = std::distance(it, last_it_consec);
+                    if (last_it_consec == it) {
+                        stride_size = 1;
+                    }
                     auto stride_it = it + stride_size;
-                    auto last_it_stride = stride_it - 1;
+                    auto last_it_stride = it;
 
-                    TT_ASSERT((stride_it == end) or stride_it->has_value());
+                    // TT_ASSERT((stride_it == end) or stride_it->has_value());
                     TT_ASSERT(last_it_stride->has_value());
                     // if stride_range is within same core
                     // the jump in data is end of curr - end last stride
                     // if stride range is in diff core
                     // jump in data is curr - beginning of last stride
                     uint32_t data_stride;
-                    if ((stride_it != end) and (stride_it != it)) {
+                    if ((stride_it != end) and (stride_it != it) and stride_it->has_value()) {
                         // data stride within core
                         if (stride_it->has_value() and stride_it->value().first == last_it_stride->value().first and
                             (stride_it->value().second > last_it_stride->value().second)) {
@@ -700,7 +704,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
                             auto prev_input_page = *(last_it_stride);
                             TT_ASSERT(prev_input_page.has_value());
                             TT_ASSERT(next_input_page.has_value());
-                            data_stride = next_input_page.value().second - prev_input_page.value().second - 1;
+                            data_stride = next_input_page.value().second - prev_input_page.value().second - stride_size;
                             stride = Stride{.core = {0, 0}, .data = data_stride};
                         }
                         // strided core but same data
@@ -746,7 +750,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
                     TT_ASSERT(data_stride < output_buffer->num_pages());
                     auto stride_start = stride_it;
                     uint32_t num_strides = 1;
-                    while (stride_it != end) {
+                    while (stride_it != end and stride_it->has_value()) {
                         bool stride_not_complete = false;
                         auto stride_it_inner = stride_it + 1;
                         auto last_it_stride_inner = stride_it;
@@ -771,14 +775,14 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
                         num_strides++;
                         last_it_stride = stride_it_inner - 1;
                         stride_it = stride_it_inner;
-                        if (stride_it == end) {
+                        if (stride_it == end or !stride_it->has_value()) {
                             break;
                         }
                         auto next_input_page = *(stride_it);
                         auto curr_input_page = *(last_it_stride);
                         bool core_stride = ((stride.core.x != 0) or (stride.core.y != 0));
-                        TT_ASSERT(curr_input_page.has_value());
-                        if (!next_input_page.has_value() or
+                        // TT_ASSERT(curr_input_page.has_value());
+                        if (!curr_input_page.has_value() or !next_input_page.has_value() or
                             (next_input_page.value().first.x - curr_input_page.value().first.x != stride.core.x) or
                             (next_input_page.value().first.y - curr_input_page.value().first.y != stride.core.y) or
                             (abs((int)next_input_page.value().second - (int)curr_input_page.value().second) !=
@@ -803,181 +807,6 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
 
     return ret_map;
 }
-
-// std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
-//     Buffer* input_buffer, Buffer* output_buffer) {
-//
-//     auto output_buffer_page_mapping = generate_buffer_page_mapping(*output_buffer);
-//     auto input_buffer_page_mapping = generate_buffer_page_mapping(*input_buffer);
-//
-//     const auto& output_shard_to_host_mapping = output_buffer_page_mapping.dev_page_to_host_page_mapping_;
-//     const auto& input_page_to_local_page_mapping = input_buffer_page_mapping.host_page_to_local_shard_page_mapping_;
-//     const auto& host_page_to_input_page_mapping = input_buffer_page_mapping.host_page_to_dev_page_mapping_;
-//
-//     auto num_pages = std::min<uint32_t>(output_shard_to_host_mapping.size(), input_buffer->num_dev_pages());
-//
-//     // First get output_core to vector< pair<input_core, input_page> (num_pages_in_output)
-//     std::unordered_map<CoreCoord, std::vector<std::pair<CoreCoord, uint32_t>>> output_core_to_vector_input_core_page;
-//
-//     for (uint32_t output_page_id = 0; output_page_id < num_pages; output_page_id++) {
-//         auto output_core =
-//         output_buffer_page_mapping.all_cores_[output_buffer_page_mapping.dev_page_to_core_mapping_[output_page_id]];
-//         auto host_page = output_shard_to_host_mapping[output_page_id];
-//         if(host_page.has_value()) {
-//             auto input_page = host_page_to_input_page_mapping[host_page.value()];
-//             auto local_input_page = input_page_to_local_page_mapping[host_page.value()];
-//             auto input_core =
-//             input_buffer_page_mapping.all_cores_[input_buffer_page_mapping.dev_page_to_core_mapping_[input_page]]; if
-//             (output_core_to_vector_input_core_page.find(output_core) == output_core_to_vector_input_core_page.end())
-//             {
-//                 output_core_to_vector_input_core_page[output_core] = {{input_core, local_input_page}};
-//             } else {
-//                 output_core_to_vector_input_core_page[output_core].push_back({input_core, local_input_page});
-//             }
-//         }
-//     }
-//
-//     // now compress to output_core to vector<pair<input_core, input_page_range> (num_page_ranges_in_output)
-//     auto output_cores = corerange_to_cores(output_buffer->shard_spec().grid());
-//     std::unordered_map<CoreCoord, std::vector<PageStride>> ret_map;
-//     ret_map.reserve(output_cores.size());
-//
-//     auto output_core_host_page_indices = output_buffer_page_mapping.core_host_page_indices_;
-//     auto device = input_buffer->device();
-//     auto full_grid = device->compute_with_storage_grid_size();
-//     CoreCoord end_core = (*output_buffer->shard_spec().grid().ranges().rbegin()).end;
-//     uint32_t output_core_id;
-//     for (auto output_core : output_cores) {
-//         ret_map.try_emplace(output_core, std::vector<PageStride>{});
-//
-//
-//         const auto& input_cores_with_pages = output_core_to_vector_input_core_page.at(output_core);
-//         auto it = input_cores_with_pages.begin();
-//         const auto end = input_cores_with_pages.end();
-//
-//
-//         while (it != end) {
-//             const auto start_core = it->first;
-//             const auto start_page = it->second;
-//             auto expected_next_page = start_page + 1;
-//             Stride stride = Stride{.core = {0,0} , .data = 0};
-//             if ((it + 1) == end) {
-//                 ret_map[output_core].push_back(PageStride{.start_core = start_core, .start_data=it->second,
-//                 .stride_size=1, .stride=stride, .num_strides=1, .skip=false}); it = end;
-//             }
-//             else {
-//                 //first get a single stride, go through the number of consecutive pages in the same core
-//                 auto consecutive_it = it+1;
-//                 auto last_it_consec = it;
-//                 while(consecutive_it != end) {
-//                     auto next_input_page = *(consecutive_it);
-//                     auto curr_input_page = *(last_it_consec);
-//                     // diff core , not consecutive
-//                     if(curr_input_page.first != next_input_page.first) {
-//                         break;
-//                     }
-//                     //not consecutive
-//                     else if ((curr_input_page.second + 1) != next_input_page.second) {
-//                         break;
-//                     }
-//                     last_it_consec = consecutive_it;
-//                     consecutive_it = consecutive_it+1;
-//                 }
-//                 uint32_t stride_size = std::distance(it, last_it_consec) + 1;
-//                 auto stride_it = it + stride_size;
-//                 auto last_it_stride = stride_it - 1;
-//
-//                 // if stride_range is within same core
-//                 // the jump in data is end of curr - end last stride
-//                 // if stride range is in diff core
-//                 // jump in data is curr - beginning of last stride
-//                 uint32_t data_stride;
-//                 if((stride_it != end) and (stride_it != it)){
-//                     // data stride within core
-//                     if(stride_it->first == last_it_stride->first and (stride_it->second > last_it_stride->second) ) {
-//                         auto next_input_page = *(stride_it);
-//                         auto prev_input_page = *(last_it_stride);
-//                         data_stride = next_input_page.second - prev_input_page.second - 1;
-//                         stride = Stride{.core = {next_input_page.first.x - prev_input_page.first.x,
-//                         next_input_page.first.y - prev_input_page.first.y},
-//                                         .data = data_stride};
-//                     }
-//                     // strided core but same data
-//                     // currently only handling increasing cores within same stride
-//                     // TODO : negative strides for cores
-//                     else if((stride_it->first != last_it_stride->first) and (stride_it->first.x >= it->first.x and
-//                     stride_it->first.y >= it->first.y) and (stride_it->second == it->second)) {
-//                     //else {
-//                         auto next_input_page = *(stride_it);
-//                         auto prev_input_page = *it;
-//                         data_stride = 0;
-//                         stride = Stride{.core = {next_input_page.first.x - prev_input_page.first.x,
-//                         next_input_page.first.y - prev_input_page.first.y},
-//                                         .data = data_stride};
-//                     }
-//                     // diff data and diff core, not handled yet
-//                     else {
-//                         ret_map[output_core].push_back(PageStride{.start_core = start_core, .start_data=it->second,
-//                         .stride_size=stride_size, .stride=stride, .num_strides=1, .skip=false}); it = stride_it;
-//                         continue;
-//                     }
-//                     //TODO add stride of data and core
-//                 }
-//                 // only single stride
-//                 else {
-//                     data_stride = 0;
-//                 }
-//
-//                 TT_ASSERT(stride.core.x < full_grid.x and stride.core.y < full_grid.y);
-//                 TT_ASSERT(data_stride < output_buffer->num_pages());
-//                 auto stride_start = stride_it;
-//                 uint32_t num_strides = 1;
-//                 while(stride_it != end) {
-//                     bool stride_not_complete = false;
-//                     auto stride_it_inner = stride_it + 1;
-//                     auto last_it_stride_inner = stride_it;
-//                     for(uint32_t i=0; i<stride_size - 1; i++) {
-//                         auto next_input_page = *(stride_it_inner);
-//                         auto curr_input_page = *(last_it_stride_inner);
-//                         int increment = 1;
-//                         if(
-//                             (next_input_page.first != curr_input_page.first) or
-//                             ((int)next_input_page.second != (int)(curr_input_page.second) + (int)increment))
-//                         {
-//                             stride_not_complete = true;
-//                             break;
-//                         }
-//                         last_it_stride_inner = stride_it_inner;
-//                         stride_it_inner = stride_it_inner+1;
-//                     }
-//                     if(stride_not_complete) {
-//                         break;
-//                     }
-//                     num_strides++;
-//                     last_it_stride = stride_it_inner - 1;
-//                     stride_it = stride_it_inner;
-//                     if(stride_it == end) {
-//                         break;
-//                     }
-//                     auto next_input_page = *(stride_it);
-//                     auto curr_input_page = *(last_it_stride);
-//                     bool core_stride = ((stride.core.x != 0) or (stride.core.y != 0));
-//
-//                     if((next_input_page.first.x - curr_input_page.first.x != stride.core.x) or
-//                         (next_input_page.first.y - curr_input_page.first.y != stride.core.y) or
-//                         (abs((int)next_input_page.second - (int)curr_input_page.second) != (int)stride.data))
-//                     {
-//                         break;
-//                     }
-//                 }
-//                 ret_map[output_core].push_back(PageStride{.start_core = start_core, .start_data=it->second,
-//                 .stride_size=stride_size, .stride=stride, .num_strides=num_strides, .skip=false}); it = stride_it;
-//             }
-//         }
-//     }
-//
-//     return ret_map;
-// }
 
 enum class ReshardStridesInRange { ALL_STRIDES, FIRST_HALF, SECOND_HALF };
 
