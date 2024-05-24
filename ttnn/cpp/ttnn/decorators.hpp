@@ -361,20 +361,6 @@ constexpr auto register_operation(const char* name) {
     return operation_t<__COUNTER__, concrete_operation_t>{name};
 }
 
-template <auto function>
-struct operation_without_validation_t {
-    template <typename... args_t>
-    static auto execute_on_main_thread(args_t&&... args) {
-        return function(std::forward<args_t>(args)...);
-    }
-};
-
-template <auto function>
-constexpr auto register_operation(const char* name) {
-    using concrete_operation_t = operation_without_validation_t<function>;
-    return operation_t<__COUNTER__, concrete_operation_t>{name};
-}
-
 #define TO_LAMBDA(function) ([](auto&&... args) { return function(std::forward<decltype(args)>(args)...); })
 
 template <typename lambda_t>

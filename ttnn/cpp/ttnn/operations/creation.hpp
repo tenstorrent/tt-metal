@@ -197,14 +197,17 @@ struct Arange {
 }  // namespace operations
 
 constexpr auto full = ttnn::register_operation<ttnn::operations::creation::Full>("ttnn::full");
-constexpr auto zeros = ttnn::register_operation<ttnn::operations::creation::zeros>("ttnn::zeros");
-constexpr auto ones = ttnn::register_operation<ttnn::operations::creation::ones>("ttnn::ones");
-constexpr auto empty = ttnn::register_operation<ttnn::operations::creation::empty>("ttnn::empty");
+constexpr auto zeros = ttnn::register_operation("ttnn::zeros", TO_LAMBDA(ttnn::operations::creation::zeros));
+constexpr auto ones = ttnn::register_operation("ttnn::ones", TO_LAMBDA(ttnn::operations::creation::ones));
+constexpr auto empty = ttnn::register_operation("ttnn::empty", TO_LAMBDA(ttnn::operations::creation::empty));
 
 constexpr auto full_like = ttnn::register_operation<ttnn::operations::creation::FullLike>("ttnn::full_like");
-constexpr auto zeros_like = ttnn::register_operation<ttnn::operations::creation::zeros_like>("ttnn::zeros_like");
-constexpr auto ones_like = ttnn::register_operation<ttnn::operations::creation::ones_like>("ttnn::ones_like");
-constexpr auto empty_like = ttnn::register_operation<ttnn::operations::creation::empty_like>("ttnn::empty_like");
+constexpr auto zeros_like =
+    ttnn::register_operation("ttnn::zeros_like", TO_LAMBDA(ttnn::operations::creation::zeros_like));
+constexpr auto ones_like =
+    ttnn::register_operation("ttnn::ones_like", TO_LAMBDA(ttnn::operations::creation::ones_like));
+constexpr auto empty_like =
+    ttnn::register_operation("ttnn::empty_like", TO_LAMBDA(ttnn::operations::creation::empty_like));
 
 constexpr auto arange = ttnn::register_operation<ttnn::operations::creation::Arange>("ttnn::arange");
 
