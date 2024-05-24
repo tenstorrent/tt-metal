@@ -71,6 +71,8 @@ inline Tensor rotary_embedding_llama(
             auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
             auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
 
+            TT_FATAL(head_dim <= 128 || std::get<WormholeComputeKernelConfig>(compute_kernel_config.value()).fp32_dest_acc_en == false, "If head_dim is > 128, fp32_dest_acc_en must be False");
+
             Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
             FormatParams input_format_params = {.pad_shape = input_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
             Shape cos_pad_shape = AutoFormat::pad_to_tile_shape(cos.get_legacy_shape());

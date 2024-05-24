@@ -33,6 +33,14 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
     uint32_t seq_len = input_tensor.get_legacy_shape()[-2];
     uint32_t B = input_tensor.get_legacy_shape()[0];
     uint32_t head_dim = input_tensor.get_legacy_shape()[-1];
+    TT_FATAL(((seq_len & (seq_len - 1)) == 0), "Sequence must be a power of 2");
+    // Check that head_dim is less than 256
+    TT_FATAL(head_dim <= 256, "Head dim must be less than 256");
+    // Check that head_dim is a multiple of 32
+    TT_FATAL(head_dim % 32 == 0, "Head dim must be a multiple of 32");
+    // Check datatypes
+    TT_FATAL(input_tensor.get_dtype() == cos.get_dtype()  && cos.get_dtype() == sin.get_dtype()
+        && sin.get_dtype() == trans_mat.get_dtype() && trans_mat.get_dtype() == DataType::BFLOAT16, "All input tensors must have dtype = bfloat16");
     TT_FATAL(cos.get_dtype() == sin.get_dtype(), "Cos and Sin dtypes must match");
     TT_FATAL(cos.get_legacy_shape() == sin.get_legacy_shape(), "Cos and Sin dims must match");
     TT_FATAL(cos.get_legacy_shape()[0] == 1 && cos.get_legacy_shape()[1] == 1 && cos.get_legacy_shape()[-1] == head_dim, "Cos dims must match input dims");
@@ -44,6 +52,7 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
 
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+
 }
 
 std::vector<Shape> RotaryEmbeddingLlama::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
