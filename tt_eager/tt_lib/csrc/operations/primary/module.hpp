@@ -671,6 +671,7 @@ void py_module(py::module& m_primary) {
         py::arg("output").noconvert() = std::nullopt,
         py::arg("bias").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a moreh_matmul operation.");
 
     // moreh_matmul_backward
