@@ -5,7 +5,7 @@
 import pytest
 from loguru import logger
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_pcc, tt2torch_tensor
 import torch
 
@@ -28,7 +28,7 @@ def run_falcon_attn_matmul_test(
 
     pcc = 0.99
 
-    if falcon_op == ttl.operations.primary.transformers.attn_matmul:
+    if falcon_op == ttnn.experimental.operations.primary.transformers.attn_matmul:
         q_len = 1
         kv_heads = 1
         q_heads = 71
@@ -37,9 +37,13 @@ def run_falcon_attn_matmul_test(
         expected_output_shape = [1, q_heads, batch, seq_len]
 
         B = torch.randn(b_shape) - 0.95
-        b_t = ttl.tensor.Tensor(B, in1_dtype).to(ttl.tensor.Layout.TILE).to(device, in1_mem_config)
+        b_t = (
+            ttnn.experimental.tensor.Tensor(B, in1_dtype)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device, in1_mem_config)
+        )
 
-    elif falcon_op == ttl.operations.primary.transformers.attn_matmul_from_cache:
+    elif falcon_op == ttnn.experimental.operations.primary.transformers.attn_matmul_from_cache:
         q_len = 1
         kv_heads = 1
         q_heads = 71
@@ -60,33 +64,41 @@ def run_falcon_attn_matmul_test(
             B = kv_cache[:, :, :seq_len, :]
             expected_output_shape = [1, q_heads, batch, K]
 
-        b_t = ttl.tensor.Tensor(kv_cache, in1_dtype).to(ttl.tensor.Layout.TILE).to(device, in1_mem_config)
+        b_t = (
+            ttnn.experimental.tensor.Tensor(kv_cache, in1_dtype)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device, in1_mem_config)
+        )
 
     else:
         raise NotImplementedError(f"falcon matmul op is undefined!")
 
     A = torch.randn(a_shape)
 
-    a_t = ttl.tensor.Tensor(A, in0_dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
+    a_t = (
+        ttnn.experimental.tensor.Tensor(A, in0_dtype)
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device, in0_mem_config)
+    )
 
     compute_grid_size = device.compute_with_storage_grid_size()
 
-    if falcon_op == ttl.operations.primary.transformers.attn_matmul:
+    if falcon_op == ttnn.experimental.operations.primary.transformers.attn_matmul:
         out = falcon_op(
             a_t,
             b_t,
-            compute_with_storage_grid_size=ttl.tensor.CoreCoord(compute_grid_size.x, compute_grid_size.y),
+            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(compute_grid_size.x, compute_grid_size.y),
             output_mem_config=out_mem_config,
             output_dtype=out_dtype,
         )
 
-    elif falcon_op == ttl.operations.primary.transformers.attn_matmul_from_cache:
-        out = ttl.operations.primary.transformers.attn_matmul_from_cache(
+    elif falcon_op == ttnn.experimental.operations.primary.transformers.attn_matmul_from_cache:
+        out = ttnn.experimental.operations.primary.transformers.attn_matmul_from_cache(
             a_t,
             b_t,
             seq_len,
             transpose_hw,
-            compute_with_storage_grid_size=ttl.tensor.CoreCoord(compute_grid_size.x, compute_grid_size.y),
+            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(compute_grid_size.x, compute_grid_size.y),
             output_mem_config=out_mem_config,
             output_dtype=out_dtype,
         )
@@ -119,34 +131,40 @@ def run_falcon_attn_matmul_test(
     "in0_mem_config, in1_mem_config, out_mem_config",
     (
         (
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+            ),
+            ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+            ),
+            ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+            ),
         ),
     ),
     ids=["DRAM"],
 )
 @pytest.mark.parametrize(
     "out_dtype",
-    (ttl.tensor.DataType.BFLOAT16,),
+    (ttnn.experimental.tensor.DataType.BFLOAT16,),
     ids=["out_BFLOAT16"],
 )
 @pytest.mark.parametrize(
     "in1_dtype",
-    (ttl.tensor.DataType.BFLOAT16,),
+    (ttnn.experimental.tensor.DataType.BFLOAT16,),
     ids=["in1_BFLOAT16"],
 )
 @pytest.mark.parametrize(
     "in0_dtype",
-    (ttl.tensor.DataType.BFLOAT16,),
+    (ttnn.experimental.tensor.DataType.BFLOAT16,),
     ids=["in0_BFLOAT16"],
 )
 @pytest.mark.parametrize(
     "falcon_op, transpose_hw",
     (
-        (ttl.operations.primary.transformers.attn_matmul, None),
-        (ttl.operations.primary.transformers.attn_matmul_from_cache, True),
-        (ttl.operations.primary.transformers.attn_matmul_from_cache, False),
+        (ttnn.experimental.operations.primary.transformers.attn_matmul, None),
+        (ttnn.experimental.operations.primary.transformers.attn_matmul_from_cache, True),
+        (ttnn.experimental.operations.primary.transformers.attn_matmul_from_cache, False),
     ),
     ids=["attn_matmul", "pre_attn_matmul_from_cache", "post_attn_matmul_from_cache"],
 )

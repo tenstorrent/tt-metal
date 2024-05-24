@@ -8,9 +8,9 @@ import time
 from functools import partial
 from pathlib import Path
 
-import pytest
 import torch
 import torch.nn.functional as F
+import ttnn
 import tt_lib
 from loguru import logger
 from models.demos.falcon7b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
@@ -20,11 +20,9 @@ from models.utility_functions import (
     disable_compilation_reports,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
-    is_wormhole_b0,
     nearest_32,
     profiler,
     torch2tt_tensor,
-    tt2torch_tensor,
     tt_tensors_to_torch_tensors,
 )
 from tqdm import tqdm
@@ -274,7 +272,7 @@ def run_falcon_demo_kv(
         for i in range(num_devices):
             tt_prefill_input_ids[i].deallocate()
             if tt_prefill_attention_mask is not None:
-                if isinstance(tt_prefill_attention_mask[i], tt_lib.tensor.Tensor):
+                if isinstance(tt_prefill_attention_mask[i], ttnn.experimental.tensor.Tensor):
                     tt_prefill_attention_mask[i].deallocate()
                 elif isinstance(tt_prefill_attention_mask[i], list):
                     for tt_attention_mask_element in tt_prefill_attention_mask[i]:
@@ -389,7 +387,7 @@ def run_falcon_demo_kv(
 
         if tt_prefill_attention_mask is not None:
             for device_id in range(len(tt_prefill_attention_mask)):
-                if isinstance(tt_prefill_attention_mask[device_id], tt_lib.tensor.Tensor):
+                if isinstance(tt_prefill_attention_mask[device_id], ttnn.experimental.tensor.Tensor):
                     tt_prefill_attention_mask[device_id].deallocate()
                 elif isinstance(tt_prefill_attention_mask[device_id], list):
                     for tt_attention_mask_element in tt_prefill_attention_mask[device_id]:
