@@ -9,6 +9,7 @@
 #include <functional>
 
 #include "tensor/tensor.hpp"
+#include "tt_dnn/op_library/compute_kernel_config.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 
 namespace tt {
@@ -21,12 +22,13 @@ using namespace tt_metal;
 //                         MorehBiasAddBackward
 ////////////////////////////////////////////////////////////////////////////
 // TODO: Move bias backward code
-operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &output_grad, const Tensor &bias_grad);
+operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &output_grad, const Tensor &bias_grad, const DeviceComputeKernelConfig &compute_kernel_config);
 
-operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor &output_grad, const Tensor &bias_grad);
+operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor &output_grad, const Tensor &bias_grad, const DeviceComputeKernelConfig &compute_kernel_config);
 
 struct MorehBiasAddBackward {
     MemoryConfig bias_grad_mem_config;
+    const DeviceComputeKernelConfig compute_kernel_config;
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -34,8 +36,8 @@ struct MorehBiasAddBackward {
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-    static constexpr auto attribute_names = std::make_tuple("bias_grad_mem_config");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->bias_grad_mem_config)); }
+    static constexpr auto attribute_names = std::make_tuple("bias_grad_mem_config", "compute_kernel_config");
+    const auto attribute_values() const { return std::make_tuple(std::cref(this->bias_grad_mem_config), std::cref(this->compute_kernel_config)); }
 };
 
 std::vector<std::optional<Tensor>> moreh_linear_backward(
@@ -49,7 +51,8 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
     std::optional<const Tensor> bias_grad = std::nullopt,
     const MemoryConfig &input_grad_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const MemoryConfig &weight_grad_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const MemoryConfig &bias_grad_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig &bias_grad_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 }  // namespace operations
