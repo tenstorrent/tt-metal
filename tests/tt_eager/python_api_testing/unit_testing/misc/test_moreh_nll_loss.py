@@ -197,8 +197,6 @@ def get_tt_tensors_2d(torch_input, torch_target, torch_weight, torch_divisor, to
         (5, 100, 2, 7, 50, 70),
     ],
 )
-# @pytest.mark.parametrize("shape", [
-#                                     (5, 10),])
 @pytest.mark.parametrize("ignore_index", [-1, 5])
 @pytest.mark.parametrize("reduction", ["mean", "sum"])
 @pytest.mark.parametrize("none_weight", [True, False])
