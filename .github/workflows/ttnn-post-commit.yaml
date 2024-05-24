@@ -20,11 +20,11 @@ jobs:
         ]
         test-group:
           - name: ttnn group 1
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -v --splits 2 --group 1 -m "not disable_fast_runtime_mode"
+            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 2 --group 1 -m "not disable_fast_runtime_mode"
           - name: ttnn group 2
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -v --splits 2 --group 2 -m "not disable_fast_runtime_mode"
+            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 2 --group 2 -m "not disable_fast_runtime_mode"
           - name: ttnn group 3
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -m requires_fast_runtime_mode_off
+            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
             env:
               TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false}'
           - name: ttnn cpp tests

@@ -12,10 +12,10 @@ if [[ -z "$ARCH_NAME" ]]; then
   exit 1
 fi
 # Execute TT Eager unit and sweep tests here
-env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -vvv
-env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -vvv
+env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv
+env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -xvvv
 
 # Execute python model tests here
 ./tests/scripts/run_python_model_tests.sh
 
-env pytest $TT_METAL_HOME/tests/ttnn/unit_tests
+env pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xvvv
