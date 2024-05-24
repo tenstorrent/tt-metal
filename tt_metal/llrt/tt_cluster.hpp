@@ -21,10 +21,12 @@
 // TODO(PGK): including wormhole in grayskull build is dangerous
 // Include noc/noc_parameters.h here so that including it from wormhole
 // doesn't pull in the wrong file!
+// clang-format off
 #include "dev_mem_map.h"
 #include "noc/noc_parameters.h"
 #include "tt_metal/third_party/umd/src/firmware/riscv/wormhole/eth_interface.h"
 #include "dev_msgs.h"
+// clang-format on
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
@@ -54,7 +56,9 @@ class Cluster {
 
     const metal_SocDescriptor &get_soc_desc(chip_id_t chip) const;
     uint32_t get_harvested_rows(chip_id_t chip) const;
-    uint32_t get_harvesting_mask(chip_id_t chip) const { return this->get_driver(chip).get_harvesting_masks_for_soc_descriptors().at(chip); }
+    uint32_t get_harvesting_mask(chip_id_t chip) const {
+        return this->get_driver(chip).get_harvesting_masks_for_soc_descriptors().at(chip);
+    }
 
     //! device driver and misc apis
     void verify_eth_fw() const;
@@ -65,18 +69,24 @@ class Cluster {
 
     void write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access = false) const;
     void read_dram_vec(
-        vector<uint32_t> &vec,  uint32_t size_in_bytes, tt_target_dram dram, uint64_t addr,bool small_access = false) const;
+        vector<uint32_t> &vec,
+        uint32_t size_in_bytes,
+        tt_target_dram dram,
+        uint64_t addr,
+        bool small_access = false) const;
 
     // Accepts physical noc coordinates
-    void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
+    void write_core(
+        const void *mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
     void read_core(
         void *mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
     void read_core(
-        vector<uint32_t>& data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
+        vector<uint32_t> &data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
 
-    std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
+    std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair &target) const {
         chip_id_t mmio_device_id = device_to_mmio_device_.at(target.chip);
-        tt_SiliconDevice* device = dynamic_cast<tt_SiliconDevice*>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
+        tt_SiliconDevice *device =
+            dynamic_cast<tt_SiliconDevice *>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
         const metal_SocDescriptor &soc_desc = this->get_soc_desc(target.chip);
         tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(target);
         return device->get_tlb_data_from_target(virtual_chip_coord);
@@ -84,13 +94,16 @@ class Cluster {
 
     uint32_t get_m_dma_buf_size(chip_id_t chip_id) const {
         chip_id_t mmio_device_id = device_to_mmio_device_.at(chip_id);
-        tt_SiliconDevice* device = dynamic_cast<tt_SiliconDevice*>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
+        tt_SiliconDevice *device =
+            dynamic_cast<tt_SiliconDevice *>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
         return device->get_m_dma_buf_size();
     }
 
-    std::function<void(uint32_t, uint32_t, const uint8_t*, uint32_t)> get_fast_pcie_static_tlb_write_callable(int chip_id) const {
+    std::function<void(uint32_t, uint32_t, const uint8_t *, uint32_t)> get_fast_pcie_static_tlb_write_callable(
+        int chip_id) const {
         chip_id_t mmio_device_id = device_to_mmio_device_.at(chip_id);
-        tt_SiliconDevice* device = dynamic_cast<tt_SiliconDevice*>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
+        tt_SiliconDevice *device =
+            dynamic_cast<tt_SiliconDevice *>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
         return device->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
     }
 
@@ -113,8 +126,10 @@ class Cluster {
     void write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
     void read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
 
-    void write_sysmem(const void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const;
-    void read_sysmem(void *mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const;
+    void write_sysmem(
+        const void *mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const;
+    void read_sysmem(
+        void *mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const;
 
     int get_device_aiclk(const chip_id_t &chip_id) const;
 
@@ -134,7 +149,8 @@ class Cluster {
     // Returns set of logical active ethernet coordinates on chip
     // If skip_reserved_tunnel_cores is true, will return cores that dispatch is not using,
     // intended for users to grab available eth cores for testing
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(chip_id_t chip_id, bool skip_reserved_tunnel_cores=false) const;
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(
+        chip_id_t chip_id, bool skip_reserved_tunnel_cores = false) const;
 
     // Returns set of logical inactive ethernet coordinates on chip
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
@@ -184,7 +200,10 @@ class Cluster {
 
     // Returns collection of devices that are controlled by the specified MMIO device inclusive of the MMIO device
     const std::set<chip_id_t> &get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const {
-        TT_ASSERT(this->devices_grouped_by_assoc_mmio_device_.count(mmio_device_id), "Expected device {} to be an MMIO device!", mmio_device_id);
+        TT_ASSERT(
+            this->devices_grouped_by_assoc_mmio_device_.count(mmio_device_id),
+            "Expected device {} to be an MMIO device!",
+            mmio_device_id);
         return this->devices_grouped_by_assoc_mmio_device_.at(mmio_device_id);
     }
 
@@ -203,11 +222,16 @@ class Cluster {
     void initialize_device_drivers();
     void assert_risc_reset();
     void assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids);
-    void open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids, const bool &skip_driver_allocs = false);
+    void open_driver(
+        chip_id_t mmio_device_id,
+        const std::set<chip_id_t> &controlled_device_ids,
+        const bool &skip_driver_allocs = false);
     void start_driver(chip_id_t mmio_device_id, tt_device_params &device_params) const;
 
     tt_device &get_driver(chip_id_t device_id) const;
-    void get_metal_desc_from_tt_desc(const std::unordered_map<chip_id_t, tt_SocDescriptor> &input, const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks);
+    void get_metal_desc_from_tt_desc(
+        const std::unordered_map<chip_id_t, tt_SocDescriptor> &input,
+        const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks);
     tt_cxy_pair convert_physical_cxy_to_virtual(const tt_cxy_pair &physical_cxy) const;
 
     // Reserves ethernet cores in cluster for tunneling
@@ -220,7 +244,8 @@ class Cluster {
     ARCH arch_;
     TargetDevice target_type_;
 
-    // There is one device driver per PCIe card. This map points id of the MMIO device points to the associated device driver
+    // There is one device driver per PCIe card. This map points id of the MMIO device points to the associated device
+    // driver
     std::unordered_map<chip_id_t, std::unique_ptr<tt_device>> mmio_device_id_to_driver_;
 
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
@@ -231,7 +256,8 @@ class Cluster {
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
 
-    // Collections of devices that are grouped based on the associated MMIO device. MMIO device is included in the grouping
+    // Collections of devices that are grouped based on the associated MMIO device. MMIO device is included in the
+    // grouping
     std::unordered_map<chip_id_t, std::set<chip_id_t>> devices_grouped_by_assoc_mmio_device_;
     // Save mapping of device id to associated MMIO device id for fast lookup
     std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_device_;
@@ -254,12 +280,10 @@ class Cluster {
     // Mapping of each devices' ethernet routing mode
     std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, EthRouterMode>> device_eth_routing_info_;
 
-    tt_device_dram_address_params dram_address_params = {
-        DRAM_BARRIER_BASE
-    };
+    tt_device_dram_address_params dram_address_params = {DRAM_BARRIER_BASE};
 
     tt_device_l1_address_params l1_address_params = {
-        (uint32_t)MEM_NCRISC_INIT_IRAM_L1_BASE,
+        (uint32_t)MEM_NCRISC_FIRMWARE_BASE,
         (uint32_t)MEM_BRISC_FIRMWARE_BASE,
         (uint32_t)MEM_TRISC0_SIZE,
         (uint32_t)MEM_TRISC1_SIZE,

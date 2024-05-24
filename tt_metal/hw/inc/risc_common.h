@@ -234,7 +234,7 @@ inline void riscv_wait(uint32_t cycles) {
 
 // Disables Blackhole's L1 cache. Grayskull and Wormhole do not have L1 cache
 inline __attribute__((always_inline)) void disable_lowcache() {
-#ifdef RISC_BLACKHOLE_HW
+#ifdef ARCH_BLACKHOLE
     // asm(R"ASM(
     //         csrrsi zero, 0x7c0, 0x8
     //       )ASM");
