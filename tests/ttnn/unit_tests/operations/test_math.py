@@ -165,6 +165,7 @@ def test_rad2deg(device, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_cbrt(device, h, w):
+    torch_cbrt = ttnn.get_golden_function(ttnn.cbrt)
     run_math_unary_test(device, h, w, ttnn.cbrt, torch_cbrt, pcc=0.999)
 
 
@@ -270,22 +271,10 @@ def run_math_unary_test_range(device, h, w, ttnn_function, torch_function, pcc=0
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
-def torch_cbrt(x, *args, **kwargs):
-    return torch.sgn(x) * torch.pow(torch.abs(x), 1.0 / 3)
-
-
-def torch_multigammaln(x, *args, **kwargs):
-    result = torch.lgamma(x)
-    result += torch.lgamma(x - 0.5)
-    result += torch.lgamma(x - 1.0)
-    result += torch.lgamma(x - 1.5)
-    result += 3.434189657547
-    return result
-
-
 @pytest.mark.parametrize("h", [5])
 @pytest.mark.parametrize("w", [5])
 def test_multigammaln(device, h, w):
+    torch_multigammaln = ttnn.get_golden_function(ttnn.multigammaln)
     run_math_unary_test_range(device, h, w, ttnn.multigammaln, torch_multigammaln, pcc=0.999)
 
 

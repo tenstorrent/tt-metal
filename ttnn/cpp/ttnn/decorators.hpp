@@ -365,12 +365,52 @@ constexpr auto register_operation(const char* name) {
     return operation_t<__COUNTER__, concrete_operation_t>{name};
 }
 
-#define TO_LAMBDA(function) ([](auto&&... args) { return function(std::forward<decltype(args)>(args)...); })
-
 template <typename lambda_t>
 constexpr auto register_operation(const char* name, const lambda_t& lambda) {
     return lambda_operation_t<__COUNTER__, lambda_t>{name, lambda};
 }
+
+// This function is used to transform the arguments of a function before calling it
+// where the lambda is applied to the type that matches T.
+// Example: https://godbolt.org/z/3P9YedMdj
+template <typename T, typename Func, typename Lambda, typename... Args>
+constexpr auto transform_args_lambda(Func func, Lambda lambda, Args&&... args) -> decltype(auto) {
+    auto transformer = [lambda](auto&& arg) -> decltype(auto) {
+        if constexpr (std::is_same_v<T, std::decay_t<decltype(arg)>>) {
+            return lambda(std::forward<decltype(arg)>(arg));
+        } else {
+            return std::forward<decltype(arg)>(arg);
+        }
+    };
+
+    return func(transformer(std::forward<Args>(args))...);
+}
+
+template <typename T, typename Lambda>
+auto transform_first_matching_arg(Lambda lambda) {
+    static_assert(!std::is_same<T, T>::value, "No matching type found");
+}
+
+template <typename T, typename Lambda, typename First, typename... Rest>
+auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) {
+    if constexpr (std::is_same_v<T, std::decay_t<First>>) {
+        return lambda(std::forward<First>(first));
+    } else {
+        return transform_first_matching_arg<T>(lambda, std::forward<Rest>(rest)...);
+    }
+}
+
+#define TO_LAMBDA(function) ([](auto&&... args) { return function(std::forward<decltype(args)>(args)...); })
+
+#define TO_LAMBDA_WITH_RESHAPE(function)                                                               \
+    ([](auto&&... args) {                                                                              \
+        const auto original_shape = ttnn::decorators::transform_first_matching_arg<Tensor>(            \
+            [&](auto&& tensor) { return tensor.get_shape(); }, std::forward<decltype(args)>(args)...); \
+        return ttnn::reshape(                                                                          \
+            ttnn::decorators::transform_args_lambda<Tensor>(                                           \
+                function, [&](auto&& tensor) { return ttnn::unsqueeze_to_4D(tensor); }, args...),      \
+            original_shape);                                                                           \
+    })
 
 }  // namespace decorators
 

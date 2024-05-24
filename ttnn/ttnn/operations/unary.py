@@ -20,6 +20,17 @@ def register_ttnn_cpp_unary_function(unary_function):
         result = torch.heaviside(x, torch.tensor(value, dtype=x.dtype))
         return result
 
+    def torch_cbrt(x, *args, **kwargs):
+        return torch.sgn(x) * torch.pow(torch.abs(x), 1.0 / 3)
+
+    def torch_multigammaln(x, *args, **kwargs):
+        result = torch.lgamma(x)
+        result += torch.lgamma(x - 0.5)
+        result += torch.lgamma(x - 1.0)
+        result += torch.lgamma(x - 1.5)
+        result += 3.434189657547
+        return result
+
     def torch_prelu(x, *args, **kwargs):
         weight = kwargs.pop("scalar")
         result = torch.nn.functional.prelu(x, torch.tensor(weight, dtype=x.dtype))
@@ -77,6 +88,28 @@ def register_ttnn_cpp_unary_function(unary_function):
         # "prelu": torch_prelu, # Alias for leaky_relu. TODO(#8544): implement PReLU properly
         # Other unaries (composite operations)
         "softplus": torch.nn.functional.softplus,
+        "acosh": torch.acosh,
+        "asinh": torch.asinh,
+        "atanh": torch.atanh,
+        "cbrt": torch_cbrt,
+        "cosh": torch.cosh,
+        "deg2rad": torch.deg2rad,
+        "digamma": torch.digamma,
+        "hardswish": torch.nn.functional.hardswish,
+        "hardsigmoid": torch.nn.functional.hardsigmoid,
+        "hardtanh": torch.nn.functional.hardtanh,
+        "lgamma": torch.lgamma,
+        "log1p": torch.log1p,
+        "mish": lambda _x: torch.nn.functional.mish(_x.to(torch.float)),
+        "multigammaln": torch_multigammaln,
+        "rad2deg": torch.rad2deg,
+        "sigmoid_accurate": torch.sigmoid,
+        "sinh": torch.sinh,
+        "softsign": torch.nn.functional.softsign,
+        "swish": torch.nn.functional.hardswish,
+        "tanhshrink": ttl.tensor.tanhshrink,
+        "tril": torch.tril,
+        "triu": torch.triu,
     }
 
     golden_keys = set(name_to_golden_function.keys())
@@ -144,6 +177,28 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     # Other unaries (composite operations)
     ttnn._ttnn.operations.unary.log_sigmoid,
     ttnn._ttnn.operations.unary.softplus,
+    ttnn._ttnn.operations.unary.acosh,
+    ttnn._ttnn.operations.unary.asinh,
+    ttnn._ttnn.operations.unary.atanh,
+    ttnn._ttnn.operations.unary.cbrt,
+    ttnn._ttnn.operations.unary.cosh,
+    ttnn._ttnn.operations.unary.deg2rad,
+    ttnn._ttnn.operations.unary.digamma,
+    ttnn._ttnn.operations.unary.hardswish,
+    ttnn._ttnn.operations.unary.hardsigmoid,
+    ttnn._ttnn.operations.unary.hardtanh,
+    ttnn._ttnn.operations.unary.lgamma,
+    ttnn._ttnn.operations.unary.log1p,
+    ttnn._ttnn.operations.unary.mish,
+    ttnn._ttnn.operations.unary.multigammaln,
+    ttnn._ttnn.operations.unary.rad2deg,
+    ttnn._ttnn.operations.unary.sigmoid_accurate,
+    ttnn._ttnn.operations.unary.sinh,
+    ttnn._ttnn.operations.unary.softsign,
+    ttnn._ttnn.operations.unary.swish,
+    ttnn._ttnn.operations.unary.tanhshrink,
+    ttnn._ttnn.operations.unary.tril,
+    ttnn._ttnn.operations.unary.triu,
 ]
 for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)
@@ -152,145 +207,6 @@ for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
 def prelu(*args, **kwargs):  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
     leaky_relu = getattr(THIS_MODULE, "leaky_relu")
     return leaky_relu(*args, **kwargs)
-
-
-def torch_cbrt(x, *args, **kwargs):
-    import torch
-
-    return torch.sgn(x) * torch.pow(torch.abs(x), 1.0 / 3)
-
-
-def torch_multigammaln(x, *args, **kwargs):
-    import torch
-
-    result = torch.lgamma(x)
-    result += torch.lgamma(x - 0.5)
-    result += torch.lgamma(x - 1.0)
-    result += torch.lgamma(x - 1.5)
-    result += 3.434189657547
-    return result
-
-
-def register_ttl_unary_function(name, ttl_unary_function):
-    import torch
-
-    name_to_golden_function = {
-        "acosh": torch.acosh,
-        "asinh": torch.asinh,
-        "atanh": torch.atanh,
-        "cbrt": torch_cbrt,
-        "cosh": torch.cosh,
-        "deg2rad": torch.deg2rad,
-        "digamma": torch.digamma,
-        "hardswish": torch.nn.functional.hardswish,
-        "hardsigmoid": torch.nn.functional.hardsigmoid,
-        "hardtanh": torch.nn.functional.hardtanh,
-        "lgamma": torch.lgamma,
-        "log1p": torch.log1p,
-        "mish": lambda _x: torch.nn.functional.mish(_x.to(torch.float)),
-        "multigammaln": torch_multigammaln,
-        "rad2deg": torch.rad2deg,
-        "sigmoid_accurate": torch.sigmoid,
-        "sinh": torch.sinh,
-        "softsign": torch.nn.functional.softsign,
-        "swish": torch.nn.functional.hardswish,
-        "tanhshrink": ttl.tensor.tanhshrink,
-        "tril": torch.tril,
-        "triu": torch.triu,
-    }
-
-    golden_keys = set(name_to_golden_function.keys())
-    function_names = {name for name, _ in TTL_UNARY_FUNCTIONS}
-    if golden_keys != function_names:
-        raise ImportError(f"Missing or extra golden functions:\n{golden_keys}\nshould be equal to\n{function_names}")
-
-    def _golden_function(input_tensor: ttnn.Tensor, **_):
-        torch_function = name_to_golden_function[name]
-        return torch_function(input_tensor)
-
-    def _unary_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-        ttnn.validate_input_tensor(
-            operation_name,
-            input_tensor,
-            ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-            layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
-            can_be_on_device=True,
-            can_be_on_cpu=False,
-        )
-
-    @ttnn.register_operation(
-        name=f"ttnn.{name}",
-        validate_input_tensors=_unary_validate_input_tensors,
-        golden_function=_golden_function,
-    )
-    def unary_function(
-        input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
-    ) -> ttnn.Tensor:
-        original_shape = input_tensor.shape
-        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-
-        if not isinstance(input_tensor, ttnn.Tensor):
-            raise TypeError("Expected first argument to be a ttnn.Tensor")
-
-        if not ttnn.is_tensor_storage_on_device(input_tensor):
-            raise RuntimeError("input_tensor must be on device!")
-
-        output_tensor = ttl_unary_function(input_tensor, output_mem_config=memory_config)
-        output_tensor = ttnn.reshape(output_tensor, original_shape)
-        return output_tensor
-
-    if isinstance(unary_function, ttnn.decorators.Operation):
-        unary_function.__name__ = f"ttnn.{name}"
-        unary_function.decorated_function.__doc__ = f"""{name}(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-            Applies {name} to :attr:`input_tensor` element-wise.
-
-            .. math::
-                {name.replace('_',' ')}(\\mathrm{{input\\_tensor}}_i)
-
-            Args:
-                * :attr:`input_tensor`
-
-            Example::
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = ttnn.{name}(tensor)
-
-            {unary_function.__doc__}
-
-            """
-    setattr(THIS_MODULE, name, unary_function)
-
-
-TTL_UNARY_FUNCTIONS = [
-    ("acosh", ttl.tensor.acosh),  # composite
-    ("asinh", ttl.tensor.asinh),  # composite
-    ("atanh", ttl.tensor.atanh),  # composite
-    ("cbrt", ttl.tensor.cbrt),  # composite
-    ("cosh", ttl.tensor.cosh),  # composite
-    ("deg2rad", ttl.tensor.deg2rad),  # composite
-    ("digamma", ttl.tensor.digamma),  # composite
-    ("hardswish", ttl.tensor.hardswish),  # composite
-    ("hardsigmoid", ttl.tensor.hardsigmoid),  # composite
-    ("hardtanh", ttl.tensor.hardtanh),  # composite
-    ("lgamma", ttl.tensor.lgamma),  # composite
-    ("log1p", ttl.tensor.log1p),  # composite
-    ("mish", ttl.tensor.mish),  # composite
-    ("multigammaln", ttl.tensor.multigammaln),  # composite
-    ("rad2deg", ttl.tensor.rad2deg),  # composite
-    ("sigmoid_accurate", ttl.tensor.sigmoid_accurate),  # composite
-    ("sinh", ttl.tensor.sinh),  # composite
-    ("softsign", ttl.tensor.softsign),  # composite
-    ("swish", ttl.tensor.swish),  # composite
-    ("tanhshrink", ttl.tensor.tanhshrink),  # composite
-    ("tril", ttl.tensor.tril),  # composite
-    ("triu", ttl.tensor.triu),  # composite
-]
-
-
-for unary_function_name, ttl_unary_function in TTL_UNARY_FUNCTIONS:
-    register_ttl_unary_function(unary_function_name, ttl_unary_function)
 
 
 def _is_scalar(value):
