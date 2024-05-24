@@ -1027,6 +1027,30 @@ def eltwise_addalpha(
 
 
 @setup_host_and_device
+def eltwise_addalpha_optional(
+    x,
+    y,
+    z,
+    *args,
+    alpha,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_tt_tensor(z, device, layout[1], input_mem_config[1], dtype[1])
+    print("output tensor before", t2)
+    t3 = ttl.tensor.addalpha(t0, t1, alpha, output_tensor=t2, output_mem_config=output_mem_config)
+    print("output tensor after", t2)
+    print("result", t3)
+    return tt2torch_tensor(t3)
+
+
+@setup_host_and_device
 def eltwise_div(
     x,
     y,
