@@ -439,6 +439,12 @@ def use_program_cache(request):
         devices = request.getfixturevalue("all_devices")
         for dev in devices:
             dev.enable_program_cache()
+    elif "t3k_device_mesh" in request.fixturenames:
+        device_mesh = request.getfixturevalue("t3k_device_mesh")
+        for device_id in device_mesh.get_device_ids():
+            device_mesh.get_device(device_id).enable_program_cache()
+    else:
+        raise ValueError("No device fixture found to apply program cache to")
     yield
 
 
