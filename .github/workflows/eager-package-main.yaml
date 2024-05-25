@@ -70,8 +70,14 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: eager-dist-${{ matrix.os }}-${{ matrix.runner-hw-info.arch }}
-      - name: Set up end-to-end tests environment
-        run: ./tests/scripts/set_up_end_to_end_tests_env.sh
+      - uses: ./.github/actions/install-python-deps
+      - name: Create env and install wheel
+        working-directory: tests/end_to_end_tests
+        run: |
+          python3 -m venv env
+          source env/bin/activate
+          python -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
+          python -m pip install ../../metal_libs-*.whl
       - name: Set up dynamic env vars
         working-directory: tests/end_to_end_tests
         run: |
