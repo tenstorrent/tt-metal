@@ -20,6 +20,7 @@ jobs:
         ]
         test-group: [
           {name: C++, cmd: ./tests/scripts/run_cpp_unit_tests.sh},
+          {name: C++ multi-queue, cmd: ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode fast-multi-queue-single-device }
         ]
     name: ${{ matrix.test-group.name }} ${{ matrix.runner-info.arch }} ${{ matrix.runner-info.name }}
     env:
