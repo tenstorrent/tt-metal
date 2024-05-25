@@ -29,6 +29,8 @@ jobs:
               TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false}'
           - name: ttnn cpp tests
             cmd: ./build/test/ttnn/unit_tests_ttnn
+          - name: ttnn integration tests
+            cmd: pytest tests/ttnn/integration_tests -xv -m "not models_performance_bare_metal and not models_device_performance_bare_metal"
     name: ${{ matrix.test-group.name }} ${{ matrix.runner-info.arch }} ${{ matrix.runner-info.name }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
