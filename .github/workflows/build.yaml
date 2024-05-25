@@ -36,46 +36,6 @@ jobs:
         run: |
           cmake -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++-17
           cmake --build build
-      - name: Remove unnecessary artifacts
+      - name: Build tt-metal C++ tests
         run: |
-          find build/ -name *.so -or -name *.a -or -name *.o | xargs strip -d
-      - name: 'Tar files'
-        run: tar -cvf ttm_${{ matrix.arch }}-${{ matrix.type}}.tar build
-      - name: Upload libraries as artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: metal-build-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.type }}
-          path: ttm_${{ matrix.arch }}-${{ matrix.type}}.tar
-  build-cpptest:
-    strategy:
-      matrix:
-        config: [Debug, Release, RelWithDebInfo]
-        arch: [grayskull, wormhole_b0, blackhole]
-        os: [ubuntu-20.04]
-      fail-fast: false
-    needs: build-lib
-    name: cmake build cpptest ${{ matrix.config }} ${{ matrix.arch }}
-    env:
-      ARCH_NAME: ${{ matrix.arch }}
-      CONFIG: ${{ matrix.config }}
-      # So we can get all the makefile output we want
-      VERBOSE: 1
-    runs-on: build
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          lfs: false
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
-        with:
-          name: metal-build-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.config }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.arch }}-${{ matrix.config}}.tar
-      - name: Build tt-metal tests
-        run: |
-          rm -f build/CMakeCache.txt && find build -name 'cmake_pch.hxx.pch' -exec touch {} \;
-          cmake -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++-17
           cmake --build build --target tests
