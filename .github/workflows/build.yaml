@@ -39,3 +39,8 @@ jobs:
       - name: Build tt-metal C++ tests
         run: |
           cmake --build build --target tests
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U0593J2RQRZ # Bill Teng
