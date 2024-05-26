@@ -32,7 +32,7 @@
 | [Bloom](.models/demos/grayskull/functional_bloom) (sen/s)  |                     | 70                           |                             |                                     |
 | U-Net                                                      | coming soon         |                              |                             |                                     |
 
-[1] - Observed from the host. Includes dispatch overahed and kernel execution time.
+[1] - Observed from the host. Includes dispatch overhead and kernel execution time.
 
 [2] - Ignoring host overhead. Kernel execution time only.
 
