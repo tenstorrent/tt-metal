@@ -15,18 +15,6 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class MatmulParallelizationStrategy {
-    MULTI_CORE,
-    MULTI_CORE_REUSE,
-    MULTI_CORE_REUSE_PADDING,
-    MULTI_CORE_REUSE_OPTIMIZED,
-    MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED,
-    MULTI_CORE_REUSE_MCAST_2D_TRANSPOSED_OPTIMIZED,
-    MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED,
-    MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED
-};
-
-
 /*
  * GENERAL MATMUL AND BMM
  */
@@ -166,6 +154,7 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     std::size_t per_core_N;
     bool transpose_mcast;
     std::optional<UnaryWithParam> fused_activation;
+    bool fuse_batch = true;
 
     static constexpr auto attribute_names = std::make_tuple(
         "compute_with_storage_grid_size",
@@ -175,7 +164,8 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
         "per_core_M",
         "per_core_N",
         "transpose_mcast",
-        "fused_activation");
+        "fused_activation",
+        "fuse_batch");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->compute_with_storage_grid_size),
@@ -185,7 +175,8 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
             std::cref(this->per_core_M),
             std::cref(this->per_core_N),
             std::cref(this->transpose_mcast),
-            std::cref(this->fused_activation));
+            std::cref(this->fused_activation),
+            std::cref(this->fuse_batch));
     }
 };
 
@@ -224,7 +215,18 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     }
 };
 
+struct MatmulMultiCoreProgramConfig {
+    static constexpr auto attribute_names = std::make_tuple();
+    const auto attribute_values() const { return std::make_tuple(); }
+};
+
+struct MatmulMultiCoreNonOptimizedReuseProgramConfig {
+    static constexpr auto attribute_names = std::make_tuple();
+    const auto attribute_values() const { return std::make_tuple(); }
+};
 using MatmulProgramConfig = std::variant<
+    MatmulMultiCoreProgramConfig,
+    MatmulMultiCoreNonOptimizedReuseProgramConfig,
     MatmulMultiCoreReuseProgramConfig,
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig

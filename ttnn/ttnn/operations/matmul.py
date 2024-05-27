@@ -123,6 +123,10 @@ def matmul(
         >>> print(output.shape)
         [10, 64, 128]
     """
+    if use_1d_systolic_array is not None or core_grid is not None:
+        if program_config is not None:
+            raise RuntimeError(f"Cannot use program_config with use_1d_systolic_array or core_grid")
+        core_grid = core_grid or input_tensor_a.device().core_grid
 
     return ttnn._ttnn.operations.matmul.matmul(
         input_tensor_a,
@@ -204,6 +208,10 @@ def linear(
         >>> print(output.shape)
         [10, 64, 128]
     """
+    if use_1d_systolic_array is not None or core_grid is not None:
+        if program_config is not None:
+            raise RuntimeError(f"Cannot use program_config with use_1d_systolic_array or core_grid")
+        core_grid = core_grid or input_tensor_a.device().core_grid
 
     # FIXME: passing an fp32 compute_kernel_config will cause the underlying C++ function to fail
     return ttnn._ttnn.operations.matmul.linear(
