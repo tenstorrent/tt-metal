@@ -19,9 +19,6 @@ def test_ttnn_import(reset_seeds):
 
 @pytest.mark.eager_package_silicon
 def test_ttnn_add(reset_seeds):
-    if os.environ["ARCH_NAME"] == "grayskull":
-        pytest.skip("Hangs on grayskull, likely because of having copies of libraries")
-
     with ttnn.manage_device(device_id=0) as device:
         a_torch = torch.ones((5, 7))
         b_torch = torch.ones((1, 7))
