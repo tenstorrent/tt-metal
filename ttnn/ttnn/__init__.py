@@ -8,6 +8,7 @@ import json
 import os
 import pathlib
 import pprint
+import subprocess
 from typing import Optional
 
 from loguru import logger
@@ -125,11 +126,15 @@ if CONFIG_PATH is not None:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         save_config_to_json_file(CONFIG_PATH)
 
-
 if CONFIG_OVERRIDES is not None:
     logger.debug(f"Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES")
     load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
 
+
+import tt_lib as _tt_lib
+
+_tt_lib._check_so_rpath("_ttnn", pathlib.Path(__file__).parent.parent / "tt_lib" / "build" / "lib")
+import ttnn._ttnn
 
 logger.debug(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))}")
 

@@ -108,6 +108,19 @@ class CMakeBuild(build_ext):
             "TT_METAL_HOME": Path(__file__).parent,
             "TT_METAL_ENV": "production",
             "CXX": "clang++-17",
+            # Currently, the ttnn (ttnn/_ttnn.so) and tt_lib (tt_lib/_C.so)
+            # both link to the tt_metal runtime. The specific thing in
+            # ttnn linking to tt_metal is likely the implementation of
+            # ttnn.manage_device.
+            # However, because of the singleton design of
+            # tt_cluster in tt_metal, both tt_lib and ttnn will have a
+            # copy of the cluster object, causing a hang during
+            # device operations in ttnn, such as calling
+            # output = ttnn.to_torch(output).
+            # Ultimately, we will not statically build tt_metal, and
+            # opt to dynamically set rpath of the bindings to the
+            # packaged libs for now.
+            "TT_METAL_CREATE_STATIC_LIB": "0",
         }
 
     # This should only run when building the wheel. Should not be running for any dev flow
@@ -123,7 +136,6 @@ class CMakeBuild(build_ext):
             ), f"Editable install detected in a non-srcdir environment, aborting"
             return
 
-        ext = self.extensions[0]
         build_env = CMakeBuild.get_build_env()
         source_dir = Path(os.environ.get("TT_METAL_HOME"))
         build_dir = Path(os.environ.get("TT_METAL_HOME") + "/build")
@@ -142,6 +154,14 @@ class CMakeBuild(build_ext):
 
         subprocess.check_call(["ls", "-hal"], cwd=source_dir, env=build_env)
         subprocess.check_call(["ls", "-hal", "build/lib"], cwd=source_dir, env=build_env)
+        subprocess.check_call(["ls", "-hal", "build/hw"], cwd=source_dir, env=build_env)
+
+        tt_build_dir = self.build_lib + "/tt_lib/build"
+        os.makedirs(tt_build_dir, exist_ok=True)
+        self.copy_tree(source_dir / "build/lib", tt_build_dir + "/lib")
+        self.copy_tree(source_dir / "build/hw", tt_build_dir + "/hw")
+        arch_name_file = self.build_lib + "/tt_lib/.ARCH_NAME"
+        subprocess.check_call(f"echo {metal_build_config.arch_name} > {arch_name_file}", shell=True)
 
         # Move built SOs into appropriate locations
         for ext in self.extensions:
