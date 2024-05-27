@@ -48,6 +48,20 @@ operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor 
 
     // This should allocate a DRAM buffer on the device
     Device *device = output_grad.device();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    log_debug(
+        LogOp,
+        "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
+        math_fidelity,
+        math_approx_mode,
+        fp32_dest_acc_en,
+        packer_l1_acc);
+
+    // TODO
+    if (fp32_dest_acc_en) {
+        log_warning(LogOp, "reduce scalar doesn't support fp32_dest_acc_en. fallback to false.");
+        fp32_dest_acc_en = false;
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
@@ -62,7 +76,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor 
             {CB::c_in2, in2_t},    // mask_h_w
             {CB::c_out0, out0_t},  // bias_grad
             {CB::c_intermed0, im0_t},
-            {CB::c_intermed1, im1_t},
+            {CB::c_intermed1, im1_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32: cb_data_format}
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -87,10 +101,20 @@ operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor 
     std::map<string, string> compute_defines;
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
+
+    if (fp32_dest_acc_en) {
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
+    }
     const auto compute_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_linear_backward/kernels/moreh_bias_backward_single_core_hw.cpp";
-    const auto compute_kernel_id =
-        CreateComputeKernel(program, compute_kernel_file, {core, core_num, compute_kernel_args}, compute_defines);
+    const auto compute_kernel_id = CreateComputeKernel(
+        program,
+        compute_kernel_file,
+        {core, core_num, compute_kernel_args},
+        compute_defines,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
