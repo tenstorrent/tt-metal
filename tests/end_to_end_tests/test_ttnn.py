@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import pytest
 import ttnn
 import torch
@@ -17,7 +18,6 @@ def test_ttnn_import(reset_seeds):
 
 
 @pytest.mark.eager_package_silicon
-@pytest.mark.skip("Tries to open device twice")
 def test_ttnn_add(reset_seeds):
     with ttnn.manage_device(device_id=0) as device:
         a_torch = torch.ones((5, 7))
@@ -28,3 +28,4 @@ def test_ttnn_add(reset_seeds):
 
         output = a + b
         output = ttnn.to_torch(output)
+        print(output)
