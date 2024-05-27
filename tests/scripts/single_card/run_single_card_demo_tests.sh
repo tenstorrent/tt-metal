@@ -59,6 +59,9 @@ run_common_func_tests() {
   # Distilbert
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/wormhole/distilbert/demo/demo.py --timeout 600; fail+=$?
 
+  #RoBERTa
+  pytest --disable-warnings models/demos/roberta/demo/demo.py --timeout 600; fail+=$?
+
   return $fail
 }
 
