@@ -109,7 +109,7 @@ class MambaDecode(nn.Module):
         ), f"Expected {num_tokens_in_full_sequence} tokens in the returned result"
         return inputs
 
-    def initialize_states(self):
+    def reset_states(self):
         for layer in self.layers:
             mixer = cast(MambaBlock, layer.mixer)
             mixer.prev_hidden_states.zero_()

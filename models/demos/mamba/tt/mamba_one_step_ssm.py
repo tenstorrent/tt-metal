@@ -17,6 +17,7 @@ class TtMambaSSM(torch.nn.Module):
 
         self.device = device
         self.args = args
+        self.load_fn = load_fn
 
         # hidden state
         self.batch_size = args.batch_size

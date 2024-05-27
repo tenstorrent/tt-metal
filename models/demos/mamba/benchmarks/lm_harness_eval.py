@@ -6,11 +6,13 @@ from typing import List, Tuple
 from tqdm import tqdm
 
 import torch
+import tt_lib as ttl
 
 from transformers import AutoTokenizer
 
 from models.demos.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
 from models.demos.mamba.benchmarks.loglikelihood import compute_loglikelihood_given_prompt_and_target
+from models.demos.mamba.demo.demo import get_tt_metal_model, get_tokenizer
 
 from lm_eval.api.model import LM
 from lm_eval.api.instance import Instance
@@ -22,7 +24,7 @@ from lm_eval.__main__ import cli_evaluate
 class MambaEvalWrapper(LM):
     def __init__(
         self,
-        pretrained: MambaPretrainedModelName = "state-spaces/mamba-370m",
+        pretrained: MambaPretrainedModelName = "state-spaces/mamba-2.8b",
         max_length=2048,
         batch_size=1,
         device="cpu",
@@ -63,6 +65,58 @@ class MambaEvalWrapper(LM):
                     self.vocab_size,
                 )
                 results.append((loglikelihood, is_greedy))
+        return results
+
+    def generate_until(self, requests):
+        raise NotImplementedError()
+
+    def loglikelihood_rolling(self, requests: List[Instance]) -> List[Tuple[float, bool]]:
+        raise NotImplementedError()
+
+
+@register_model("mamba-wh")
+class MambaEvalWrapper(LM):
+    def __init__(
+        self,
+        pretrained: MambaPretrainedModelName = "state-spaces/mamba-2.8b",
+        max_length=2048,
+        batch_size=1,
+        device="wh",
+    ):
+        LM.__init__(self)
+
+        self.tokenizer = get_tokenizer()
+        self.vocab_size = self.tokenizer.vocab_size
+
+        self.device = ttl.device.CreateDevice(0)
+        ttl.device.SetDefaultDevice(self.device)
+        self.device.enable_program_cache()
+
+        self.model = get_tt_metal_model(pretrained, self.device, cache_dir="/tmp", batch_size=32)
+        self.model.eval()
+
+    def loglikelihood(self, requests: List[Instance]):
+        results = []
+        with torch.no_grad():
+            for instance in tqdm(requests):
+                context, target = instance.arguments
+
+                context_ids = self.tokenizer(context, return_tensors="pt").input_ids  # (1 x CONTEXT_LEN)
+                if context == "":
+                    context_ids = torch.Tensor([self.tokenizer.eos_token_id])
+                assert len(context_ids.shape) == 2 and context_ids.shape[1] > 0, "Expected at least one context token"
+
+                target_ids = self.tokenizer(target, return_tensors="pt").input_ids  # (1 x TARGET_LEN)
+                assert len(target_ids.shape) == 2 and target_ids.shape[1] > 0, "Expected at least one target token"
+
+                loglikelihood, is_greedy = compute_loglikelihood_given_prompt_and_target(
+                    context_ids,
+                    target_ids,
+                    self.model,
+                    self.vocab_size,
+                )
+                results.append((loglikelihood, is_greedy))
+
         return results
 
     def generate_until(self, requests):
