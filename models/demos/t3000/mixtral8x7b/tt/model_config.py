@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import ttnn
 from pathlib import Path
 from loguru import logger
+import torch
+import ttnn
+from models.demos.t3000.mixtral8x7b.reference.model import Transformer
 
 
 class TtModelArgs:
@@ -63,24 +65,26 @@ class TtModelArgs:
         "OUTPUT_MM",
     )
 
-    def __init__(self, device=None, instruct=False):
-        # Assert if all folders and files exist
-        assert os.path.exists(
-            self.DEFAULT_CKPT_DIR
-        ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please use export MIXTRAL_CKPT_DIR=..."
-        assert os.path.isfile(
-            self.DEFAULT_CKPT_DIR + "/repack_weights.pt"
-        ), f"Repacked weights {self.DEFAULT_CKPT_DIR + '/repack_weights.pt'} does not exist, please use export MIXTRAL_CKPT_DIR=..."
-        assert os.path.isfile(
-            self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
-        ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please use export MIXTRAL_TOKENIZER_PATH=..."
-        assert os.path.exists(
-            self.DEFAULT_CACHE_PATH
-        ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please use export MIXTRAL_CACHE_PATH=..."
+    def __init__(self, device=None, instruct=False, dummy_weights=False):
+        if not dummy_weights:
+            # Assert if all folders and files exist
+            assert os.path.exists(
+                self.DEFAULT_CKPT_DIR
+            ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please use export MIXTRAL_CKPT_DIR=..."
+            assert os.path.isfile(
+                self.DEFAULT_CKPT_DIR + "/repack_weights.pt"
+            ), f"Repacked weights {self.DEFAULT_CKPT_DIR + '/repack_weights.pt'} does not exist, please use export MIXTRAL_CKPT_DIR=..."
+            assert os.path.isfile(
+                self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
+            ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please use export MIXTRAL_TOKENIZER_PATH=..."
+            assert os.path.exists(
+                self.DEFAULT_CACHE_PATH
+            ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please use export MIXTRAL_CACHE_PATH=..."
 
         logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
         logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
+        logger.info(f"Note: Using dummy weights, weight caching disabled")
 
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
         self.model_cache_path = Path(self.DEFAULT_CACHE_PATH)
@@ -88,6 +92,7 @@ class TtModelArgs:
         self.tokenizer_path = self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
         self.state_dict_path = str(self.model_base_path / "repack_weights.pt")
         self.instruct = instruct
+        self.dummy_weights = dummy_weights
 
         DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
         L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
@@ -246,3 +251,19 @@ class TtModelArgs:
 
     def get_compute_kernel_attn_config(self):
         return self.compute_kernel_attn_config
+
+    def load_state_dict(self):
+        """Generate or load state_dict for the first n_layers of the model"""
+        if self.dummy_weights:
+            reference_model = Transformer(args=self)
+            state_dict = reference_model.state_dict()
+        else:
+            state_dict = torch.load(self.state_dict_path)
+
+        keys_dict = list(state_dict.keys())[:]
+        remv = [f"layers.{i}" for i in range(self.n_layers, 32)]
+        for k in keys_dict:
+            if any([r in k for r in remv]):
+                state_dict.pop(k)
+
+        return state_dict

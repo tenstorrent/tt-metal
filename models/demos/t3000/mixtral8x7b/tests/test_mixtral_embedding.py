@@ -36,7 +36,7 @@ def test_mixtral_embedding(device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat16
 
     model_args = TtModelArgs(device)
-    state_dict = torch.load(model_args.state_dict_path)
+    state_dict = model_args.load_state_dict()
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     reference_emb = Emb()

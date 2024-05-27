@@ -22,7 +22,12 @@ class TtMixtralEmbedding(torch.nn.Module):
 
         base_name = "tok_embeddings.weight"
         torch_weight = self.state_dict[base_name]
-        cache_name = weight_cache_path / base_name
+
+        if args.dummy_weights:
+            cache_name = None
+        else:
+            cache_name = weight_cache_path / base_name
+
         self.weights = ttnn.as_tensor(
             torch_weight,
             dtype=dtype,

@@ -29,7 +29,7 @@ def test_mistral_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_se
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
-    state_dict = torch.load(model_args.state_dict_path)
+    state_dict = model_args.load_state_dict(dummy_weights=False)
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {k[24:]: v for k, v in state_dict.items() if (k.startswith("layers.0.attention_norm."))}

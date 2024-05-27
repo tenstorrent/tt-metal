@@ -25,9 +25,12 @@ class TtMixtralMLP(torch.nn.Module):
             ],
             dim=0,
         )
-        cache_name = lambda name: args.weight_cache_path(dtypes[name]) / (
-            f"layers.{layer_num}.feed_forward_multidevice_unsqueezed.experts.{name}"
-        )
+        if args.dummy_weights:
+            cache_name = lambda _: None
+        else:
+            cache_name = lambda name: args.weight_cache_path(dtypes[name]) / (
+                f"layers.{layer_num}.feed_forward_multidevice_unsqueezed.experts.{name}"
+            )
         as_tensor = lambda name: ttnn.as_tensor(
             torch_weight(name),
             dtype=dtypes[name],
