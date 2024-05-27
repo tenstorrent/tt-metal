@@ -106,6 +106,14 @@ class TtMambaSSM(torch.nn.Module):
         self.core_grid_row = 5
         self.core_grid_col = 8
 
+    def reset_states(self):
+        ttnn.deallocate(self.tt_hidden_state)
+        self.initialize_hidden_state()
+
+    def initialize_hidden_state(self):
+        prev_hidden_states = torch.zeros((1, 1, self.batch_size, self.hidden_size * self.n))
+        self.tt_hidden_state = self.load_fn(f"tt_hidden_state_{self.args.batch_size}", torch_tensor=prev_hidden_states)
+
     def forward(self, x):
         assert len(x.shape) == 4, "SSM block expects inputs to be rank 4"
 
