@@ -248,9 +248,7 @@ def test_moreh_nll_loss(shape, ignore_index, reduction, none_weight, fp32_dest_a
 @pytest.mark.parametrize("ignore_index", [-1])
 @pytest.mark.parametrize("reduction", ["mean", "sum"])
 @pytest.mark.parametrize("none_weight", [True, False])
-def test_moreh_nll_loss_cache(shape, ignore_index, reduction, none_weight, device, use_program_cache):
-    device.enable_program_cache()
-
+def test_moreh_nll_loss_callback(shape, ignore_index, reduction, none_weight, device, use_program_cache):
     (torch_input, torch_target, torch_weight, torch_divisor, torch_output) = get_torch_tensors(shape)
 
     if none_weight:
@@ -264,15 +262,16 @@ def test_moreh_nll_loss_cache(shape, ignore_index, reduction, none_weight, devic
     )
 
     reduction_mean = reduction == "mean"
-    tt_loss = ttl.operations.primary.moreh_nll_loss(
-        tt_input,
-        tt_target,
-        tt_weight,
-        tt_divisor,
-        tt_output,
-        ignore_index,
-        reduction_mean,
-    )
+    for _ in range(2):
+        tt_loss = ttl.operations.primary.moreh_nll_loss(
+            tt_input,
+            tt_target,
+            tt_weight,
+            tt_divisor,
+            tt_output,
+            ignore_index,
+            reduction_mean,
+        )
 
     tt_loss_to_cpu = tt_loss.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile([1, 1]).to_torch().reshape([1])
     rtol = atol = 0.05

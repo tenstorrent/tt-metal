@@ -164,7 +164,9 @@ operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(
                 {
                     auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                     runtime_args[0] = target_dram_buffer->address();
-                    runtime_args[1] = weight_dram_buffer->address();
+                    if (weight_dram_buffer != nullptr) {
+                        runtime_args[1] = weight_dram_buffer->address();
+                    }
                 }
 
                 {
