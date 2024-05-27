@@ -737,14 +737,13 @@ namespace operations {
 namespace primary {
 
 inline MatmulProgramConfig generate_matmul_program_config(
-    const Tensor &input_tensor_a,
-    const Tensor &input_tensor_b,
-    const MemoryConfig &mem_config,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const MemoryConfig& mem_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreCoord> user_core_coord,
     const std::optional<const UnaryWithParam> user_fused_activation,
-    const std::optional<const bool> user_run_batched
-    ) {
+    const std::optional<const bool> user_run_batched) {
     const bool has_user_grid = user_core_coord.has_value();
     if (has_user_grid || !input_tensor_a.is_sharded()) {
         CoreCoord core_coord;
@@ -754,20 +753,30 @@ inline MatmulProgramConfig generate_matmul_program_config(
             TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "input tensor needs to be on device");
             core_coord = input_tensor_a.device()->compute_with_storage_grid_size();
         }
-        auto config = create_matmul_program_config(input_tensor_a, input_tensor_b, user_core_coord, user_fused_activation, compute_kernel_config);
+        auto config = create_matmul_program_config(
+            input_tensor_a, input_tensor_b, user_core_coord, user_fused_activation, compute_kernel_config);
         tt::log_debug(tt::LogOp, "Auto generated program config: {}", config);
         return config;
     } else {
         bool bmm = user_run_batched.value_or(false);
-        return bmm_op_utils::get_matmul_program_config(input_tensor_a, input_tensor_b, mem_config, std::nullopt, !bmm, user_core_coord, compute_kernel_config);
+        return bmm_op_utils::get_matmul_program_config(
+            input_tensor_a, input_tensor_b, mem_config, std::nullopt, !bmm, user_core_coord, compute_kernel_config);
     }
 }
 
-inline std::optional<MatmulProgramConfig> get_program_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const struct Matmul* matmul) {
+inline std::optional<MatmulProgramConfig> get_program_config(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const struct Matmul* matmul) {
     if (matmul->program_config.has_value()) {
         return matmul->program_config;
     }
-    return generate_matmul_program_config(input_tensor_a, input_tensor_b, matmul->output_mem_config, matmul->compute_kernel_config, matmul->user_core_coord, matmul->user_fused_activation, matmul->user_run_batched);
+    return generate_matmul_program_config(
+        input_tensor_a,
+        input_tensor_b,
+        matmul->output_mem_config,
+        matmul->compute_kernel_config,
+        matmul->user_core_coord,
+        matmul->user_fused_activation,
+        matmul->user_run_batched);
 }
 
 void Matmul::validate(
@@ -1063,7 +1072,8 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
     const auto& input_tensor_b = input_tensors.at(1);
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (this->output_mem_config.is_sharded()) {
-        std::optional<MatmulProgramConfig> chosen_program_config = get_program_config(input_tensor_a, input_tensor_b, this);
+        std::optional<MatmulProgramConfig> chosen_program_config =
+            get_program_config(input_tensor_a, input_tensor_b, this);
         if (!chosen_program_config.has_value()) {
             TT_FATAL(false, "Not using a supported op for output sharding");
         }
@@ -1186,7 +1196,6 @@ uint32_t get_per_core_for_multiple_blocks(uint32_t per_core, uint32_t tiles) {
     return per_core;
 }
 
-
 operation::ProgramWithCallbacks Matmul::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -1233,7 +1242,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                 uint32_t per_core_N = program_config.per_core_N;
                 uint32_t in0_block_w = program_config.in0_block_w;
                 bool this_has_program_config = this->program_config.has_value();
-                bool needs_adjustment = !this_has_program_config && per_core_M >= max_per_tile && program_config.per_core_N >= max_per_tile;
+                bool needs_adjustment =
+                    !this_has_program_config && per_core_M >= max_per_tile && program_config.per_core_N >= max_per_tile;
                 if (needs_adjustment) {
                     fuse_batch = false;
                     auto a_shape = input_tensor_a.get_shape();
@@ -1250,12 +1260,25 @@ operation::ProgramWithCallbacks Matmul::create_program(
                         per_core_N = get_per_core_for_multiple_blocks(per_core_N, Nt);
                     }
                     if (per_core_M > max_per_tile || per_core_N > max_per_tile) {
-                        tt::log_debug(tt::LogOp, "Per core value too large. Need to use Matmul multi core. No support for bias and fused activation. per_core_M={}, per_core_N={}", per_core_M, per_core_N);
-                        TT_FATAL(!program_config.fused_activation.has_value(), "Fused activation is not supported for matmul multi core");
+                        tt::log_debug(
+                            tt::LogOp,
+                            "Per core value too large. Need to use Matmul multi core. No support for bias and fused "
+                            "activation. per_core_M={}, per_core_N={}",
+                            per_core_M,
+                            per_core_N);
+                        TT_FATAL(
+                            !program_config.fused_activation.has_value(),
+                            "Fused activation is not supported for matmul multi core");
                         TT_FATAL(!bias.has_value(), "Bias is not supported for matmul multi core");
                         return matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
                     }
-                    tt::log_debug(tt::LogOp, "Matmul adjustments: fuse_batch={} in0_block_w={} per_core_M={}, per_core_N={}", fuse_batch, in0_block_w, per_core_M, per_core_N);
+                    tt::log_debug(
+                        tt::LogOp,
+                        "Matmul adjustments: fuse_batch={} in0_block_w={} per_core_M={}, per_core_N={}",
+                        fuse_batch,
+                        in0_block_w,
+                        per_core_M,
+                        per_core_N);
                 }
                 return matmul_multi_core_reuse_mcast_2d_optimized(
                     input_tensor_a,
@@ -1265,11 +1288,11 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     broadcast_batch,
                     program_config.compute_with_storage_grid_size,
                     this->compute_kernel_config,
-                    program_config.in0_block_w,
+                    in0_block_w,
                     program_config.out_subblock_h,
                     program_config.out_subblock_w,
-                    program_config.per_core_M,
-                    program_config.per_core_N,
+                    per_core_M,
+                    per_core_N,
                     fuse_batch,
                     program_config.transpose_mcast,
                     program_config.fused_activation,
@@ -1479,18 +1502,19 @@ MatmulProgramConfig create_matmul_program_config(
             k_tiles_per_core = 1;
         }
         uint32_t max_per_tile = 16;
-        bool force_fixed_config = !has_user_core_coord && (m_tiles_per_core > max_per_tile || n_tiles_per_core > max_per_tile);
+        bool force_fixed_config =
+            !has_user_core_coord && (m_tiles_per_core > max_per_tile || n_tiles_per_core > max_per_tile);
         if (force_fixed_config) {
             k_tiles_per_core = ((k_size / ttnn::TILE_SIZE) % 2 == 0) ? 2 : 1;
             return MatmulMultiCoreReuseMultiCastProgramConfig{
                 .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
-                    .in0_block_w = k_tiles_per_core,
-                    .out_subblock_h = 4,
-                    .out_subblock_w = 2,
-                    .per_core_M = 16,
-                    .per_core_N = 16,
-                    .transpose_mcast = false,
-                    .fused_activation = fused_activation,
+                .in0_block_w = k_tiles_per_core,
+                .out_subblock_h = 4,
+                .out_subblock_w = 2,
+                .per_core_M = 16,
+                .per_core_N = 16,
+                .transpose_mcast = false,
+                .fused_activation = fused_activation,
             };
         }
 
