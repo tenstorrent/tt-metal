@@ -12,6 +12,7 @@
  * wt is which tile it is along the row [0, Wt) so j + 32*wt is the value in the tile at each element
 */
 FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
+    // TODO: investigate moving to compile time (binary size is at risk)
     cb_reserve_back(cb_id, 1);
     uint32_t write_addr = get_write_ptr(cb_id);
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
@@ -46,8 +47,8 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat data_format = get_dataformat(cb_id_in0);
+    constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    constexpr DataFormat data_format = get_dataformat(cb_id_in0);
 
     const InterleavedAddrGenFast<src_is_dram> s = {
         .bank_base_address = src_addr,
@@ -55,7 +56,8 @@ void kernel_main() {
         .data_format = data_format
     };
 
-    // there's an argument to processing two tiles at once since llk requires two index and two value tiles at at ime
+    // Stream in input tensor, buffer has four tiles as we double-buffer to continue streaming while waiting for compute and we need two tiles for the bitonic sort llk
+    // We could load in an entire row of tiles at a time but that would require substantially more memory (we would be double buffering four Wt sized CBs)
     for (uint32_t i = 0; i < Ht; ++i) {
         for (uint32_t j = 0; j < Wt; ++j) {
             cb_reserve_back(cb_id_in0, onetile);
