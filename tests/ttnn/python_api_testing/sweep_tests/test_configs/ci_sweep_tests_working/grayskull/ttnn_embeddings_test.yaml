@@ -21,7 +21,7 @@ test-list:
         inputs:
           - input-1:
             data-layout: ["ROW_MAJOR"]
-            data-type: ["UINT32"]
+            data-type: ["UINT32", "BFLOAT16"]
             buffer-type: ["DRAM", "L1"]
           - input-2:
             data-layout: ["ROW_MAJOR"]
