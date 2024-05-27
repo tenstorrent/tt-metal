@@ -85,7 +85,7 @@ jobs:
           source env/bin/activate
           python3 -m tt_metal.scripts.set_up_kernels prepare
       - name: Activate env and run release tests - silicon
-        timeout-minutes: 10
+        timeout-minutes: 2
         shell: bash
         run: |
           echo $TT_METAL_HOME
