@@ -4,23 +4,13 @@
 .github/ @tt-rkim
 
 # T3000 workflows
-.github/t3000-unit-tests.yaml @tapspatel
-.github/t3000-profiler-tests.yaml @tapspatel
-.github/t3000-model-perf-tests.yaml @tapspatel
-.github/t3000-frequent-tests.yaml @tapspatel
-.github/t3000-demo-tests.yaml @tapspatel
+.github/workflows/t3000*.yaml @tapspatel
 
 # TG workflows
-.github/tg-unit-tests.yaml @tapspatel
-.github/tg-model-perf-tests.yaml @tapspatel
-.github/tg-frequent-tests.yaml @tapspatel
-.github/tg-demo-tests.yaml @tapspatel
+.github/workflows/tg-*.yaml @tapspatel
 
 # TGG workflows
-.github/tgg-unit-tests.yaml @tapspatel
-.github/tgg-model-perf-tests.yaml @tapspatel
-.github/tgg-frequent-tests.yaml @tapspatel
-.github/tgg-demo-tests.yaml @tapspatel
+.github/workflows/tgg*.yaml @tapspatel
 
 /infra/ @tt-rkim
 
@@ -42,11 +32,18 @@ pyproject.toml @tt-rkim
 requirements*.txt @tt-rkim
 setup_hugepages.py @tt-rkim
 
+scripts/build_scripts/ @tt-rkim @vtangTT @TT-billteng
+scripts/build_scripts/build_with_profiler_opt.sh @mo-tenstorrent @tt-rkim
+cmake/ @tt-rkim @vtangTT @TT-billteng
+
 Makefile @tt-rkim
 /module.mk @tt-rkim
 tt_metal/module.mk @tt-rkim
 tt_metal/common/module.mk @tt-rkim
 tt_eager/module.mk @tt-rkim
+/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng
+tt_metal/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng
+tt_eager/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng
 
 # Testing scripts and infra
 
@@ -75,17 +72,12 @@ tt_metal/impl/buffers/ @tarafdarTT @kmabeeTT
 tt_metal/impl/dispatch/ @pgkeller @tt-asaigal
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema
 tt_metal/impl/dispatch/kernels/eth_* @ubcheema
-tt_metal/impl/dispatch/**/module.mk @tt-rkim @pgkeller
 tt_metal/kernels/dataflow/dispatch/ @tarafdarTT @pgkeller
 docs/source/frameworks/tt_dispatch.rst @pgkeller
 # docs/source/tt_metal/apis/host_apis/ @TT-billteng
 tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema
 
 # metal - fw, llks, risc-v
-# tt_metal/hw/ckernels/ @davorchap
-# tt_metal/hw/ckernels/**/module.mk @tt-rkim @davorchap
-# tt_metal/hw/ckernels/**/Makefile @tt-rkim @davorchap
-# tt_metal/hw/firmware/ @davorchap @pgkeller
 tt_metal/hw/ckernels/ @rtawfik01
 tt_metal/hw/firmware/**/module.mk @tt-rkim
 tt_metal/hw/firmware/**/Makefile @tt-rkim
@@ -102,6 +94,7 @@ tt_metal/third_party/tt_llk_* @rtawfik01 @ttmtrajkovic @rdjogoTT
 # metal - profiler
 tt_metal/**/profiler/ @mo-tenstorrent
 tt_metal/**/profiler/**/module.mk @tt-rkim @mo-tenstorrent
+tt_metal/**/profiler/**/CMakeLists.txt @tt-rkim @mo-tenstorrent
 tests/tt_metal/tools/profiler/ @mo-tenstorrent
 tt_metal/hostdevcommon/profiler_common.h @mo-tenstorrent
 docs/source/performance_measurement_tools/profiler.rst @mo-tenstorrent
@@ -110,10 +103,6 @@ tt-metal/tt_metal/programming_examples/profiler @mo-tenstorrent
 # test scripts
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tt-rkim
 tests/scripts/run_performance.sh @tt-rkim @tapspatel
-
-# eager - dtx
-**/dtx/ @tt-nshanker
-**/dtx/**/module.mk @tt-rkim @tt-nshanker
 
 # eager - tensor
 # **/tensor/ @TT-BrianLiu @tt-aho @arakhmati
