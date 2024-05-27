@@ -293,7 +293,17 @@ def falcon_prefill_matmul(
 
 
 def partial_layernorm(
-    xs, ln_gamma, ln_beta, ln_eps, layernorm_params, memconfig, pgmconfig, dtype, hidden_size, devices
+    xs,
+    ln_gamma,
+    ln_beta,
+    ln_eps,
+    layernorm_params,
+    memconfig,
+    pgmconfig,
+    dtype,
+    hidden_size,
+    devices,
+    ln_output_tensors_dict,
 ):
     # Do partial layernorm by partial sequence length of 128
     # Input xs[0] is [1, 1, seq_len, 8192]
@@ -318,16 +328,7 @@ def partial_layernorm(
         assert seq_len % slice_size == 0, "Sequence length must be divisible by layernorm slice size {slice_size}"
         num_slices = seq_len // slice_size  # we do 128 per iteration (slice), then we concat the result.
 
-        xs_output_cat = []  # this is the output we write to. Initiate as empty tensors
-        for i in range(len(xs)):
-            xs_output_cat.append(
-                torch2tt_tensor(
-                    torch.zeros([1, 1, seq_len, hidden_size]),
-                    devices[i],
-                    tt_memory_config=dram_memcfg,
-                    tt_dtype=ttl.tensor.DataType.BFLOAT16,
-                )
-            )
+        xs_output_cat = ln_output_tensors_dict[seq_len]
 
         for slice_i in range(num_slices):
             xs_slice = []
@@ -376,6 +377,43 @@ def partial_layernorm(
             )
         xs = convert_to_layout(xs, memconfig, dram_memcfg)
         xs_output_cat = xs
-    for i in range(num_devices):
-        xs_output_cat[i] = ttl.tensor.typecast(xs_output_cat[i], dtype)
+        for i in range(num_devices):
+            xs_output_cat[i] = ttl.tensor.typecast(xs_output_cat[i], dtype)
     return xs_output_cat
+
+
+def determine_tensor_deallocation(layernorm_slice_size, seq_len):
+    """
+    Tensors will be reused for seq_lens > 512 and deallocated for seq_lens <= 512
+    All tensors that satisfy above condition used in layernorm processing will be later deallocated in:
+    - falcon_mlp
+    - falcon_attention
+    - falcon_causallm
+    Args:
+        layernorm_slice_size (int): The slice size used for layer normalization.
+        seq_len (int): The sequence length.
+
+    Returns:
+        bool: True if tensors should be deallocated, False otherwise.
+    """
+    return seq_len <= layernorm_slice_size
+
+
+def generate_layernorm_persistent_tensors(seq_len, slice_size, ln_output_tensors_dict, devices, hidden_size, dtype):
+    if seq_len <= slice_size:
+        return
+
+    for name in ["final_layernorm", "mlp_layernorm", "attn_layernorm"]:
+        output_tensor = [
+            torch2tt_tensor(
+                torch.zeros(1, 1, seq_len, hidden_size),
+                devices[i],
+                tt_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                tt_dtype=dtype,
+            )
+            for i in range(len(devices))
+        ]
+        if name in ln_output_tensors_dict and ln_output_tensors_dict[name] is not None:
+            ln_output_tensors_dict[name].update({seq_len: output_tensor})
+        else:
+            ln_output_tensors_dict[name] = {seq_len: output_tensor}

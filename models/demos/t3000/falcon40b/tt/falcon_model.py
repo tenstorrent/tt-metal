@@ -18,7 +18,7 @@ from models.utility_functions import (
     nearest_32,
 )
 
-from models.demos.t3000.falcon40b.tt.model_utils import convert_to_layout, partial_layernorm
+from models.demos.t3000.falcon40b.tt.model_utils import partial_layernorm, generate_layernorm_persistent_tensors
 
 
 class TtFalconModelShared:
@@ -48,6 +48,7 @@ class TtFalconModelShared:
         self.num_layers = num_layers
         self.hidden_size = config.hidden_size
         self.num_devices = len(devices)
+        self.ln_output_tensors_dict = {"final_layernorm": dict(), "mlp_layernorm": dict(), "attn_layernorm": dict()}
 
         # Word Embeddings
         self.embeddings = TtFalconEmbeddings(
@@ -81,6 +82,7 @@ class TtFalconModelShared:
                 model_config=model_config,
                 tt_cache_path=tt_cache_path,
                 global_cos_sin_cache=global_cos_sin_cache,
+                ln_output_tensors_dict=self.ln_output_tensors_dict,
             )
             for layer_num in tqdm(range(num_layers), desc="Loading decoder layers")
         ]
@@ -202,6 +204,20 @@ class TtFalconModelShared:
                     tt_attention_mask[i],
                     output_mem_config=attention_mask_memconfig,
                     output_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                )
+            # Genereate ln output tensors for prefill if not existing
+            do_generate_ln_tensors = (
+                sequence_size > self.model_config["layernorm_params"]["slice_size"]
+                and sequence_size not in self.ln_output_tensors_dict["final_layernorm"]
+            )
+            if do_generate_ln_tensors:
+                generate_layernorm_persistent_tensors(
+                    sequence_size,
+                    self.model_config["layernorm_params"]["slice_size"],
+                    self.ln_output_tensors_dict,
+                    self.devices,
+                    self.hidden_size,
+                    self.model_config["LN_MLP_OUTPUT_DTYPE"],
                 )
 
         elif llm_mode == "decode":
@@ -347,6 +363,7 @@ class TtFalconModelShared:
             self.model_config["LN_MLP_OUTPUT_DTYPE"],
             self.hidden_size,
             self.devices,
+            self.ln_output_tensors_dict["final_layernorm"],
         )
 
         return layer_output, presents
