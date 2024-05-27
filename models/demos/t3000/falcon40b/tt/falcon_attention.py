@@ -20,7 +20,7 @@ from models.demos.t3000.falcon40b.tt.model_utils import (
     convert_to_layout,
 )
 
-from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul
+from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
 
 
 def generate_cos_sin_cache(
@@ -529,7 +529,14 @@ class TtFalconAttention:
                 overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
                 overwrite_subblock_h=1,
             )
-
+        # There are references to tensors in case seq_len > 512
+        # so we won't force deallocation
+        should_deallocate_tensors = determine_tensor_deallocation(
+            self.model_config["layernorm_params"]["slice_size"], q_len
+        )
+        if should_deallocate_tensors:
+            for i in range(len(hidden_states)):
+                hidden_states[i].deallocate(True)
         layer_present = layer_past if use_cache else None
         return attn_output, layer_present
 
