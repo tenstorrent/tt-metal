@@ -57,17 +57,10 @@ def test_mixtral_model_inference(
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
     model_args.n_layers = n_layers
 
-    state_dict = torch.load(model_args.state_dict_path)
-    keys_dict = list(state_dict.keys())[:]
-    remv = [f"layers.{i}" for i in range(n_layers, 32)]
-    for k in keys_dict:
-        if any([r in k for r in remv]):
-            state_dict.pop(k)
+    state_dict = model_args.load_state_dict()
 
     tokenizer = Tokenizer(model_args.tokenizer_path)
-
     prompts = ["Once"] * 32
-
     encoded_prompts = [tokenizer.encode(prompt) for prompt in prompts]
 
     if validation_type == "pcc":

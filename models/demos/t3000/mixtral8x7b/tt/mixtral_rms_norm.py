@@ -29,7 +29,11 @@ class TtRMSNorm(torch.nn.Module):
             weight_name = f"layers.{layer_num}.{weight_key}.weight"
 
         torch_weight = self.state_dict[weight_name].unsqueeze(0).expand(32, -1)
-        cache_name = args.weight_cache_path(dtype) / (weight_name + "multidevice")
+
+        if args.dummy_weights:
+            cache_name = None
+        else:
+            cache_name = args.weight_cache_path(dtype) / (weight_name + "multidevice")
 
         self.weight = ttnn.as_tensor(
             torch_weight,
@@ -69,7 +73,10 @@ class TtRMSNormSharded(torch.nn.Module):
             weight_name = f"layers.{layer_num}.{weight_key}.weight"
 
         torch_weight = self.state_dict[weight_name].unsqueeze(0).view(1, 1, 4096).expand([1, 32, 4096])
-        cache_name = args.weight_cache_path(dtype) / (weight_name + "multidevice")
+        if args.dummy_weights:
+            cache_name = None
+        else:
+            cache_name = args.weight_cache_path(dtype) / (weight_name + "multidevice")
 
         self.weight = ttnn.as_tensor(
             torch_weight,
