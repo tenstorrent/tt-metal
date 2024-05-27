@@ -7,7 +7,7 @@ import tt_lib
 
 from typing import List
 from models.utility_functions import torch2tt_tensor
-from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul
+from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
 
 
 class TtFalconMLP:
@@ -148,6 +148,9 @@ class TtFalconMLP:
 
     def fwd_prefill(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
         hidden_states = []
+        should_deallocate_ln_tensors = determine_tensor_deallocation(
+            self.model_config["layernorm_params"]["slice_size"], x[0].get_legacy_shape()[2]
+        )
         for i in range(len(x)):
             hidden_states.append(
                 falcon_prefill_matmul(
@@ -161,7 +164,8 @@ class TtFalconMLP:
                     overwrite_subblock_h=1,
                 )
             )
-            x[i].deallocate(True)
+            if should_deallocate_ln_tensors:
+                x[i].deallocate(True)
 
         hidden_states = tt_lib.tensor.all_gather(
             hidden_states,

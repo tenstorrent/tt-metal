@@ -26,6 +26,7 @@ class TtFalconDecoderLayer:
         model_config,
         tt_cache_path,
         global_cos_sin_cache,
+        ln_output_tensors_dict,
     ):
         super().__init__()
         self.hidden_size = config.hidden_size
@@ -36,6 +37,7 @@ class TtFalconDecoderLayer:
         self.max_position_embeddings = max_position_embeddings
         self.model_config = model_config
         self.num_devices = len(devices)
+        self.ln_output_tensors_dict = ln_output_tensors_dict
 
         assert config.parallel_attn, "Path for config.parallel_attn=False is not implemented in TtFalconDecoderLayer!"
 
@@ -261,6 +263,7 @@ class TtFalconDecoderLayer:
             self.model_config["LN_MLP_OUTPUT_DTYPE"],
             self.hidden_size,
             self.devices,
+            self.ln_output_tensors_dict["attn_layernorm"],
         )
 
         mlp_ln_output = partial_layernorm(
@@ -274,6 +277,7 @@ class TtFalconDecoderLayer:
             self.model_config["LN_MLP_OUTPUT_DTYPE"],
             self.hidden_size,
             self.devices,
+            self.ln_output_tensors_dict["mlp_layernorm"],
         )
 
         residual = hidden_states
