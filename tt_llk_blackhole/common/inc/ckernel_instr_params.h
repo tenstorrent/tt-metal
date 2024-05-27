@@ -98,6 +98,7 @@ struct p_unpacr
     constexpr static uint UNP_CLRSRC_ONE_INT8  =  0x2;
 };
 
+//TODO: RT Review this struct, bits do not match for UNPACR_NOP
 struct p_unpacr_nop
 {
     constexpr static uint UNP_POP                = 0b000;

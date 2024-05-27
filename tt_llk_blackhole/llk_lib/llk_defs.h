@@ -12,6 +12,7 @@ enum VectorMode {
   R         = 1,
   C         = 2,
   RC        = 4,
+  RC_custom = 6,
   Invalid   = 0xFF,
 };
 
@@ -95,6 +96,9 @@ enum ReluType {
     MIN_THRESHOLD_RELU,
     MAX_THRESHOLD_RELU,
 };
+
+constexpr bool UnpackToDestEn = true;
+constexpr bool UnpackToDestDis = false;
 
 /*
 Stochastic rounding modes:

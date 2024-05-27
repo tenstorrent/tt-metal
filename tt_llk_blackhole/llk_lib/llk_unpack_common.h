@@ -99,6 +99,10 @@ inline void _llk_unpack_dbg_feature_disable_(){
                                                            // workaround for bug tenstorrent/budabackend#1372
 }
 
+inline void _llk_unpack_clear_dbg_feature_disable_(){
+    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);     // Unset debug feature disable
+}
+
 inline void _llk_enable_int8_fpu_math_() {
     enable_int8_fpu_math();
 }
