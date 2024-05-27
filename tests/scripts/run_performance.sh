@@ -78,6 +78,8 @@ run_device_perf_models() {
         env pytest "tests/ttnn/integration_tests/resnet/test_performance.py" -m $test_marker
 
         env pytest models/demos/resnet/tests -m $test_marker
+
+        env pytest models/experimental/functional_roberta/tests -m $test_marker
     fi
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
