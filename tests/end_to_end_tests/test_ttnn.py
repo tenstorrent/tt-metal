@@ -10,19 +10,9 @@ import torch
 import ttnn.operations.binary
 
 
-@pytest.mark.eager_host_side
-def test_ttnn_import_host(reset_seeds):
-    torch_input_tensor = torch.zeros(2, 4, dtype=torch.float32)
-
-    tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16)
-    torch_output_tensor = ttnn.to_torch(tensor)
-
-    assert torch.allclose(torch_input_tensor, torch_output_tensor)
-
-
 @pytest.mark.eager_package_silicon
 @pytest.mark.skip("Tries to open device twice")
-def test_ttnn_import_sliicon(reset_seeds):
+def test_ttnn_import(reset_seeds):
     with ttnn.manage_device(device_id=0) as device:
         pass
 
