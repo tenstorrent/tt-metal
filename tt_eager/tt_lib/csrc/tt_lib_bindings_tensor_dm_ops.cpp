@@ -300,8 +300,8 @@ namespace tt::tt_metal::detail{
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                 "input", "Input tensor", "Tensor", "", "Yes"
-                "output_tensor_start", "Start indices of input tensor", "List[int[4]]", "Must be all 0s", "Yes"
-                "output_tensor_end", "End indices of input tensor in output tensor", "List[int[4]]", "Values along each dim must be < input_tensor_shape[i]", "Yes"
+                "output_tensor_start", "Start indices of input tensor", "List[int[tensor rank]]", "Values along each dim must be < input_tensor_shape[i]", "Yes"
+                "output_tensor_end", "End indices of input tensor in output tensor", "List[int[tensor rank]]", "Values along each dim must be < input_tensor_shape[i]", "Yes"
                 "pad_value", "Value to pad input tensor", "float", "", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
