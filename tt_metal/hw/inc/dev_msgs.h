@@ -102,7 +102,7 @@ struct debug_insert_delays_msg_t {
     volatile uint8_t read_delay_riscv_mask = 0;    // Which Riscs will delay their reads
     volatile uint8_t write_delay_riscv_mask = 0;   // Which Riscs will delay their writes
     volatile uint8_t atomic_delay_riscv_mask = 0;  // Which Riscs will delay their atomics
-    volatile uint8_t pad;
+    volatile uint8_t feedback = 0;                 // Stores the feedback about delays (used for testing)
 };
 
 enum debug_sanitize_noc_invalid_enum {

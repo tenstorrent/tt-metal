@@ -945,12 +945,14 @@ void watcher_init(Device *device) {
         log_info(
             tt::LogMetal,
             "Configured Watcher debug delays for device {}, core {}: read_delay_cores_mask=0x{:x}, "
-            "write_delay_cores_mask=0x{:x}, atomic_delay_cores_mask=0x{:x}",
+            "write_delay_cores_mask=0x{:x}, atomic_delay_cores_mask=0x{:x}. Delay cycles: {}",
             device->id(),
             delay.first.str().c_str(),
             delay.second.read_delay_riscv_mask,
             delay.second.write_delay_riscv_mask,
-            delay.second.atomic_delay_riscv_mask);
+            delay.second.atomic_delay_riscv_mask,
+            tt::llrt::OptionsG.get_watcher_debug_delay()
+            );
     }
 
     std::vector<uint32_t>

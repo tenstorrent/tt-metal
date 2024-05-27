@@ -200,6 +200,7 @@ class RunTimeOptions {
     inline void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_enabled = enable; }
 
     inline uint32_t get_watcher_debug_delay() { return watcher_debug_delay; }
+    void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }
 
    private:
     // Helper functions to parse feature-specific environment vaiables.
