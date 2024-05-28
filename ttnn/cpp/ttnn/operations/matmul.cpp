@@ -106,7 +106,7 @@ std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std
 ttnn::Tensor linear(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
-    const std::optional<const ttnn::Tensor>& bias,
+    const ttnn::Tensor& bias,
     const std::optional<const MatmulProgramConfig> program_config,
     const ttnn::MemoryConfig& memory_config,
     std::optional<const DataType> dtype,
@@ -129,16 +129,13 @@ ttnn::Tensor linear(
     const auto input_tensor_a_4d = ttnn::unsqueeze_to_4D(input_tensor_a);
     const auto input_tensor_b_4d = ttnn::unsqueeze_to_4D(input_tensor_b);
 
-    std::optional<Tensor> bias_4d = std::nullopt;
     const bool has_user_grid = core_grid.has_value();
     const bool has_program_config = program_config.has_value();
 
     bool post_process_bias = false;
-    if (bias.has_value()) {
-        bias_4d = ttnn::unsqueeze_to_4D(bias.value());
-        if (!has_program_config && !has_user_grid) {
-	    post_process_bias = true;
-	}
+    auto bias_4d = ttnn::unsqueeze_to_4D(bias);
+    if (!has_program_config && !has_user_grid) {
+        post_process_bias = true;
     }
 
     if (width_a != height_b) {
@@ -150,11 +147,11 @@ ttnn::Tensor linear(
     }
 
     auto output_tensor = tt::operations::primary::matmul(
-        input_tensor_a_4d, input_tensor_b_4d, post_process_bias ? std::nullopt : bias_4d, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/, user_core_coord, get_fused_activation(activation));
+        input_tensor_a_4d, input_tensor_b_4d, post_process_bias ? std::nullopt : std::make_optional<const Tensor>(bias_4d), program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/, user_core_coord, get_fused_activation(activation));
 
     if (post_process_bias) {
         output_tensor = tt::tt_metal::bcast(
-            output_tensor, bias_4d.value(), tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, memory_config);
+            output_tensor, bias_4d, tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, memory_config);
     }
 
     if (activation.has_value() && !has_user_grid) {

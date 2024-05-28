@@ -704,10 +704,19 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
                 ttnn::operations::core::deallocate(input_tensor_post_tm);
             }
         }
-        auto matmul_output = ttnn::operations::matmul::linear(
+        auto matmul_output = bias_tensor_on_device.has_value() ?
+            ttnn::operations::matmul::linear(
             matmul_input,
             weight_tensor_on_device,
-            bias_tensor_on_device,
+            bias_tensor_on_device.value(),
+            matmul_program_config,
+            conv_out_memory_config,
+            conv_config.dtype,
+            conv_config.activation == "" ? std::nullopt : std::optional<std::string>{conv_config.activation},
+            compute_kernel_config) :
+            ttnn::operations::matmul::matmul(
+            matmul_input,
+            weight_tensor_on_device,
             matmul_program_config,
             conv_out_memory_config,
             conv_config.dtype,

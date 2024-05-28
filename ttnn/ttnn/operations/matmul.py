@@ -171,7 +171,7 @@ def linear(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
     *,
-    bias: Optional[ttnn.Tensor] = None,
+    bias: ttnn.Tensor,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     dtype: Optional[ttnn.DataType] = None,
     core_grid: Optional[ttnn.CoreGrid] = None,
@@ -190,7 +190,7 @@ def linear(
         * :attr:`input_tensor_b` (ttnn.Tensor): the second tensor to be multiplied
 
     Keyword Arguments:
-        * :attr:`bias` (Optional[ttnn.Tensor]): the bias tensor to be added. Defaults to None
+        * :attr:`bias` ([ttnn.Tensor]): the bias tensor to be added. Required.
         * :attr:`memory_config` (ttnn.MemoryConfig): the memory configuration of the output tensor. Defaults to ttnn.DRAM_MEMORY_CONFIG
         * :attr:`dtype` (Optional[ttnn.DataType]): the data type of the output tensor. Defaults to None
         * :attr:`core_grid` (Optional[ttnn.CoreGrid]): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to None
