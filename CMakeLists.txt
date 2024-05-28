@@ -53,8 +53,9 @@ set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG=DEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG=DEBUG")
 set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG=DEBUG")
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Set default values for variables/options
 set(UMD_HOME "${CMAKE_SOURCE_DIR}/tt_metal/third_party/umd")
@@ -94,7 +95,9 @@ target_link_libraries(metal_common_libs INTERFACE
 add_library(linker_flags INTERFACE)
 
 add_library(compiler_warnings INTERFACE)
-target_compile_options(compiler_warnings INTERFACE -Werror -Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter)
+target_compile_options(compiler_warnings INTERFACE -Werror -Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter
+                        -Wno-deprecated-this-capture -Wno-deprecated-volatile
+)
 CHECK_COMPILER_WARNINGS()      # <- add any extra compile warning flags for building with Clang-17
 
 add_library(compiler_flags INTERFACE)

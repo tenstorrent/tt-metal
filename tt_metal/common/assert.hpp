@@ -96,6 +96,7 @@ inline std::string backtrace_to_string(int size = 64, int skip = 2, const std::s
     return ss.str();
 }
 
+// fix from https://github.com/fmtlib/fmt/issues/2438
 template <typename... Ts>
 void tt_assert_message(std::ostream& os, Ts const&... ts) {
     std::string fmt;
@@ -103,19 +104,19 @@ void tt_assert_message(std::ostream& os, Ts const&... ts) {
         fmt += "{} ";
     }
     log_fatal(fmt.c_str(), ts...);
-    os << fmt::format(fmt, ts...);
+    os << fmt::format(fmt::runtime(fmt), ts...);
     os << std::endl;
 }
 
 template <typename... Ts>
 void tt_assert_message(std::ostream& os, const char* t, Ts const&... ts) {
-    os << fmt::format(t, ts...);
+    os << fmt::format(fmt::runtime(t), ts...);
     os << std::endl;
 }
 
 template <typename... Ts>
 void tt_assert_message(std::ostream& os, const std::string& t, Ts const&... ts) {
-    os << fmt::format(t, ts...);
+    os << fmt::format(fmt::runtime(t), ts...);
     os << std::endl;
 }
 

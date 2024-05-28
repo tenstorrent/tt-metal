@@ -45,6 +45,21 @@ namespace utils
     // instead of letting the program terminate.
     class ThreadManager {
         public:
+            // c++20 fix for -> error: implicit capture of 'this' with a capture default of '=' is deprecated [-Werror,-Wdeprecated-this-capture]
+            // not tested at all !!!
+            // template <typename Func, typename... Args>
+            // void start(Func&& func, Args&&... args) {
+            //     auto args_tuple = std::make_tuple(std::forward<Args>(args)...);
+            //     threads.emplace_back(std::thread([this, func=std::forward<Func>(func), args_tuple]() mutable{
+            //         try {
+            //             std::apply(func, args_tuple);
+            //         } catch (...) {
+            //             std::lock_guard<std::mutex> lock(exceptionMutex);
+            //             exceptions.push_back(std::current_exception());
+            //         }
+            //     }));
+            // }
+
             template <typename Func, typename... Args>
             void start(Func&& func, Args&&... args) {
                 threads.emplace_back(std::thread([=]() {

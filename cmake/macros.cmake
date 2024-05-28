@@ -23,7 +23,7 @@ endmacro()
 macro(CHECK_COMPILER_WARNINGS)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         target_compile_options(compiler_warnings INTERFACE
-            -Wsometimes-uninitialized -Wno-c++11-narrowing -Wno-c++20-extensions -Wno-c++23-extensions -Wno-error=local-type-template-args
+            -Wsometimes-uninitialized -Wno-c++11-narrowing -Wno-c++23-extensions -Wno-error=local-type-template-args
             -Wno-delete-non-abstract-non-virtual-dtor -Wno-c99-designator -Wno-shift-op-parentheses -Wno-non-c-typedef-for-linkage)
         # -Wsometimes-uninitialized will override the -Wuninitialized added before
     endif()
