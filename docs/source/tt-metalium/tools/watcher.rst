@@ -205,16 +205,16 @@ watcher log:
 
 Debug Delays
 ------------
-It is possible to add delays to NOC transactions. This can be useful for debugging race conditions.
-The delay can be set using environment variable `TT_METAL_WATCHER_DELAY`. The variable specifies the number
-of spin loop iterations to wait for. The delay can be set for all cores, or a subset through the environment
-variable `TT_METAL_*_DEBUG_DELAY_CORES`: x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all. The * can be
-one of: READ, WRITE, ATOMIC indicating whether the delays will be inserted before read, write or atomic NOC
-transactions. Finally, the delay can be set of specific RISCs (BRISC, NCRISC, TRISC0, TRISC1, TRISC2) through the
-environment variable `TT_METAL_*_DEBUG_DELAY_RISCVS` (one of: BR,NC,TR0,TR1,TR2); if not set, the delay
+Watcher can insert NOC transactions delays for debugging purposes. The delayes can be specified by
+transaction type and location. Environment variable `TT_METAL_WATCHER_DELAY` specifies the number
+of spin loop iterations to wait for. Similarly to DPRINT, the delay can be set for all cores, or a
+or a subset by setting environment variable `TT_METAL_*_DEBUG_DELAY_CORES`: x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all.
+The * can be one of: READ, WRITE or ATOMIC indicating whether the delays will be inserted before read, write or atomic NOC
+transactions. Finally, the delay can be set for a specific RISCs (BRISC, NCRISC, TRISC0, TRISC1, TRISC2) through the
+environment variable `TT_METAL_*_DEBUG_DELAY_RISCVS`: (one of: BR,NC,TR0,TR1,TR2); if not set, the delay
 is applied to all RISCs.
 Note that `TT_METAL_WATCHER` must be set and `TT_METAL_WATCHER_DISABLE_NOC_SANITIZE` must not be
-set.
+set for the delays to be applied.
 
 For example, the following environment variables will add a delay of 10 iterations for both READ
 and WRITE transactions on BRISC core at location 0,0.

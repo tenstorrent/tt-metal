@@ -55,7 +55,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel> kernel, JitBuildOptions &
 
     for (int i = 0; i < llrt::RunTimeDebugFeatureCount; i++) {
         compile_hash_str += "_";
-        compile_hash_str += std::to_string(tt::llrt::OptionsG.get_feature_enabled((llrt::RunTimeDebugFeatures)i));
+        compile_hash_str += tt::llrt::OptionsG.get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
     }
     size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 

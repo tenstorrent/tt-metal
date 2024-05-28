@@ -138,7 +138,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
     ParseFeatureRiscvMask(feature, feature_env_prefix + "_RISCVS");
     ParseFeatureFileName(feature, feature_env_prefix + "_FILE");
 
-    // Set feature enabled if the user asked for any dprint cores
+    // Set feature enabled if the user asked for any feature cores
     feature_targets[feature].enabled = false;
     for (auto &core_type_and_all_flag : feature_targets[feature].all_cores)
         if (core_type_and_all_flag.second)

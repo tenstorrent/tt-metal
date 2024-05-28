@@ -21,8 +21,8 @@ namespace tt {
 
 namespace llrt {
 
-// Enumerates the debug features that can be enabled at runtime. Used features that
-// allow for more fine-grained control over which cores, chips, etc. the feature is enabled for.
+// Enumerates the debug features that can be enabled at runtime. These features allow for
+// fine-grained control over targeted cores, chips, harts, etc.
 enum RunTimeDebugFeatures {
     RunTimeDebugFeatureDprint,
     RunTimeDebugFeatureReadDebugDelay,
@@ -34,8 +34,8 @@ enum RunTimeDebugFeatures {
 
 extern const char *RunTimeDebugFeatureNames[RunTimeDebugFeatureCount];
 
-// TargetSelection is used to store the targets for a given debug feature. I.e. which chips, cores, harts etc
-// to enable a debug feature for.
+// TargetSelection stores the targets for a given debug feature. I.e. for which chips, cores, harts
+// to enable the feature.
 struct TargetSelection {
     std::map<CoreType, std::vector<CoreCoord>> cores;
     std::map<CoreType, bool> all_cores;
@@ -163,7 +163,7 @@ class RunTimeOptions {
     inline bool get_dprint_noc_transfers() { return dprint_noc_transfer_data; }
     inline void set_dprint_noc_transfers(bool val) { dprint_noc_transfer_data = val; }
 
-    // Returns the string representation of the feature hash for a given feature.
+    // Returns the string representation for hash computation.
     inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) {
         switch (feature) {
             case RunTimeDebugFeatureDprint: return std::to_string(get_feature_enabled(feature));
