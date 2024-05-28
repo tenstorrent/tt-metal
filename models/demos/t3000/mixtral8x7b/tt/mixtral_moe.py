@@ -20,7 +20,7 @@ class TtMoeLayer(torch.nn.Module):
         if args.dummy_weights:
             cache_name = None
         else:
-            args.weight_cache_path(dtype) / (gate_name + "_multidevice_repadded")
+            cache_name = args.weight_cache_path(dtype) / (gate_name + "_multidevice_repadded")
 
         self.gates_H8 = ttnn.as_tensor(
             torch.nn.functional.pad(state_dict[gate_name].permute(1, 0), (1, 55), "constant", 0)
