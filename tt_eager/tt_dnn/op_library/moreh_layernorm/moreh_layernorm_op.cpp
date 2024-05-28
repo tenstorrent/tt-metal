@@ -522,14 +522,6 @@ Tensor moreh_layernorm(
         {gamma, beta, mean, rstd});
 
     return output_tensors.at(0);
-
-    // return operation::run(
-    //            MorehLayerNorm{
-    //                .normalized_dims = normalized_dims, .eps = eps, .output_mem_config =
-    //                std::move(output_mem_config)},
-    //            {input},
-    //            {gamma, beta, mean, rstd})
-    //     .at(0);
 }
 
 }  // namespace primary
@@ -567,13 +559,6 @@ Tensor moreh_layernorm(
         {gamma, beta, mean, rstd});
 
     return output_tensors.at(0);
-
-    // return operation::run_with_autoformat(
-    //            operations::primary::MorehLayerNorm{
-    //                .normalized_dims = normalized_dims, .eps = eps, .output_mem_config = std::move(output_mem_config)},
-    //            {input},
-    //            {gamma, beta, mean, rstd})
-    //     .at(0);
 }
 
 }  // namespace tt_metal
