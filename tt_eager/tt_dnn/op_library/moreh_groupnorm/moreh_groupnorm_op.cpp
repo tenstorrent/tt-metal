@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/moreh_groupnorm/moreh_groupnorm_op.hpp"
-
 #include <cmath>
 #include <optional>
 #include <utility>
 #include <vector>
+
+#include "tt_eager/tt_dnn/op_library/moreh_groupnorm/moreh_groupnorm_op.hpp"
 
 namespace tt {
 
@@ -185,34 +185,50 @@ std::vector<std::optional<Tensor>> moreh_groupnorm(
     const MemoryConfig &mean_mem_config,
     const MemoryConfig &rstd_mem_config) {
     TT_ASSERT(are_required_outputs.at(0) == true, "output is always required.");
-    const auto &outputs = operation::run(
-        MorehGroupNorm{
-            .num_groups = num_groups,
-            .eps = eps,
-            .are_required_outputs = std::move(are_required_outputs),
-            .output_mem_config = std::move(output_mem_config),
-            .mean_mem_config = std::move(mean_mem_config),
-            .rstd_mem_config = std::move(rstd_mem_config)},
+
+    std::vector<Tensor> output_tensors = {
+        Tensor(operation::get_workers_for_op_output({input}, {gamma, beta})),
+        Tensor(operation::get_workers_for_op_output({input}, {gamma, beta})),
+        Tensor(operation::get_workers_for_op_output({input}, {gamma, beta}))};
+
+    operation::launch_op(
+        [num_groups, eps, are_required_outputs, output_mem_config, mean_mem_config, rstd_mem_config](
+            const std::vector<Tensor> &input_tensors,
+            const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+            const std::vector<std::optional<Tensor>> &optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehGroupNorm{
+                    .num_groups = num_groups,
+                    .eps = eps,
+                    .are_required_outputs = std::move(are_required_outputs),
+                    .output_mem_config = std::move(output_mem_config),
+                    .mean_mem_config = std::move(mean_mem_config),
+                    .rstd_mem_config = std::move(rstd_mem_config)},
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
         {input},
+        output_tensors,
         {gamma, beta},
         {output, mean, rstd});
 
     std::vector<std::optional<Tensor>> result;
     result.reserve(3);
 
-    result.push_back(std::make_optional<Tensor>(outputs.at(0)));
+    result.push_back(std::make_optional<Tensor>(output_tensors.at(0)));
 
     if (are_required_outputs.at(1)) {
-        result.push_back(std::make_optional<Tensor>(outputs.at(1)));
+        result.push_back(std::make_optional<Tensor>(output_tensors.at(1)));
         if (are_required_outputs.at(2)) {
-            result.push_back(std::make_optional<Tensor>(outputs.at(2)));
+            result.push_back(std::make_optional<Tensor>(output_tensors.at(2)));
         } else {
             result.push_back(std::nullopt);
         }
     } else {
         result.push_back(std::nullopt);
         if (are_required_outputs.at(2)) {
-            result.push_back(std::make_optional<Tensor>(outputs.at(1)));
+            result.push_back(std::make_optional<Tensor>(output_tensors.at(1)));
         } else {
             result.push_back(std::nullopt);
         }
