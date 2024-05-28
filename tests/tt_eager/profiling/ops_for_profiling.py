@@ -107,6 +107,46 @@ def lerp_binary(x, y):
     tt_lib.tensor.lerp(x, y, 0.7)
 
 
+def unary_mul_bw(x, y):
+    tt_lib.tensor.unary_mul_bw(x, y, 3)
+
+
+def unary_add_bw(x, y):
+    tt_lib.tensor.unary_add_bw(x, y, 3)
+
+
+def unary_div_bw(x, y):
+    tt_lib.tensor.unary_div_bw(x, y, 3)
+
+
+def rdiv_bw(x, y):
+    tt_lib.tensor.rdiv_bw(x, y, 3)
+
+
+def unary_pow_bw(x, y):
+    tt_lib.tensor.unary_pow_bw(x, y, 3)
+
+
+def clamp_bw(x, y):
+    tt_lib.tensor.clamp_bw(x, y, 0.1, 0.9)
+
+
+def clamp_min_bw(x, y):
+    tt_lib.tensor.clamp_min_bw(x, y, 0.1)
+
+
+def clamp_max_bw(x, y):
+    tt_lib.tensor.clamp_min_bw(x, y, 0.9)
+
+
+def gelu_bw_none(x, y):
+    tt_lib.tensor.gelu_bw(x, y, approximate="none")
+
+
+def gelu_bw_tanh(x, y):
+    tt_lib.tensor.gelu_bw(x, y, approximate="tanh")
+
+
 all_binary_ops = [
     {
         "op": tt_lib.tensor.add,
@@ -322,11 +362,134 @@ all_binary_ops = [
         "op": lerp_binary,
         "name": "tt_lib.tensor.lerp(binary)",
     },
-    # {
-    #     "op": conv,
-    #     "name": "tt_lib.tensor.conv",
-    # },
+    {
+        "op": tt_lib.tensor.xlogy,
+        "name": "tt_lib.tensor.xlogy",
+    },
+    {
+        "op": tt_lib.tensor.embeddings,
+        "name": "tt_lib.tensor.embeddings",
+        "layout": "ROW_MAJOR",
+        "embeddings_shapes": True,
+    },
+    {
+        "op": tt_lib.tensor.nextafter,
+        "name": "tt_lib.tensor.nextafter",
+    },
+    {
+        "op": tt_lib.tensor.conj_bw,
+        "name": "tt_lib.tensor.conj_bw",
+    },
+    {
+        "op": unary_mul_bw,
+        "name": "tt_lib.tensor.unary_mul_bw",
+    },
+    {
+        "op": unary_add_bw,
+        "name": "tt_lib.tensor.unary_add_bw",
+    },
+    {
+        "op": unary_add_bw,
+        "name": "tt_lib.tensor.unary_add_bw",
+    },
+    {
+        "op": tt_lib.tensor.unary_assign_bw,
+        "name": "tt_lib.tensor.unary_assign_bw",
+    },
+    {
+        "op": unary_div_bw,
+        "name": "tt_lib.tensor.unary_div_bw",
+    },
+    {
+        "op": rdiv_bw,
+        "name": "tt_lib.tensor.rdiv_bw",
+    },
+    {
+        "op": tt_lib.tensor.sqrt_bw,
+        "name": "tt_lib.tensor.sqrt_bw",
+    },
+    {
+        "op": tt_lib.tensor.tan_bw,
+        "name": "tt_lib.tensor.tan_bw",
+    },
+    {
+        "op": tt_lib.tensor.exp_bw,
+        "name": "tt_lib.tensor.exp_bw",
+    },
+    {
+        "op": tt_lib.tensor.exp2_bw,
+        "name": "tt_lib.tensor.exp2_bw",
+    },
+    {
+        "op": tt_lib.tensor.expm1_bw,
+        "name": "tt_lib.tensor.expm1_bw",
+    },
+    {
+        "op": unary_pow_bw,
+        "name": "tt_lib.tensor.unary_pow_bw",
+    },
+    {
+        "op": tt_lib.tensor.tanh_bw,
+        "name": "tt_lib.tensor.tanh_bw",
+    },
+    {
+        "op": tt_lib.tensor.unary_sub_bw,
+        "name": "tt_lib.tensor.unary_sub_bw",
+    },
+    {
+        "op": tt_lib.tensor.log_bw,
+        "name": "tt_lib.tensor.log_bw",
+    },
+    {
+        "op": tt_lib.tensor.abs_bw,
+        "name": "tt_lib.tensor.abs_bw",
+    },
+    {
+        "op": tt_lib.tensor.rsqrt_bw,
+        "name": "tt_lib.tensor.rsqrt_bw",
+    },
+    {
+        "op": tt_lib.tensor.neg_bw,
+        "name": "tt_lib.tensor.neg_bw",
+    },
+    {
+        "op": tt_lib.tensor.relu_bw,
+        "name": "tt_lib.tensor.relu_bw",
+    },
+    {
+        "op": clamp_bw,
+        "name": "tt_lib.tensor.clamp_bw",
+    },
+    {
+        "op": clamp_min_bw,
+        "name": "tt_lib.tensor.clamp_min_bw",
+    },
+    {
+        "op": clamp_max_bw,
+        "name": "tt_lib.tensor.clamp_max_bw",
+    },
+    {
+        "op": tt_lib.tensor.binary_le_bw,
+        "name": "tt_lib.tensor.binary_le_bw",
+    },
+    {
+        "op": tt_lib.tensor.binary_le_bw,
+        "name": "tt_lib.tensor.binary_le_bw",
+    },
+    {
+        "op": gelu_bw_none,
+        "name": "tt_lib.tensor.gelu_bw('none')",
+    },
+    {
+        "op": gelu_bw_tanh,
+        "name": "tt_lib.tensor.gelu_bw('tanh')",
+    },
 ]
+
+# # {
+# #     "op": conv,
+# #     "name": "tt_lib.tensor.conv",
+# # },
 
 
 def add_unary(x):
@@ -643,6 +806,114 @@ def fill_ones_rm(x):
     tt_lib.tensor.fill_ones_rm(
         N=shape[0], C=shape[1], H=shape[2], W=shape[3], hOnes=shape[2] - 32, wOnes=shape[3] - 32, any=x
     )
+
+
+def groupnorm_no_weights(x):
+    tt_lib.tensor.groupnorm(input=x, group_size=32, eps=0.0001)
+
+
+def convert_conv_weight_tensor_to_tiled_layout(x):
+    tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout(x, in1_block_h=32, in1_block_w=32)
+
+
+def logical_noti(x):
+    tt_lib.tensor.logical_noti(x, 2)
+
+
+def glu_1(x):
+    tt_lib.tensor.glu(x, -1)
+
+
+def geglu_1(x):
+    tt_lib.tensor.geglu(x, -1)
+
+
+def reglu_1(x):
+    tt_lib.tensor.reglu(x, -1)
+
+
+def swiglu_1(x):
+    tt_lib.tensor.swiglu(x, -1)
+
+
+def glu_2(x):
+    tt_lib.tensor.glu(x, -2)
+
+
+def geglu_2(x):
+    tt_lib.tensor.geglu(x, -2)
+
+
+def reglu_2(x):
+    tt_lib.tensor.reglu(x, -2)
+
+
+def swiglu_2(x):
+    tt_lib.tensor.swiglu(x, -2)
+
+
+def repeat(x):
+    tt_lib.tensor.repeat(x, (1, 1, 1, 4))
+
+
+def repeat_interleave_0(x):
+    tt_lib.tensor.repeat_interleave(x, 4, 0)
+
+
+def repeat_interleave_1(x):
+    tt_lib.tensor.repeat_interleave(x, 4, 1)
+
+
+def repeat_interleave_2(x):
+    tt_lib.tensor.repeat_interleave(x, 4, 2)
+
+
+def pow_int(x):
+    tt_lib.tensor.pow(x, 3)
+
+
+def pow_float(x):
+    tt_lib.tensor.pow(x, 3.3)
+
+
+def argmax_1(x):
+    tt_lib.tensor.argmax(x, dim=-1)
+
+
+def argmax_2(x):
+    tt_lib.tensor.argmax(x, dim=-2)
+
+
+def argmax_3(x):
+    tt_lib.tensor.argmax(x, dim=-3)
+
+
+def argmax_4(x):
+    tt_lib.tensor.argmax(x, dim=-4)
+
+
+def argmax_all(x):
+    tt_lib.tensor.argmax(x, dim=-1, all=True)
+
+
+def argmin_1(x):
+    tt_lib.tensor.argmin(x, dim=-1)
+
+
+def argmin_2(x):
+    tt_lib.tensor.argmin(x, dim=-2)
+
+
+def argmin_3(x):
+    tt_lib.tensor.argmin(x, dim=-3)
+
+
+def argmin_4(x):
+    tt_lib.tensor.argmin(x, dim=-4)
+
+
+def argmin_all(x):
+    tt_lib.tensor.argmin(x, dim=-1, all=True)
 
 
 all_unary_ops = [
@@ -1219,7 +1490,205 @@ all_unary_ops = [
         "op": fill_ones_rm,
         "name": "tt_lib.tensor.fill_ones_rm",
     },
+    {
+        "op": groupnorm_no_weights,
+        "name": "tt_lib.tensor.groupnorm_no_weights",
+    },
+    {
+        "op": tt_lib.tensor.mean_hw,
+        "name": "tt_lib.tensor.mean_hw",
+    },
+    {
+        "op": tt_lib.tensor.var_hw,
+        "name": "tt_lib.tensor.var_hw",
+    },
+    {
+        "op": logical_noti,
+        "name": "tt_lib.tensor.logical_noti",
+    },
+    {
+        "op": tt_lib.tensor.std_hw,
+        "name": "tt_lib.tensor.std_hw",
+    },
+    {
+        "op": tt_lib.tensor.normalize_hw,
+        "name": "tt_lib.tensor.normalize_hw",
+    },
+    {
+        "op": tt_lib.tensor.normalize_global,
+        "name": "tt_lib.tensor.normalize_global",
+    },
+    {
+        "op": glu_1,
+        "name": "tt_lib.tensor.glu(dim=-1)",
+    },
+    {
+        "op": geglu_1,
+        "name": "tt_lib.tensor.geglu(dim=-1)",
+    },
+    {
+        "op": reglu_1,
+        "name": "tt_lib.tensor.reglu(dim=-1)",
+    },
+    {
+        "op": swiglu_1,
+        "name": "tt_lib.tensor.swiglu(dim=-1)",
+    },
+    {
+        "op": glu_2,
+        "name": "tt_lib.tensor.glu(dim=-2)",
+    },
+    {
+        "op": geglu_2,
+        "name": "tt_lib.tensor.geglu(dim=-2)",
+    },
+    {
+        "op": reglu_2,
+        "name": "tt_lib.tensor.reglu(dim=-2)",
+    },
+    {
+        "op": swiglu_2,
+        "name": "tt_lib.tensor.swiglu(dim=-2)",
+    },
+    {
+        "op": repeat,
+        "name": "tt_lib.tensor.repeat",
+    },
+    {
+        "op": repeat_interleave_0,
+        "name": "tt_lib.tensor.repeat_interleave(dim=0)",
+    },
+    {
+        "op": repeat_interleave_1,
+        "name": "tt_lib.tensor.repeat_interleave(dim=1)",
+    },
+    {
+        "op": repeat_interleave_2,
+        "name": "tt_lib.tensor.repeat_interleave(dim=2)",
+    },
+    {
+        "op": pow_int,
+        "name": "tt_lib.tensor.pow(int)",
+    },
+    {
+        "op": pow_float,
+        "name": "tt_lib.tensor.pow(float)",
+    },
+    {
+        "op": tt_lib.tensor.identity,
+        "name": "tt_lib.tensor.identity",
+    },
+    {
+        "op": argmax_1,
+        "name": "tt_lib.tensor.argmax(dim=-1)",
+    },
+    {
+        "op": argmax_2,
+        "name": "tt_lib.tensor.argmax(dim=-2)",
+    },
+    {
+        "op": argmax_3,
+        "name": "tt_lib.tensor.argmax(dim=-3)",
+    },
+    {
+        "op": argmax_4,
+        "name": "tt_lib.tensor.argmax(dim=-4)",
+    },
+    {
+        "op": argmax_all,
+        "name": "tt_lib.tensor.argmax(all)",
+    },
+    {
+        "op": argmin_1,
+        "name": "tt_lib.tensor.argmin(dim=-1)",
+    },
+    {
+        "op": argmin_2,
+        "name": "tt_lib.tensor.argmin(dim=-2)",
+    },
+    {
+        "op": argmin_3,
+        "name": "tt_lib.tensor.argmin(dim=-3)",
+    },
+    {
+        "op": argmin_4,
+        "name": "tt_lib.tensor.argmin(dim=-4)",
+    },
+    {
+        "op": argmin_all,
+        "name": "tt_lib.tensor.argmin(all)",
+    },
+    {
+        "op": tt_lib.tensor.fill_zero_bw,
+        "name": "tt_lib.tensor.fill_zero_bw",
+    },
+    {
+        "op": tt_lib.tensor.fill_bw,
+        "name": "tt_lib.tensor.fill_bw",
+    },
+    {
+        "op": tt_lib.tensor.lt_bw,
+        "name": "tt_lib.tensor.lt_bw",
+    },
+    {
+        "op": tt_lib.tensor.gt_bw,
+        "name": "tt_lib.tensor.gt_bw",
+    },
+    {
+        "op": tt_lib.tensor.ne_bw,
+        "name": "tt_lib.tensor.ne_bw",
+    },
 ]
+
+# {
+#     "op": convert_conv_weight_tensor_to_tiled_layout, #  Unsupported storage type
+#     "name": "tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout",
+#     "layout": "ROW_MAJOR",
+# },
+
+
+def layernorm(x, y, z):
+    tt_lib.tensor.layernorm(input=x, eps=0.0001, gamma=y, beta=z)
+
+
+def add_layernorm(x, y, z):
+    tt_lib.tensor.add_layernorm(a=x, b=x, eps=0.0001, gamma=y, beta=z)
+
+
+def groupnorm(x, y, z):
+    tt_lib.tensor.groupnorm(input=x, group_size=32, eps=0.0001, gamma=y, beta=z)
+
+
+def rmsnorm(x, y, z):
+    tt_lib.tensor.rmsnorm(input=x, eps=0.0001, gamma=y, beta=z)
+
+
+def addcmul(x, y, z):
+    tt_lib.tensor.addcmul(x, y, z, 2)
+
+
+def addcdiv(x, y, z):
+    tt_lib.tensor.addcdiv(x, y, z, 2)
+
+
+def lamb_optimizer(x, y, z):
+    tt_lib.tensor.lamb_optimizer(x, x, y, z, beta1=0.8, beta2=0.99, step_size=1e-3, eps=1e-6, weight_decay=0.02)
+
+
+def addalpha_bw(x, y, z):
+    tt_lib.tensor.addalpha_bw(x, y, z, alpha=5)
+
+
+def addcmul_bw(x, y, z):
+    tt_lib.tensor.addcmul_bw(x, x, y, z, value=5)
+
+
+def addcdiv_bw(x, y, z):
+    tt_lib.tensor.addcdiv_bw(x, x, y, z, value=5)
+
+
+def where_bw(x, y, z):
+    tt_lib.tensor.where_bw(x, y, z, z)
 
 
 all_ternary_ops = [
@@ -1234,5 +1703,96 @@ all_ternary_ops = [
     {
         "op": tt_lib.tensor.lerp,
         "name": "tt_lib.tensor.lerp",
+    },
+    {
+        "op": layernorm,
+        "name": "tt_lib.tensor.layernorm",
+        "norm_shapes": True,
+    },
+    {
+        "op": groupnorm,
+        "name": "tt_lib.tensor.groupnorm",
+    },
+    {
+        "op": rmsnorm,
+        "name": "tt_lib.tensor.rmsnorm",
+        "norm_shapes": True,
+    },
+    {
+        "op": add_layernorm,
+        "name": "tt_lib.tensor.add_layernorm",
+        "norm_shapes": True,
+    },
+    {
+        "op": addcmul,
+        "name": "tt_lib.tensor.addcmul",
+    },
+    {
+        "op": addcdiv,
+        "name": "tt_lib.tensor.addcdiv",
+    },
+    {
+        "op": lamb_optimizer,
+        "name": "tt_lib.tensor.lamb_optimizer",
+    },
+    {
+        "op": addalpha_bw,
+        "name": "tt_lib.tensor.addalpha_bw",
+    },
+    {
+        "op": addcmul_bw,
+        "name": "tt_lib.tensor.addcmul_bw",
+    },
+    {
+        "op": addcdiv_bw,
+        "name": "tt_lib.tensor.addcdiv_bw",
+    },
+    {
+        "op": tt_lib.tensor.binary_assign_bw,
+        "name": "tt_lib.tensor.binary_assign_bw",
+    },
+    {
+        "op": tt_lib.tensor.div_bw,
+        "name": "tt_lib.tensor.div_bw",
+    },
+    {
+        "op": tt_lib.tensor.mul_bw,
+        "name": "tt_lib.tensor.mul_bw",
+    },
+    {
+        "op": tt_lib.tensor.max_bw,
+        "name": "tt_lib.tensor.max_bw",
+    },
+    {
+        "op": tt_lib.tensor.min_bw,
+        "name": "tt_lib.tensor.min_bw",
+    },
+    {
+        "op": tt_lib.tensor.add_bw,
+        "name": "tt_lib.tensor.add_bw",
+    },
+    # {
+    #     "op": tt_lib.tensor.embedding_bw,
+    #     "name": "tt_lib.tensor.embedding_bw",
+    # },
+    {
+        "op": where_bw,
+        "name": "tt_lib.tensor.where_bw",
+    },
+    {
+        "op": tt_lib.tensor.sub_bw,
+        "name": "tt_lib.tensor.sub_bw",
+    },
+    {
+        "op": tt_lib.tensor.rsub_bw,
+        "name": "tt_lib.tensor.rsub_bw",
+    },
+    {
+        "op": tt_lib.tensor.atan2_bw,
+        "name": "tt_lib.tensor.atan2_bw",
+    },
+    {
+        "op": tt_lib.tensor.hypot_bw,
+        "name": "tt_lib.tensor.hypot_bw",
     },
 ]
