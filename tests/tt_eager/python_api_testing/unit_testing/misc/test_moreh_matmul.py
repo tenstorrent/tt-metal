@@ -360,3 +360,16 @@ def test_moreh_matmul_enable_cache(params, device, use_program_cache):
     for i in range(2):
         passing = moreh_matmul(params, True, None, device)
         assert passing
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        # input, other, output shape, transpose input, other
+        ([310, 1020], [1020, 310], [1020, 1020], True, True),  # input, other mask, transpose
+    ),
+)
+def test_moreh_matmul_kernel_build_error(params, device):
+    compute_kernel_config = get_compute_kernel_options(True)
+    passing = moreh_matmul(params, True, compute_kernel_config, device)
+    assert passing
