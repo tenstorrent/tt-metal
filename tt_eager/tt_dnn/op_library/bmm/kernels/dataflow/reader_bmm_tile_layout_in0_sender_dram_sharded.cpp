@@ -6,7 +6,7 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
 void kernel_main() {
     // COMPILE TIME ARGS
@@ -30,9 +30,6 @@ void kernel_main() {
 
     constexpr uint32_t num_blocks_per_shard               = get_compile_time_arg_val(12);
     constexpr uint32_t num_storage_cores = num_blocks / num_blocks_per_shard;
-
-    // DPRINT << num_blocks << ENDL();
-    // DPRINT << num_blocks_per_shard << ENDL();
 
     // RUNTIME ARGS
     const bool is_worker_core                                     = get_arg_val<uint32_t>(0) == 1;

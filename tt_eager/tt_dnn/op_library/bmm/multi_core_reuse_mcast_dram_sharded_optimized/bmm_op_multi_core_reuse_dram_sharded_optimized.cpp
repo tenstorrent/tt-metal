@@ -38,7 +38,7 @@ void get_dram_reader_core_coords_grayskull(
     uint32_t max_bank_id = num_banks - 1;
     std::vector<CoreCoord> dram_coord_phy;
     for (int i = 0; i < num_banks; ++i) {
-        dram_coord_phy.push_back(device->core_from_dram_channel(i));
+        dram_coord_phy.push_back(device->dram_core_from_dram_channel(i));
     }
 
     // get worker logical coords
@@ -132,7 +132,7 @@ void get_dram_reader_core_coords_wormhole_b0(
     uint32_t max_bank_id = num_banks - 1;
     std::vector<CoreCoord> dram_coord_phy;
     for (int i = 0; i < num_banks; ++i) {
-        dram_coord_phy.push_back(device->core_from_dram_channel(i));
+        dram_coord_phy.push_back(device->dram_core_from_dram_channel(i));
     }
 
     // get worker logical coords
@@ -340,12 +340,12 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     bool skip_compute,
     bool skip_in0_mcast,
     bool skip_write_back) {
-    log_info("math_fidelity: {}", math_fidelity);
-    log_info("fp32_dest_acc_en: {}", fp32_dest_acc_en);
-    log_info("math_approx_mode: {}", math_approx_mode);
-    log_info("packer_l1_acc: {}", packer_l1_acc);
-    log_info("M: {}, K: {}, N: {}", M, K, N);
-    log_info("per_core_M: {}, per_core_N_storage: {}", per_core_M, per_core_N_storage);
+    log_debug("math_fidelity: {}", math_fidelity);
+    log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    log_debug("math_approx_mode: {}", math_approx_mode);
+    log_debug("packer_l1_acc: {}", packer_l1_acc);
+    log_debug("M: {}, K: {}, N: {}", M, K, N);
+    log_debug("per_core_M: {}, per_core_N_storage: {}", per_core_M, per_core_N_storage);
 
     tt_metal::Program program{};
 
@@ -363,10 +363,10 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     // dram banks
     uint32_t num_dram_banks = all_worker_cores_ordered.size();
     for (auto core : corerange_to_cores(all_worker_cores)) {
-        log_info("all_worker_cores_log: {}", core);
+        log_debug("all_worker_cores_log: {}", core);
     }
     for (auto core : all_worker_cores_ordered) {
-        log_info("all_worker_cores_ordered: {}", core);
+        log_debug("all_worker_cores_ordered: {}", core);
     }
 
     uint32_t per_core_N = (N + num_dram_banks - 1) / num_dram_banks;
@@ -383,8 +383,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         out_subblock_w = std::get<1>(subblock_hw);
     }
 
-    log_info("per_core_M: {}, per_core_N: {}", per_core_M, per_core_N);
-    log_info("out_subblock_h: {}, out_subblock_w: {}", out_subblock_h, out_subblock_w);
+    log_debug("per_core_M: {}, per_core_N: {}", per_core_M, per_core_N);
+    log_debug("out_subblock_h: {}, out_subblock_w: {}", out_subblock_h, out_subblock_w);
 
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
@@ -474,10 +474,10 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     CoreRangeSet mcast_receivers = CoreRangeSet(all_worker_cores_set);
 
     for (auto core : corerange_to_cores(mcast_senders)) {
-        log_info("mcast_senders: {}", core);
+        log_debug("mcast_senders: {}", core);
     }
     for (auto core : corerange_to_cores(mcast_receivers)) {
-        log_info("mcast_receivers: {}", core);
+        log_debug("mcast_receivers: {}", core);
     }
 
     // all cores
@@ -487,7 +487,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     CoreRangeSet all_cores = CoreRangeSet(all_cores_set);
 
     for (auto core : corerange_to_cores(all_cores)) {
-        log_info("all_cores: {}", core);
+        log_debug("all_cores: {}", core);
     }
 
     // Mcast args
@@ -524,7 +524,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     }
 
     uint32_t num_blocks_per_shard = num_blocks / all_storage_cores_vec.size();
-    log_info("num_blocks_per_shard: {}", num_blocks_per_shard);
+    log_debug("num_blocks_per_shard: {}", num_blocks_per_shard);
     if (per_core_M > 1) {
         TT_ASSERT(
             num_blocks_per_shard == 1,
@@ -565,7 +565,6 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         (std::uint32_t)per_core_N_storage * output_single_tile_size,  // out_reshard_tensor_stride_w_bytes
         (std::uint32_t)per_core_M};
     if (bias_buffer != nullptr) {
-        // in1_sender_writer_compile_time_args.push_back(bias_buffer->address());
         in1_sender_writer_compile_time_args.push_back(bias_buffer_page_size);
         in1_sender_writer_compile_time_args.push_back(bias_buffer_num_pages);
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);
@@ -684,7 +683,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines});
 
-    log_info(LogOp, "in1_single_tile_size: {}", in1_single_tile_size);
+    log_debug(LogOp, "in1_single_tile_size: {}", in1_single_tile_size);
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;
@@ -692,7 +691,6 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
-    // auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_worker_cores, src0_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -706,7 +704,6 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
-    // auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_worker_cores, src1_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -721,7 +718,6 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
             .set_page_size(src2_cb_index, in0_single_tile_size)
             .set_globally_allocated_address(*in0_buffer);
     auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
-    // auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_storage_cores, src2_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -752,7 +748,6 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
                                 .set_page_size(interm0_cb_index, interm0_single_tile_size);
 
         auto cb_interm0 = tt_metal::CreateCircularBuffer(program, all_cores, interm0_cb_config);
-        // auto cb_interm0 = tt_metal::CreateCircularBuffer(program, all_worker_cores, interm0_cb_config);
         log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -761,7 +756,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
             interm0_CB_size / interm0_single_tile_size,
             interm0_CB_size);
     } else {
-        log_info(LogOp, "inplace interm and outout cb");
+        log_debug(LogOp, "inplace interm and outout cb");
         // share buffer
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
@@ -770,7 +765,6 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
                                .set_page_size(interm0_cb_index, interm0_single_tile_size);
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
-    // auto cb_output = tt_metal::CreateCircularBuffer(program, all_worker_cores, output_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -789,7 +783,6 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
             .set_page_size(output_reshard_cb_index, output_single_tile_size);
     output_reshard_cb_config = output_reshard_cb_config.set_globally_allocated_address(*out_buffer);
     auto cb_output_reshard = tt_metal::CreateCircularBuffer(program, all_cores, output_reshard_cb_config);
-    // auto cb_output_reshard = tt_metal::CreateCircularBuffer(program, all_storage_cores, output_reshard_cb_config);
 
     if (bias_buffer != nullptr) {
         uint32_t src3_cb_index = 3;
@@ -925,10 +918,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
 
                 if (per_core_N_reshard_2 != 0 and (curr_storage_core_idx + 1) < all_storage_cores_vec.size()) {
                     mm_in1_sender_writer_args.push_back(2);
-                    // mm_in1_sender_writer_args.push_back(true); // split output tensor to two shards
                 } else {
                     mm_in1_sender_writer_args.push_back(1);
-                    // mm_in1_sender_writer_args.push_back(false);
                 }
 
                 mm_in1_sender_writer_args.push_back(
@@ -955,12 +946,11 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
             }
         } else {
             uint32_t num_iter = 0;
-            // mm_in1_sender_writer_args.push_back(num_iter);
 
             if (curr_storage_core < all_storage_cores_vec.size()) {
                 num_iter++;
 
-                log_info(
+                log_debug(
                     "curr worker core: {}, send back to storage core: {}, coord: {}",
                     curr_worker_core,
                     curr_storage_core,
@@ -987,7 +977,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
                 while (curr_worker_core <= i and curr_storage_core < all_storage_cores_vec.size()) {
                     num_iter++;
 
-                    log_info(
+                    log_debug(
                         "curr worker core: {}, send back to storage core: {}, coord: {}",
                         curr_worker_core,
                         curr_storage_core,
