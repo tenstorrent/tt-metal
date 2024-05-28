@@ -859,41 +859,40 @@ Tensor div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, con
     return operation::decorate_as_composite(__func__, _div)(input_a, input_b, accurate_mode, output_mem_config);
 }
 
-Tensor _trunc(const Tensor& input_a, const MemoryConfig& output_mem_config) {
-    Tensor floor_res = unary_floor(input_a, output_mem_config);
-    Tensor trunc_res = where(ne(input_a, floor_res), add1(floor_res), floor_res, output_mem_config);
-    Tensor result = where(gtz(input_a, output_mem_config), floor_res, trunc_res, output_mem_config);
+Tensor _trunc(const Tensor& input, const MemoryConfig& output_mem_config) {
+    Tensor floor_res = tt::tt_metal::floor(input, output_mem_config);
+    Tensor trunc_res = where(ne(input, floor_res), add1(floor_res), floor_res, output_mem_config);
+    Tensor result = where(gtz(input, output_mem_config), floor_res, trunc_res, output_mem_config);
     return result;
 }
-Tensor trunc(const Tensor& input_a, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _trunc)(input_a, output_mem_config);
+Tensor trunc(const Tensor& input, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _trunc)(input, output_mem_config);
 }
 
-Tensor is_odd(const Tensor& input_a, const MemoryConfig& output_mem_config) {
-    Tensor result = div_unary(input_a, 2.0f);
-    Tensor floor_res = unary_floor(result);
+Tensor is_odd(const Tensor& input, const MemoryConfig& output_mem_config) {
+    Tensor result = div_unary(input, 2.0f);
+    Tensor floor_res = tt::tt_metal::floor(result);
     return ne(result, floor_res);
 }
 
-Tensor _round(const Tensor& input_a, int64_t decimals, const MemoryConfig& output_mem_config) {
-    Tensor floor_res = unary_floor(input_a, output_mem_config);
-    if (decimals != 0) {
-        // Need to work on this
+Tensor _round(const Tensor& input, int64_t decimals, const MemoryConfig& output_mem_config) {
+    Tensor floor_res = tt::tt_metal::floor(input, output_mem_config);
+    if (decimals != 0) { //TODO: For decimal value!=0
         Tensor power_10 =
-            pow(full_like(input_a, 10.0f, output_mem_config), static_cast<float>(decimals), output_mem_config);
-        Tensor rounded_non_half = unary_floor(
-            add_unary(mul(input_a, power_10, std::nullopt, output_mem_config), 0.5, output_mem_config),
+            pow(full_like(input, 10.0f, output_mem_config), static_cast<float>(decimals), output_mem_config);
+        Tensor rounded_non_half = tt::tt_metal::floor(
+            add_unary(mul(input, power_10, std::nullopt, output_mem_config), 0.5, output_mem_config),
             output_mem_config);
         rounded_non_half = div(rounded_non_half, power_10);
         return rounded_non_half;
     } else {  // Bankers' Rounding
-        Tensor rounded_non_half = unary_floor(
-            add(input_a,
-                where(logical_and(gte_unary(input_a, 0.4), lte_unary(input_a, 0.5)), 0.4f, 0.5f, output_mem_config),
+        Tensor rounded_non_half = tt::tt_metal::floor(
+            add(input,
+                where(logical_and(gte_unary(input, 0.4), lte_unary(input, 0.5)), 0.4f, 0.5f, output_mem_config),
                 std::nullopt,
                 output_mem_config),
             output_mem_config);
-        Tensor fractional_part = sub(input_a, floor_res, std::nullopt, output_mem_config);
+        Tensor fractional_part = sub(input, floor_res, std::nullopt, output_mem_config);
         Tensor is_half = eq_unary(fractional_part, 0.5);
         Tensor rounded_half =
             add(floor_res, tt::tt_metal::is_odd(floor_res, output_mem_config), std::nullopt, output_mem_config);
@@ -901,8 +900,8 @@ Tensor _round(const Tensor& input_a, int64_t decimals, const MemoryConfig& outpu
     }
 }
 
-Tensor round(const Tensor& input_a, int64_t decimals, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _round)(input_a, decimals, output_mem_config);
+Tensor round(const Tensor& input, int64_t decimals, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _round)(input, decimals, output_mem_config);
 }
 
 Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
@@ -915,22 +914,23 @@ Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const MemoryConf
                 eq_unary(temp, std::numeric_limits<float>::infinity()),
                 eq_unary(temp, -std::numeric_limits<float>::infinity()))),
         temp,
-        unary_floor(temp, output_mem_config));
+        tt::tt_metal::floor(temp, output_mem_config));
 }
 Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _floor_div)(input_a, input_b, output_mem_config);
 }
 
-Tensor _floor_div_overload(const Tensor& input_a, float value, const MemoryConfig& output_mem_config) {
-    Tensor t_inf = full_like(input_a, std::numeric_limits<float>::infinity(), output_mem_config);
-    Tensor t_nan = full_like(input_a, std::nanf(""), output_mem_config);
-    if (value == 0)
+Tensor _floor_div_overload(const Tensor& input, float value, const MemoryConfig& output_mem_config) {
+    if (value == 0) {
+        Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
+        Tensor t_nan = full_like(input, std::nanf(""), output_mem_config);
         return where(
-            eqz(input_a, output_mem_config),
+            eqz(input, output_mem_config),
             t_nan,
-            mul(t_inf, sign(input_a, output_mem_config), std::nullopt, output_mem_config),
+            mul(t_inf, sign(input, output_mem_config), std::nullopt, output_mem_config),
             output_mem_config);
-    Tensor temp = div_unary(input_a, value);
+    }
+    Tensor temp = div_unary(input, value);
     return temp;
 }
 Tensor floor_div(const Tensor& input_a, float value, const MemoryConfig& output_mem_config) {
@@ -1659,7 +1659,7 @@ Tensor triu(
 
 Tensor _power_fp(const Tensor& input_a, float exponent, const MemoryConfig& output_mem_config) {
     TT_FATAL(exponent >= 0.0f, "works for positive exponents only");
-    const uint32_t exponent_floor = static_cast<uint32_t>(floor(exponent));
+    const uint32_t exponent_floor = static_cast<uint32_t>(std::floor(exponent));
     if (static_cast<float>(exponent_floor) == exponent) {
         return power(input_a, exponent_floor, output_mem_config);
     }
