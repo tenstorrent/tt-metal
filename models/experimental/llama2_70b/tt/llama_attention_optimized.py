@@ -443,19 +443,7 @@ class TtLlamaAttention_optimized:
         # key and value layers will have kv_seq_len padded to nearest 32
 
         keys = self.layer_past[0]
-        key_layer = tt_lib.tensor.unpad(
-            keys,
-            [0, 0, 0, 0],
-            [
-                self.n_local_kv_heads - 1,
-                self.max_batch_size - 1,
-                padded_layer_past_len - 1,
-                self.head_dim - 1,
-            ],
-            output_mem_config=self.model_config["DRAM_MEMCFG"],
-        )
-
-        key_layer = tt_lib.tensor.interleaved_to_sharded(key_layer, sharded_mem_config=kv_cache_memcfg)
+        key_layer = tt_lib.tensor.nlp_kv_cache_load_slice(keys, 0, padded_layer_past_len)
 
         # PRE-SOFTMAX MM
 
@@ -503,19 +491,7 @@ class TtLlamaAttention_optimized:
         value_layer.deallocate(True)
 
         values = self.layer_past[1]
-        value_layer = tt_lib.tensor.unpad(
-            values,
-            [0, 0, 0, 0],
-            [
-                self.n_local_kv_heads - 1,
-                self.max_batch_size - 1,
-                padded_layer_past_len - 1,
-                self.head_dim - 1,
-            ],
-            output_mem_config=self.model_config["DRAM_MEMCFG"],
-        )
-
-        value_layer = tt_lib.tensor.interleaved_to_sharded(value_layer, sharded_mem_config=kv_cache_memcfg)
+        value_layer = tt_lib.tensor.nlp_kv_cache_load_slice(values, 0, padded_layer_past_len)
 
         # POST-SOFTMAX MM
         scores_prog_config = self.model_config["SCORES_BATCHED_MM_PROGCFG_LAMBDA"](padded_layer_past_len // 32)
