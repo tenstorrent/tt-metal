@@ -144,14 +144,6 @@ Tensor moreh_groupnorm_backward_input_grad(
         {input_grad});
 
     return output_tensors.at(0);
-
-    // return operation::run(
-    //            MorehGroupNormBackwardInputGrad{
-    //                .num_groups = num_groups, .input_grad_mem_config = std::move(input_grad_mem_config)},
-    //            {output_grad, input, mean, rstd},
-    //            {gamma},
-    //            {input_grad})
-    //     .at(0);
 }
 
 void MorehGroupNormBackwardGammaBetaGrad::validate_with_output_tensors(
