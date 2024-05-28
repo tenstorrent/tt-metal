@@ -10,11 +10,16 @@ import torch
 import ttnn.operations.binary
 
 
-@pytest.mark.eager_package_silicon
-@pytest.mark.skip("Tries to open device twice")
-def test_ttnn_import(reset_seeds):
-    with ttnn.manage_device(device_id=0) as device:
-        pass
+@pytest.mark.eager_host_side
+def test_ttnn_host_tensor(reset_seeds):
+    torch_input_tensor = torch.zeros(2, 4, dtype=torch.float32)
+
+    tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16)
+    torch_output_tensor = ttnn.to_torch(tensor)
+
+    expected_output = torch_input_tensor.bfloat16()
+
+    assert torch.allclose(expected_output, torch_output_tensor)
 
 
 @pytest.mark.eager_package_silicon
@@ -28,4 +33,3 @@ def test_ttnn_add(reset_seeds):
 
         output = a + b
         output = ttnn.to_torch(output)
-        print(output)
