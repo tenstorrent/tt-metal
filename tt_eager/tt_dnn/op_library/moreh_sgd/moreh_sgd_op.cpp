@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/moreh_sgd/moreh_sgd_op.hpp"
-
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "tt_eager/tt_dnn/op_library/moreh_sgd/moreh_sgd_op.hpp"
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
@@ -137,24 +136,35 @@ std::vector<std::optional<Tensor>> moreh_sgd(
         output_tensors.push_back(Tensor(operation::get_workers_for_op_output({param_in, grad}, {momentum_buffer_in})));
     }
 
-    auto op = MorehSGD{
-        .lr = lr,
-        .momentum = momentum,
-        .dampening = dampening,
-        .weight_decay = weight_decay,
-        .nesterov = nesterov,
-        .momentum_initialized = momentum_initialized,
-        .core_range = all_cores,
-        .param_out_mem_config = param_out_mem_config,
-        .momentum_buffer_out_mem_config = momentum_buffer_out_mem_config,
-        .compute_kernel_config = kernel_config_val};
-
     operation::launch_op(
-        [op](
+        [lr,
+         momentum,
+         dampening,
+         weight_decay,
+         nesterov,
+         momentum_initialized,
+         all_cores,
+         param_out_mem_config,
+         momentum_buffer_out_mem_config,
+         kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            return operation::run(op, input_tensors, optional_input_tensors, optional_output_tensors);
+            return operation::run(
+                MorehSGD{
+                    .lr = lr,
+                    .momentum = momentum,
+                    .dampening = dampening,
+                    .weight_decay = weight_decay,
+                    .nesterov = nesterov,
+                    .momentum_initialized = momentum_initialized,
+                    .core_range = all_cores,
+                    .param_out_mem_config = param_out_mem_config,
+                    .momentum_buffer_out_mem_config = momentum_buffer_out_mem_config,
+                    .compute_kernel_config = kernel_config_val},
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
         },
         {param_in, grad},
         output_tensors,
