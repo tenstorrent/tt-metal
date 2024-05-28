@@ -20,6 +20,7 @@
 uint32_t halt_stack_ptr_save;
 
 tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
+volatile tt_l1_ptr uint8_t *const ncrisc_run = mailboxes->slave_sync.ncrisc;
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -47,10 +48,18 @@ inline __attribute__((always_inline)) void set_ncrisc_resume_addr() {
 #endif
 }
 
-inline __attribute__((always_inline)) void halt_ncrisc_with_iram() {
+inline __attribute__((always_inline)) void notify_brisc_and_wait() {
 #ifdef NCRISC_HAS_IRAM
     extern "C" void notify_brisc_and_halt(uint32_t status);
     notify_brisc_and_halt(RUN_SYNC_MSG_DONE);
+#else
+    while (*ncrisc_run != RUN_SYNC_MSG_GO);
+#endif
+}
+
+inline __attribute__((always_inline)) void signal_ncrisc_completion() {
+#ifndef NCRISC_HAS_IRAM
+    *ncrisc_run = RUN_SYNC_MSG_DONE;
 #endif
 }
 
@@ -67,12 +76,11 @@ int main(int argc, char *argv[]) {
     // If NCRISC has IRAM it needs to halt before BRISC copies data from L1 to IRAM
     // Need to save address to jump to after BRISC resumes NCRISC
     set_ncrisc_resume_addr();
-    mailboxes->ncrisc_halt.resume_addr = (uint32_t)ncrisc_resume;
 
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
         DEBUG_STATUS("W");
-        halt_ncrisc_with_iram();
+        notify_brisc_and_wait();
         DeviceZoneScopedMainN("NCRISC-FW");
 
         setup_cb_read_write_interfaces(0, mailboxes->launch.max_cb_index, true, true);
@@ -80,6 +88,8 @@ int main(int argc, char *argv[]) {
         DEBUG_STATUS("R");
         kernel_init();
         DEBUG_STATUS("D");
+
+        signal_ncrisc_completion();
     }
 
     return 0;
