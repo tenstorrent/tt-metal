@@ -361,6 +361,7 @@ inline Tensor matmul(
 Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt, bool untilize_out = false);
 
 MatmulProgramConfig generate_matmul_program_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig &mem_config, const std::optional<const DeviceComputeKernelConfig> compute_kernel_config, const std::optional<const CoreCoord> user_core_coord, const std::optional<const UnaryWithParam> user_fused_activation, const std::optional<const bool> user_run_batched);
+
 }  // namespace primary
 
 }  // namespace operations
@@ -374,14 +375,14 @@ using namespace tt::tt_metal;
 // Ensure there are always symmetrical values. Different paths use different
 // index ordering (0,1 vs 1,0) to meet test PCC requirements.
 constexpr std::array<tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
-    {4, 2}, {2, 4}, {8, 1}, {1, 8},
-    {7, 1}, {1, 7},
-    {3, 2}, {2, 3}, {6, 1}, {1, 6},
-    {5, 1}, {1, 5},
-    {2, 2}, {4, 1}, {1, 4},
-    {3, 1}, {1, 3},
-    {2, 1}, {1, 2},
-    {1, 1},
+    {4, 2}, {2, 4}, {8, 1}, {1, 8},  // subblock_hw = 8
+    {7, 1}, {1, 7},                  // subblock_hw = 7
+    {3, 2}, {2, 3}, {6, 1}, {1, 6},  // subblock_hw = 6
+    {5, 1}, {1, 5},                  // subblock_hw = 5
+    {2, 2}, {4, 1}, {1, 4},          // subblock_hw = 4
+    {3, 1}, {1, 3},                  // subblock_hw = 3
+    {2, 1}, {1, 2},                  // subblock_hw = 2
+    {1, 1},                          // subblock_hw = 1
 }};
 
 tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(uint32_t Mt, uint32_t Nt, uint32_t num_cores_y, uint32_t num_cores_x, uint32_t in0_block_w);
