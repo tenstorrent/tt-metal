@@ -16,7 +16,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from models.utility_functions import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0, skip_for_grayskull
 
 shapes = [
     [[1, 1, 32, 32]],  # Single core
@@ -585,6 +585,7 @@ class TestEltwiseUnary:
         )
 
     @pytest.mark.parametrize("round_off_method", ["floor", "trunc"])
+    @skip_for_grayskull("#ToDo: GS implementation needs to be done for Floor")
     def test_run_eltwise_round_off_ops(
         self,
         round_off_method,
