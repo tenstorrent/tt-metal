@@ -7,22 +7,22 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ccl.hpp"
-#include "conv2d.hpp"
-#include "core.hpp"
-#include "creation.hpp"
-#include "data_movement.hpp"
-#include "embedding.hpp"
-#include "kv_cache.hpp"
-#include "matmul.hpp"
-#include "maxpool2d.hpp"
-#include "normalization.hpp"
-#include "pool.hpp"
 #include "pybind11/operations/binary.hpp"
-#include "reduction.hpp"
-#include "ternary.hpp"
-#include "transformer.hpp"
-#include "unary.hpp"
+#include "pybind11/operations/ccl.hpp"
+#include "pybind11/operations/conv2d.hpp"
+#include "pybind11/operations/core.hpp"
+#include "pybind11/operations/creation.hpp"
+#include "pybind11/operations/data_movement.hpp"
+#include "pybind11/operations/embedding.hpp"
+#include "pybind11/operations/kv_cache.hpp"
+#include "pybind11/operations/matmul.hpp"
+#include "pybind11/operations/maxpool2d.hpp"
+#include "pybind11/operations/normalization.hpp"
+#include "pybind11/operations/pool.hpp"
+#include "pybind11/operations/reduction.hpp"
+#include "pybind11/operations/ternary.hpp"
+#include "pybind11/operations/transformer.hpp"
+#include "pybind11/operations/unary.hpp"
 
 namespace py = pybind11;
 

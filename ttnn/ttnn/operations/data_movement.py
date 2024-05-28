@@ -370,62 +370,7 @@ def _golden_function(tensor, shape, **_):
     return tensor.repeat(shape[0], shape[1], shape[2], shape[3])
 
 
-def _repeat_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.int32, ttnn.uint32),
-        layouts=(ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=True,
-    )
-
-
-@ttnn.register_operation(
-    name="ttnn.repeat",
-    validate_input_tensors=_repeat_validate_input_tensors,
-    golden_function=_golden_function,
-)
-def repeat(
-    input_tensor: ttnn.Tensor,
-    shape: ttnn.Shape,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    r"""
-    repeat(input_tensor: ttnn.Tensor, shape : ttnn.Shape) -> ttnn.Tensor
-
-    Returns a new tensor filled with repetition of input :attr:`input_tensor` according to number of times specified in :attr:`shape`.
-
-    Args:
-        * :attr:`input_tensor`: the input_tensor to apply the repeate operation.
-        * :attr:`shape`: The number of repetitions for each element.
-
-    Example::
-
-        >>> tensor = ttnn.repeat(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]]), 2,)), device)
-        >>> print(tensor)
-        tensor([[1, 2],
-        [1, 2],
-        [3, 4],
-        [3, 4]])
-
-    """
-
-    if not isinstance(shape, ttnn.Shape):
-        raise RuntimeError("ttnn: Expected shape to be a ttnn.Shape")
-
-    rank = len(input_tensor.shape)
-    if rank == 4:
-        output_tensor = ttl.tensor.repeat(input_tensor, shape, output_mem_config=memory_config)
-        *batch, _, _ = output_tensor.shape
-        *_, h, w = output_tensor.shape
-        *_, padded_h, padded_w = output_tensor.shape.with_tile_padding()
-
-        output_tensor = ttnn.reshape(output_tensor, shape=ttnn.Shape(batch + [h, w], batch + [padded_h, padded_w]))
-        return output_tensor
-    else:
-        raise NotImplementedError
+repeat = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.data_movement.repeat)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, scale_factor: Tuple[float, float], **_):

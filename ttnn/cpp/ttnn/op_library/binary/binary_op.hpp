@@ -121,7 +121,7 @@ struct ExecuteBinary {
             input_shape_a[-3] == input_shape_b[-3]) {
             tt::log_warning(tt::LogOp, "Using repeat op to broadcast batch dim");
             Shape repeats({input_shape_a[0], 1, 1, 1});
-            input_tensor_b = repeat(input_tensor_b, repeats.value(), output_memory_config);
+            input_tensor_b = tt::tt_metal::repeat(input_tensor_b, repeats.value(), output_memory_config);
         }
 
         return operation::run(
