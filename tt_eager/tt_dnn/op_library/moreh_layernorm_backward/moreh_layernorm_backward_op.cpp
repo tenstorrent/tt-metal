@@ -176,16 +176,6 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
         {gamma});
 
     return input_grad;
-
-    // return output_tensors.at(0);
-    // Inplace
-    // operation::run(
-    //     MorehLayerNormBackwardInputGrad{
-    //         .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
-    //     {output_grad, input, mean, rstd, input_grad},
-    //     {gamma});
-
-    // return input_grad;
 }
 
 // gamma_grad and beta_grad
@@ -229,22 +219,6 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
         outputs[1] = beta_grad.value();
     }
     return outputs;
-
-    // // Inplace
-    // operation::run(
-    //     MorehLayerNormBackwardGammaBetaGrad{
-    //         .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
-    //     {output_grad, input, mean, rstd},
-    //     {gamma_grad, beta_grad});
-
-    // if (gamma_grad.has_value()) {
-    //     outputs[0] = gamma_grad.value();
-    // }
-    // if (beta_grad.has_value()) {
-    //     outputs[1] = beta_grad.value();
-    // }
-
-    // return outputs;
 }
 
 // input_grad and gamma_grad and beta_grad
