@@ -44,8 +44,7 @@ void MorehMeanBackward::validate(const std::vector<Tensor>& inputs) const {
     TT_ASSERT(
         input_grad.get_dtype() == DataType::BFLOAT16 || input_grad.get_dtype() == DataType::BFLOAT8_B,
         "Unsupported data format");
-    TT_ASSERT(
-        output_grad.get_dtype() == input_grad.get_dtype(), "Unsupported data format");
+    TT_ASSERT(output_grad.get_dtype() == input_grad.get_dtype(), "Unsupported data format");
     TT_ASSERT(
         output_grad.storage_type() == StorageType::DEVICE and input_grad.storage_type() == StorageType::DEVICE,
         "Operands to mean backward need to be on device!");
@@ -76,7 +75,18 @@ std::vector<Shape> MorehMeanBackward::compute_output_shapes(const std::vector<Te
 tt::stl::reflection::Attributes MorehMeanBackward::attributes() const { return {}; }
 
 Tensor moreh_mean_backward_(const Tensor& output_grad, const Tensor& input_grad) {
-    operation::run(MorehMeanBackward{}, {output_grad, input_grad});
+    std::vector<Tensor> dummy_output_tensors = {
+        Tensor(operation::get_workers_for_op_output({output_grad, input_grad}))};
+
+    operation::launch_op(
+        [](const std::vector<Tensor>& input_tensors,
+           const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+           const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(MorehMeanBackward{}, input_tensors, optional_input_tensors, optional_output_tensors);
+        },
+        {output_grad, input_grad},
+        dummy_output_tensors);
+
     return input_grad;
 }
 
