@@ -244,8 +244,6 @@ void WriteToDeviceSharded(const Buffer &buffer, const std::vector<uint32_t> &hos
 
     auto device = buffer.device();
 
-    TT_ASSERT(buffer.is_l1(), "Only L1 Buffers support sharding");
-
     auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
     auto total_pages = buffer.num_pages();
     for (int host_page_id = 0; host_page_id < total_pages; host_page_id++) {
@@ -289,12 +287,8 @@ void WriteToDeviceInterleavedContiguous(const Buffer &buffer, const std::vector<
         page.insert(
             page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_page);
         switch (buffer.buffer_type()) {
-            case BufferType::DRAM: {
-                auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
-                tt::Cluster::instance().write_dram_vec(
-                    page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
-            } break;
-            case BufferType::L1:  // fallthrough
+            case BufferType::DRAM:
+            case BufferType::L1:
             case BufferType::L1_SMALL: {
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
                 llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
@@ -351,12 +345,8 @@ void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, std::vector<uint3
         auto absolute_address = buffer.page_address(bank_index, page_index);
         std::vector<uint32_t> page;
         switch (buffer.buffer_type()) {
-            case BufferType::DRAM: {
-                auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
-                tt::Cluster::instance().read_dram_vec(
-                    page, page_size, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
-            } break;
-            case BufferType::L1:  // fallthrough
+            case BufferType::DRAM:
+            case BufferType::L1:
             case BufferType::L1_SMALL: {
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
                 page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
@@ -383,16 +373,9 @@ void read_pages_to_host_helper(
     const uint32_t &bank_id) {
     auto absolute_address = dev_buffer.sharded_page_address(bank_id, dev_page_id);
     auto noc_coordinates = dev_buffer.noc_coordinates(bank_id);
-
     uint32_t num_entries_per_page = page_size / sizeof(uint32_t);
-    auto page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
     uint32_t host_buffer_start = host_page_id * num_entries_per_page;
-    uint32_t dev_page_index = 0;
-    for (uint32_t host_buffer_index = host_buffer_start; host_buffer_index < host_buffer_start + num_entries_per_page;
-         host_buffer_index++) {
-        host_buffer[host_buffer_index] = page[dev_page_index];
-        dev_page_index++;
-    }
+    tt::Cluster::instance().read_core(host_buffer.data() + host_buffer_start, page_size, tt_cxy_pair(device->id(), noc_coordinates), absolute_address);
 }
 
 void ReadFromDeviceSharded(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
@@ -434,7 +417,6 @@ void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bo
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
         ReadFromDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
-        TT_ASSERT(buffer.is_l1(), "Only L1 Buffers support sharding");
         ReadFromDeviceSharded(buffer, host_buffer, shard_order);
     } else {
         TT_ASSERT(false && "Unsupported buffer layout");

@@ -28,7 +28,7 @@ void validate_buffer_size_and_page_size(
     uint64_t page_size,
     const BufferType &buffer_type,
     const TensorMemoryLayout &buffer_layout,
-    std::optional<ShardSpecBuffer> shard_parameters) {
+    const std::optional<ShardSpecBuffer>& shard_parameters) {
     TT_FATAL(size != 0 and page_size != 0, "Buffer size and page size should be larger than 0 bytes!");
     bool valid_page_size = (size % page_size == 0);
     TT_FATAL(
@@ -40,10 +40,11 @@ void validate_buffer_size_and_page_size(
     TT_FATAL(
         page_size % sizeof(uint32_t) == 0,
         "Page size must be divisible by sizeof(uint32_t) because buffers hold uint32_t values");
-    if (buffer_layout == TensorMemoryLayout::SINGLE_BANK) {
-        TT_ASSERT(page_size == size, "Continguous buffer must be one contiguous page");
-    } else if (is_sharded(buffer_layout)) {
-        TT_ASSERT(shard_parameters != std::nullopt, "Sharded buffers must have a core grid assigned");
+
+    if (is_sharded(buffer_layout)) {
+        TT_FATAL(shard_parameters != std::nullopt, "Sharded buffers must have a core grid assigned");
+    } else if (buffer_layout == TensorMemoryLayout::SINGLE_BANK) {
+        TT_FATAL(page_size == size, "Contiguous buffer must be one contiguous page");
     }
 }
 
@@ -119,7 +120,7 @@ Buffer::Buffer(
     uint64_t page_size,
     const BufferType buffer_type,
     const TensorMemoryLayout buffer_layout,
-    std::optional<ShardSpecBuffer> shard_parameters,
+    const std::optional<ShardSpecBuffer>& shard_parameters,
     bool allocate) :
     device_(device),
     size_(size),
@@ -268,7 +269,7 @@ CoreCoord Buffer::noc_coordinates(uint32_t bank_id) const {
     switch (this->buffer_type_) {
         case BufferType::DRAM: {
             auto dram_channel = this->dram_channel_from_bank_id(bank_id);
-            return llrt::get_core_for_dram_channel(dram_channel, this->device_->id());
+            return this->device_->dram_core_from_dram_channel(dram_channel);
         }
         case BufferType::L1:  // fallthrough
         case BufferType::L1_SMALL: {
@@ -278,9 +279,8 @@ CoreCoord Buffer::noc_coordinates(uint32_t bank_id) const {
         case BufferType::SYSTEM_MEMORY: {
             TT_THROW("Host buffer is located in system memory! Cannot retrieve NoC coordinates for it");
         } break;
-        default: TT_ASSERT(false && "Unsupported buffer type!");
+        default: TT_THROW("Unsupported buffer type!");
     }
-    return CoreCoord{0, 0};
 }
 
 CoreCoord Buffer::noc_coordinates() const { return this->noc_coordinates(0); }
@@ -301,10 +301,7 @@ uint64_t Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) con
 }
 
 uint64_t Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) const {
-    // DRAM readers and writers in Cluster add DRAM bank offset before doing a read but L1 readers and writers do not
-    uint64_t base_page_address = this->buffer_type_ == BufferType::DRAM
-                                     ? this->address_
-                                     : this->address_ + this->device_->bank_offset(this->buffer_type_, bank_id);
+    uint64_t base_page_address = this->address_ + this->device_->bank_offset(this->buffer_type_, bank_id);
     return base_page_address + offset;
 }
 

@@ -84,31 +84,23 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
 }
 
 std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, std::array<uint32_t, 2> shard_shape) {
-    uint32_t page_size = 0;
-
-    std::array<uint32_t, 2> page_shape = {constants::TILE_HEIGHT, constants::TILE_WIDTH};
-
     // Physical limitation in FD for now
     switch (layout) {
-        case Layout::ROW_MAJOR: {
+        case Layout::ROW_MAJOR:
             // TODO: Explore valid page shapes other than 1,W
-            page_shape = {1, shard_shape[1]};
-        } break;
-        case Layout::TILE: {
-            ;
-        } break;
-        default: TT_ASSERT(false && "Unsupported layout to write to device");
+            return {1, shard_shape[1]};
+        case Layout::TILE:
+            return {constants::TILE_HEIGHT, constants::TILE_WIDTH};
+        default:
+            TT_THROW("Unsupported layout to write to device");
     }
-
-    return page_shape;
 }
 
 void validate_sharded_buffer_allocation(
-    const Shape& shape, Layout layout, std::optional<ShardSpecBuffer> shard_params, const MemoryConfig& memory_config) {
-    TT_ASSERT(shard_params.has_value(), "Shard params are required for sharded buffer and they were not initialized");
+    const Shape& shape, Layout layout, DataType data_type, const ShardSpecBuffer& shard_params, const MemoryConfig& memory_config) {
 
-    auto shard_spec = memory_config.shard_spec.value();
-    auto& shard_shape = shard_spec.shape;
+    const auto& shard_spec = memory_config.shard_spec.value();
+    const auto& shard_shape = shard_spec.shape;
 
     uint32_t num_cores = shard_spec.num_cores();
 
@@ -171,14 +163,12 @@ void validate_sharded_buffer_allocation(
     } else {
         TT_FATAL(false, "Unsupported sharding scheme");
     }
-
     if (layout == Layout::TILE) {
-        TT_ASSERT(
+        TT_FATAL(
             (shard_shape[0] % constants::TILE_HEIGHT == 0 && shard_shape[1] % constants::TILE_WIDTH == 0),
             "Shard shape must be tile sized");
     } else if (layout == Layout::ROW_MAJOR) {
-        // Require alignment for now
-        // TT_ASSERT(shard_shape[1] * tensor_impl::element_size_bytes(data_type) % ADDRESS_ALIGNMENT == 0);
+        TT_FATAL(shard_shape[1] * tensor_impl::element_size_bytes(data_type) % sizeof(uint32_t) == 0);
     }
 }
 
@@ -206,10 +196,10 @@ DeviceBuffer allocate_sharded_buffer_on_device(
     const Shape& shape,
     DataType data_type,
     Layout layout,
-    std::optional<ShardSpecBuffer> shard_params,
+    const ShardSpecBuffer& shard_params,
     const MemoryConfig& memory_config) {
-    validate_sharded_buffer_allocation(shape, layout, shard_params, memory_config);
-    auto page_shape = shard_params.value().page_shape;
+    validate_sharded_buffer_allocation(shape, layout, data_type, shard_params, memory_config);
+    const auto& page_shape = shard_params.page_shape;
     uint32_t size_of_element = element_size_bytes(data_type);
     uint32_t page_size = page_shape[0] * page_shape[1] * size_of_element;
     if (layout == Layout::TILE) {
@@ -229,7 +219,7 @@ DeviceBuffer allocate_buffer_on_device(
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
-    std::optional<ShardSpecBuffer> shard_spec) {
+    const std::optional<ShardSpecBuffer>& shard_spec) {
     if (memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         return detail::allocate_interleaved_buffer_on_device(
             buffer_size_bytes, device, shape, data_type, layout, memory_config);
@@ -238,7 +228,7 @@ DeviceBuffer allocate_buffer_on_device(
     } else {
         TT_ASSERT(memory_config.is_sharded() && "Incorrect Memory Layout");
         return detail::allocate_sharded_buffer_on_device(
-            buffer_size_bytes, device, shape, data_type, layout, shard_spec, memory_config);
+            buffer_size_bytes, device, shape, data_type, layout, shard_spec.value(), memory_config);
     }
 }
 

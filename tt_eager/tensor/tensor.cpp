@@ -849,9 +849,8 @@ Tensor create_device_tensor(
     ZoneScoped;
     if (memory_config.is_sharded()) {
         TT_ASSERT(memory_config.shard_spec.has_value());
-        TT_ASSERT(memory_config.is_l1());
 
-        auto shard_spec = memory_config.shard_spec.value();
+        auto& shard_spec = memory_config.shard_spec.value();
         auto& shard_shape = shard_spec.shape;
 
         auto width = shape[-1];
@@ -864,10 +863,7 @@ Tensor create_device_tensor(
         auto page_shape = tensor_impl::get_sharded_page_shape(layout, data_type, shard_spec.shape);
         std::array<uint32_t, 2> tensor2d_size = {other_dims / page_shape[0], width / page_shape[1]};
         ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
-        uint32_t packed_size_in_bytes;
-
-        packed_size_in_bytes =
-            tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
+        uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
         auto device_buffer = tensor_impl::allocate_buffer_on_device(
             packed_size_in_bytes,
             device,
@@ -875,7 +871,7 @@ Tensor create_device_tensor(
             data_type,
             layout,
             memory_config,
-            std::make_optional<ShardSpecBuffer>(shard_spec_buffer));
+            shard_spec_buffer);
         return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
     } else {
         uint32_t packed_size_in_bytes =

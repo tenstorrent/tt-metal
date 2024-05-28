@@ -322,7 +322,7 @@ void initialize_dram_banks(Device *device)
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
     auto offset = device->bank_offset(BufferType::DRAM, bank_id);
     auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-    auto bank_core = device->core_from_dram_channel(dram_channel);
+    auto bank_core = device->dram_core_from_dram_channel(dram_channel);
     log_info(
         tt::LogTest,
         "Initializing DRAM {} bytes for bank_id: {} core: {} at addr: 0x{:x}",

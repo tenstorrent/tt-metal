@@ -126,7 +126,7 @@ DeviceData::DeviceData(Device *device,
     auto num_banks = device->num_banks(BufferType::DRAM);
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
         auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-        CoreCoord phys_core = device->core_from_dram_channel(dram_channel);
+        CoreCoord phys_core = device->dram_core_from_dram_channel(dram_channel);
         int32_t bank_offset = device->bank_offset(BufferType::DRAM, bank_id);
         this->all_data[phys_core][bank_id] = one_core_data_t();
         this->all_data[phys_core][bank_id].logical_core = phys_core;
@@ -176,7 +176,7 @@ void DeviceData::prepopulate_dram(Device *device, uint32_t size_words) {
     for (int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
         auto offset = device->bank_offset(BufferType::DRAM, bank_id);
         auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-        auto bank_core = device->core_from_dram_channel(dram_channel);
+        auto bank_core = device->dram_core_from_dram_channel(dram_channel);
         one_core_data_t& data = this->all_data[bank_core][bank_id];
 
         // Generate random or coherent data per bank of specific size.
@@ -567,7 +567,7 @@ inline void generate_random_paged_payload(Device *device,
 
         if (is_dram) {
             auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-            bank_core = device->core_from_dram_channel(dram_channel);
+            bank_core = device->dram_core_from_dram_channel(dram_channel);
         } else {
             bank_core = device->logical_core_from_bank_id(bank_id);
         }

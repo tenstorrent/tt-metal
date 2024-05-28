@@ -334,16 +334,25 @@ def test_tensor_conversion_between_torch_and_tt_tile(
         ([1, 1, 4, 256], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1, 256)),
     ],
 )
-def test_tensor_conversion_between_torch_and_tt_rm(tt_dtype, device, tensor_shape, shard_scheme, shard_shape):
+@pytest.mark.parametrize(
+    "buffer_type",
+    [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.L1],
+)
+def test_tensor_conversion_between_torch_and_tt_rm(
+    tt_dtype, device, tensor_shape, shard_scheme, shard_shape, buffer_type
+):
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
     num_pages_width = tensor_shape[2] / shard_shape[0]
     num_pages_height = tensor_shape[3] / shard_shape[1]
 
     shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
     shard_halo = False
-    shard_grid = ttl.tensor.CoreCoord(
-        device.compute_with_storage_grid_size().x - 1, device.compute_with_storage_grid_size().y - 1
-    )
+    if buffer_type == ttl.tensor.BufferType.DRAM:
+        shard_grid = ttl.tensor.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+    else:
+        shard_grid = ttl.tensor.CoreCoord(
+            device.compute_with_storage_grid_size().x - 1, device.compute_with_storage_grid_size().y - 1
+        )
     shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), shard_grid)})
     shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
 
@@ -360,7 +369,7 @@ def test_tensor_conversion_between_torch_and_tt_rm(tt_dtype, device, tensor_shap
 
     assert list(torch_tensor.size()) == tensor_shape
 
-    mem_config = ttl.tensor.MemoryConfig(shard_scheme, ttl.tensor.BufferType.L1, shard_spec)
+    mem_config = ttl.tensor.MemoryConfig(shard_scheme, buffer_type, shard_spec)
     tt_tensor = tt_tensor.to(device, mem_config)
     tt_tensor = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
 
@@ -369,5 +378,5 @@ def test_tensor_conversion_between_torch_and_tt_rm(tt_dtype, device, tensor_shap
     assert torch_tensor.dtype == torch_tensor_after_round_trip.dtype
     assert torch_tensor.shape == torch_tensor_after_round_trip.shape
 
-    passing = torch.allclose(torch_tensor, torch_tensor_after_round_trip)
+    passing = torch.equal(torch_tensor, torch_tensor_after_round_trip)
     assert passing

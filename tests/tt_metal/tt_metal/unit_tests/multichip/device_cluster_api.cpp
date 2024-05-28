@@ -138,7 +138,7 @@ TEST_F(N300DeviceFixture, ValidatePhysicalCoreConversion) {
             expected_mapping_logical_to_physical.at(logical_core));
     }
     // Check an invalid core type
-    EXPECT_ANY_THROW(device_0->physical_core_from_logical_core(CoreCoord(0, 0), CoreType::DRAM));
+    EXPECT_ANY_THROW(device_0->physical_core_from_logical_core(CoreCoord(0, 0), CoreType::PCIE));
 }
 
 TEST_F(N300DeviceFixture, ValidateEthernetSockets) {

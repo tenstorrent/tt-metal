@@ -875,8 +875,8 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
     auto input_shard_spec = input.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();
     auto all_cores = output_shard_spec.grid;
-
-    auto grid = device->compute_with_storage_grid_size();
+    auto grid = input.buffer()->buffer_type() == BufferType::DRAM ? device->dram_grid_size() : device->compute_with_storage_grid_size();
+    auto input_core_type = input.buffer()->core_type();
     uint32_t dst_cb_index = 16;
     auto cores =
         corerange_to_cores(all_cores, std::nullopt, output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
@@ -916,15 +916,15 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
     std::vector<uint32_t> physical_core_coords;
     physical_core_coords.reserve(grid.x * grid.y);
     for (uint32_t i = 0; i < grid.x; i++) {
-        auto physical_input_core = device->worker_core_from_logical_core(CoreCoord(i, 0));
+        auto physical_input_core = device->physical_core_from_logical_core(CoreCoord(i, 0), input_core_type);
         physical_core_coords.push_back(physical_input_core.x);
     }
     for (uint32_t i = 0; i < grid.y; i++) {
-        auto physical_input_core = device->worker_core_from_logical_core(CoreCoord(0, i));
+        auto physical_input_core = device->physical_core_from_logical_core(CoreCoord(0, i), input_core_type);
         physical_core_coords.push_back(physical_input_core.y);
     }
 
-    for (auto core : cores) {
+    for (const auto& core : cores) {
         auto page_stride_vector = output_core_to_page_range_pair.at(core);
         uint32_t num_ranges = page_stride_vector.size();
         std::vector<uint32_t> runtime_args = physical_core_coords;
@@ -949,7 +949,7 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
         tt_metal::SetRuntimeArgs(program, kernel_id_1, core, runtime_args_1);
     }
 
-    auto override_runtime_arguments_callback = [kernel_id_0, kernel_id_1, cb_dst0, grid](
+    auto override_runtime_arguments_callback = [kernel_id_0, kernel_id_1, cb_dst0, grid, cores](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
@@ -957,15 +957,14 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
                                                    const std::vector<Tensor>& output_tensors) {
         const auto& input = input_tensors.at(0);
         const auto& output = output_tensors.at(0);
-        auto output_shard_spec = output.shard_spec().value();
-        auto all_cores = output_shard_spec.grid;
-        auto cores =
-            corerange_to_cores(all_cores, std::nullopt, output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+        uint32_t input_addr = input.buffer()->address();
+        auto& runtime_args_0_by_core = GetRuntimeArgs(program, kernel_id_0);
+        auto& runtime_args_1_by_core = GetRuntimeArgs(program, kernel_id_1);
         for (auto core : cores) {
-            auto& runtime_args_0 = GetRuntimeArgs(program, kernel_id_0, core);
-            auto& runtime_args_1 = GetRuntimeArgs(program, kernel_id_1, core);
-            runtime_args_0[grid.x + grid.y] = input.buffer()->address();
-            runtime_args_1[grid.x + grid.y] = input.buffer()->address();
+            auto& runtime_args_0 = runtime_args_0_by_core[core.x][core.y];
+            auto& runtime_args_1 = runtime_args_1_by_core[core.x][core.y];
+            runtime_args_0[grid.x + grid.y] = input_addr;
+            runtime_args_1[grid.x + grid.y] = input_addr;
         }
         UpdateDynamicCircularBufferAddress(program, cb_dst0, *output.buffer());
     };

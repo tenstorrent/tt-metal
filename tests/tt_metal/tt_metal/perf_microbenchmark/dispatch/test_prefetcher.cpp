@@ -407,7 +407,7 @@ void add_paged_dram_data_to_device_data(Device *device,
 
         uint32_t dram_bank_id = page_idx % num_dram_banks_g;
         auto dram_channel = device->dram_channel_from_bank_id(dram_bank_id);
-        CoreCoord bank_core = device->core_from_dram_channel(dram_channel);
+        CoreCoord bank_core = device->dram_core_from_dram_channel(dram_channel);
         uint32_t bank_offset = base_addr_words + page_size_words * (page_idx / num_dram_banks_g);
 
         if (page_idx == last_page - 1) page_size_words -= length_adjust_words;
@@ -840,7 +840,7 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(Device *device,
         uint32_t bank_id = page_id % num_dram_banks_g;
         auto offset = device->bank_offset(BufferType::DRAM, bank_id);
         auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-        auto bank_core = device->core_from_dram_channel(dram_channel);
+        auto bank_core = device->dram_core_from_dram_channel(dram_channel);
 
         tt::Cluster::instance().write_core(static_cast<const void*>(&buf_cmds[index / sizeof(uint32_t)]),
             page_size, tt_cxy_pair(device->id(), bank_core), DRAM_EXEC_BUF_DEFAULT_BASE_ADDR + offset + (page_id / num_dram_banks_g) * page_size);
@@ -1218,7 +1218,7 @@ void initialize_dram_banks(Device *device)
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
         auto offset = device->bank_offset(BufferType::DRAM, bank_id);
         auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-        auto bank_core = device->core_from_dram_channel(dram_channel);
+        auto bank_core = device->dram_core_from_dram_channel(dram_channel);
 
         log_info(tt::LogTest, "Initializing DRAM {} bytes for bank_id: {} core: {} at addr: 0x{:x}", bank_size, bank_id, bank_core.str(), offset);
         tt::Cluster::instance().write_core(static_cast<const void*>(fill.data()), fill.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), bank_core), offset);

@@ -20,13 +20,17 @@ void Sharded::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
     if (this->sharded_op_type == ShardedOpType::InterleavedToSharded) {
         TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(this->output_mem_config.is_sharded());
+        TT_FATAL(this->output_mem_config.buffer_type == BufferType::L1);
         if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-            TT_FATAL(this->shard_spec.shape[1] * input_tensor.element_size() % L1_ALIGNMENT == 0, "Shard page size must currently have L1 aligned page size");
+            TT_FATAL((*this->output_mem_config.shard_spec).shape[1] * input_tensor.element_size() % L1_ALIGNMENT == 0, "Shard page size must currently have L1 aligned page size");
         }
     } else if (this->sharded_op_type == ShardedOpType::ShardedToInterleaved) {
         TT_FATAL(input_tensor.memory_config().is_sharded());
+        TT_FATAL(input_tensor.memory_config().buffer_type == BufferType::L1);
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
         if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-            TT_FATAL(this->shard_spec.shape[1] * input_tensor.element_size() % (this->output_mem_config.buffer_type == BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT) == 0, "Shard page size must be aligned to output buffer type alignment");
+            TT_FATAL((*input_tensor.memory_config().shard_spec).shape[1] * input_tensor.element_size() % (this->output_mem_config.buffer_type == BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT) == 0, "Shard page size must be aligned to output buffer type alignment");
         }
     }
     if (input_tensor.get_dtype() != this->output_dtype) {
@@ -44,20 +48,8 @@ std::vector<Shape> Sharded::compute_output_shapes(const std::vector<Tensor>& inp
 
 std::vector<Tensor> Sharded::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    if (this->sharded_op_type == ShardedOpType::InterleavedToSharded) {
-        auto mem_config = this->output_mem_config;
-        mem_config.shard_spec = this->shard_spec;
-        return {create_device_tensor(
-            this->compute_output_shapes(input_tensors).at(0),
-            this->output_dtype,
-            input_tensor.get_layout(),
-            input_tensor.device(),
-            mem_config
-            )};
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, this->output_dtype, input_tensor.get_layout(), this->output_mem_config);
-    }
+    return operation::generic_create_output_tensors(
+        *this, input_tensors, this->output_dtype, input_tensor.get_layout(), this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks Sharded::create_program(
@@ -85,6 +77,7 @@ void Reshard::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.is_sharded(), "input must be sharded");
     TT_FATAL(this->output_mem_config.is_sharded(), "output must be sharded");
+    TT_FATAL(this->output_mem_config.buffer_type == BufferType::L1);
     if(input_tensor.get_layout() == Layout::ROW_MAJOR) {
         bool same_row_size = input_tensor.memory_config().shard_spec.value().shape[1] == this->output_mem_config.shard_spec.value().shape[1];
         TT_FATAL(same_row_size, "row major must have shard_spec[1] be the same on both input and output");
