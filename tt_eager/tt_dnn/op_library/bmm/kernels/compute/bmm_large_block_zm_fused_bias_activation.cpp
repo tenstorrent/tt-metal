@@ -15,7 +15,7 @@
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
 
 namespace NAMESPACE {
@@ -198,9 +198,6 @@ void MAIN {
                         tile_regs_release();
                         cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
 
-                        // cb_wait_front(mm_out_cb_id, out_subblock_num_tiles);
-                        // UNPACK(( DPRINT  << TSLICE(mm_out_cb_id, out_subblock_num_tiles-1, SliceRange::hw0_32_8()) << ENDL() ));
-
                     } else {
                         tile_regs_commit();
                         // Wait for tiles in output buffer to be written out since interm and output share memory
@@ -226,8 +223,6 @@ void MAIN {
                         tile_regs_release();
                         cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
 
-                        // cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
-                        // UNPACK(( DPRINT  << TSLICE(mm_partials_cb_id, 0, SliceRange::hw0_32_8()) << ENDL() ));
                     }
 
                     in1_index_subblock_offset += out_subblock_w;

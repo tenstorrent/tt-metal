@@ -858,7 +858,8 @@ inline MatmulProgramConfig get_program_config(
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (
                 not std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig> and
-                not std::is_same_v<ProgramConfigType, MatmulMultiCoreNonOptimizedReuseProgramConfig>) {
+                not std::is_same_v<ProgramConfigType, MatmulMultiCoreNonOptimizedReuseProgramConfig> and
+                not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                 TT_FATAL(
                     program_config.compute_with_storage_grid_size.x <=
                         input_tensor_a.device()->compute_with_storage_grid_size().x,

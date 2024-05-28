@@ -6,7 +6,7 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
 void kernel_main() {
     // COMPILE TIME ARGS
@@ -36,12 +36,8 @@ void kernel_main() {
         // get the mcast sender noc
         uint64_t in0_mcast_sender_semaphore_noc_addr = get_noc_addr(in0_mcast_sender_noc_x[block_id], in0_mcast_sender_noc_y[block_id], in0_mcast_sender_semaphore_addr);
 
-        // DPRINT << in0_mcast_sender_noc_x[block] << " " << in0_mcast_sender_noc_y[block] << ENDL();
-
         // Operand 0
         cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-
-        // DPRINT << in0_mcast_sender_noc_x[block] << " " << in0_mcast_sender_noc_y[block] << ENDL();
 
         // Set in0 semaphore value to INVALID
         noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);

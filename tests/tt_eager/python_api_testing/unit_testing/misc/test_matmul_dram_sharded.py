@@ -26,9 +26,9 @@ def find_max_subblock(out_block_h, out_block_w):
     best_w = 1
 
     for h in range(1, out_block_h + 1):
-        if out_block_h % h == 0:  # h is a divisor of out_block_h
+        if out_block_h % h == 0:
             for w in range(1, out_block_w + 1):
-                if out_block_w % w == 0 and h * w <= 8:  # w is a divisor and product condition met
+                if out_block_w % w == 0 and h * w <= 8:
                     if h * w > max_product:
                         max_product = h * w
                         best_h = h
@@ -51,16 +51,17 @@ def pad_to_dram_banks(num, lcm=32 * 12):
     "fidelity",
     [
         ttl.tensor.MathFidelity.HiFi2,
-        # ttl.tensor.MathFidelity.LoFi,
+        ttl.tensor.MathFidelity.LoFi,
     ],
-    ids=["HiFi2"],
+    ids=["HiFi2", "LoFi"],
 )
 @pytest.mark.parametrize(
     "has_bias",
     [
         False,
+        True,
     ],
-    ids=["no_bias"],
+    ids=["no_bias", "bias"],
 )
 @pytest.mark.parametrize(
     "in0_dtype, in1_dtype, out_dtype",
@@ -104,16 +105,19 @@ def test_matmul_in1_dram_sharded(
 
     if is_grayskull():
         N_padded = N
+        num_banks = 8
     else:
         N_padded = pad_to_dram_banks(N)
+        num_banks = 12
+
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     in1_shape_padded = [1, 1, K, N_padded]
+    in1_shard_shape = [K, N_padded // num_banks]
     bias_shape = [1, 1, 1, N]
     bias_shape_padded = [1, 1, 32, N_padded]
+    bias_shard_shape = [32, N_padded // num_banks]
     num_cores = grid_size[0] * grid_size[1]
-
-    logger.debug("N_padded " + str(N_padded))
 
     in0_block_h = M // 32
     in0_block_w = K // num_cores // 32
@@ -122,6 +126,7 @@ def test_matmul_in1_dram_sharded(
 
     out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
 
+    logger.debug("N_padded " + str(N_padded))
     logger.debug("in0 block h w " + str(in0_block_h * 32) + " " + str(in0_block_w * 32))
     logger.debug("in1 block h w " + str(in0_block_w * 32) + " " + str(out_block_w * 32))
     logger.debug("out block h w " + str(out_block_h * 32) + " " + str(out_block_w * 32))
@@ -131,38 +136,51 @@ def test_matmul_in1_dram_sharded(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
         buffer_type=ttl.tensor.BufferType.DRAM,
     )
-    interleaved_mem_config_in1 = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
-        # shard_spec=ttl.tensor.ShardSpec([K // 32, N // 32 // num_banks]),
-    )
     sharded_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
         buffer_type=ttl.tensor.BufferType.L1,
     )
 
-    step = K // num_cores
+    in1_shard_grid = ttl.tensor.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+    in1_shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), in1_shard_grid)})
+    in1_shard_spec = ttl.tensor.ShardSpec(in1_shard_grid, in1_shard_shape, ttl.tensor.ShardOrientation.ROW_MAJOR, False)
+    in1_mem_config = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.DRAM, in1_shard_spec
+    )
+
+    logger.debug("in1_shard_shape " + str(in1_shard_shape))
+    logger.debug("in1_shard_grid " + str(in1_shard_grid))
+
     in0 = torch.randn(in0_shape).bfloat16().float()
+    # step = K // num_cores
     # in0 = torch.ones(in0_shape).bfloat16().float()
     # for i in range(num_cores):  # since 32768 / 16 = 2048
     #     in0[:, :, :, i * step : (i + 1) * step] = i + 1
-    # in1 = torch.randn(in1_shape).bfloat16().float()
-    in1 = torch.ones(in1_shape).bfloat16().float()
-    bias = torch.ones(bias_shape).bfloat16().float() * 10
-
-    output_mem_config = sharded_mem_config
+    in1 = torch.randn(in1_shape).bfloat16().float()
+    # in1 = torch.ones(in1_shape).bfloat16().float()
+    bias = torch.randn(bias_shape).bfloat16().float()
+    # bias = torch.ones(bias_shape).bfloat16().float() * 10
 
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=in0_dtype)
     in1_t = ttl.tensor.Tensor(in1.flatten().tolist(), in1_shape, in1_dtype, ttl.tensor.Layout.ROW_MAJOR)
-    in1_t = in1_t.pad(in1_shape_padded, (0, 0, 0, 0), 1).to(ttl.tensor.Layout.TILE)
-    in1_t = in1_t.to(device)
+    in1_t = in1_t.pad(in1_shape_padded, (0, 0, 0, 0), 0).to(ttl.tensor.Layout.TILE)
+    in1_t = in1_t.to(device, in1_mem_config)
 
     if has_bias:
+        bias_shard_grid = ttl.tensor.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+        bias_shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), bias_shard_grid)})
+        bias_shard_spec = ttl.tensor.ShardSpec(
+            bias_shard_grid, bias_shard_shape, ttl.tensor.ShardOrientation.ROW_MAJOR, False
+        )
+        bias_mem_config = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.DRAM, bias_shard_spec
+        )
+
         bias_t = ttl.tensor.Tensor(
             bias.flatten().tolist(), bias_shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR
         )
-        bias_t = bias_t.pad(bias_shape_padded, (0, 0, 0, 0), 10).to(ttl.tensor.Layout.TILE)
-        bias_t = bias_t.to(device)
+        bias_t = bias_t.pad(bias_shape_padded, (0, 0, 0, 0), 0).to(ttl.tensor.Layout.TILE)
+        bias_t = bias_t.to(device, bias_mem_config)
 
     in0_t = ttl.tensor.interleaved_to_sharded(
         in0_t,
@@ -204,7 +222,7 @@ def test_matmul_in1_dram_sharded(
             in1_t,
             bias=bias_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
+            output_mem_config=sharded_mem_config,
             output_dtype=out_dtype,
             compute_kernel_config=compute_kernel_config,
         )
@@ -213,7 +231,7 @@ def test_matmul_in1_dram_sharded(
             in0_t,
             in1_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
+            output_mem_config=sharded_mem_config,
             output_dtype=out_dtype,
             compute_kernel_config=compute_kernel_config,
         )
@@ -226,12 +244,10 @@ def test_matmul_in1_dram_sharded(
     tt_out = tt2torch_tensor(output_t)
 
     print(pt_out)
-    # torch.set_printoptions(threshold=float('inf'))
     print(tt_out)
 
     pt_out_unpad = pt_out[:, :, :, 0:N]
     tt_out_unpad = tt_out[:, :, :, 0:N]
-
     passing, output = comp_pcc(pt_out_unpad, tt_out_unpad)
     logger.info(output)
     assert passing
