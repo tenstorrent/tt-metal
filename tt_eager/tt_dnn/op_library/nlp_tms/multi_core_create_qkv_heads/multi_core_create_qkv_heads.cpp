@@ -158,7 +158,7 @@ static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
         UpdateDynamicCircularBufferAddress(program, cb_out2_id, *out2_buffer);
     };
 
-    return {std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 namespace tt {

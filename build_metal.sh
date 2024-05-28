@@ -43,6 +43,9 @@ Example:
     <run a pytest>                                                  # <- this test ran in Release config
     ninja install -C build_debug                                    # <- install Debug pybinds
     <run a pytest>                                                  # <- this test ran in Debug config
+
+NOTE ON DEBUGGING!:
+    GDB/LLDB is not stable right now. Recommend to use GCC11 or higher for debugging or Clang-17 with GDB 14+
 '
 
 set -eo pipefail
@@ -94,7 +97,7 @@ else
 fi
 
 echo "Building tt-metal"
-cmake_args="-B build -G Ninja -DCMAKE_CXX_COMPILER=clang++-17 -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
+cmake_args="-B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
 
 if [ "$enable_ccache" = "ON" ]; then
     cmake_args="$cmake_args -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"

@@ -270,6 +270,7 @@ static_assert(
 struct OwnedStorage {
     OwnedBuffer buffer;
     OwnedStorage() = default;
+    OwnedStorage(OwnedBuffer buffer_) : buffer(std::move(buffer_)) {}
 
     static constexpr auto attribute_names = std::make_tuple();
     const auto attribute_values() const { return std::make_tuple(); }
@@ -288,6 +289,7 @@ using DeviceBuffer = std::shared_ptr<Buffer>;
 struct DeviceStorage {
     DeviceBuffer buffer;
     DeviceStorage() = default;
+    DeviceStorage(DeviceBuffer buffer_) : buffer(std::move(buffer_)) {}
 
     const MemoryConfig memory_config() const {
         if (this->buffer.get() == nullptr) {

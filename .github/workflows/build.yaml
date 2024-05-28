@@ -34,7 +34,7 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal libraries
         run: |
-          cmake -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++-17
+          cmake -B build -G Ninja
           cmake --build build
       - name: Build tt-metal C++ tests
         run: |

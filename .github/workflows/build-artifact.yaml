@@ -32,7 +32,7 @@ jobs:
           git submodule update --init --recursive
       - name: Build tt-metal and libs
         run: |
-          cmake -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++-17
+          cmake -B build -G Ninja
           cmake --build build --target tests
           cmake --build build --target install
       - name: 'Tar files'
