@@ -30,11 +30,9 @@ struct MorehDot {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-    static constexpr auto attribute_names =
-        std::make_tuple("output_mem_config", "output_dtype");
+    static constexpr auto attribute_names = std::make_tuple("output_mem_config", "output_dtype");
     const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->output_mem_config), std::cref(this->output_dtype));
+        return std::make_tuple(std::cref(this->output_mem_config), std::cref(this->output_dtype));
     }
 };
 
@@ -42,10 +40,24 @@ inline Tensor moreh_dot(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    return operation::run(
-               MorehDot{.output_mem_config = mem_config, .output_dtype = input_tensor_a.get_dtype()},
-               {input_tensor_a, input_tensor_b})
-        .at(0);
+    std::vector<Tensor> output_tensors = {
+        Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
+
+    operation::launch_op(
+        [mem_config, input_tensor_a](
+            const std::vector<Tensor> &input_tensors,
+            const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+            const std::vector<std::optional<Tensor>> &optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehDot{.output_mem_config = mem_config, .output_dtype = input_tensor_a.get_dtype()},
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
+        {input_tensor_a, input_tensor_b},
+        output_tensors);
+
+    return output_tensors.at(0);
 }
 
 }  // namespace primary
