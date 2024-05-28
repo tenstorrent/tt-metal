@@ -90,14 +90,20 @@ export PYTHONPATH=$(pwd)
 export TT_METAL_ENV=dev
 ```
 
-4. Build & activate
+4. Build & activate.
 
 NEW!! CMake Support
 ```sh
 ./build_metal.sh
 
+# If you would like an out-of-the-box virtual environment to use,
+./create_venv.sh
 source python_env/bin/activate
 ```
+
+Note about Python environments: You do not have to use `create_venv.sh`. If you
+are less familiar with Python and its various environment tools, just use
+`create_venv.sh` as shown above.
 
 Old Makefile Flow
 ```sh
