@@ -104,7 +104,17 @@ def measure_host_overhead_binary(
 
 
 def measure_host_overhead_unary(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, device, op, num_call_to_stack, num_repeats
+    input_shape,
+    dtype,
+    dlayout,
+    in_mem_config,
+    out_mem_config,
+    device,
+    op,
+    num_call_to_stack,
+    num_repeats,
+    bcast=False,
+    bcast_dim=tt_lib.tensor.BcastOpDim.W,
 ):
     x = torch.Tensor(size=input_shape).uniform_(-100, 100)
     x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
