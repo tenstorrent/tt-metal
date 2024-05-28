@@ -24,27 +24,27 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 ) {
     Program program{};
 
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
+    const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    const uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
 
-    tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.get_dtype());
-    uint32_t cos_single_tile_size = tt_metal::detail::TileSize(cos_cb_data_format);
+    const tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.get_dtype());
+    const uint32_t cos_single_tile_size = tt_metal::detail::TileSize(cos_cb_data_format);
 
-    tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.get_dtype());
-    uint32_t sin_single_tile_size = tt_metal::detail::TileSize(sin_cb_data_format);
+    const tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.get_dtype());
+    const uint32_t sin_single_tile_size = tt_metal::detail::TileSize(sin_cb_data_format);
 
-    tt::DataFormat trans_mat_cb_data_format = tt_metal::datatype_to_dataformat_converter(trans_mat.get_dtype());
-    uint32_t trans_mat_single_tile_size = tt_metal::detail::TileSize(trans_mat_cb_data_format);
+    const tt::DataFormat trans_mat_cb_data_format = tt_metal::datatype_to_dataformat_converter(trans_mat.get_dtype());
+    const uint32_t trans_mat_single_tile_size = tt_metal::detail::TileSize(trans_mat_cb_data_format);
 
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
+    const tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    const uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
-    uint32_t num_tiles = input.volume() / TILE_HW;
-    uint32_t num_rows = input.volume() / input.get_legacy_shape()[-1] / TILE_HEIGHT;
-    uint32_t Ht = input.get_legacy_shape()[-2] / TILE_HEIGHT; // 128 // 32 = 4
-    uint32_t Wt = input.get_legacy_shape()[-1] / TILE_WIDTH; // 128 // 32 = 4
-    uint32_t HtWt = Ht * Wt; // 4 * 4 = 16
-    uint32_t Wbytes = input.get_legacy_shape()[-1] * sizeof(bfloat16);
+    const uint32_t num_tiles = input.volume() / TILE_HW;
+    const uint32_t num_rows = input.volume() / input.get_legacy_shape()[-1] / TILE_HEIGHT;
+    const uint32_t Ht = input.get_legacy_shape()[-2] / TILE_HEIGHT; // 128 // 32 = 4
+    const uint32_t Wt = input.get_legacy_shape()[-1] / TILE_WIDTH; // 128 // 32 = 4
+    const uint32_t HtWt = Ht * Wt; // 4 * 4 = 16
+    const uint32_t Wbytes = input.get_legacy_shape()[-1] * sizeof(bfloat16);
 
     tt_metal::Device *device = input.device();
 
@@ -179,7 +179,8 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         (std::uint32_t)Wt,
         (std::uint32_t)HtWt,
         (std::uint32_t)num_rows_per_core,
-        (std::uint32_t)num_sin_cos_rows_per_core
+        (std::uint32_t)num_sin_cos_rows_per_core,
+        (std::uint32_t)(Wt * num_sin_cos_rows_per_core)
     };
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
@@ -208,6 +209,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         (std::uint32_t)output_cb_index,
         (std::uint32_t)num_rows_per_core,
         (std::uint32_t)num_sin_cos_rows_per_core,
+        (std::uint32_t)(Wt * num_sin_cos_rows_per_core),
         (std::uint32_t)Wt,
         };
 
@@ -225,8 +227,22 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         Overall loop iterations: # total cores
     */
 
-    std::vector< std::vector<uint32_t> > unary_reader_args = {cores.size(), std::vector<uint32_t>(6)}; // 6 is the number of args in the reader kernel
-    std::vector< std::vector<uint32_t> > unary_writer_args = {cores.size(), std::vector<uint32_t>(2)}; // 2 is the number of args in the writer kernel
+    std::vector<uint32_t> default_reader_args = {
+        src_buffer->address(),
+        cos_buffer->address(),
+        sin_buffer->address(),
+        trans_mat_buffer->address(),
+        0,
+        0
+    };
+
+    std::vector<uint32_t> default_writer_args = {
+        dst_buffer->address(),
+        0
+    };
+
+    std::vector< std::vector<uint32_t> > unary_reader_args = {cores.size(), default_reader_args}; // 6 is the number of args in the reader kernel
+    std::vector< std::vector<uint32_t> > unary_writer_args = {cores.size(), default_writer_args}; // 2 is the number of args in the writer kernel
 
     for (uint32_t sin_cos_row = 0; sin_cos_row < Ht; sin_cos_row+=num_sin_cos_rows_per_core) {
         uint32_t anchor_row = sin_cos_row;
@@ -236,16 +252,11 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
             // Reader runtime args
             auto& reader_rt_args = unary_reader_args[core_idx];
-            reader_rt_args[0] = src_buffer->address();
-            reader_rt_args[1] = cos_buffer->address();
-            reader_rt_args[2] = sin_buffer->address();
-            reader_rt_args[3] = trans_mat_buffer->address();
-            reader_rt_args[4] = start_row; // start_row_id
+            reader_rt_args[4] = start_row * Wt;
             reader_rt_args[5] = sin_cos_row * Wt; // This range of this idx must be [0, HtWt - 1], where HtWt is the size of the sin/cos matrices in # of tiles
 
             // Writer runtime args
             auto& writer_rt_args = unary_writer_args[core_idx];
-            writer_rt_args[0] = dst_buffer->address();
             writer_rt_args[1] = start_row;
 
             // Go to next core

@@ -10,7 +10,7 @@ void kernel_main() {
     uint32_t cos_addr  = get_arg_val<uint32_t>(1);
     uint32_t sin_addr  = get_arg_val<uint32_t>(2);
     uint32_t trans_mat_addr = get_arg_val<uint32_t>(3);
-    uint32_t start_row_idx = get_arg_val<uint32_t>(4); // Index correctly in the for loop
+    uint32_t input_start_idx = get_arg_val<uint32_t>(4); // Index correctly in the for loop
     uint32_t cos_sin_start_idx = get_arg_val<uint32_t>(5); // Index correctly in the for loop
 
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
@@ -26,6 +26,8 @@ void kernel_main() {
     constexpr uint32_t HtWt = get_compile_time_arg_val(10);
     constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(11);
     constexpr uint32_t num_sin_cos_rows_per_core = get_compile_time_arg_val(12);
+    constexpr uint32_t sin_cos_cb_size_in_tiles = get_compile_time_arg_val(13);
+
 
 
     constexpr uint32_t onetile = 1;
@@ -65,10 +67,9 @@ void kernel_main() {
         .data_format = trans_mat_format
     };
 
-    uint32_t input_curr_idx = start_row_idx * Wt;
+    uint32_t input_curr_idx = input_start_idx;
     uint32_t cos_sin_curr_idx = cos_sin_start_idx;
     uint32_t trans_mat_curr_idx = 0;
-    uint32_t ht = start_row_idx;
 
     // Read transformation matrix in CB (only once, because it will be reused)
     cb_reserve_back(trans_mat_cb_id, onetile);
@@ -85,8 +86,8 @@ void kernel_main() {
             Ht = 4
             Wt = 4
     */
-    cb_reserve_back(sin_cb_id, Wt * num_sin_cos_rows_per_core);
-    cb_reserve_back(cos_cb_id, Wt * num_sin_cos_rows_per_core);
+    cb_reserve_back(sin_cb_id, sin_cos_cb_size_in_tiles);
+    cb_reserve_back(cos_cb_id, sin_cos_cb_size_in_tiles);
     uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
     uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
 

@@ -27,7 +27,8 @@ void MAIN {
     constexpr uint32_t out_cb = get_compile_time_arg_val(7);
     constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(8); // Index correctly in the for loop
     constexpr uint32_t num_sin_cos_rows_per_core = get_compile_time_arg_val(9);
-    constexpr uint32_t Wt = get_compile_time_arg_val(10);
+    constexpr uint32_t sin_cos_cb_size_in_tiles = get_compile_time_arg_val(10);
+    constexpr uint32_t Wt = get_compile_time_arg_val(11);
 
     mm_init();
     binary_op_init_common(rotated_in_interm_cb, cos_cb); // General Init for all binary ops
@@ -39,8 +40,8 @@ void MAIN {
     uint32_t in1_index = 0;
     uint32_t interm_index = 0;
 
-    cb_wait_front(sin_cb, Wt * num_sin_cos_rows_per_core);
-    cb_wait_front(cos_cb, Wt * num_sin_cos_rows_per_core);
+    cb_wait_front(sin_cb, sin_cos_cb_size_in_tiles);
+    cb_wait_front(cos_cb, sin_cos_cb_size_in_tiles);
 
     uint32_t sin_cos_row_cnt = 0;
 
@@ -106,8 +107,8 @@ void MAIN {
             sin_cos_row_cnt = 0;
         }
     }
-    cb_pop_front(sin_cb, Wt * num_sin_cos_rows_per_core);
-    cb_pop_front(cos_cb, Wt * num_sin_cos_rows_per_core);
+    cb_pop_front(sin_cb, sin_cos_cb_size_in_tiles);
+    cb_pop_front(cos_cb, sin_cos_cb_size_in_tiles);
 
 
     // Done with the transformation matrix, so remove from CB

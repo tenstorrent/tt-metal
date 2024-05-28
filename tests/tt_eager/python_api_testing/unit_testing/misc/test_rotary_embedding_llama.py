@@ -5,22 +5,14 @@
 import pytest
 from loguru import logger
 import torch
-from torch import nn
-import ttnn.experimental as tt_lib
 import ttnn
+import ttnn.experimental
 
-from models.experimental.llama2_70b.reference.llama.llama import Llama
 from models.experimental.llama2_70b.reference.llama.llama.model import precompute_freqs_cis, apply_rotary_emb
-from models.experimental.llama2_70b.tt.model_config import (
-    get_model_config,
-)
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
-from models.experimental.llama2_70b.tt.llama_common import (
-    get_llama_path,
-)
+from models.utility_functions import skip_for_grayskull
 
 from models.experimental.llama2_70b.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix, gather_rotary_emb
 
@@ -38,6 +30,7 @@ class TtLlamaRotary(torch.nn.Module):
         self,
         device,
         head_dim: int,
+        datatype=ttnn.bfloat16,
     ):
         super().__init__()
         self.head_dim = head_dim
@@ -45,21 +38,23 @@ class TtLlamaRotary(torch.nn.Module):
 
         tile_width = 32
 
-        self.transformation_mat = torch2tt_tensor(get_rot_transformation_mat(dhead=tile_width), device)
+        self.transformation_mat = ttnn.from_torch(
+            get_rot_transformation_mat(dhead=tile_width), device=device, layout=ttnn.TILE_LAYOUT, dtype=datatype
+        )
 
     def apply_rotary(self, x, cos, sin):
         # n_head = 8 for Q
         # n_head = 1 for K
 
-        compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             # math_fidelity=ttl.tensor.MathFidelity.LoFi,
-            math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=True,
             fp32_dest_acc_en=(True if self.head_dim <= 128 else False),
             packer_l1_acc=True,
         )
 
-        rotary_output = tt_lib.tensor.rotary_embedding_llama(
+        rotary_output = ttnn.experimental.tensor.rotary_embedding_llama(
             x, cos, sin, self.transformation_mat, compute_kernel_config=compute_kernel_config
         )
 
@@ -147,19 +142,16 @@ def run_test_rotary_embedding_llama(
     pytorch_out = (torch_xq, torch_xk)
 
     # TT hardware / Modified PyTorch execution -------------------------------------------------------------
-    tt_model = TtLlamaRotary(
-        device,
-        head_dim,
-    )
+    tt_model = TtLlamaRotary(device, head_dim, datatype)
 
     cos, sin = compute_gather_cos_sin(
         dhead=head_dim, end=max_seq_len * 2, position_ids=torch.arange(start_pos, start_pos + seq_len)
     )
     tt_inp = [inp[0], inp[1], cos, sin]
-    tt_inp = [torch2tt_tensor(i, device, tt_dtype=datatype) for i in tt_inp]
+    tt_inp = [ttnn.from_torch(i, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT) for i in tt_inp]
 
     tt_out = tt_model(*tt_inp)
-    tt_out = [tt2torch_tensor(tt_out_tensor) for tt_out_tensor in tt_out]
+    tt_out = [ttnn.to_torch(tt_out_tensor) for tt_out_tensor in tt_out]
 
     # check outputs ----------------------------------------------------------------------
     assert len(pytorch_out) == len(tt_out), "Lengths of pytorch and tt outputs do not match!"
@@ -246,13 +238,13 @@ def test_rotary_embedding_llama(
     # shift input/output tensor by creating very small tensor between loop
     inp = torch.rand(1, 1, 32, 32)
     test_tensor = (
-        tt_lib.tensor.Tensor(
+        ttnn.Tensor(
             inp.reshape(-1).tolist(),
             inp.shape,
             ttnn.bfloat16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.Layout.ROW_MAJOR,
         )
-        .to(tt_lib.tensor.Layout.TILE)
+        .to(ttnn.Layout.TILE)
         .to(devices[0])
     )
 
@@ -303,13 +295,13 @@ def test_rotary_embedding_llama_with_program_cache(
         # shift input/output tensor by creating very small tensor between loop
         inp = torch.rand(1, 1, 32, 32)
         test_tensor = (
-            tt_lib.tensor.Tensor(
+            ttnn.Tensor(
                 inp.reshape(-1).tolist(),
                 inp.shape,
                 ttnn.bfloat16,
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                ttnn.Layout.ROW_MAJOR,
             )
-            .to(tt_lib.tensor.Layout.TILE)
+            .to(ttnn.Layout.TILE)
             .to(devices[0])
         )
 
