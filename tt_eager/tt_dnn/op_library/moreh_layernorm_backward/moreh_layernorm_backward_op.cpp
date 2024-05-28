@@ -147,7 +147,7 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
 }
 
 // input_grad
-[[maybe_unused]] Tensor moreh_layernorm_backward_input_grad(
+Tensor moreh_layernorm_backward_input_grad(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& mean,
@@ -179,7 +179,7 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
 }
 
 // gamma_grad and beta_grad
-[[maybe_unused]] std::vector<std::variant<Tensor, char*>> moreh_layernorm_backward_gamma_beta_grad(
+std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& mean,
@@ -188,7 +188,7 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
     const std::optional<std::reference_wrapper<const Tensor>> gamma_grad,
     const std::optional<std::reference_wrapper<const Tensor>> beta_grad,
     const MemoryConfig& output_mem_config) {
-    std::vector<std::variant<Tensor, char*>> outputs{nullptr, nullptr};
+    std::vector<std::optional<Tensor>> outputs(2);
     if (!gamma_grad.has_value() && !beta_grad.has_value()) {
         return outputs;
     }
@@ -222,7 +222,7 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
 }
 
 // input_grad and gamma_grad and beta_grad
-[[maybe_unused]] std::vector<std::variant<Tensor, char*>> moreh_layernorm_backward(
+std::vector<std::optional<Tensor>> moreh_layernorm_backward(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& mean,
@@ -233,7 +233,7 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
     const std::optional<std::reference_wrapper<const Tensor>> gamma_grad,
     const std::optional<std::reference_wrapper<const Tensor>> beta_grad,
     const MemoryConfig& output_mem_config) {
-    std::vector<std::variant<Tensor, char*>> outputs;
+    std::vector<std::optional<Tensor>> outputs;
     outputs.reserve(3);
 
     // input_grad
@@ -241,7 +241,7 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
         outputs.push_back(moreh_layernorm_backward_input_grad(
             output_grad, input, mean, rstd, normalized_dims, input_grad->get(), gamma, output_mem_config));
     } else {
-        outputs.push_back(nullptr);
+        outputs.push_back(std::nullopt);
     }
 
     // gamma_grad and beta_grad

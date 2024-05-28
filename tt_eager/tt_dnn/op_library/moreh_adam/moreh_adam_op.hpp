@@ -53,7 +53,7 @@ operation::ProgramWithCallbacks moreh_adam_(
     float lr, float beta1, float beta2, float eps, float weight_decay, uint32_t step, bool amsgrad,
     const std::optional<std::reference_wrapper<const Tensor>> max_exp_avg_sq = std::nullopt);
 
-[[maybe_unused]] std::vector<std::variant<Tensor, char*>> moreh_adam(
+std::vector<std::optional<Tensor>> moreh_adam(
     const Tensor &param,
     const Tensor &grad,
     const Tensor &exp_avg,

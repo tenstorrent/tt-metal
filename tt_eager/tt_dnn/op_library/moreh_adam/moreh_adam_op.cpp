@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks MorehAdam::create_program(
         max_exp_avg_sq);
 }
 
-[[maybe_unused]] std::vector<std::variant<Tensor, char*>> moreh_adam(
+std::vector<std::optional<Tensor>> moreh_adam(
     const Tensor& param,
     const Tensor& grad,
     const Tensor& exp_avg,
@@ -137,7 +137,7 @@ operation::ProgramWithCallbacks MorehAdam::create_program(
         dummy_output_tensors,
         {max_exp_avg_sq});
 
-    std::vector<std::variant<Tensor, char*>> outputs{nullptr, nullptr, nullptr, nullptr, nullptr};
+    std::vector<std::optional<Tensor>> outputs(5);
     outputs[0] = param;
     outputs[1] = grad;
     outputs[2] = exp_avg;
