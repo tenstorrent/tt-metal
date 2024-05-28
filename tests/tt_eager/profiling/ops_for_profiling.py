@@ -57,6 +57,56 @@ def bcast_mul_hw(x, y):
     tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
 
 
+def complex_add(x, y):
+    tt_lib.tensor.complex_add(
+        x, y, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
+    )
+
+
+def complex_sub(x, y):
+    tt_lib.tensor.complex_sub(
+        x, y, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
+    )
+
+
+def complex_mul(x, y):
+    tt_lib.tensor.complex_mul(
+        x, y, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
+    )
+
+
+def complex_div(x, y):
+    tt_lib.tensor.complex_div(
+        x, y, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
+    )
+
+
+def polar_binary(x, y):
+    tt_lib.tensor.polar(
+        x, y, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
+    )
+
+
+def concat_0(x, y):
+    tt_lib.tensor.concat([x, y], 0)
+
+
+def concat_1(x, y):
+    tt_lib.tensor.concat([x, y], 1)
+
+
+def concat_2(x, y):
+    tt_lib.tensor.concat([x, y], 2)
+
+
+def concat_3(x, y):
+    tt_lib.tensor.concat([x, y], 3)
+
+
+def lerp_binary(x, y):
+    tt_lib.tensor.lerp(x, y, 0.7)
+
+
 all_binary_ops = [
     {
         "op": tt_lib.tensor.add,
@@ -232,6 +282,50 @@ all_binary_ops = [
         "bcast": True,
         "bcast_dim": tt_lib.tensor.BcastOpDim.HW,
     },
+    {
+        "op": complex_add,
+        "name": "tt_lib.tensor.complex_add",
+    },
+    {
+        "op": complex_sub,
+        "name": "tt_lib.tensor.complex_sub",
+    },
+    {
+        "op": complex_mul,
+        "name": "tt_lib.tensor.complex_mul",
+    },
+    {
+        "op": complex_div,
+        "name": "tt_lib.tensor.complex_div",
+    },
+    {
+        "op": polar_binary,
+        "name": "tt_lib.tensor.polar(binary)",
+    },
+    {
+        "op": concat_0,
+        "name": "tt_lib.tensor.concat(dim=0)",
+    },
+    {
+        "op": concat_1,
+        "name": "tt_lib.tensor.concat(dim=1)",
+    },
+    {
+        "op": concat_2,
+        "name": "tt_lib.tensor.concat(dim=2)",
+    },
+    {
+        "op": concat_3,
+        "name": "tt_lib.tensor.concat(dim=3)",
+    },
+    {
+        "op": lerp_binary,
+        "name": "tt_lib.tensor.lerp(binary)",
+    },
+    # {
+    #     "op": conv,
+    #     "name": "tt_lib.tensor.conv",
+    # },
 ]
 
 
@@ -419,6 +513,136 @@ def tril(x):
 
 def triu(x):
     tt_lib.tensor.triu(x, 1)
+
+
+def reduce_sum_h(x):
+    tt_lib.tensor.reduce(x, tt_lib.tensor.ReduceOpMath.SUM, tt_lib.tensor.ReduceOpDim.H, 1.0)
+
+
+def reduce_sum_w(x):
+    tt_lib.tensor.reduce(x, tt_lib.tensor.ReduceOpMath.SUM, tt_lib.tensor.ReduceOpDim.W, 1.0)
+
+
+def reduce_sum_hw(x):
+    tt_lib.tensor.reduce(x, tt_lib.tensor.ReduceOpMath.SUM, tt_lib.tensor.ReduceOpDim.HW, 1.0)
+
+
+def reduce_min_h(x):
+    tt_lib.tensor.reduce(x, tt_lib.tensor.ReduceOpMath.MIN, tt_lib.tensor.ReduceOpDim.H, 1.0)
+
+
+def reduce_min_w(x):
+    tt_lib.tensor.reduce(x, tt_lib.tensor.ReduceOpMath.MIN, tt_lib.tensor.ReduceOpDim.W, 1.0)
+
+
+def reduce_min_hw(x):
+    tt_lib.tensor.reduce(x, tt_lib.tensor.ReduceOpMath.MIN, tt_lib.tensor.ReduceOpDim.HW, 1.0)
+
+
+def reduce_max_h(x):
+    tt_lib.tensor.reduce(x, tt_lib.tensor.ReduceOpMath.MAX, tt_lib.tensor.ReduceOpDim.H, 1.0)
+
+
+def reduce_max_w(x):
+    tt_lib.tensor.reduce(x, tt_lib.tensor.ReduceOpMath.MAX, tt_lib.tensor.ReduceOpDim.W, 1.0)
+
+
+def reduce_max_hw(x):
+    tt_lib.tensor.reduce(x, tt_lib.tensor.ReduceOpMath.MAX, tt_lib.tensor.ReduceOpDim.HW, 1.0)
+
+
+def rpow(x):
+    tt_lib.tensor.rpow(x, 3)
+
+
+def rsub(x):
+    tt_lib.tensor.rsub(x, 3)
+
+
+def rdiv(x):
+    tt_lib.tensor.rdiv(x, 3)
+
+
+def real(x):
+    tt_lib.tensor.real(
+        x, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
+    )
+
+
+def imag(x):
+    tt_lib.tensor.imag(
+        x, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
+    )
+
+
+def complex_abs(x):
+    tt_lib.tensor.complex_abs(
+        x, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
+    )
+
+
+def conj(x):
+    tt_lib.tensor.conj(
+        x, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
+    )
+
+
+def complex_recip(x):
+    tt_lib.tensor.complex_recip(
+        x, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
+    )
+
+
+def sum_0(x):
+    tt_lib.tensor.sum(x, 0)
+
+
+def sum_1(x):
+    tt_lib.tensor.sum(x, 1)
+
+
+def sum_2(x):
+    tt_lib.tensor.sum(x, 2)
+
+
+def sum_3(x):
+    tt_lib.tensor.sum(x, 3)
+
+
+def erf_slow(x):
+    tt_lib.tensor.erf(x, fast_and_approx=False)
+
+
+def erfc_slow(x):
+    tt_lib.tensor.erfc(x, fast_and_approx=False)
+
+
+def rsqrt_slow(x):
+    tt_lib.tensor.rsqrt(x, fast_and_approx=False)
+
+
+def fill_rm(x):
+    shape = x.get_legacy_shape()
+
+    tt_lib.tensor.fill_rm(
+        N=shape[0],
+        C=shape[1],
+        H=shape[2],
+        W=shape[3],
+        hOnes=shape[2] - 32,
+        wOnes=shape[3] - 32,
+        any=x,
+        val_hi=10,
+        val_lo=5,
+    )
+
+
+def fill_ones_rm(x):
+    shape = x.get_legacy_shape()
+
+    tt_lib.tensor.fill_ones_rm(
+        N=shape[0], C=shape[1], H=shape[2], W=shape[3], hOnes=shape[2] - 32, wOnes=shape[3] - 32, any=x
+    )
 
 
 all_unary_ops = [
@@ -843,6 +1067,158 @@ all_unary_ops = [
         "op": triu,
         "name": "tt_lib.tensor.triu",
     },
+    {
+        "op": reduce_sum_h,
+        "name": "tt_lib.tensor.reduce(sum h)",
+    },
+    {
+        "op": reduce_sum_w,
+        "name": "tt_lib.tensor.reduce(sum w)",
+    },
+    {
+        "op": reduce_sum_hw,
+        "name": "tt_lib.tensor.reduce(sum hw)",
+    },
+    {
+        "op": reduce_min_h,
+        "name": "tt_lib.tensor.reduce(min h)",
+    },
+    {
+        "op": reduce_min_w,
+        "name": "tt_lib.tensor.reduce(min w)",
+    },
+    {
+        "op": reduce_min_hw,
+        "name": "tt_lib.tensor.reduce(min hw)",
+    },
+    {
+        "op": reduce_max_h,
+        "name": "tt_lib.tensor.reduce(max h)",
+    },
+    {
+        "op": reduce_max_w,
+        "name": "tt_lib.tensor.reduce(max w)",
+    },
+    {
+        "op": reduce_max_hw,
+        "name": "tt_lib.tensor.reduce(max hw)",
+    },
+    {
+        "op": tt_lib.tensor.global_min,
+        "name": "tt_lib.tensor.global_min",
+    },
+    {
+        "op": tt_lib.tensor.global_max,
+        "name": "tt_lib.tensor.global_max",
+    },
+    {
+        "op": tt_lib.tensor.global_sum,
+        "name": "tt_lib.tensor.global_sum",
+    },
+    {
+        "op": tt_lib.tensor.global_mean,
+        "name": "tt_lib.tensor.global_mean",
+    },
+    {
+        "op": rpow,
+        "name": "tt_lib.tensor.rpow",
+    },
+    {
+        "op": rsub,
+        "name": "tt_lib.tensor.rsub",
+    },
+    {
+        "op": rdiv,
+        "name": "tt_lib.tensor.rdiv",
+    },
+    {
+        "op": real,
+        "name": "tt_lib.tensor.real",
+    },
+    {
+        "op": imag,
+        "name": "tt_lib.tensor.imag",
+    },
+    {
+        "op": complex_abs,
+        "name": "tt_lib.tensor.complex_abs",
+    },
+    {
+        "op": conj,
+        "name": "tt_lib.tensor.conj",
+    },
+    {
+        "op": complex_recip,
+        "name": "tt_lib.tensor.complex_recip",
+    },
+    {
+        "op": sum_0,
+        "name": "tt_lib.tensor.sum(dim=0)",
+    },
+    {
+        "op": sum_1,
+        "name": "tt_lib.tensor.sum(dim=1)",
+    },
+    {
+        "op": sum_2,
+        "name": "tt_lib.tensor.sum(dim=2)",
+    },
+    {
+        "op": sum_3,
+        "name": "tt_lib.tensor.sum(dim=3)",
+    },
+    {
+        "op": tt_lib.tensor.log_sigmoid,
+        "name": "tt_lib.tensor.log_sigmoid",
+    },
+    {
+        "op": tt_lib.tensor.expm1,
+        "name": "tt_lib.tensor.expm1",
+    },
+    {
+        "op": tt_lib.tensor.asinh,
+        "name": "tt_lib.tensor.asinh",
+    },
+    {
+        "op": tt_lib.tensor.acosh,
+        "name": "tt_lib.tensor.acosh",
+    },
+    {
+        "op": tt_lib.tensor.erf,
+        "name": "tt_lib.tensor.erf(fast_and_approx=True)",
+    },
+    {
+        "op": erf_slow,
+        "name": "tt_lib.tensor.erf(fast_and_approx=False)",
+    },
+    {
+        "op": tt_lib.tensor.erfc,
+        "name": "tt_lib.tensor.erfc(fast_and_approx=True)",
+    },
+    {
+        "op": erfc_slow,
+        "name": "tt_lib.tensor.erfc(fast_and_approx=False)",
+    },
+    {
+        "op": tt_lib.tensor.rsqrt,
+        "name": "tt_lib.tensor.rsqrt(fast_and_approx=True)",
+    },
+    {
+        "op": rsqrt_slow,
+        "name": "tt_lib.tensor.rsqrt(fast_and_approx=False)",
+    },
+    {
+        "op": tt_lib.tensor.signbit,
+        "name": "tt_lib.tensor.signbit",
+    },
+    {
+        "op": fill_rm,
+        "name": "tt_lib.tensor.fill_rm",
+    },
+    {
+        "op": fill_ones_rm,
+        "name": "tt_lib.tensor.fill_ones_rm",
+    },
 ]
 
 
@@ -854,5 +1230,9 @@ all_ternary_ops = [
     {
         "op": tt_lib.tensor.where,
         "name": "tt_lib.tensor.where",
+    },
+    {
+        "op": tt_lib.tensor.lerp,
+        "name": "tt_lib.tensor.lerp",
     },
 ]
