@@ -105,25 +105,29 @@ def ResnetLinear(
     if batch_size in hardcoded_matmul_config_linear and output_mem_config.is_sharded():
         matmul_config = hardcoded_matmul_config_linear[batch_size]
 
-    def linear_(act):
-        if is_grayskull():
-            compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
-                math_fidelity=model_config["MATH_FIDELITY"],
-                math_approx_mode=True,
-            )
-        else:
-            compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
-                math_fidelity=model_config["MATH_FIDELITY"],
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            )
+    if is_grayskull():
+        compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+            math_fidelity=model_config["MATH_FIDELITY"],
+            math_approx_mode=True,
+        )
+    else:
+        compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+            math_fidelity=model_config["MATH_FIDELITY"],
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
 
-        ## this uses the systolic 1d matmul with bias fused
-        if matmul_config is None:
-            output = tt_lib.tensor.resnet_matmul(act, weight_T, bias, output_mem_config)
-        else:
-            output = tt_lib.operations.primary.matmul_1d(
+    ## this uses the systolic 1d matmul with bias fused
+    if matmul_config is None:
+
+        def linear_(act):
+            return tt_lib.tensor.resnet_matmul(act, weight_T, bias, output_mem_config)
+
+    else:
+
+        def linear_(act):
+            return tt_lib.operations.primary.matmul_1d(
                 act,
                 weight_T,
                 bias=bias,
@@ -132,7 +136,6 @@ def ResnetLinear(
                 output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 compute_kernel_config=compute_kernel_config,
             )
-        return output
 
     return linear_
 
@@ -1458,7 +1461,7 @@ class ResNet(nn.Module):
             per_core_act_h_ntiles = 80
             self.layer_3_grid_size = (12, 8)
             self.layer_4_grid_size = (11, 8)
-
+        self.end_grid_size = (8, 4)
         self.first_conv_num_cores_nhw = 98
         if sharded:
             self.fold_grid = tt_lib.tensor.CoreRangeSet(
@@ -2114,11 +2117,12 @@ class ResNet(nn.Module):
                 original_A_cl_host_shape[3],
             )
         elif x.storage_type() != tt_lib.tensor.StorageType.DEVICE:
+            x_shape = x.get_legacy_shape()
             shard_spec = tt_lib.tensor.ShardSpec(
                 self.shard_grid,
                 [
-                    x.get_legacy_shape()[2] // self.first_conv_num_cores_nhw,
-                    x.get_legacy_shape()[3],
+                    x_shape[2] // self.first_conv_num_cores_nhw,
+                    x_shape[3],
                 ],
                 tt_lib.tensor.ShardOrientation.ROW_MAJOR,
                 False,
@@ -2182,13 +2186,13 @@ class ResNet(nn.Module):
         x = self.layer2_module3(x)
         x = self.layer2_module4(x)
         if self.sharded:
-            grid_size = (10, 8)
+            x_shape = x.get_legacy_shape()
             x = tt_lib.tensor.interleaved_to_sharded(
                 x,
                 self.layer_3_grid_size,
                 [
-                    math.ceil((x.get_legacy_shape()[-2] // 32) / self.layer_3_grid_size[0]) * 32,
-                    x.get_legacy_shape()[-1] // self.layer_3_grid_size[1],
+                    math.ceil((x_shape[-2] // 32) / self.layer_3_grid_size[0]) * 32,
+                    x_shape[-1] // self.layer_3_grid_size[1],
                 ],
                 tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                 tt_lib.tensor.ShardOrientation.COL_MAJOR,
@@ -2200,12 +2204,13 @@ class ResNet(nn.Module):
         x = self.layer3_module5(x)
         x = self.layer3_module6(x)
         if self.sharded:
+            x_shape = x.get_legacy_shape()
             x = tt_lib.tensor.interleaved_to_sharded(
                 x,
                 self.layer_4_grid_size,
                 [
-                    math.ceil((x.get_legacy_shape()[-2] // 32) / self.layer_4_grid_size[0]) * 32,
-                    x.get_legacy_shape()[-1] // self.layer_4_grid_size[1],
+                    math.ceil((x_shape[-2] // 32) / self.layer_4_grid_size[0]) * 32,
+                    x_shape[-1] // self.layer_4_grid_size[1],
                 ],
                 tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                 tt_lib.tensor.ShardOrientation.COL_MAJOR,
@@ -2221,18 +2226,19 @@ class ResNet(nn.Module):
             self.memory_config,
         )
 
+        x_shape = x.get_legacy_shape()
         x = x.reshape(
             self.batch_size,
-            x.get_legacy_shape()[1],
-            (int)(x.get_legacy_shape()[2] / self.batch_size),
-            x.get_legacy_shape()[3],
+            x_shape[1],
+            x_shape[2] // self.batch_size,
+            x_shape[3],
         )
         if self.sharded:
-            grid_size = (8, 4)
+            x_shape = x.get_legacy_shape()
             x = tt_lib.tensor.interleaved_to_sharded(
                 x,
-                grid_size,
-                [x.volume() // x.get_legacy_shape()[-1], x.get_legacy_shape()[-1] // (grid_size[0] * grid_size[1])],
+                self.end_grid_size,
+                [x.volume() // x_shape[-1], x_shape[-1] // (self.end_grid_size[0] * self.end_grid_size[1])],
                 tt_lib.tensor.TensorMemoryLayout.WIDTH_SHARDED,
                 tt_lib.tensor.ShardOrientation.ROW_MAJOR,
             )
@@ -2265,11 +2271,12 @@ class ResNet(nn.Module):
 
         x = self.avgpool(x, self.width_sharded_memory_config)
 
+        x_shape = x.get_legacy_shape()
         unpadded_shape_end = [
-            x.get_legacy_shape()[0] - 1,
-            x.get_legacy_shape()[1] - 1,
+            x_shape[0] - 1,
+            x_shape[1] - 1,
             1 - 1,
-            x.get_legacy_shape()[3] - 1,
+            x_shape[3] - 1,
         ]
         if self.sharded:
             x = tt_lib.tensor.untilize_with_unpadding(
@@ -2279,7 +2286,8 @@ class ResNet(nn.Module):
             x = tt_lib.tensor.untilize(x, self.memory_config, use_multicore=True)
             x = tt_lib.tensor.unpad(x, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=self.memory_config)
 
-        x = x.reshape(1, x.get_legacy_shape()[1], self.batch_size * x.get_legacy_shape()[2], x.get_legacy_shape()[3])
+        x_shape = x.get_legacy_shape()
+        x = x.reshape(1, x_shape[1], self.batch_size * x_shape[2], x_shape[3])
 
         unpadded_shape = x.get_legacy_shape()
         padded_shape = [
@@ -2308,18 +2316,18 @@ class ResNet(nn.Module):
             )
 
         x = self.fc(x)
-        desired_shape = list(x.shape_without_padding())
-        desired_shape[-1] = 1000
+        x_shape = x.shape_without_padding()
         x = tt_lib.tensor.untilize_with_unpadding(
             x,
-            (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
+            (x_shape[0] - 1, x_shape[1] - 1, x_shape[2] - 1, 1000 - 1),
             self.memory_config,
         )
+        x_shape = x.get_legacy_shape()
         x = x.reshape(
             self.batch_size,
-            x.get_legacy_shape()[1],
-            (int)(x.get_legacy_shape()[2] / self.batch_size),
-            x.get_legacy_shape()[3],
+            x_shape[1],
+            x_shape[2] // self.batch_size,
+            x_shape[3],
         )
 
         return x
