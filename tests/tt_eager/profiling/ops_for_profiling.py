@@ -21,6 +21,42 @@ def where_binary_2(x, y):
     tt_lib.tensor.where(x, y, 5)
 
 
+def bcast_add_h(x, y):
+    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
+
+
+def bcast_add_w(x, y):
+    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.W)
+
+
+def bcast_add_hw(x, y):
+    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.HW)
+
+
+def bcast_sub_h(x, y):
+    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.SUB, tt_lib.tensor.BcastOpDim.H)
+
+
+def bcast_sub_w(x, y):
+    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.SUB, tt_lib.tensor.BcastOpDim.W)
+
+
+def bcast_sub_hw(x, y):
+    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.SUB, tt_lib.tensor.BcastOpDim.HW)
+
+
+def bcast_mul_h(x, y):
+    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.H)
+
+
+def bcast_mul_w(x, y):
+    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.W)
+
+
+def bcast_mul_hw(x, y):
+    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
+
+
 all_binary_ops = [
     {
         "op": tt_lib.tensor.add,
@@ -28,15 +64,15 @@ all_binary_ops = [
     },
     {
         "op": tt_lib.tensor.sub,
-        "name": "tt_lib.tensor.add",
+        "name": "tt_lib.tensor.sub",
     },
     {
         "op": tt_lib.tensor.mul,
-        "name": "tt_lib.tensor.add",
+        "name": "tt_lib.tensor.mul",
     },
     {
-        "op": tt_lib.tensor.mul,
-        "name": "tt_lib.tensor.add",
+        "op": tt_lib.tensor.div,
+        "name": "tt_lib.tensor.div",
     },
     {
         "op": tt_lib.tensor.matmul,
@@ -124,11 +160,11 @@ all_binary_ops = [
     },
     {
         "op": where_binary_1,
-        "name": "tt_lib.tensor.where(binary x, const, y)",
+        "name": "tt_lib.tensor.where(binary: x const y)",
     },
     {
         "op": where_binary_2,
-        "name": "tt_lib.tensor.where(binary x, y, const)",
+        "name": "tt_lib.tensor.where(binary: x y const)",
     },
     {
         "op": tt_lib.tensor.matmul,
@@ -141,6 +177,60 @@ all_binary_ops = [
     {
         "op": tt_lib.tensor.copy,
         "name": "tt_lib.tensor.copy",
+    },
+    {
+        "op": bcast_add_h,
+        "name": "tt_lib.tensor.bcast(add h)",
+        "bcast": True,
+        "bcast_dim": tt_lib.tensor.BcastOpDim.H,
+    },
+    {
+        "op": bcast_add_w,
+        "name": "tt_lib.tensor.bcast(add w)",
+        "bcast": True,
+        "bcast_dim": tt_lib.tensor.BcastOpDim.W,
+    },
+    {
+        "op": bcast_add_hw,
+        "name": "tt_lib.tensor.bcast(add hw)",
+        "bcast": True,
+        "bcast_dim": tt_lib.tensor.BcastOpDim.HW,
+    },
+    {
+        "op": bcast_sub_h,
+        "name": "tt_lib.tensor.bcast(sub h)",
+        "bcast": True,
+        "bcast_dim": tt_lib.tensor.BcastOpDim.H,
+    },
+    {
+        "op": bcast_sub_w,
+        "name": "tt_lib.tensor.bcast(sub w)",
+        "bcast": True,
+        "bcast_dim": tt_lib.tensor.BcastOpDim.W,
+    },
+    {
+        "op": bcast_sub_hw,
+        "name": "tt_lib.tensor.bcast(sub hw)",
+        "bcast": True,
+        "bcast_dim": tt_lib.tensor.BcastOpDim.HW,
+    },
+    {
+        "op": bcast_mul_h,
+        "name": "tt_lib.tensor.bcast(mul h)",
+        "bcast": True,
+        "bcast_dim": tt_lib.tensor.BcastOpDim.H,
+    },
+    {
+        "op": bcast_mul_w,
+        "name": "tt_lib.tensor.bcast(mul w)",
+        "bcast": True,
+        "bcast_dim": tt_lib.tensor.BcastOpDim.W,
+    },
+    {
+        "op": bcast_mul_hw,
+        "name": "tt_lib.tensor.bcast(mul hw)",
+        "bcast": True,
+        "bcast_dim": tt_lib.tensor.BcastOpDim.HW,
     },
 ]
 
@@ -650,7 +740,7 @@ all_unary_ops = [
     },
     {
         "op": where_unary,
-        "name": "tt_lib.tensor.where(unary x, const, const)",
+        "name": "tt_lib.tensor.where(unary: x const const)",
     },
     {
         "op": threshold,
