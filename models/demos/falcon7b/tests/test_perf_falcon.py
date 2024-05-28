@@ -378,10 +378,10 @@ class TestParametrized:
     @pytest.mark.parametrize(
         "llm_mode, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc, expected_inference_time",
         (
-            ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.837, 0.97, 0.86, 0.31),
-            ("prefill", 32, 1, 128, 0, "BFLOAT16-L1", 0.837, 0.97, 0.86, 0.29),
-            ("prefill", 32, 1, 256, 0, "BFLOAT16-DRAM", 0.90, 0.97, 0.865, 0.43),
-            ("prefill", 32, 1, 256, 0, "BFLOAT16-L1", 0.90, 0.97, 0.865, 0.34),
+            ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.85, 0.97, 0.86, 0.31),
+            ("prefill", 32, 1, 128, 0, "BFLOAT16-L1", 0.85, 0.97, 0.86, 0.29),
+            ("prefill", 32, 1, 256, 0, "BFLOAT16-DRAM", 0.90, 0.97, 0.87, 0.43),
+            ("prefill", 32, 1, 256, 0, "BFLOAT16-L1", 0.90, 0.97, 0.87, 0.34),
             ("decode", 32, 32, 1, 128, "BFLOAT16-DRAM", 0.63, 0.80, 0.84, 0.28),
             ("decode", 32, 32, 1, 128, "BFLOAT16-L1", 0.63, 0.80, 0.84, 0.28),
             ("decode", 32, 32, 1, 1024, "BFLOAT16-DRAM", 0.56, 0.86, 0.88, 0.37),
