@@ -82,6 +82,8 @@ followed the instructions for [installing and building the software](https://git
     * You can add one or both of these environment variables
         *   `export TT_METAL_LOGGER_TYPES=Op`
         *   `export TT_METAL_LOGGER_LEVEL=DEBUG`
+    * In addition, you can add the following environment variable to print currently executing ttnn operations. This basically makes every op blocking, ensuring that what is printed is actually executing. Otherwise, logging may not be representative of where the error occurs. Note: you may want to omit this when using gdb since there may be interactions with gdb.
+        *  `export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false, "enable_logging": true}'`
     * For the location of the operations use the following environment variable
         * `export OPERATION_HISTORY_CSV=<filename>`
 * What is the format for git commit messages?
