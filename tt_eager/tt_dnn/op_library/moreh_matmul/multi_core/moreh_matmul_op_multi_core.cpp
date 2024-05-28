@@ -172,6 +172,15 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     log_debug(LogOp, "{}:{} {} {} mask_h {} mask_w {}", __func__, __LINE__,
         need_other_mask_h, need_other_mask_w,
         other_mask_h, other_mask_w);
+
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    log_debug(
+        LogOp,
+        "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
+        math_fidelity,
+        math_approx_mode,
+        fp32_dest_acc_en,
+        packer_l1_acc);
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Grid Configuration For Workload
     ////////////////////////////////////////////////////////////////////////////
@@ -211,7 +220,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
             {CB::c_in2, in2_t},
             {CB::c_in3, in3_t},
             {CB::c_in4, in4_t},
-            {CB::c_intermed0, im0_t},
+            {CB::c_intermed0, im0_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32: cb_data_format},
             {CB::c_intermed1, im1_t},
             {CB::c_intermed2, im2_t},
             {CB::c_out0, out0_t},
@@ -275,8 +284,18 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
         compute_args_group_1.push_back(static_cast<uint32_t>(is_scalar_bias));
     }
 
+    if (fp32_dest_acc_en) {
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+
     const auto compute_kernel_1_id = CreateComputeKernel(
-        program, compute_kernel_file, { core_group_1, num_output_tiles_per_core_group_1, compute_args_group_1 }, compute_defines);
+        program,
+        compute_kernel_file,
+        {core_group_1, num_output_tiles_per_core_group_1, compute_args_group_1},
+        compute_defines,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode);
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
@@ -300,8 +319,11 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
         compute_kernel_2_id = CreateComputeKernel(
             program,
             compute_kernel_file,
-            { core_group_2, num_output_tiles_per_core_group_2, compute_args_group_2 },
-            compute_defines);
+            {core_group_2, num_output_tiles_per_core_group_2, compute_args_group_2},
+            compute_defines,
+            math_fidelity,
+            fp32_dest_acc_en,
+            math_approx_mode);
     }
     log_debug(LogOp, "{}:{} Compute ", __func__, __LINE__, static_cast<uint32_t>(transpose_input), static_cast<uint32_t>(transpose_other));
 

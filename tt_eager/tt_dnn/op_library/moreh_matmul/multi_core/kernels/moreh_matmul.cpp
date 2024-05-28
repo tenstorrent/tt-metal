@@ -43,12 +43,18 @@ FORCE_INLINE void unravel_output_tidx(uint32_t output_tidx, uint32_t* output_idx
 // TODO: move it to moreh_common.hpp if more use cases.
 FORCE_INLINE void transpose_wh_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_t idst = 0)
 {
+    #if defined FP32_DEST_ACC_EN
+        unpack_reconfig_data_format_srca(icb);
+    #endif
     transpose_wh_init_short(icb);
     tile_regs_acquire();
     transpose_wh_tile(icb, itile, idst);
     tile_regs_commit();
     cb_reserve_back(ocb, onetile);
     tile_regs_wait();
+    #if defined FP32_DEST_ACC_EN
+        pack_reconfig_data_format(ocb);
+    #endif
     pack_tile(idst, ocb);
     tile_regs_release();
     cb_push_back(ocb, onetile);
@@ -75,6 +81,9 @@ FORCE_INLINE void pack_onetile_to_cb(uint32_t ocb = 16, uint32_t idst = 0)
 {
     cb_reserve_back(ocb, onetile);
     tile_regs_wait();
+    #if defined FP32_DEST_ACC_EN
+        pack_reconfig_data_format(ocb);
+    #endif
     pack_tile(idst, ocb);
     tile_regs_release();
     cb_push_back(ocb, onetile);
@@ -125,7 +134,10 @@ FORCE_INLINE void mask_tile_to_cb(uint32_t& mm_src, bool& need_mask, bool need_m
 
         // mul input tile with mask tile
         tile_regs_acquire();
-        mul_tiles_init();
+        #if defined FP32_DEST_ACC_EN
+            unpack_reconfig_data_format(cb_in0, cb_mask);
+        #endif
+        mul_tiles_init(cb_in, cb_mask);
         mul_tiles(cb_in, cb_mask, 0, mask_tidx, 0);
         tile_regs_commit();
 
@@ -151,11 +163,17 @@ FORCE_INLINE void bias_add(bool is_scalar_bias)
 
     tile_regs_acquire();
     if (is_scalar_bias) {
-        add_bcast_scalar_init_short();
+        #if defined FP32_DEST_ACC_EN
+            unpack_reconfig_data_format(cb_intermed0, bias_cb_id);
+        #endif
+        add_bcast_scalar_init_short(cb_intermed0, bias_cb_id);
         add_tiles_bcast_scalar(cb_intermed0, bias_cb_id, 0, 0, 0);
     }
     else {
-        add_bcast_rows_init_short();
+        #if defined FP32_DEST_ACC_EN
+            unpack_reconfig_data_format(cb_intermed0, bias_cb_id);
+        #endif
+        add_bcast_rows_init_short(cb_intermed0, bias_cb_id);
         add_tiles_bcast_rows(cb_intermed0, bias_cb_id, 0, 0, 0);
     }
     tile_regs_commit();
@@ -185,6 +203,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(uint32_t output_tidx, uint32_t 
         cb_wait_front(cb_in3, num_mask_tiles);
     }
 
+    #pragma GCC unroll 0
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
         bool spill = Kt > 1;
         bool enable_reload = false;
@@ -195,6 +214,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(uint32_t output_tidx, uint32_t 
         bool input_last_row = (output_idxes[1] == Mt - 1) ? (true) : (false);
         bool other_last_col = (output_idxes[0] == Nt - 1) ? (true) : (false);
 
+        #pragma GCC unroll 0
         for (uint32_t kt = 0; kt < Kt; kt++) {
             bool last_out = kt == (Kt - 1);
             bool need_input_mask = false;
@@ -227,6 +247,9 @@ FORCE_INLINE void matmul_with_transpose_and_mask(uint32_t output_tidx, uint32_t 
             tile_regs_acquire();
             if (enable_reload) {
                 cb_wait_front(cb_intermed0, onetile);
+                #if defined FP32_DEST_ACC_EN
+                    unpack_reconfig_data_format_srca(cb_intermed0);
+                #endif
                 copy_tile_to_dst_init_short(cb_intermed0);
                 copy_tile(cb_intermed0, 0, 0);
                 cb_pop_front(cb_intermed0, onetile);
@@ -241,6 +264,9 @@ FORCE_INLINE void matmul_with_transpose_and_mask(uint32_t output_tidx, uint32_t 
             }
 
             mm_init_short(mm_src0, mm_src1);
+            #if defined FP32_DEST_ACC_EN
+                unpack_reconfig_data_format(mm_src0, mm_src1);
+            #endif
             matmul_tiles(mm_src0, mm_src1, 0, 0, 0, false);
             tile_regs_commit();
 
@@ -276,10 +302,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(uint32_t output_tidx, uint32_t 
 }
 
 FORCE_INLINE void matmul(uint32_t num_output_tiles, uint32_t Kt) {
-    auto cb_in0 = tt::CB::c_in0;
-    auto cb_in1 = tt::CB::c_in1;
-    auto cb_out0 = tt::CB::c_out0;
-    mm_init();
+    mm_init(cb_in0, cb_in1, cb_out0);
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
         tile_regs_acquire();
         for (uint32_t kt = 0; kt < Kt; kt++) {
@@ -296,29 +319,29 @@ FORCE_INLINE void matmul(uint32_t num_output_tiles, uint32_t Kt) {
 
 void MAIN {
     // compile-time args
-    uint32_t num_output_tiles = get_compile_time_arg_val(0);
-    uint32_t Mt = get_compile_time_arg_val(1);
-    uint32_t Nt = get_compile_time_arg_val(2);
-    uint32_t Kt = get_compile_time_arg_val(3);
-    bool transpose_input = (get_compile_time_arg_val(4) == 1);
-    bool transpose_other = (get_compile_time_arg_val(5) == 1);
-    uint32_t input_mask_h = get_compile_time_arg_val(6);
-    uint32_t input_mask_w = get_compile_time_arg_val(7);
-    uint32_t other_mask_h = get_compile_time_arg_val(8);
-    uint32_t other_mask_w = get_compile_time_arg_val(9);
+    constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t Mt = get_compile_time_arg_val(1);
+    constexpr uint32_t Nt = get_compile_time_arg_val(2);
+    constexpr uint32_t Kt = get_compile_time_arg_val(3);
+    constexpr bool transpose_input = (get_compile_time_arg_val(4) == 1);
+    constexpr bool transpose_other = (get_compile_time_arg_val(5) == 1);
+    constexpr uint32_t input_mask_h = get_compile_time_arg_val(6);
+    constexpr uint32_t input_mask_w = get_compile_time_arg_val(7);
+    constexpr uint32_t other_mask_h = get_compile_time_arg_val(8);
+    constexpr uint32_t other_mask_w = get_compile_time_arg_val(9);
     #ifdef FUSE_BIAS
-    bool is_scalar_bias = (get_compile_time_arg_val(10) == 1);
-    bool need_bias_add = true;
+    constexpr bool is_scalar_bias = (get_compile_time_arg_val(10) == 1);
+    constexpr bool need_bias_add = true;
     #else
-    bool is_scalar_bias = false;
-    bool need_bias_add = false;
+    constexpr bool is_scalar_bias = false;
+    constexpr bool need_bias_add = false;
     #endif
-    bool need_input_mask_h = (input_mask_h != 32);
-    bool need_input_mask_w = (input_mask_w != 32);
-    bool need_other_mask_h = (other_mask_h != 32);
-    bool need_other_mask_w = (other_mask_w != 32);
-    bool need_mask = (need_input_mask_h || need_input_mask_w || need_other_mask_h || need_other_mask_w);
-    bool need_transpose = (transpose_input || transpose_other);
+    constexpr bool need_input_mask_h = (input_mask_h != 32);
+    constexpr bool need_input_mask_w = (input_mask_w != 32);
+    constexpr bool need_other_mask_h = (other_mask_h != 32);
+    constexpr bool need_other_mask_w = (other_mask_w != 32);
+    constexpr bool need_mask = (need_input_mask_h || need_input_mask_w || need_other_mask_h || need_other_mask_w);
+    constexpr bool need_transpose = (transpose_input || transpose_other);
 
     // runtime args
     ArgFetcher arg_fetcher;
