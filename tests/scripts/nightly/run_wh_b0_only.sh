@@ -28,3 +28,4 @@ env pytest models/demos/wormhole/mistral7b/tests/test_mistral_rms_norm.py
 env pytest models/demos/wormhole/mistral7b/tests/test_mistral_mlp.py
 env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mistral7b/tests/test_mistral_attention.py
 env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mistral7b/tests/test_mistral_decoder.py
+#env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_unet/tests
