@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
-
 #include <functional>
 #include <optional>
 #include <utility>
 #include <variant>
 #include <vector>
+
+#include "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
 
 namespace tt {
 
@@ -156,14 +156,36 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
     const tt_metal::Tensor& input_grad,
     const std::optional<std::reference_wrapper<const Tensor>> gamma,
     const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> dummy_output_tensors = {
+        Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd, input_grad}, {gamma}))};
     // Inplace
-    operation::run(
-        MorehLayerNormBackwardInputGrad{
-            .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
+    operation::launch_op(
+        [normalized_dims, output_mem_config](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehLayerNormBackwardInputGrad{
+                    .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
         {output_grad, input, mean, rstd, input_grad},
+        dummy_output_tensors,
         {gamma});
 
     return input_grad;
+
+    // return output_tensors.at(0);
+    // Inplace
+    // operation::run(
+    //     MorehLayerNormBackwardInputGrad{
+    //         .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
+    //     {output_grad, input, mean, rstd, input_grad},
+    //     {gamma});
+
+    // return input_grad;
 }
 
 // gamma_grad and beta_grad
@@ -181,11 +203,23 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
         return outputs;
     }
 
+    std::vector<Tensor> dummy_output_tensors = {
+        Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma_grad, beta_grad}))};
     // Inplace
-    operation::run(
-        MorehLayerNormBackwardGammaBetaGrad{
-            .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
+    operation::launch_op(
+        [normalized_dims, output_mem_config](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehLayerNormBackwardGammaBetaGrad{
+                    .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
         {output_grad, input, mean, rstd},
+        dummy_output_tensors,
         {gamma_grad, beta_grad});
 
     if (gamma_grad.has_value()) {
@@ -194,8 +228,23 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
     if (beta_grad.has_value()) {
         outputs[1] = beta_grad.value();
     }
-
     return outputs;
+
+    // // Inplace
+    // operation::run(
+    //     MorehLayerNormBackwardGammaBetaGrad{
+    //         .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
+    //     {output_grad, input, mean, rstd},
+    //     {gamma_grad, beta_grad});
+
+    // if (gamma_grad.has_value()) {
+    //     outputs[0] = gamma_grad.value();
+    // }
+    // if (beta_grad.has_value()) {
+    //     outputs[1] = beta_grad.value();
+    // }
+
+    // return outputs;
 }
 
 // input_grad and gamma_grad and beta_grad
