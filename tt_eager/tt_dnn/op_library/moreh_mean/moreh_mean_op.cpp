@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/moreh_mean/moreh_mean_op.hpp"
-
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -94,7 +93,6 @@ inline Tensor create_output_tensor(
 
 // output as arg
 Tensor moreh_mean_(const Tensor& input, const Tensor& output, const int64_t& dim) {
-    auto op = MorehMean{.dim = dim};
     std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({input, output}))};
 
     operation::launch_op(
