@@ -55,14 +55,12 @@ void MorehAdam::validate(
     }
 }
 
-std::vector<Shape> MorehAdam::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<Shape> MorehAdam::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     // inplace
     return {};
 }
 
-std::vector<Tensor> MorehAdam::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<Tensor> MorehAdam::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     // inplace
     return {};
 }
@@ -78,7 +76,6 @@ operation::ProgramWithCallbacks MorehAdam::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-
     const auto& param = input_tensors.at(0);
     const auto& grad = input_tensors.at(1);
     const auto& exp_avg = input_tensors.at(2);
@@ -86,8 +83,17 @@ operation::ProgramWithCallbacks MorehAdam::create_program(
     const auto& max_exp_avg_sq = optional_input_tensors.at(0);
 
     return moreh_adam_(
-        param, grad, exp_avg, exp_avg_sq,
-        this->lr, this->beta1, this->beta2, this->eps, this->weight_decay, this->step, this->amsgrad,
+        param,
+        grad,
+        exp_avg,
+        exp_avg_sq,
+        this->lr,
+        this->beta1,
+        this->beta2,
+        this->eps,
+        this->weight_decay,
+        this->step,
+        this->amsgrad,
         max_exp_avg_sq);
 }
 
@@ -96,20 +102,43 @@ operation::ProgramWithCallbacks MorehAdam::create_program(
     const Tensor& grad,
     const Tensor& exp_avg,
     const Tensor& exp_avg_sq,
-    float lr, float beta1, float beta2, float eps, float weight_decay, uint32_t step, bool amsgrad,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    float weight_decay,
+    uint32_t step,
+    bool amsgrad,
     const std::optional<std::reference_wrapper<const Tensor>> max_exp_avg_sq,
     const MemoryConfig& mem_config) {
+    std::vector<Tensor> dummy_output_tensors = {
+        Tensor(operation::get_workers_for_op_output({param, grad, exp_avg, exp_avg_sq}, {max_exp_avg_sq}))};
 
-    std::vector<std::variant<Tensor, char*>> outputs{nullptr, nullptr, nullptr, nullptr, nullptr};
-
-    operation::run(
-        MorehAdam{
-            .inplace = true,
-            .lr = lr, .beta1 = beta1, .beta2 = beta2, .eps = eps, .weight_decay = weight_decay, .step = step, .amsgrad = amsgrad,
-            .output_mem_config = mem_config},
+    operation::launch_op(
+        [lr, beta1, beta2, eps, weight_decay, step, amsgrad, mem_config](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehAdam{
+                    .inplace = true,
+                    .lr = lr,
+                    .beta1 = beta1,
+                    .beta2 = beta2,
+                    .eps = eps,
+                    .weight_decay = weight_decay,
+                    .step = step,
+                    .amsgrad = amsgrad,
+                    .output_mem_config = mem_config},
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
         {param, grad, exp_avg, exp_avg_sq},
+        dummy_output_tensors,
         {max_exp_avg_sq});
 
+    std::vector<std::variant<Tensor, char*>> outputs{nullptr, nullptr, nullptr, nullptr, nullptr};
     outputs[0] = param;
     outputs[1] = grad;
     outputs[2] = exp_avg;
