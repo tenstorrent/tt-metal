@@ -52,7 +52,7 @@ class TtTransformer(torch.nn.Module):
         if args.dummy_weights:
             output_cache_name = None
         else:
-            output_cache_name = (args.weight_cache_path(dtype) / "output_multidevice.weight",)
+            output_cache_name = args.weight_cache_path(dtype) / "output_multidevice.weight"
 
         self.output_weight = ttnn.as_tensor(
             self.state_dict["output.weight"].permute(1, 0),
