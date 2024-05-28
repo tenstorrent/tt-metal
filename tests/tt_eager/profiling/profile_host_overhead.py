@@ -28,7 +28,7 @@ test_sweep_args = [
     ),
 ]
 
-all_num_call_to_stack = [1, 2, 3]  # For 10 and more test  execution spills to dispatch
+all_num_call_to_stack = [1, 3]  # For 10 and more test  execution spills to dispatch
 num_repeats = 10
 
 
@@ -40,10 +40,8 @@ def measure_host_overhead(op_func, device, num_call_to_stack):
     tt_lib.device.Synchronize(device)
 
     duration = 1000 * (time.time() - start_time)
-    duration_per_call = duration / num_call_to_stack
-    logger.info(
-        f"{num_call_to_stack} calls and Synchronize after {duration:.2f}ms ({duration_per_call:.2f}ms per call)"
-    )
+    total_op_time = duration / num_call_to_stack
+    logger.info(f"{num_call_to_stack} calls and Synchronize after {duration:.2f}ms ({total_op_time:.2f}ms per call)")
 
     start_time = time.time()
     for _ in range(num_call_to_stack):
@@ -59,14 +57,34 @@ def measure_host_overhead(op_func, device, num_call_to_stack):
     duration_per_call = duration / num_call_to_stack
 
     logger.info(f"Synchronize {duration:.2f}ms ({duration_per_call:.2f}ms per call)")
-    return overhead_ms
+    return overhead_ms, total_op_time
 
 
 def measure_host_overhead_binary(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, device, op, num_call_to_stack
+    input_shape,
+    dtype,
+    dlayout,
+    in_mem_config,
+    out_mem_config,
+    device,
+    op,
+    num_call_to_stack,
+    num_repeats,
+    bcast=False,
+    bcast_dim=tt_lib.tensor.BcastOpDim.W,
 ):
+    if bcast == False:
+        input_shape_2 = input_shape
+    else:
+        if bcast_dim == tt_lib.tensor.BcastOpDim.W:
+            input_shape_2 = [input_shape[-4], input_shape[-3], input_shape[-2], 32]
+        elif bcast_dim == tt_lib.tensor.BcastOpDim.H:
+            input_shape_2 = [input_shape[-4], input_shape[-3], 32, input_shape[-1]]
+        else:
+            input_shape_2 = [input_shape[-4], input_shape[-3], 32, 32]
+
     x = torch.Tensor(size=input_shape).uniform_(-100, 100)
-    y = torch.Tensor(size=input_shape).uniform_(-100, 100)
+    y = torch.Tensor(size=input_shape_2).uniform_(-100, 100)
 
     x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
     y = torch2tt_tensor(y, device, dlayout, in_mem_config, dtype)
@@ -74,11 +92,19 @@ def measure_host_overhead_binary(
     def op_func():
         op(x, y)
 
-    return measure_host_overhead(op_func, device, num_call_to_stack)
+    result_overhead = []
+    result_op = []
+
+    for _ in range(num_repeats):
+        overhead_ms, total_op_time = measure_host_overhead(op_func, device, num_call_to_stack)
+        result_overhead.append(overhead_ms)
+        result_op.append(total_op_time)
+
+    return result_overhead, result_op
 
 
 def measure_host_overhead_unary(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, device, op, num_call_to_stack
+    input_shape, dtype, dlayout, in_mem_config, out_mem_config, device, op, num_call_to_stack, num_repeats
 ):
     x = torch.Tensor(size=input_shape).uniform_(-100, 100)
     x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
@@ -86,7 +112,72 @@ def measure_host_overhead_unary(
     def op_func():
         op(x)
 
-    return measure_host_overhead(op_func, device, num_call_to_stack)
+    result_overhead = []
+    result_op = []
+
+    for _ in range(num_repeats):
+        overhead_ms, total_op_time = measure_host_overhead(op_func, device, num_call_to_stack)
+        result_overhead.append(overhead_ms)
+        result_op.append(total_op_time)
+
+    return result_overhead, result_op
+
+
+def run_measure_host_overhead(op, device, text_file, measuring_func):
+    results_overhead = []
+    results_op = []
+
+    for input_shape, dtype, dlayout, in_mem_config, out_mem_config in test_sweep_args:
+        logger.info("")
+        logger.info(f"Profiling op {op['name']} for input shape {input_shape}")
+
+        if "layout" in op and op["layout"] == "ROW_MAJOR":
+            dlayout = tt_lib.tensor.Layout.ROW_MAJOR
+
+        bcast = False if "bcast" not in op else op["bcast"]
+        bcast_dim = tt_lib.tensor.BcastOpDim.W if "bcast_dim" not in op else op["bcast_dim"]
+
+        # Warmup
+        measuring_func(
+            input_shape,
+            dtype,
+            dlayout,
+            in_mem_config,
+            out_mem_config,
+            device,
+            op["op"],
+            1,
+            1,
+            bcast=bcast,
+            bcast_dim=bcast_dim,
+        )
+
+        for num_call_to_stack in all_num_call_to_stack:
+            overhead_ms, op_ms = measuring_func(
+                input_shape,
+                dtype,
+                dlayout,
+                in_mem_config,
+                out_mem_config,
+                device,
+                op["op"],
+                num_call_to_stack,
+                num_repeats,
+                bcast=bcast,
+                bcast_dim=bcast_dim,
+            )
+
+            results_overhead += overhead_ms
+            results_op += op_ms
+
+    min_val = round(min(results_overhead), 2)
+    mean_val = round(statistics.mean(results_overhead), 2)
+
+    min_val_op = round(min(results_op), 2)
+    mean_val_op = round(statistics.mean(results_op), 2)
+
+    logger.info(f"Measure overhead of launching {op['name']} is {min_val:.2f}ms (mean {mean_val:.2f}ms)")
+    text_file.write(f"{op['name']}, {min_val}, {mean_val}\n")
 
 
 def test_host_overhead(device):
@@ -97,91 +188,16 @@ def test_host_overhead(device):
     Run with tracy:
     python -m tracy -v -r -p -o host_overgead_profile -m "pytest tests/tt_eager/profiling/profile_host_overhead.py"
     """
-    results = {}
     output_folder_path = "host_overhead_profiler_output.csv"
 
     # if user_input is not None and len(user_input) > 0:
     #     output_folder_path = user_input[0]
 
-    for op in ops_for_profiling.all_binary_ops:
-        for input_shape, dtype, dlayout, in_mem_config, out_mem_config in test_sweep_args:
-            logger.info("")
-            logger.info(f"Profiling op {op['name']} for input shape {input_shape}")
-            results[op["name"]] = []
-
-            # Warmup
-            overhead_ms = measure_host_overhead_binary(
-                input_shape,
-                dtype,
-                dlayout,
-                in_mem_config,
-                out_mem_config,
-                device,
-                op["op"],
-                1,
-            )
-
-            for _ in range(num_repeats):
-                for num_call_to_stack in all_num_call_to_stack:
-                    overhead_ms = measure_host_overhead_binary(
-                        input_shape,
-                        dtype,
-                        dlayout,
-                        in_mem_config,
-                        out_mem_config,
-                        device,
-                        op["op"],
-                        num_call_to_stack,
-                    )
-
-                    results[op["name"]].append(overhead_ms)
-
-    for op in ops_for_profiling.all_unary_ops:
-        for input_shape, dtype, dlayout, in_mem_config, out_mem_config in test_sweep_args:
-            logger.info("")
-            logger.info(f"Profiling op {op['name']} for input shape {input_shape}")
-            results[op["name"]] = []
-
-            if "layout" in op and op["layout"] == "ROW_MAJOR":
-                dlayout = tt_lib.tensor.Layout.ROW_MAJOR
-
-            # Warmup
-            logger.info(f"Warming up")
-            overhead_ms = measure_host_overhead_unary(
-                input_shape,
-                dtype,
-                dlayout,
-                in_mem_config,
-                out_mem_config,
-                device,
-                op["op"],
-                1,
-            )
-
-            logger.info(f"Warm up finished")
-            for _ in range(num_repeats):
-                for num_call_to_stack in all_num_call_to_stack:
-                    overhead_ms = measure_host_overhead_unary(
-                        input_shape,
-                        dtype,
-                        dlayout,
-                        in_mem_config,
-                        out_mem_config,
-                        device,
-                        op["op"],
-                        num_call_to_stack,
-                    )
-
-                    results[op["name"]].append(overhead_ms)
-
-    logger.info("")
-
     with open(output_folder_path, "w") as text_file:
-        text_file.write(f"op, min(ms), mean(ms)\n")
+        text_file.write(f"op, overhead min(ms), overhead mean(ms)\n")
 
-        for key in results:
-            min_val = round(min(results[key]), 2)
-            mean_val = round(statistics.mean(results[key]), 2)
+        for op in ops_for_profiling.all_binary_ops:
+            run_measure_host_overhead(op, device, text_file, measure_host_overhead_binary)
 
-            logger.info(f"Measure overhead of launching {key} is {min_val:.2f}ms (mean {mean_val:.2f}ms)")
-            text_file.write(f"{key}, {min_val}, {mean_val}\n")
+        for op in ops_for_profiling.all_unary_ops:
+            run_measure_host_overhead(op, device, text_file, measure_host_overhead_unary)
