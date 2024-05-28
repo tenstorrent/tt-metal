@@ -49,7 +49,6 @@ Compute APIs
   square_tile
   reduce_tile
   transpose_wh_tile
-  floor_tile
 
   tanh_tile
   tan_tile

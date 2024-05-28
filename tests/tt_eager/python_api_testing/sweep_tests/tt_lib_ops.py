@@ -2432,7 +2432,7 @@ transpose_cn = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=1))
 transpose_nh = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=-2))
 transpose_nw = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=-1))
 transpose_cw = make_unary_op(partial(ttl.tensor.transpose, dim0=1, dim1=-1))
-eltwise_floor = make_unary_op(ttl.tensor.unary_floor)
+eltwise_floor = make_unary_op(ttl.tensor.floor)
 eltwise_trunc = make_unary_op(ttl.tensor.trunc)
 
 

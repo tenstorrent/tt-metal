@@ -76,6 +76,6 @@ enum SfpuType {
     softplus,
     tiled_prod,
     right_shift,
-    unary_floor,
+    floor,
     unused,
 };
