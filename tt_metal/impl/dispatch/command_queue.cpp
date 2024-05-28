@@ -86,9 +86,9 @@ void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceComma
 
 void EnqueueReadShardedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
     uint32_t padded_page_size = align(this->buffer.page_size(), ADDRESS_ALIGNMENT);
-    const CoreCoord worker_core = this->buffer.device()->worker_core_from_logical_core(this->core);
+    const CoreCoord physical_core = this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
     command.add_prefetch_relay_linear(
-        get_noc_unicast_encoding(worker_core), padded_page_size * this->pages_to_read, this->buffer.address());
+        get_noc_unicast_encoding(physical_core), padded_page_size * this->pages_to_read, this->bank_base_address);
 }
 
 void EnqueueReadBufferCommand::process() {
@@ -206,7 +206,7 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
 
 void EnqueueWriteShardedBufferCommand::add_dispatch_write(HugepageDeviceCommand& command_sequence) {
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
-    CoreCoord physical_core = this->buffer.device()->worker_core_from_logical_core(this->core);
+    const CoreCoord physical_core = this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
 
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_linear(
@@ -1322,6 +1322,10 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                 num_pages_to_read = min(num_total_pages, max_pages_per_shard);
                 num_total_pages -= num_pages_to_read;
             }
+            uint32_t bank_base_address = buffer.address();
+            if (buffer.buffer_type() == BufferType::DRAM) {
+                bank_base_address += buffer.device()->bank_offset(BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
+            }
             if (num_pages_to_read > 0) {
                 if (width_split) {
                     uint32_t host_page = buffer_page_mapping.value().core_host_page_indices_[core_id][0];
@@ -1339,6 +1343,7 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                     this->manager,
                     this->expected_num_workers_completed,
                     cores[core_id],
+                    bank_base_address,
                     src_page_index,
                     num_pages_to_read);
 
@@ -1473,6 +1478,10 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
                 num_total_pages -= num_pages;
             }
             uint32_t curr_page_idx_in_shard = 0;
+            uint32_t bank_base_address = buffer.address();
+            if (buffer.buffer_type() == BufferType::DRAM) {
+                bank_base_address += buffer.device()->bank_offset(BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
+            }
             while (num_pages != 0) {
                 // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
                 uint32_t data_offset_bytes = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
@@ -1488,7 +1497,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
 
                 uint32_t pages_to_write = std::min(num_pages, (uint32_t)num_pages_available);
                 if (pages_to_write > 0) {
-                    uint32_t bank_base_address = buffer.address() + curr_page_idx_in_shard * padded_page_size;
+                    uint32_t address = bank_base_address + curr_page_idx_in_shard * padded_page_size;
 
                     tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for channel {}", this->id);
 
@@ -1500,7 +1509,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
                         this->manager,
                         issue_wait,
                         this->expected_num_workers_completed,
-                        bank_base_address,
+                        address,
                         buffer_page_mapping,
                         cores[core_id],
                         padded_page_size,

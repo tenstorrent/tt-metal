@@ -215,7 +215,7 @@ inline std::vector<T> convert_layout_tile_to_row_major(const Shape& shape, const
 // ======================================================================================
 void validate_on_device_dtype_and_layout(Device* device, const Shape& shape, DataType dtype, Layout layout);
 void validate_sharded_buffer_allocation(
-    const Shape& shape, Layout layout, std::optional<ShardSpecBuffer> shard_params, const MemoryConfig& memory_config);
+    const Shape& shape, Layout layout, DataType data_type, const ShardSpecBuffer& shard_params, const MemoryConfig& memory_config);
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              High Level APIs
@@ -235,7 +235,7 @@ DeviceBuffer allocate_buffer_on_device(
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
-    std::optional<ShardSpecBuffer> shard_spec = std::nullopt);
+    const std::optional<ShardSpecBuffer>& shard_spec = std::nullopt);
 
 template <typename T>
 inline void read_data_from_device_buffer(
@@ -293,7 +293,7 @@ inline DeviceBuffer initialize_data_on_device(
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
-    std::optional<ShardSpecBuffer> shard_spec,
+    const std::optional<ShardSpecBuffer>& shard_spec,
     std::optional<std::reference_wrapper<CommandQueue>> queue = std::nullopt) {
     ZoneScoped;
     TT_ASSERT(device != nullptr);
@@ -319,7 +319,7 @@ inline DeviceBuffer to_device_buffer(
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
-    std::optional<ShardSpecBuffer> shard_spec,
+    const std::optional<ShardSpecBuffer>& shard_spec,
     std::optional<std::reference_wrapper<CommandQueue>> queue) {
     return std::visit(
         [&device, &shape, &data_type, &layout, memory_config, shard_spec](auto&& storage) -> DeviceBuffer {
