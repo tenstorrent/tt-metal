@@ -72,16 +72,22 @@ def measure_host_overhead_binary(
     num_repeats,
     bcast=False,
     bcast_dim=tt_lib.tensor.BcastOpDim.W,
+    norm_shapes=False,
+    embeddings_shapes=False,
 ):
-    if bcast == False:
-        input_shape_2 = input_shape
-    else:
+    input_shape_2 = input_shape
+
+    if bcast:
         if bcast_dim == tt_lib.tensor.BcastOpDim.W:
             input_shape_2 = [input_shape[-4], input_shape[-3], input_shape[-2], 32]
         elif bcast_dim == tt_lib.tensor.BcastOpDim.H:
             input_shape_2 = [input_shape[-4], input_shape[-3], 32, input_shape[-1]]
         else:
             input_shape_2 = [input_shape[-4], input_shape[-3], 32, 32]
+
+    if embeddings_shapes:
+        input_shape = (input_shape[0], 1, 1, input_shape[-1])
+        input_shape_2 = (input_shape_2[0], 1, 1, input_shape_2[-1])
 
     x = torch.Tensor(size=input_shape).uniform_(-100, 100)
     y = torch.Tensor(size=input_shape_2).uniform_(-100, 100)
@@ -115,12 +121,56 @@ def measure_host_overhead_unary(
     num_repeats,
     bcast=False,
     bcast_dim=tt_lib.tensor.BcastOpDim.W,
+    norm_shapes=False,
+    embeddings_shapes=False,
 ):
     x = torch.Tensor(size=input_shape).uniform_(-100, 100)
     x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
 
     def op_func():
         op(x)
+
+    result_overhead = []
+    result_op = []
+
+    for _ in range(num_repeats):
+        overhead_ms, total_op_time = measure_host_overhead(op_func, device, num_call_to_stack)
+        result_overhead.append(overhead_ms)
+        result_op.append(total_op_time)
+
+    return result_overhead, result_op
+
+
+def measure_host_overhead_ternary(
+    input_shape,
+    dtype,
+    dlayout,
+    in_mem_config,
+    out_mem_config,
+    device,
+    op,
+    num_call_to_stack,
+    num_repeats,
+    bcast=False,
+    bcast_dim=tt_lib.tensor.BcastOpDim.W,
+    norm_shapes=False,
+    embeddings_shapes=False,
+):
+    input_shape_2 = input_shape
+
+    if norm_shapes:
+        input_shape_2 = [input_shape[0], input_shape[1], 32, input_shape[3]]
+
+    x = torch.Tensor(size=input_shape).uniform_(-100, 100)
+    y = torch.Tensor(size=input_shape_2).uniform_(-100, 100)
+    z = torch.Tensor(size=input_shape_2).uniform_(-100, 100)
+
+    x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
+    y = torch2tt_tensor(y, device, dlayout, in_mem_config, dtype)
+    z = torch2tt_tensor(z, device, dlayout, in_mem_config, dtype)
+
+    def op_func():
+        op(x, y, z)
 
     result_overhead = []
     result_op = []
@@ -144,6 +194,8 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
         if "layout" in op and op["layout"] == "ROW_MAJOR":
             dlayout = tt_lib.tensor.Layout.ROW_MAJOR
 
+        norm_shapes = False if "norm_shapes" not in op else op["norm_shapes"]
+        embeddings_shapes = False if "embeddings_shapes" not in op else op["embeddings_shapes"]
         bcast = False if "bcast" not in op else op["bcast"]
         bcast_dim = tt_lib.tensor.BcastOpDim.W if "bcast_dim" not in op else op["bcast_dim"]
 
@@ -160,6 +212,8 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
             1,
             bcast=bcast,
             bcast_dim=bcast_dim,
+            norm_shapes=norm_shapes,
+            embeddings_shapes=embeddings_shapes,
         )
 
         for num_call_to_stack in all_num_call_to_stack:
@@ -175,6 +229,8 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
                 num_repeats,
                 bcast=bcast,
                 bcast_dim=bcast_dim,
+                norm_shapes=norm_shapes,
+                embeddings_shapes=embeddings_shapes,
             )
 
             results_overhead += overhead_ms
@@ -211,3 +267,6 @@ def test_host_overhead(device):
 
         for op in ops_for_profiling.all_unary_ops:
             run_measure_host_overhead(op, device, text_file, measure_host_overhead_unary)
+
+        for op in ops_for_profiling.all_ternary_ops:
+            run_measure_host_overhead(op, device, text_file, measure_host_overhead_ternary)
