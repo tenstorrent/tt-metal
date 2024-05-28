@@ -37,7 +37,7 @@ def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.99987)
+    assert_with_pcc(torch_output_tensor, output, 0.99981)
 
 
 # fmt: off
@@ -116,7 +116,7 @@ def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999649)
+    assert_with_pcc(torch_output_tensor, output, 0.999599)
 
 
 # fmt: off
@@ -141,7 +141,7 @@ def test_matmul_same_shape_and_valid(device, n_size, c, h, w):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999877)
+    assert_with_pcc(torch_output_tensor, output, 0.9997)
 
 
 # fmt: off

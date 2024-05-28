@@ -1388,7 +1388,7 @@ Tensor _outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config) {
         b_slim = reshape(b, 1, 1, 1, b.volume(), output_mem_config);
     }
 
-    return tt::operations::primary::matmul(a_slim, b_slim, std::nullopt, tt::operations::primary::MatmulDefaultProgramConfig{}, output_mem_config, std::nullopt /*output_dtype*/, std::nullopt /*compute_kernel_config*/, false /*untilize_out*/, std::nullopt /*user_core_coord*/, std::nullopt /*fused_activation*/, std::nullopt /*input_b_is_batched*/, true /*needs_autoformat*/);
+    return tt::operations::primary::matmul(a_slim, b_slim, std::nullopt, std::nullopt, output_mem_config, std::nullopt /*output_dtype*/, std::nullopt /*compute_kernel_config*/, false /*untilize_out*/, std::nullopt /*user_core_coord*/, std::nullopt /*fused_activation*/, std::nullopt /*input_b_is_batched*/, true /*needs_autoformat*/);
 }
 Tensor outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _outer)(a, b, output_mem_config);

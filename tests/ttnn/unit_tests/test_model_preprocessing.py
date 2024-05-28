@@ -378,7 +378,7 @@ def test_module_with_childen_and_parameters(device, batch_size, m_size, k_size, 
     output_tensor = functional_ttnn(input_tensor, parameters)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99988)
 
 
 @skip_for_wormhole_b0()

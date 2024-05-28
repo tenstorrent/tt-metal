@@ -23,63 +23,44 @@ void py_module(py::module& module) {
            const ttnn::Tensor& input_tensor_b,
            const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
            const std::optional<const DataType> dtype = std::nullopt,
-           const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-	   const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> ttnn::Tensor {
-            return ttnn::operations::matmul::matmul(
-                input_tensor_a, input_tensor_b, MatmulDefaultProgramConfig{}, memory_config, dtype, compute_kernel_config, core_grid);
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("memory_config") = DRAM_MEMORY_CONFIG,
-        py::arg("dtype") = std::nullopt,
-        py::arg("compute_kernel_config") = std::nullopt,
-	py::arg("core_grid") = std::nullopt);
-
-    module.def(
-        "matmul",
-        [](const ttnn::Tensor& input_tensor_a,
-           const ttnn::Tensor& input_tensor_b,
-           const ttnn::MatmulProgramConfig& program_config,
-           const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
-           const std::optional<const DataType> dtype = std::nullopt,
-           const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) -> ttnn::Tensor  {
-            return ttnn::operations::matmul::matmul(
-                input_tensor_a,
-                input_tensor_b,
-                program_config,
-                memory_config,
-                dtype,
-                compute_kernel_config);
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("program_config"),
-        py::arg("memory_config") = DRAM_MEMORY_CONFIG,
-        py::arg("dtype") = std::nullopt,
-        py::arg("compute_kernel_config") = std::nullopt);
-
-    module.def(
-        "linear",
-        [](const ttnn::Tensor& input_tensor_a,
-           const ttnn::Tensor& input_tensor_b,
-           const std::optional<const ttnn::Tensor>& bias,
-           const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
-           const std::optional<const DataType> dtype = std::nullopt,
+           const std::optional<const ttnn::MatmulProgramConfig> program_config = std::nullopt,
            const std::optional<const std::string>& activation = std::nullopt,
            const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-	   const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> ttnn::Tensor {
+           const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> ttnn::Tensor {
+            return ttnn::operations::matmul::matmul(
+                input_tensor_a, input_tensor_b, program_config, memory_config, dtype, activation, compute_kernel_config, core_grid);
+        },
+        py::arg("input_tensor_a"),
+        py::arg("input_tensor_b"),
+        py::kw_only(),
+        py::arg("memory_config") = DRAM_MEMORY_CONFIG,
+        py::arg("dtype") = std::nullopt,
+        py::arg("program_config") = std::nullopt,
+        py::arg("activation") = std::nullopt,
+        py::arg("compute_kernel_config") = std::nullopt,
+        py::arg("core_grid") = std::nullopt);
+
+    module.def(
+            "linear",
+            [](const ttnn::Tensor& input_tensor_a,
+                const ttnn::Tensor& input_tensor_b,
+                const std::optional<const ttnn::Tensor>& bias,
+                const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
+                const std::optional<const DataType> dtype = std::nullopt,
+                const std::optional<const ttnn::MatmulProgramConfig> program_config = std::nullopt,
+                const std::optional<const std::string>& activation = std::nullopt,
+                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+                const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> ttnn::Tensor {
             return ttnn::operations::matmul::linear(
                 input_tensor_a,
                 input_tensor_b,
                 bias,
-                ttnn::MatmulDefaultProgramConfig{},
+                program_config,
                 memory_config,
                 dtype,
                 activation,
                 compute_kernel_config,
-		core_grid);
+                core_grid);
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),
@@ -87,38 +68,10 @@ void py_module(py::module& module) {
         py::arg("bias") = std::nullopt,
         py::arg("memory_config") = DRAM_MEMORY_CONFIG,
         py::arg("dtype") = std::nullopt,
+        py::arg("program_config") = std::nullopt,
         py::arg("activation") = std::nullopt,
         py::arg("compute_kernel_config") = std::nullopt,
-	py::arg("core_grid") = std::nullopt);
-
-    module.def(
-        "linear",
-        [](const ttnn::Tensor& input_tensor_a,
-           const ttnn::Tensor& input_tensor_b,
-           const std::optional<const ttnn::Tensor>& bias,
-           const ttnn::MatmulProgramConfig& program_config = ttnn::MatmulDefaultProgramConfig{},
-           const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
-           const std::optional<const DataType> dtype = std::nullopt,
-           const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) -> ttnn::Tensor  {
-            return ttnn::operations::matmul::linear(
-                input_tensor_a,
-                input_tensor_b,
-                bias,
-                program_config,
-                memory_config,
-                dtype,
-		std::nullopt /*activation*/,
-                compute_kernel_config,
-		std::nullopt);
-        },
-        py::arg("input_tensor_a"),
-        py::arg("input_tensor_b"),
-        py::kw_only(),
-        py::arg("bias") = std::nullopt,
-        py::arg("program_config"),
-        py::arg("memory_config") = DRAM_MEMORY_CONFIG,
-        py::arg("dtype") = std::nullopt,
-        py::arg("compute_kernel_config") = std::nullopt);
+        py::arg("core_grid") = std::nullopt);
 
 }
 

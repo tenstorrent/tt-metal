@@ -7,7 +7,6 @@
 #include "ttnn/cpp/ttnn/operations/core.hpp"
 namespace ttnn {
 
-using MatmulDefaultProgramConfig = tt::operations::primary::MatmulDefaultProgramConfig;
 using MatmulMultiCoreReuseProgramConfig = tt::operations::primary::MatmulMultiCoreReuseProgramConfig;
 using MatmulMultiCoreReuseMultiCastProgramConfig = tt::operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig;
 using MatmulMultiCoreReuseMultiCast1DProgramConfig =
@@ -46,9 +45,10 @@ const std::array<ttnn::TensorSchema, 3> input_tensor_schemas() {
 ttnn::Tensor matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
-    const MatmulProgramConfig& program_config,
+    const std::optional<const MatmulProgramConfig> program_config,
     const ttnn::MemoryConfig& memory_config,
     const std::optional<const DataType> dtype,
+    const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid)
     {
@@ -71,11 +71,25 @@ ttnn::Tensor matmul(
     const auto input_tensor_b_4d = ttnn::unsqueeze_to_4D(input_tensor_b);
 
     std::optional<CoreCoord> user_core_coord;
-    if (core_grid) {
+    const bool has_user_grid = core_grid.has_value();
+    if (has_user_grid) {
 	user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
     auto output_tensor = tt::operations::primary::matmul(
-        input_tensor_a_4d, input_tensor_b_4d, /*bias=*/std::nullopt, program_config, memory_config, dtype, compute_kernel_config, /*untilize_out=*/false,  user_core_coord, /*user_fused_activation=*/std::nullopt, input_b_is_batched);
+        input_tensor_a_4d, input_tensor_b_4d, /*bias=*/std::nullopt, program_config, memory_config, dtype, compute_kernel_config, /*untilize_out=*/false,  user_core_coord, get_fused_activation(activation), input_b_is_batched);
+
+    if (activation.has_value() && !has_user_grid) {
+        if (activation.value() == "relu") {
+            output_tensor = tt::tt_metal::relu(output_tensor, memory_config);
+        } else if (activation.value() == "gelu") {
+            output_tensor = tt::tt_metal::gelu(output_tensor, false, memory_config);
+        } else if (activation.value() == "silu") {
+            output_tensor = tt::tt_metal::silu(output_tensor, memory_config);
+        } else {
+            TT_THROW("ttnn.matmul: Unsupported activation function");
+        }
+    }
+
     while (output_tensor.get_shape().rank() != input_tensor_a_shape.rank()) {
         output_tensor = ttnn::squeeze_from_4D(output_tensor, input_tensor_a_shape.rank());
     }
@@ -93,7 +107,7 @@ ttnn::Tensor linear(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
-    const MatmulProgramConfig& program_config,
+    const std::optional<const MatmulProgramConfig> program_config,
     const ttnn::MemoryConfig& memory_config,
     std::optional<const DataType> dtype,
     const std::optional<const std::string>& activation,
@@ -117,10 +131,12 @@ ttnn::Tensor linear(
 
     std::optional<Tensor> bias_4d = std::nullopt;
     const bool has_user_grid = core_grid.has_value();
+    const bool has_program_config = program_config.has_value();
+
     bool post_process_bias = false;
     if (bias.has_value()) {
         bias_4d = ttnn::unsqueeze_to_4D(bias.value());
-	if (tt::operations::primary::is_program_config_default(program_config) && !has_user_grid) {
+        if (!has_program_config && !has_user_grid) {
 	    post_process_bias = true;
 	}
     }
