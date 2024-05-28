@@ -822,10 +822,10 @@ inline MatmulProgramConfig generate_matmul_program_config(
     }
 }
 
-inline std::optional<MatmulProgramConfig> get_program_config(
+inline MatmulProgramConfig get_program_config(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, const struct Matmul* matmul) {
     if (matmul->program_config.has_value()) {
-        return matmul->program_config;
+        return matmul->program_config.value();
     }
     auto config = generate_matmul_program_config(
         input_tensor_a,
@@ -861,25 +861,23 @@ void Matmul::validate(
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
-    std::optional<MatmulProgramConfig> chosen_program_config = get_program_config(input_tensor_a, input_tensor_b, this);
-    if (chosen_program_config.has_value()) {
-        std::visit(
-            [input_tensor_a](const auto& program_config) {
-                using ProgramConfigType = std::decay_t<decltype(program_config)>;
-                if constexpr (not std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig> and
-                        not std::is_same_v<ProgramConfigType, MatmulMultiCoreNonOptimizedReuseProgramConfig>) {
-                TT_FATAL(
-                    program_config.compute_with_storage_grid_size.x <=
-                        input_tensor_a.device()->compute_with_storage_grid_size().x,
-                    "Matmul grid size exceeds maximum device compute grid size!");
-                TT_FATAL(
-                    program_config.compute_with_storage_grid_size.y <=
-                        input_tensor_a.device()->compute_with_storage_grid_size().y,
-                    "Matmul grid size exceeds maximum device compute grid size!");
-                }
-            },
-            chosen_program_config.value());
-    }
+    MatmulProgramConfig chosen_program_config = get_program_config(input_tensor_a, input_tensor_b, this);
+    std::visit(
+        [input_tensor_a](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (not std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig> and
+                    not std::is_same_v<ProgramConfigType, MatmulMultiCoreNonOptimizedReuseProgramConfig>) {
+            TT_FATAL(
+                program_config.compute_with_storage_grid_size.x <=
+                    input_tensor_a.device()->compute_with_storage_grid_size().x,
+                "Matmul grid size exceeds maximum device compute grid size!");
+            TT_FATAL(
+                program_config.compute_with_storage_grid_size.y <=
+                    input_tensor_a.device()->compute_with_storage_grid_size().y,
+                "Matmul grid size exceeds maximum device compute grid size!");
+            }
+        },
+        chosen_program_config);
 
     TT_FATAL(optional_input_tensors.size() == 1);
     const auto& optional_bias = optional_input_tensors.at(0);
@@ -1112,7 +1110,7 @@ void Matmul::validate(
                     "per_core_N must be divisible by out_subblock_w");
             }
         },
-        chosen_program_config.value());
+        chosen_program_config);
 }
 
 std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -1135,11 +1133,8 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
     const auto& input_tensor_b = input_tensors.at(1);
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (this->output_mem_config.is_sharded()) {
-        std::optional<MatmulProgramConfig> chosen_program_config =
+        MatmulProgramConfig chosen_program_config =
             get_program_config(input_tensor_a, input_tensor_b, this);
-        if (!chosen_program_config.has_value()) {
-            TT_FATAL(false, "Not using a supported op for output sharding");
-        }
         return std::visit(
             [&](const auto& program_config) -> std::vector<Tensor> {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -1233,7 +1228,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     return {};
                 }
             },
-            chosen_program_config.value());
+            chosen_program_config);
     }
     return operation::generic_create_output_tensors(
         *this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
@@ -1276,7 +1271,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
     // TODO: Only for MatmulMultiCoreReuseProgramConfig we allow this as single core matmul/bmm
     bool broadcast_batch = this->bcast_batch;
 
-    std::optional<MatmulProgramConfig> chosen_program_config = get_program_config(input_tensor_a, input_tensor_b, this);
+    MatmulProgramConfig chosen_program_config = get_program_config(input_tensor_a, input_tensor_b, this);
 
     return std::visit(
         [&](const auto& program_config) -> operation::ProgramWithCallbacks {
@@ -1345,7 +1340,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                 TT_THROW("Unrecognized Config");
             }
         },
-        chosen_program_config.value());
+        chosen_program_config);
 }
 
 Tensor matmul_1d(
