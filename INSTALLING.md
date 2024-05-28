@@ -20,7 +20,7 @@ Note the current compatability matrix:
 
 ---
 
-### Step 2. System-level dependencies and Clang-17
+### Step 2. System-level dependencies
 
 ```sh
 sudo apt update
