@@ -163,7 +163,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
     TT_ASSERT(small_bank_id_to_bank_offset.size() == num_banks.num_l1_small_banks);
     TT_ASSERT(
         (bank_id_to_bank_offset.size() + small_bank_id_to_bank_offset.size()) == num_banks.total,
-        "init_compute_and_storage_l1_bank_manager() -- banks setup={} must be equal to the number of bankes "
+        "init_compute_and_storage_l1_bank_manager() -- banks setup={} must be equal to the number of banks "
         "expected={}",
         bank_id_to_bank_offset.size(),
         small_bank_id_to_bank_offset.size(),

@@ -133,6 +133,7 @@ class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
    private:
     void add_prefetch_relay(HugepageDeviceCommand& command) override;
     const CoreCoord core;
+    const uint32_t bank_base_address;
 
    public:
     EnqueueReadShardedBufferCommand(
@@ -143,6 +144,7 @@ class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
         SystemMemoryManager& manager,
         uint32_t expected_num_workers_completed,
         const CoreCoord& core,
+        uint32_t bank_base_address,
         uint32_t src_page_index = 0,
         std::optional<uint32_t> pages_to_read = std::nullopt) :
         EnqueueReadBufferCommand(
@@ -154,7 +156,7 @@ class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
             expected_num_workers_completed,
             src_page_index,
             pages_to_read),
-        core(core) {}
+        core(core), bank_base_address(bank_base_address) {}
 };
 
 class EnqueueWriteShardedBufferCommand;
