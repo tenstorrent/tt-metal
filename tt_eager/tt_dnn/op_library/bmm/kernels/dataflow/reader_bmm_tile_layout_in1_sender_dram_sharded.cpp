@@ -6,7 +6,7 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
 
 void kernel_main() {
@@ -93,13 +93,13 @@ void kernel_main() {
             l1_write_addr_in1 += in1_page_size;
         }
 
-        if (num_free_blocks_in_buffer == 1) {
+        if (num_free_blocks_in_buffer == 2) {
             noc_async_read_barrier_with_trid(block_trid_to_wait);
             cb_push_back(cb_id_in1, in1_block_num_tiles);
             // wait for next block trid
             block_trid_to_wait = (block_trid_to_wait + 1) % total_num_blocks_in_buffer;
             // reserve for next block
-            cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+            cb_reserve_back(cb_id_in1, in1_block_num_tiles * 2);
         } else {
             num_free_blocks_in_buffer -= 1;
         }
@@ -113,11 +113,7 @@ void kernel_main() {
         }
         l1_write_addr_in1 = l1_write_addr_in1_start + l1_write_addr_in1_offset;
     }
-    // second-to-last block to wait
-    noc_async_read_barrier_with_trid(block_trid_to_wait);
-    cb_push_back(cb_id_in1, in1_block_num_tiles);
     // last block to wait
-    block_trid_to_wait = (block_trid_to_wait + 1) % total_num_blocks_in_buffer;
     noc_async_read_barrier_with_trid(block_trid_to_wait);
     cb_push_back(cb_id_in1, in1_block_num_tiles);
     #endif
