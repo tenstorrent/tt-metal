@@ -218,11 +218,7 @@ class TtFalconAttentionPrefill(nn.Module):
 
         seq_len = hidden_states[0].get_legacy_shape()[2]
 
-        if (
-            self.model_config["PREFILL_OPTIMIZED_MODE"]
-            and self.model_config["PREFILL_ATTENTION_OPTIMIZED_MODE"]
-            and seq_len in [128, 1024, 2048]
-        ):
+        if self.model_config["PREFILL_OPTIMIZED_MODE"] and seq_len in [128, 1024, 2048]:
             attn_output, layer_present = self._optimized_forward(
                 hidden_states,
                 attention_mask,
@@ -450,10 +446,10 @@ class TtFalconAttentionPrefill(nn.Module):
             key_layer[i].deallocate()
 
         grid_size = self.model_config["ATTN_OPTIMIZED_GRID_SIZE"]
-        num_cores = grid_size[0] * grid_size[1]
+        allowed_num_cores = self.model_config["ATTN_OPTIMIZED_ALLOWED_NUM_CORES"]
         num_slices = {128: 1, 1024: 4, 2048: 16}[seq_len]
 
-        tiles_per_shard = math.ceil((((self.num_heads * seq_len) / num_cores) / num_slices) / 32)
+        tiles_per_shard = math.ceil((((self.num_heads * seq_len) / allowed_num_cores) / num_slices) / 32)
         mm_activations_height_shard_spec = [tiles_per_shard * 32, 2 * 32]
         mm_output_height_shard_spec = [tiles_per_shard * 32, seq_len]
 
