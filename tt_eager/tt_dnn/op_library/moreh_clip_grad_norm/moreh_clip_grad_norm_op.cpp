@@ -95,11 +95,6 @@ void moreh_clip_grad_norm_step1(const std::vector<Tensor> &inputs, float norm_ty
             dummy_output_tensors,
             {tmp_pow_sum});
 
-        // operation::run(
-        //     MorehClipGradNormStep1{.norm_type = norm_type, .tile_offset_of_tmp_pow_sum = tile_offset},
-        //     std::vector<Tensor>(inputs.begin() + tile_offset, inputs.begin() + tile_offset +
-        //     num_inputs_at_this_iter), {tmp_pow_sum});
-
         if (i < (num_iter - 1)) {
             tile_offset += num_inputs_at_this_iter;
             num_inputs -= num_inputs_at_this_iter;
@@ -143,8 +138,6 @@ void moreh_clip_grad_norm_step2(const Tensor &tmp_pow_sum, float norm_type, cons
         },
         {tmp_pow_sum, total_norm},
         dummy_output_tensors);
-
-    // operation::run(MorehClipGradNormStep2{.norm_type = norm_type}, {tmp_pow_sum, total_norm});
 }
 
 void MorehClipGradNormStep3::validate(
@@ -196,12 +189,6 @@ void moreh_clip_grad_norm_step3(const std::vector<Tensor> &inputs, const Tensor 
             input_tensors,
             dummy_output_tensors,
             {clip_coef_clamped});
-
-        // operation::run(
-        //     MorehClipGradNormStep3{},
-        //     std::vector<Tensor>(
-        //         inputs.begin() + start_input_idx, inputs.begin() + start_input_idx + num_inputs_at_this_iter),
-        //     {clip_coef_clamped});
 
         if (i < (num_iter - 1)) {
             start_input_idx += num_inputs_at_this_iter;
