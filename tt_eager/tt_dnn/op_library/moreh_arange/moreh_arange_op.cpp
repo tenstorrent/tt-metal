@@ -2,13 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
-
 #include <cmath>
 
-#include "tt_metal/common/test_tiles.hpp"
+#include "tt_eager/tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/common/test_tiles.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -69,7 +68,7 @@ operation::ProgramWithCallbacks moreh_arange_(
     auto kernel_id = CreateWriteKernel(
         program,
         untilize_out ? "tt_eager/tt_dnn/op_library/moreh_arange/kernels/writer_moreh_arange_rm.cpp"
-        : "tt_eager/tt_dnn/op_library/moreh_arange/kernels/writer_moreh_arange.cpp",
+                     : "tt_eager/tt_dnn/op_library/moreh_arange/kernels/writer_moreh_arange.cpp",
         all_cores,
         {dst_is_dram},
         writer_defines);
@@ -123,7 +122,8 @@ operation::ProgramWithCallbacks moreh_arange_(
     return {std::move(program), override_runtime_args_callback};
 }
 
-void MorehArange::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+void MorehArange::validate_with_output_tensors(
+    const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
     TT_FATAL(this->step > 0 || this->step < 0, "step must be nonzero");
     TT_FATAL(
         ((this->step > 0) && (this->end >= this->start)) || ((this->step < 0) && (this->end <= this->start)),
@@ -131,7 +131,7 @@ void MorehArange::validate_with_output_tensors(const std::vector<Tensor> &input_
 
     TT_FATAL(this->output_dtype != DataType::BFLOAT8_B, "moreh arange not support bfloat8_b dtype");
 
-    if(output_tensors.empty() || !output_tensors.at(0).has_value()){
+    if (output_tensors.empty() || !output_tensors.at(0).has_value()) {
         // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
         return;
     }
@@ -143,7 +143,7 @@ void MorehArange::validate_with_output_tensors(const std::vector<Tensor> &input_
 
     TT_FATAL(output_memory_layout == TensorMemoryLayout::INTERLEAVED);
 
-    if (this->untilize_out){
+    if (this->untilize_out) {
         TT_FATAL(output_layout == Layout::ROW_MAJOR);
     } else {
         TT_FATAL(output_layout == Layout::TILE);
@@ -163,7 +163,8 @@ std::vector<Shape> MorehArange::compute_output_shapes(const std::vector<Tensor> 
     return {output_shape};
 }
 
-std::vector<Tensor> MorehArange::create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+std::vector<Tensor> MorehArange::create_output_tensors(
+    const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
     if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
         return {output_tensors.at(0).value()};
     }
@@ -176,14 +177,8 @@ std::vector<Tensor> MorehArange::create_output_tensors(const std::vector<Tensor>
 
 operation::ProgramWithCallbacks MorehArange::create_program(
     const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const {
-
     return moreh_arange_(
-        output_tensors.at(0),
-        this->start,
-        this->end,
-        this->step,
-        this->untilize_out,
-        this->core_range);
+        output_tensors.at(0), this->start, this->end, this->step, this->untilize_out, this->core_range);
 }
 
 Tensor moreh_arange(
@@ -199,25 +194,34 @@ Tensor moreh_arange(
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
-
     auto default_output_dtype = DataType::BFLOAT16;
 
-    output_tensor = operation::run(
-                        MorehArange{
-                            .start = start,
-                            .end = end,
-                            .step = step,
-                            .untilize_out = untilize_out,
-                            .output_dtype = output_dtype.value_or(default_output_dtype),
-                            .core_range = all_cores,
-                            .output_mem_config = output_mem_config,
-                            },
-                        {any},
-                        {},
-                        {output_tensor})
-                        .at(0);
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({any}))};
 
-    return output_tensor.value();
+    operation::launch_op(
+        [start, end, step, untilize_out, output_dtype, all_cores, output_mem_config, default_output_dtype](
+            const std::vector<Tensor> &input_tensors,
+            const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+            const std::vector<std::optional<Tensor>> &optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehArange{
+                    .start = start,
+                    .end = end,
+                    .step = step,
+                    .untilize_out = untilize_out,
+                    .output_dtype = output_dtype.value_or(default_output_dtype),
+                    .core_range = all_cores,
+                    .output_mem_config = output_mem_config,
+                },
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
+        {any},
+        output_tensors,
+        {output_tensor});
+
+    return output_tensors.at(0);
 }
 
 }  // namespace primary
