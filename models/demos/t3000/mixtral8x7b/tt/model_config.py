@@ -84,7 +84,8 @@ class TtModelArgs:
         logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
         logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
-        logger.info(f"Note: Using dummy weights, weight caching disabled")
+        if dummy_weights:
+            logger.info(f"Note: Using dummy weights, weight caching disabled")
 
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
         self.model_cache_path = Path(self.DEFAULT_CACHE_PATH)
