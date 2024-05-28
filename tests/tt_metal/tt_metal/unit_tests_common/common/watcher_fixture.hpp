@@ -6,6 +6,7 @@
 #include <thread>
 #include "common_fixture.hpp"
 #include "impl/debug/watcher_server.hpp"
+#include "llrt/rtoptions.hpp"
 
 // A version of CommonFixture with watcher enabled
 class WatcherFixture: public CommonFixture {
@@ -88,8 +89,8 @@ protected:
 // A version of WatcherFixture with read and write debug delays enabled
 class WatcherDelayFixture : public WatcherFixture {
 public:
-    bool watcher_previous_read_debug_delay;
-    bool watcher_previous_write_debug_delay;
+    tt::llrt::TargetSelection saved_target_selection[tt::llrt::RunTimeDebugFeatureCount];
+
     std::map<CoreType, std::vector<CoreCoord>> delayed_cores;
 
     void SetUp() override {
@@ -97,8 +98,9 @@ public:
         delayed_cores[CoreType::WORKER] = {{0, 0}, {1, 1}};
 
         // Store the previous state of the watcher features
-        watcher_previous_read_debug_delay = tt::llrt::OptionsG.get_feature_enabled(tt::llrt::RunTimeDebugFeatureReadDebugDelay);
-        watcher_previous_write_debug_delay = tt::llrt::OptionsG.get_feature_enabled(tt::llrt::RunTimeDebugFeatureWriteDebugDelay);
+        saved_target_selection[tt::llrt::RunTimeDebugFeatureReadDebugDelay] = tt::llrt::OptionsG.get_feature_targets(tt::llrt::RunTimeDebugFeatureReadDebugDelay);
+        saved_target_selection[tt::llrt::RunTimeDebugFeatureWriteDebugDelay] = tt::llrt::OptionsG.get_feature_targets(tt::llrt::RunTimeDebugFeatureWriteDebugDelay);
+        saved_target_selection[tt::llrt::RunTimeDebugFeatureAtomicDebugDelay] = tt::llrt::OptionsG.get_feature_targets(tt::llrt::RunTimeDebugFeatureAtomicDebugDelay);
 
         // Enable read and write debug delay for the test core
         tt::llrt::OptionsG.set_feature_enabled(tt::llrt::RunTimeDebugFeatureReadDebugDelay, true);
@@ -115,7 +117,8 @@ public:
         WatcherFixture::TearDown();
 
         // Restore
-        tt::llrt::OptionsG.set_feature_enabled(tt::llrt::RunTimeDebugFeatureReadDebugDelay, watcher_previous_read_debug_delay);
-        tt::llrt::OptionsG.set_feature_enabled(tt::llrt::RunTimeDebugFeatureWriteDebugDelay, watcher_previous_write_debug_delay);
+        tt::llrt::OptionsG.set_feature_targets(tt::llrt::RunTimeDebugFeatureReadDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureReadDebugDelay]);
+        tt::llrt::OptionsG.set_feature_targets(tt::llrt::RunTimeDebugFeatureWriteDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureWriteDebugDelay]);
+        tt::llrt::OptionsG.set_feature_targets(tt::llrt::RunTimeDebugFeatureAtomicDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureAtomicDebugDelay]);
     }
 };
