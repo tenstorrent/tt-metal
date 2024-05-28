@@ -10,7 +10,7 @@ from models.utility_functions import is_wormhole_b0, get_devices_for_t3000
 @pytest.mark.parametrize(
     "perf_mode, expected_perf_prefill_decode, greedy_sampling, expected_greedy_output_path",
     (
-        (True, [6600, 1050], False, None),
+        (True, [9000, 1050], False, None),
         (True, None, False, None),
         (False, None, True, "models/demos/t3000/falcon7b/expected_greedy_output.json"),
         (False, None, True, None),
