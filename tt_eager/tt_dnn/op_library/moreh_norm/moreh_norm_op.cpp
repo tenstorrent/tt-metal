@@ -84,7 +84,7 @@ void MorehNorm::validate(const std::vector<Tensor> &input_tensors) const {
 
 std::vector<Shape> MorehNorm::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
 
-std::vector<Tensor> MorehNorm::create_output_tensors(const std::vector<Tensor> &) const { return {}; }
+std::vector<Tensor> MorehNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const { return {input_tensors.at(1)}; }
 
 [[maybe_unused]] Tensor moreh_norm(
     const Tensor &input,
@@ -142,15 +142,29 @@ std::vector<Tensor> MorehNorm::create_output_tensors(const std::vector<Tensor> &
         tmp_output, p, outermost_dim, create_output_tensor(tmp_output, outermost_dim, output_mem_config));
 }
 
+// TODO: move output to optional_output_tensors
 Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim, const Tensor &output) {
-    operation::run(MorehNorm{.p = p, .dim = dim}, {input, output});
-    return output;
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input, output}))};
+    operation::launch_op(
+        [p, dim](
+            const std::vector<Tensor> &input_tensors,
+            const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+            const std::vector<std::optional<Tensor>> &optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehNorm{.p = p, .dim = dim}, input_tensors, optional_input_tensors, optional_output_tensors);
+        },
+        {input, output},
+        output_tensors,
+        {},
+        {});
+
+    return output_tensors.at(0);
 }
 
 operation::ProgramWithCallbacks MorehNorm::create_program(
     const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto &input = input_tensors.at(0);
-    const auto &output = input_tensors.at(1);
+    const auto &output = output_tensors.at(0);
 
     const auto dim = this->dim;
     const auto input_rank = static_cast<decltype(dim)>(input.get_legacy_shape().rank());
