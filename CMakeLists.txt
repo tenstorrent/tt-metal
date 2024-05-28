@@ -5,14 +5,15 @@ cmake_policy(VERSION 3.16)
 # Project setup
 ############################################
 
-### Uncomment this if you don't want to manually pass Clang-17 compiler through CLI ###
-# find_program(CLANG_17 clang++-17)
-# if(CLANG_17)
-#     message(STATUS "Found Clang-17 here: ${CLANG_17}")
-#     set(CMAKE_CXX_COMPILER "${CLANG_17}")
-# else()
-#     message(WARNING "Clang++-17 not found, recommended to build with Clang-17 > GCC for better perf")
-# endif()
+# Use Clang-17 by default until we upgrade to Ubuntu version that supports higher GCC
+# No longer support GCC-9 as it does not support C++20
+find_program(CLANG_17 clang++-17)
+if(CLANG_17)
+    message(STATUS "Found Clang-17 here: ${CLANG_17}")
+    set(CMAKE_CXX_COMPILER "${CLANG_17}")
+else()
+    message(WARNING "Clang++-17 not found!!!")
+endif()
 
 if(${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_BINARY_DIR})
     message(FATAL_ERROR "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!")
@@ -57,8 +58,9 @@ set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG=DEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG=DEBUG")
 set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG=DEBUG")
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Set default values for variables/options
 set(UMD_HOME "${CMAKE_SOURCE_DIR}/tt_metal/third_party/umd")
