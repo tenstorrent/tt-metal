@@ -116,5 +116,5 @@ ttnn/tutorials/DiT/
 compile_commands.json
 
 # rpath_check
-tt_eager/tt_lib/.rpath_checked
+tt_eager/tt_lib/.rpath_checked*
 ttnn/ttnn/.rpath_checked
