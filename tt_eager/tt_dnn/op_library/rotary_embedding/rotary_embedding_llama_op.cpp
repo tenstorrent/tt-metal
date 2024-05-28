@@ -76,24 +76,8 @@ operation::ProgramWithCallbacks RotaryEmbeddingLlama::create_program(
     const auto& trans_mat = input_tensors.at(3);
     auto& output_tensor = output_tensors.at(0);
 
-    switch (this->get_parallelization_strategy(input_tensors)) {
-        case RotaryEmbeddingLlamaOpParallelizationStrategy::MULTI_CORE:
-            return rotary_embedding_llama_multi_core(input_tensor, cos, sin, trans_mat, output_tensor, this->compute_kernel_config);
-            break;
-        case RotaryEmbeddingLlamaOpParallelizationStrategy::SINGLE_CORE:
-        default: return rotary_embedding_llama_single_core(input_tensor, cos, sin, trans_mat, output_tensor, this->compute_kernel_config);
-    }
-}
-
-RotaryEmbeddingLlamaOpParallelizationStrategy RotaryEmbeddingLlama::get_parallelization_strategy(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    // num_rows = 1 x 8 x 128 x 128 / 128 / 32 = 32
-    uint32_t num_rows = input_tensor.volume() / input_tensor.get_legacy_shape()[-1] / TILE_HEIGHT;
-    if (num_rows > 1) {
-        return RotaryEmbeddingLlamaOpParallelizationStrategy::MULTI_CORE;
-    } else {return RotaryEmbeddingLlamaOpParallelizationStrategy::SINGLE_CORE;}
-    return RotaryEmbeddingLlamaOpParallelizationStrategy::SINGLE_CORE;
+    // Works on single core as well
+    return rotary_embedding_llama_multi_core(input_tensor, cos, sin, trans_mat, output_tensor, this->compute_kernel_config);
 }
 
 tt::stl::reflection::Attributes RotaryEmbeddingLlama::attributes() const {
@@ -101,10 +85,6 @@ tt::stl::reflection::Attributes RotaryEmbeddingLlama::attributes() const {
         {"seq_len", this->seq_len},
         {"output_mem_config", this->output_mem_config},
     };
-}
-
-const operation::Hash RotaryEmbeddingLlama::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
-    return operation::hash_operation<RotaryEmbeddingLlama>(this->seq_len, this->output_mem_config, input_tensors);
 }
 
 }  // namespace tt_metal

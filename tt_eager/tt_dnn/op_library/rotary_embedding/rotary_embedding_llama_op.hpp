@@ -16,10 +16,6 @@ namespace tt {
 
 namespace tt_metal {
 
-enum class RotaryEmbeddingLlamaOpParallelizationStrategy { MULTI_CORE = 0, SINGLE_CORE = 1 };
-
-operation::ProgramWithCallbacks rotary_embedding_llama_single_core(
-    const Tensor &input, const Tensor &cos, const Tensor &sin, const Tensor &trans_mat, Tensor &output, DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     const Tensor &input, const Tensor &cos, const Tensor &sin, const Tensor &trans_mat, Tensor &output, DeviceComputeKernelConfig compute_kernel_config);
 
@@ -28,9 +24,6 @@ struct RotaryEmbeddingLlama {
     const MemoryConfig output_mem_config;
     const DeviceComputeKernelConfig compute_kernel_config;
 
-    RotaryEmbeddingLlamaOpParallelizationStrategy get_parallelization_strategy(
-        const std::vector<Tensor> &input_tensors) const;
-
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
@@ -38,8 +31,6 @@ struct RotaryEmbeddingLlama {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
-
-    const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 };
 
 inline Tensor rotary_embedding_llama(
@@ -56,22 +47,13 @@ inline Tensor rotary_embedding_llama(
             auto& cos = input_tensors.at(1);
             auto& sin = input_tensors.at(2);
             auto& trans_mat = input_tensors.at(3);
-            TT_FATAL(input_tensor.get_legacy_shape()[-1] % TILE_WIDTH == 0, "Input X dim must be divisible into tiles");
             uint32_t seq_len = input_tensor.get_legacy_shape()[-2];
-            uint32_t B = input_tensor.get_legacy_shape()[0];
             uint32_t head_dim = input_tensor.get_legacy_shape()[-1];
-            TT_FATAL(cos.get_legacy_shape() == sin.get_legacy_shape(), "Cos and Sin dims must match");
-            TT_FATAL(cos.get_legacy_shape()[0] == 1 && cos.get_legacy_shape()[1] == 1 && cos.get_legacy_shape()[-1] == head_dim, "Cos dims must match input dims");
-            TT_FATAL(cos.get_legacy_shape()[-2] >= seq_len, "Cos dims must match input dims");
 
-            TT_FATAL(trans_mat.get_legacy_shape()[0] == 1 && trans_mat.get_legacy_shape()[1] == 1, "Transformation matrix must have 1st & 2nd dim equal to 1");
-            TT_FATAL(trans_mat.get_legacy_shape()[-2] == TILE_HEIGHT, "Transformation matrix must have 3rd dim equal to TILE_HEIGHT");
-            TT_FATAL(trans_mat.get_legacy_shape()[-1] == TILE_WIDTH, "Transformation matrix must have 4rd dim equal to TILE_WIDTH");
+            TT_FATAL(head_dim <= 128 || std::get<WormholeComputeKernelConfig>(compute_kernel_config.value()).fp32_dest_acc_en == false, "If head_dim is > 128, fp32_dest_acc_en must be False");
 
             auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
             auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-
-            TT_FATAL(head_dim <= 128 || std::get<WormholeComputeKernelConfig>(compute_kernel_config.value()).fp32_dest_acc_en == false, "If head_dim is > 128, fp32_dest_acc_en must be False");
 
             Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
             FormatParams input_format_params = {.pad_shape = input_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};

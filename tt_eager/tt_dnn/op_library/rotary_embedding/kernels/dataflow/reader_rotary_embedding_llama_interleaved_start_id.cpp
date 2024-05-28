@@ -4,16 +4,8 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"  // required in all kernels using DPRINT
-
-
-// template <uint32_t tile_bytes, uint32_t num_readers>
-// constexpr uint32_t get_barrier_read_threshold() {
-//     return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
-// }
 
 void kernel_main() {
-    //DPRINT << "Reader Hang 1" << ENDL();
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
     uint32_t cos_addr  = get_arg_val<uint32_t>(1);
     uint32_t sin_addr  = get_arg_val<uint32_t>(2);
@@ -85,8 +77,6 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(trans_mat_cb_id, onetile);
 
-    // constexpr uint32_t barrier_threshold = get_barrier_read_threshold<input_tile_bytes, 64>();  //TODO: Pass in number of cores to make this dynamic
-    // uint32_t barrier_count = 0;
     /*
         Read a ublock of tiles from src to CB, and then push the ublock to unpacker
 

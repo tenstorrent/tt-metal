@@ -106,7 +106,7 @@ def compute_gather_cos_sin(dhead, end, position_ids):
     return cos, sin
 
 
-def run_test_rotary_embedding_llamma(
+def run_test_rotary_embedding_llama(
     devices,
     batch,
     seq_len,
@@ -162,8 +162,9 @@ def run_test_rotary_embedding_llamma(
     tt_out = [tt2torch_tensor(tt_out_tensor) for tt_out_tensor in tt_out]
 
     # check outputs ----------------------------------------------------------------------
+    assert len(pytorch_out) == len(tt_out), "Lengths of pytorch and tt outputs do not match!"
     does_pass = True
-    for i in range(2):
+    for i in range(len(pytorch_out)):
         out_pass, output_pcc = comp_pcc(pytorch_out[i], tt_out[i], pcc)
         # Check each shape matches
         assert pytorch_out[i].shape == tt_out[i].shape
@@ -190,6 +191,7 @@ def run_test_rotary_embedding_llamma(
 @pytest.mark.parametrize(
     "batch, seq_len",
     (
+        (1, 32),  # To test single core implementation
         (1, 128),
         (1, 256),
         (1, 512),
@@ -199,6 +201,7 @@ def run_test_rotary_embedding_llamma(
         (1, 16384),
     ),
     ids=(
+        "prefill_32",
         "prefill_128",
         "prefill_256",
         "prefill_512",
@@ -221,7 +224,60 @@ def run_test_rotary_embedding_llamma(
 )
 @pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
 @pytest.mark.parametrize("pcc", (0.9997,))
-def test_LlamaAttention_inference(
+def test_rotary_embedding_llama(
+    batch,
+    seq_len,
+    n_heads,
+    n_kv_heads,
+    head_dim,
+    datatype,
+    pcc,
+    all_devices,
+):
+    devices = all_devices
+    compute_grid_size = devices[0].compute_with_storage_grid_size()
+    if compute_grid_size.x < 8 or compute_grid_size.y < 8:
+        pytest.skip(f"Requires grid size of at least {(8, 8)} to run")
+
+    max_seq_len = max(4096, seq_len)
+
+    run_test_rotary_embedding_llama(devices, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, max_seq_len, datatype)
+
+    # shift input/output tensor by creating very small tensor between loop
+    inp = torch.rand(1, 1, 32, 32)
+    test_tensor = (
+        tt_lib.tensor.Tensor(
+            inp.reshape(-1).tolist(),
+            inp.shape,
+            ttnn.bfloat16,
+            tt_lib.tensor.Layout.ROW_MAJOR,
+        )
+        .to(tt_lib.tensor.Layout.TILE)
+        .to(devices[0])
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "batch, seq_len",
+    (
+        (1, 2048),
+        (1, 4096),
+        (1, 8192),
+    ),
+    ids=(
+        "prefill_2k",
+        "prefill_4k",
+        "prefill_8k",
+    ),
+)
+@pytest.mark.parametrize(
+    "n_heads, n_kv_heads, head_dim",
+    ((8, 1, 128),),
+)
+@pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
+@pytest.mark.parametrize("pcc", (0.9997,))
+def test_rotary_embedding_llama_with_program_cache(
     batch,
     seq_len,
     n_heads,
@@ -239,8 +295,8 @@ def test_LlamaAttention_inference(
 
     max_seq_len = max(4096, seq_len)
 
-    for i in range(3 if use_program_cache else 1):
-        run_test_rotary_embedding_llamma(
+    for _ in range(3):
+        run_test_rotary_embedding_llama(
             devices, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, max_seq_len, datatype
         )
 
