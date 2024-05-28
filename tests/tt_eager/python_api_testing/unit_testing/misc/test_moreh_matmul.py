@@ -8,6 +8,11 @@ from loguru import logger
 
 import tt_lib as ttl
 from models.utility_functions import comp_allclose_and_pcc
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+    get_compute_kernel_options,
+    compute_kernel_options,
+    compute_kernel_ids,
+)
 
 
 def get_tensors(input_shape, other_shape, output_shape, require_input_grad, require_other_grad, is_1d, device):
@@ -244,7 +249,7 @@ def test_moreh_matmul_backward(params, requires_grad, device):
         assert tt_other_grad is None
 
 
-def moreh_matmul(params, has_output, device):
+def moreh_matmul(params, has_output, compute_kernel_config, device):
     torch.manual_seed(3072)
     input_shape, other_shape, output_shape, transpose_input, transpose_other = params
     tt_input, tt_other, tt_output, _, _, _, torch_input, torch_other, _ = get_tensors(
@@ -264,6 +269,7 @@ def moreh_matmul(params, has_output, device):
         transpose_input=transpose_input,
         transpose_other=transpose_other,
         output=tt_output,
+        compute_kernel_config=compute_kernel_config,
     )
     tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
 
@@ -307,8 +313,10 @@ def moreh_matmul(params, has_output, device):
         ),  # batched matmul
     ),
 )
-def test_moreh_matmul(params, device):
-    passing = moreh_matmul(params, True, device)
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_moreh_matmul(params, compute_kernel_options, device):
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
+    passing = moreh_matmul(params, True, compute_kernel_config, device)
     assert passing
 
 
@@ -329,7 +337,7 @@ def test_moreh_matmul(params, device):
     ),
 )
 def test_moreh_matmul_wo_output(params, device):
-    passing = moreh_matmul(params, False, device)
+    passing = moreh_matmul(params, False, None, device)
     assert passing
 
 
@@ -350,5 +358,5 @@ def test_moreh_matmul_wo_output(params, device):
 def test_moreh_matmul_enable_cache(params, device, use_program_cache):
     torch.manual_seed(3072)
     for i in range(2):
-        passing = moreh_matmul(params, True, device)
+        passing = moreh_matmul(params, True, None, device)
         assert passing
