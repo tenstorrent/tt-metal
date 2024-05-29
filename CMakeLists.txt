@@ -96,7 +96,7 @@ add_library(linker_flags INTERFACE)
 
 add_library(compiler_warnings INTERFACE)
 target_compile_options(compiler_warnings INTERFACE -Werror -Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter
-                        -Wno-deprecated-this-capture -Wno-deprecated-volatile -Wno-deprecated-builtins
+                        -Wno-deprecated-this-capture -Wno-deprecated-volatile -Wno-deprecated-builtins -Wno-deprecated-declarations # -> extra C++20 build flags
 )
 CHECK_COMPILER_WARNINGS()      # <- add any extra compile warning flags for building with Clang-17
 
