@@ -12,7 +12,8 @@ from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 # separates the 8 experts and saves the updated dict into a new single file.
 def repack_mixtral_weights(ckpt_dir, repack_dir):
     state_dict = {}
-    model_args = TtModelArgs()
+    # Set dummy_weights to True to avoid going through asserts that check for repack weights file (repack_weights.pt)
+    model_args = TtModelArgs(dummy_weights=True)
     consolidated_weights_path = lambda i: str(ckpt_dir + f"/consolidated.{i:02d}.pt")
 
     for i in range(1 + (model_args.n_layers - 1) // 4):
