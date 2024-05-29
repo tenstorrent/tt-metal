@@ -34,7 +34,7 @@ void py_module(py::module& module) {
             Keyword Args:
                 * :attr:`memory_config`: the memory configuration for the output tensor. If not provided, the memory configuration of the input tensor is used.
 
-            Example::
+            Example:
 
                 >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
                 >>> output = ttnn.softmax(tensor, -1)

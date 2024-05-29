@@ -37,7 +37,7 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             * :attr:`dtype` (ttnn.DataType): data type for the output tensor
             * :attr:`activations` (List[str]): list of activation functions to apply to the output tensor
 
-        Example::
+        Example:
 
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
             >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
