@@ -216,9 +216,10 @@ is applied to all RISCs.
 Note that `TT_METAL_WATCHER` must be set and `TT_METAL_WATCHER_DISABLE_NOC_SANITIZE` must not be
 set for the delays to be applied.
 
-For example, the following environment variables will add a delay of 10 iterations for both READ
-and WRITE transactions on BRISC core at location 0,0.
+For example, the following command will run test_eltwise_binary with a delay of 10 iterations added to both READ and WRITE
+transactions on BRISC core at location 0,0:
 
 .. code-block::
 
-    TT_METAL_WATCHER=1 TT_METAL_WATCHER_DEBUG_DELAY=10 TT_METAL_READ_DEBUG_DELAY_CORES=0,0 TT_METAL_WRITE_DEBUG_DELAY_CORES=0,0 TT_METAL_READ_DEBUG_DELAY_RISCVS=BR TT_METAL_WRITE_DEBUG_DELAY_RISCVS=BR
+    TT_METAL_WATCHER=1 TT_METAL_WATCHER_DEBUG_DELAY=10 TT_METAL_READ_DEBUG_DELAY_CORES=0,0 TT_METAL_WRITE_DEBUG_DELAY_CORES=0,0 TT_METAL_READ_DEBUG_DELAY_RISCVS=BR TT_METAL_WRITE_DEBUG_DELAY_RISCVS=BR ./
+build/test/tt_metal/test_eltwise_binary
