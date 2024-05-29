@@ -135,12 +135,24 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
 
     if (bias_required_grad) {
         TT_ASSERT(bias.has_value(), "bias tensor should not be std::nullopt");
-        result[2] = operation::run(
-                        MorehBiasAddBackward{.bias_grad_mem_config = bias_grad_mem_config},
-                        {output_grad, bias.value()},
-                        {},
-                        {bias_grad})
-                        .at(0);
+        std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({output_grad, bias.value()}))};
+        operation::launch_op(
+            [bias_grad_mem_config](
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+                return operation::run(
+                    MorehBiasAddBackward{.bias_grad_mem_config = bias_grad_mem_config},
+                    input_tensors,
+                    optional_input_tensors,
+                    optional_output_tensors);
+            },
+            {output_grad, bias.value()},
+            output_tensors,
+            {},
+            {bias_grad});
+
+        result[2] = std::make_optional(output_tensors.at(0));
     }
 
     return result;
