@@ -1826,7 +1826,6 @@ uint32_t noc_async_read_tile_dram_sharded_set_state(uint32_t bank_base_address, 
     src_noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
 
     DEBUG_STATUS("NRTW");
-    DEBUG_SANITIZE_NOC_READ_TRANSACTION(get_noc_addr_helper(src_noc_xy, src_addr_), dest_addr, page_size);
     while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF));
     DEBUG_STATUS("NRTD");
 
