@@ -31,7 +31,6 @@ CHECK_COMPILERS()
 ############################################################################################################################
 # Find all required libraries to build
 ############################################################################################################################
-# find_package(Boost REQUIRED COMPONENTS thread filesystem system regex)
 find_package(GTest REQUIRED)
 find_package (Python3 COMPONENTS Interpreter Development)
 
@@ -121,7 +120,7 @@ endif()
 
 add_library(metal_header_directories INTERFACE)
 target_include_directories(metal_header_directories INTERFACE ${CMAKE_SOURCE_DIR}/tt_metal/hw/inc
-    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/boost/headers
+    ${CMAKE_SOURCE_DIR}/tt_metal/third_party
 )
 if ("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
     target_include_directories(metal_header_directories INTERFACE tt_metal/hw/inc/wormhole

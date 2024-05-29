@@ -27,7 +27,7 @@ set(LDFLAGS_ "-L${CMAKE_BINARY_DIR}/lib -Wl,-rpath,${CMAKE_BINARY_DIR}/lib ${CON
 set(SHARED_LIB_FLAGS_ "-shared -fPIC")
 set(STATIC_LIB_FLAGS_ "-fPIC")
 
-set (CMAKE_CXX_FLAGS_ "--std=c++17 -fvisibility-inlines-hidden -I${CMAKE_SOURCE_DIR}/tt_metal/third_party/boost/headers")
+set (CMAKE_CXX_FLAGS_ "--std=c++17 -fvisibility-inlines-hidden -I${CMAKE_SOURCE_DIR}/tt_metal/third_party")
 
 # This will build the shared library libdevice.so in build/lib where tt_metal can then find and link it
 include(ExternalProject)
