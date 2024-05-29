@@ -205,7 +205,7 @@ watcher log:
 
 Debug Delays
 ------------
-Watcher can insert NOC transactions delays for debugging purposes. The delayes can be specified by
+Watcher can insert NOC transaction delays for debugging purposes. These delays can be specified by
 transaction type and location. Environment variable `TT_METAL_WATCHER_DELAY` specifies the number
 of spin loop iterations to wait for. Similarly to DPRINT, the delay can be set for all cores, or a
 or a subset by setting environment variable `TT_METAL_*_DEBUG_DELAY_CORES`: x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all.
