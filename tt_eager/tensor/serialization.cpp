@@ -46,7 +46,7 @@ void dump_borrowed_storage(ofstream& output_stream, const BorrowedStorage& stora
 }
 
 void dump_multi_device_host_storage(ofstream& output_stream, const MultiDeviceHostStorage& storage) {
-    std::size_t num_buffers = storage.buffers.size();
+    std::size_t num_buffers = storage.num_buffers();
     output_stream.write(reinterpret_cast<const char*>(&num_buffers), sizeof(std::size_t));
     output_stream.write(reinterpret_cast<const char*>(&storage.strategy), sizeof(DistributedTensorConfig));
 
@@ -57,19 +57,19 @@ void dump_multi_device_host_storage(ofstream& output_stream, const MultiDeviceHo
                 auto size = buffer.size();
                 output_stream.write(reinterpret_cast<const char*>(&size), sizeof(size));
                 output_stream.write(reinterpret_cast<const char*>(buffer.begin()), sizeof(T) * size);
-            }, storage.buffers.at(0)
+            }, storage.get_buffer(0)
         );
         output_stream.write(reinterpret_cast<const char*>(&storage.shapes.at(0)), sizeof(Shape));
 
     } else {
-        for (const auto& buffer : storage.buffers) {
+        for (int i = 0; i < num_buffers; i++) {
             std::visit(
                 [&output_stream]<typename T>(const owned_buffer::Buffer<T>& generic_buffer) {
                     const auto buffer = owned_buffer::get_as<T>(generic_buffer);
                     auto size = buffer.size();
                     output_stream.write(reinterpret_cast<const char*>(&size), sizeof(size));
                     output_stream.write(reinterpret_cast<const char*>(buffer.begin()), sizeof(T) * size);
-                }, buffer
+                }, storage.get_buffer(i)
             );
         }
         for (const auto& shape : storage.shapes) {

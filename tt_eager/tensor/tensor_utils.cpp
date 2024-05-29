@@ -250,9 +250,9 @@ const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volu
 
 Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id) {
     const auto& tensor_storage = std::get<MultiDeviceStorage>(multi_device_tensor.get_storage());
-    if (tensor_storage.buffers.find(device_id) != tensor_storage.buffers.end()) {
+    if (tensor_storage.has_buffer_for_device_id(device_id)) {
         return Tensor{
-            DeviceStorage{tensor_storage.buffers.at(device_id)},
+            DeviceStorage{tensor_storage.get_buffer_for_device_id(device_id)},
             multi_device_tensor.get_legacy_shape(),
             multi_device_tensor.get_dtype(),
             multi_device_tensor.get_layout()
@@ -274,11 +274,11 @@ std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_de
     std::vector<ttnn::Tensor> tensors;
     if (multi_device_tensor.storage_type() == StorageType::MULTI_DEVICE) {
         const auto& tensor_storage = std::get<MultiDeviceStorage>(multi_device_tensor.get_storage());
-        tensors = std::vector<ttnn::Tensor>(tensor_storage.buffers.size(), Tensor());
+        tensors = std::vector<ttnn::Tensor>(tensor_storage.num_buffers(), Tensor());
         for (int i = 0; i < tensor_storage.ordered_device_ids.size(); ++i) {
             auto device_id = tensor_storage.ordered_device_ids[i];
             tensors[i] = Tensor{
-                DeviceStorage{tensor_storage.buffers.at(device_id)},
+                DeviceStorage{tensor_storage.get_buffer_for_device_id(device_id)},
                 tensor_storage.shapes.at(device_id),
                 multi_device_tensor.get_dtype(),
                 multi_device_tensor.get_layout()
@@ -287,9 +287,9 @@ std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_de
         return tensors;
     } else if (multi_device_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
         const auto& tensor_storage = std::get<MultiDeviceHostStorage>(multi_device_tensor.get_storage());
-        for (int i = 0; i < tensor_storage.buffers.size(); ++i) {
+        for (int i = 0; i < tensor_storage.num_buffers(); ++i) {
             tensors.push_back(Tensor{
-                OwnedStorage{tensor_storage.buffers[i]},
+                OwnedStorage{tensor_storage.get_buffer(i)},
                 tensor_storage.shapes[i],
                 multi_device_tensor.get_dtype(),
                 multi_device_tensor.get_layout()
@@ -376,7 +376,7 @@ std::vector<Device*> get_devices(const Tensor& tensor) {
         const auto& tensor_storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
         for (int i = 0; i < tensor_storage.ordered_device_ids.size(); ++i) {
             auto device_id = tensor_storage.ordered_device_ids[i];
-            devices.push_back(tensor_storage.buffers.at(device_id)->device());
+            devices.push_back(tensor_storage.get_buffer_for_device_id(device_id)->device());
         }
         return devices;
     } else {

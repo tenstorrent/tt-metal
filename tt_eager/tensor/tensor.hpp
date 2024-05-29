@@ -325,7 +325,7 @@ struct Tensor {
             return buffer->device();
         } else if (this->storage_type() == tt::tt_metal::StorageType::MULTI_DEVICE) {
             auto &storage = std::get<MultiDeviceStorage>(this->get_storage());
-            return storage.buffers.at(0)->device();
+            return storage.get_buffer_for_device_id(0)->device();
         } else {
             TT_THROW("Cannot get the device from a tensor with host storage");
         }
