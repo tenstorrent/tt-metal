@@ -97,7 +97,8 @@ export TT_METAL_ENV=dev
 
 4. Build & activate.
 
-NEW!! CMake Support
+We use CMake for our build flows.
+
 ```sh
 ./build_metal.sh
 
@@ -109,13 +110,6 @@ source python_env/bin/activate
 Note about Python environments: You do not have to use `create_venv.sh`. If you
 are less familiar with Python and its various environment tools, just use
 `create_venv.sh` as shown above.
-
-Old Makefile Flow
-```sh
-make build
-
-source build/python_env/bin/activate
-```
 
 5. Start coding
 

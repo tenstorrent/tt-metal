@@ -18,8 +18,7 @@ depending on the most up-to-date installation methods.
 
     export ARCH_NAME=<arch name>
     export TT_METAL_HOME=<this repo dir>
-    make build
-    make programming_examples/matmul_single_core
+    ./build_metal.sh
     ./build/programming_examples/matmul_single_core
 
 Host Code

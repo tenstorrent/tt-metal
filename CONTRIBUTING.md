@@ -11,7 +11,6 @@ Table of Contents
     - [Setting up Git](#setting-up-git)
     - [Setting logger level](#setting-logger-level)
     - [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
-    - [Cleaning the dev environment with `make nuke`](#cleaning-the-dev-environment-with-make-nuke)
   - [Tests in tt-metal](#tests-in-tt-metal)
     - [Running post-commit regressions](#running-post-commit-regressions)
     - [Adding post-commit tests](#adding-post-commit-tests)
@@ -174,14 +173,6 @@ $ cd ${TT_METAL_HOME} && ./docs/spellcheck.sh update
 Commit your changes and the personal dictionary, at docs/aspell-dictionary.pws,
 that is changed.
 
-### Cleaning the dev environment with `make nuke`
-
-Normally, `make clean` only clears out build artifacts. It does **not** delete
-the built Python dev environment stored at `build/python_env/`.
-
-To delete absolutely everything including the Python environment, use `make
-nuke`.
-
 ## Tests in tt-metal
 
 Ensure you're in a developer Python environment with necessary environment variables
@@ -201,8 +192,8 @@ You must run post-commit regressions before you commit something.
 These regressions will also run after every pushed commit to the GitHub repo.
 
 ```
-make build
-make tests
+cmake --build build --target install
+cmake --build build --target tests
 ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit
 ```
 
@@ -252,7 +243,7 @@ a specific one you'd like to run.
 
 1. Build the API integration tests using the make command,
 ```
-make tests
+cmake --build build --target tests
 ```
 2. Run the test binaries from the path **${TT_METAL_HOME}/build/test/tt_metal**
 
@@ -268,7 +259,7 @@ fast dispatch, you can
 
 1. Build the unit tests:
    ```
-   make tests
+   cmake --build build --target tests
    ```
 2. Run the test:
    ```
