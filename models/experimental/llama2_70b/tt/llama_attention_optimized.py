@@ -632,16 +632,6 @@ class TtLlamaAttention_optimized:
         cores_y = 4 if slice_size == 128 else 8
         num_slices = seq_len // slice_size  # we do q_lens of 128 per iteration (slice), then we concat the result.
 
-        # this is the output we write to. Initiate as empty tensors
-        attn_output_cat = ttnn.as_tensor(
-            torch.zeros([1, self.n_local_heads, seq_len, self.head_dim]),
-            device=self.device_mesh,
-            memory_config=self.model_config["DRAM_MEMCFG"],
-            dtype=ttnn.bfloat16,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
-            layout=ttnn.TILE_LAYOUT,
-        )
-
         # FILL K CACHE
         keys = self.layer_past[0]
         # Fill cache expects batch in dim0
@@ -664,90 +654,28 @@ class TtLlamaAttention_optimized:
         #     values_reshaped, value_layer, user_id
         # )
 
-        # PRE-SOFTMAX MM
-
-        key_layer_transposed = tt_lib.tensor.transpose(
+        # SPDA
+        program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[8, 8],
+            q_chunk_size=128,
+            k_chunk_size=128,
+        )
+        attn_output = tt_lib.operations.primary.transformers.scaled_dot_product_attention(
+            query_layer,
             key_layer,
-            -2,
-            -1,
-            output_mem_config=self.model_config["DRAM_MEMCFG"],
+            value_layer,
+            attn_masks,
+            is_causal=True,
+            scale=self.scale,
+            program_config=program_config,
         )
 
-        key_layer.deallocate(True)
-
-        for slice_i in range(num_slices):
-            q_slices = tt_lib.tensor.interleaved_to_sharded_partial(
-                query_layer,
-                (8, cores_y),
-                [32, self.head_dim],  # each slice is [1,8,128,128], we use 32 cores
-                num_slices,  # num_slices
-                slice_i,  # slice_index
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
-            )
-            attn_mask_slices = tt_lib.tensor.interleaved_to_sharded_partial(
-                attn_masks,
-                (8, cores_y),
-                [32, seq_len],  # each slice is [1,8,128,128], we use 32 cores
-                num_slices,  # num_slices
-                slice_i,  # slice_index
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
-            )
-            # print('qk matmul')
-            attn_weights = tt_lib.operations.primary.matmul(
-                q_slices,
-                key_layer_transposed,
-                program_config=self.model_config["ATTN_BATCHED_MM_PROGCFG"],
-                output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-                output_dtype=self.model_config["ATTN_BATCHED_MM_OUTPUT_DTYPE"],
-                compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-            )
-            q_slices.deallocate(True)
-
-            # SOFTMAX
-            softmax_progcfg = self.model_config["BATCHED_SOFTMAX_PROGCFG"]
-            softmax_progcfg.block_w = seq_len // 32
-
-            attn_weights = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
-                attn_weights,
-                self.scale,
-                attn_mask_slices,
-                program_config=self.model_config["BATCHED_SOFTMAX_PROGCFG"],
-                is_causal_mask=True,
-            )
-            attn_mask_slices.deallocate(True)
-
-            # POST-SOFTMAX MM
-            # print('v matmul')
-            attn_output = tt_lib.operations.primary.matmul(
-                attn_weights,
-                value_layer,
-                program_config=self.model_config["SCORES_BATCHED_MM_PROGCFG"],
-                output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-                output_dtype=self.model_config["BFP8_DTYPE"],
-                compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-            )
-
-            attn_weights.deallocate(True)
-
-            # write output to attn_output_cat
-            tt_lib.tensor.sharded_to_interleaved_partial(
-                attn_output,
-                attn_output_cat,
-                num_slices,
-                slice_i,
-                self.model_config["DRAM_MEMCFG"],
-            )
-            attn_output.deallocate(True)
-
         # deallocate keys and values
-
         query_layer.deallocate(True)
-        key_layer_transposed.deallocate(True)
+        key_layer.deallocate(True)
         value_layer.deallocate(True)
 
-        return attn_output_cat
+        return attn_output
 
     def prefill_attn_selfout(self, attn_output):
         # ATTENTION SELFOUT
