@@ -22,8 +22,7 @@ if($ENV{ENABLE_TRACY})
 endif()
 
 # MUST have the RPATH set, or else can't find the tracy lib
-# set(LDFLAGS_ "-L${CMAKE_BINARY_DIR}/lib -L/usr/local/lib -Wl,-rpath,${CMAKE_BINARY_DIR}/lib -Wl,-rpath,/usr/local/lib ${CONFIG_LDFLAGS} -ldl -lz -lboost_thread -lboost_filesystem -lboost_system -lboost_regex -lpthread -latomic -lhwloc -lstdc++")
-set(LDFLAGS_ "-L${CMAKE_BINARY_DIR}/lib -Wl,-rpath,${CMAKE_BINARY_DIR}/lib ${CONFIG_LDFLAGS} -Itt_metal/third_party/boost/interprocess/include -ldl -lz -lumd_boost -lpthread -latomic -lhwloc -lstdc++")
+set(LDFLAGS_ "-L${CMAKE_BINARY_DIR}/lib -L/usr/local/lib -Wl,-rpath,${CMAKE_BINARY_DIR}/lib -Wl,-rpath,/usr/local/lib ${CONFIG_LDFLAGS} -ldl -lz -lboost_thread -lboost_filesystem -lboost_system -lboost_regex -lpthread -latomic -lhwloc -lstdc++")
 set(SHARED_LIB_FLAGS_ "-shared -fPIC")
 set(STATIC_LIB_FLAGS_ "-fPIC")
 
@@ -57,7 +56,6 @@ ExternalProject_Add(
         LDFLAGS=${LDFLAGS_}
         CXXFLAGS=${CMAKE_CXX_FLAGS_}
 )
-add_dependencies(umd_device umd_boost)
 if($ENV{ENABLE_TRACY})
     add_dependencies(umd_device TracyClient)
 endif()

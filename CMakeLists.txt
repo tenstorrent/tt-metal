@@ -31,7 +31,7 @@ CHECK_COMPILERS()
 ############################################################################################################################
 # Find all required libraries to build
 ############################################################################################################################
-# find_package(Boost REQUIRED COMPONENTS thread filesystem system regex)
+find_package(Boost REQUIRED COMPONENTS thread filesystem system regex)
 find_package(GTest REQUIRED)
 find_package (Python3 COMPONENTS Interpreter Development)
 
@@ -59,7 +59,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Set default values for variables/options
 set(UMD_HOME "${CMAKE_SOURCE_DIR}/tt_metal/third_party/umd")
-set(BOOST_HOME "${CMAKE_SOURCE_DIR}/tt_metal/third_party/boost")
 
 option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
 option(TT_METAL_VERSIM_DISABLED "Disable TT_METAL_VERSIM" ON)
@@ -86,8 +85,8 @@ set(CMAKE_INSTALL_DATAROOTDIR "${CMAKE_BINARY_DIR}/tmp/share")
 ############################################################################################################################
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(metal_common_libs INTERFACE
-    dl z pthread atomic stdc++ hwloc # system libraries; hwloc has no cmake support, find_package won't find it
-    boost_interprocess boost_format boost_core boost_container_hash boost_align
+    dl z pthread atomic stdc++ # system libraries
+    Boost::thread Boost::filesystem Boost::system Boost::regex hwloc    # hwloc has no cmake support, find_package won't find it
 )
 
 # Note on flags:
@@ -121,22 +120,16 @@ if($ENV{ENABLE_TRACY})
 endif()
 
 add_library(metal_header_directories INTERFACE)
-target_include_directories(metal_header_directories INTERFACE ${CMAKE_SOURCE_DIR}/tt_metal/hw/inc
-    ${BOOST_HOME}/core/include
-    ${BOOST_HOME}/container_hash/include
-    ${BOOST_HOME}/format/include
-    ${BOOST_HOME}/align/include
-    ${BOOST_HOME}/describe/include
-)
+target_include_directories(metal_header_directories INTERFACE tt_metal/hw/inc)
 if ("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
-    target_include_directories(metal_header_directories INTERFACE ${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/wormhole
-        ${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/wormhole/wormhole_b0_defines
+    target_include_directories(metal_header_directories INTERFACE tt_metal/hw/inc/wormhole
+        tt_metal/hw/inc/wormhole/wormhole_b0_defines
         ${UMD_HOME}/device/wormhole
         ${UMD_HOME}/src/firmware/riscv/wormhole
     )
 else()
     target_include_directories(metal_header_directories INTERFACE
-        ${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/$ENV{ARCH_NAME}
+        tt_metal/hw/inc/$ENV{ARCH_NAME}
         ${UMD_HOME}/device/$ENV{ARCH_NAME}
         ${UMD_HOME}/src/firmware/riscv/$ENV{ARCH_NAME}
     )
@@ -153,8 +146,6 @@ target_precompile_headers(pch_pybinds INTERFACE
 ############################################################################################################################
 # Build subdirectories
 ############################################################################################################################
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/boost)
-
 if($ENV{ENABLE_TRACY})
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/tracy.cmake)
 endif()
