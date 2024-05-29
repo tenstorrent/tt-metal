@@ -52,10 +52,10 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
             } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 this->tensor_attributes->tensor_populated = {true};
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
-                workers.reserve(storage.buffers.size());
+                workers.reserve(storage.num_buffers());
                 for (int i = 0; i < storage.ordered_device_ids.size(); i++) {
                     auto device_id = storage.ordered_device_ids[i];
-                    auto buffer = storage.buffers.at(device_id);
+                    auto buffer = storage.get_buffer_for_device_id(device_id);
                     TT_ASSERT(buffer->device() != nullptr);
                     TT_ASSERT(buffer->device()->id() == device_id);
                     tensor_impl::validate_on_device_dtype_and_layout(buffer->device(), shape.value(), dtype, layout);
@@ -68,9 +68,9 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
                 if (not this->workers.at(0)->in_main_thread()) {
                     this->tensor_attributes->main_thread_tensor = false;
                 }
-                this->tensor_attributes->tensor_populated = std::vector<bool>(storage.buffers.size(), true);
+                this->tensor_attributes->tensor_populated = std::vector<bool>(storage.num_buffers(), true);
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
-                this->tensor_attributes->tensor_populated = std::vector<bool>(storage.buffers.size(), true);
+                this->tensor_attributes->tensor_populated = std::vector<bool>(storage.num_buffers(), true);
             } else {
                 raise_unsupported_storage<StorageType>();
             }
@@ -130,7 +130,6 @@ void Tensor::deallocate(bool force) {
                                     if (num_threads_sharing_tensor) {
                                         while (num_threads_sharing_tensor) {
                                             num_threads_sharing_tensor = attr->num_sibling_workers_sharing_tensor;
-                                            ;
                                         }
                                     }
                                     std::visit(
@@ -186,11 +185,12 @@ void Tensor::deallocate(bool force) {
                                 [force, attr = this->tensor_attributes](Device* worker) mutable {
                                     ZoneScopedN("ShardDeallocate");
                                     auto& s = std::get<MultiDeviceStorage>(attr->storage);
-                                    if (s.buffers.find(worker->id()) != s.buffers.end()) {
-                                        if ((force or s.buffers.at(worker->id()).use_count() == 1)) {
-                                            DeallocateBuffer(*(s.buffers.at(worker->id())));
+                                    if (s.has_buffer_for_device(worker)) {
+                                        auto& device_buffer = s.get_buffer_for_device(worker);
+                                        if (force or device_buffer.use_count() == 1) {
+                                            DeallocateBuffer(*device_buffer);
                                         }
-                                        s.buffers.at(worker->id()).reset();
+                                        device_buffer.reset();
                                     }
                                 });
 
@@ -208,7 +208,8 @@ void Tensor::deallocate(bool force) {
                 } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
                     if (this->tensor_attributes.use_count() == 1) {
                         // Same logic as above for host tensors
-                        for (auto& current_buffer : storage.buffers) {
+                        for (int i = 0; i < storage.num_buffers(); i++) {
+                            auto& current_buffer = storage.get_buffer(i);
                             std::visit([](auto&& buffer) { buffer.reset(); }, current_buffer);
                         }
                     }
@@ -354,10 +355,10 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
                 if (not this->workers.size()) {
                     // Not populated - sync.
                     this->wait_for_tensor_data_populated();
-                    workers.reserve(storage.buffers.size());
+                    workers.reserve(storage.num_buffers());
                     for (int i = 0; i < storage.ordered_device_ids.size(); ++i) {
                         auto device_id = storage.ordered_device_ids[i];
-                        workers.push_back(storage.buffers[device_id]->device());
+                        workers.push_back(storage.get_buffer_for_device_id(device_id)->device());
                     }
                 } else {
                     workers = this->workers;
@@ -772,15 +773,15 @@ bool Tensor::is_allocated() const {
                 return true;
             } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
                 bool is_allocated = true;
-                for (const auto& buffer : storage.buffers) {
-                    is_allocated &= std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, buffer);
+                for (int i = 0; i < storage.num_buffers(); i++) {
+                    is_allocated &= std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, storage.get_buffer(i));
                 }
                 return is_allocated;
             } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 bool is_allocated = true;
                 for (int i = 0; i < storage.ordered_device_ids.size(); ++i) {
                     auto device_id = storage.ordered_device_ids[i];
-                    const auto& buffer = storage.buffers.at(device_id);
+                    const auto& buffer = storage.get_buffer_for_device_id(device_id);
                     is_allocated &= bool(buffer) and buffer->size() > 0;
                 }
                 return is_allocated;
