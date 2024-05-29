@@ -116,11 +116,7 @@ class TtFalconModelShared(torch.nn.Module):
                 dim=-1,
             )
 
-            if (
-                self.model_config["PREFILL_OPTIMIZED_MODE"]
-                and self.model_config["PREFILL_ATTENTION_OPTIMIZED_MODE"]
-                and num_input_tokens in [128, 1024, 2048]
-            ):
+            if self.model_config["PREFILL_OPTIMIZED_MODE"] and num_input_tokens in [128, 1024, 2048]:
                 attention_mask_ = create_prefill_attn_mask_for_sharded_softmax(
                     attention_mask_bool_padded * -1e5,
                     self.config.num_attention_heads,

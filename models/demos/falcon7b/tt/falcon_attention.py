@@ -218,11 +218,7 @@ class TtFalconAttentionPrefill(nn.Module):
 
         seq_len = hidden_states[0].get_legacy_shape()[2]
 
-        if (
-            self.model_config["PREFILL_OPTIMIZED_MODE"]
-            and self.model_config["PREFILL_ATTENTION_OPTIMIZED_MODE"]
-            and seq_len in [128, 1024, 2048]
-        ):
+        if self.model_config["PREFILL_OPTIMIZED_MODE"] and seq_len in [128, 1024, 2048]:
             attn_output, layer_present = self._optimized_forward(
                 hidden_states,
                 attention_mask,
@@ -399,11 +395,14 @@ class TtFalconAttentionPrefill(nn.Module):
             ]
         else:
             fused_query_key_value = [
-                ttnn.experimental.tensor.falcon_fused_qkv_matmul(
+                ttnn.matmul(
                     hidden_states[device_id],
                     self.query_key_value_weights[device_id],
-                    output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                    memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+                    dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                    compute_kernel_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_KERNEL_CONFIG"],
+                    core_grid=ttnn.CoreGrid(y=7, x=8),
+                    use_1d_systolic_array=True,
                 )
                 for device_id in range(self.num_devices)
             ]
@@ -450,10 +449,10 @@ class TtFalconAttentionPrefill(nn.Module):
             key_layer[i].deallocate()
 
         grid_size = self.model_config["ATTN_OPTIMIZED_GRID_SIZE"]
-        num_cores = grid_size[0] * grid_size[1]
+        allowed_num_cores = self.model_config["ATTN_OPTIMIZED_ALLOWED_NUM_CORES"]
         num_slices = {128: 1, 1024: 4, 2048: 16}[seq_len]
 
-        tiles_per_shard = math.ceil((((self.num_heads * seq_len) / num_cores) / num_slices) / 32)
+        tiles_per_shard = math.ceil((((self.num_heads * seq_len) / allowed_num_cores) / num_slices) / 32)
         mm_activations_height_shard_spec = [tiles_per_shard * 32, 2 * 32]
         mm_output_height_shard_spec = [tiles_per_shard * 32, seq_len]
 
@@ -550,13 +549,15 @@ class TtFalconAttentionPrefill(nn.Module):
             )
             for device_id in range(self.num_devices)
         ]
-
         attn_outputs = [
-            ttnn.experimental.tensor.falcon_selfout_matmul(
+            ttnn.matmul(
                 attn_outputs[device_id],
                 self.dense_weights[device_id],
-                output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
-                output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+                memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
+                dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+                compute_kernel_config=self.model_config["SELFOUT_MM_OPTIMIZED_KERNEL_CONFIG"],
+                core_grid=ttnn.CoreGrid(y=7, x=8),
+                use_1d_systolic_array=True,
             )
             for device_id in range(self.num_devices)
         ]
