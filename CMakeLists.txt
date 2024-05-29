@@ -126,6 +126,7 @@ target_include_directories(metal_header_directories INTERFACE ${CMAKE_SOURCE_DIR
     ${BOOST_HOME}/container_hash/include
     ${BOOST_HOME}/format/include
     ${BOOST_HOME}/align/include
+    ${BOOST_HOME}/describe/include
 )
 if ("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
     target_include_directories(metal_header_directories INTERFACE ${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/wormhole
