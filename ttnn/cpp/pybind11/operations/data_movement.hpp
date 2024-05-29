@@ -6,6 +6,7 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+
 #include "ttnn/operations/data_movement.hpp"
 
 namespace py = pybind11;
@@ -13,9 +14,11 @@ namespace py = pybind11;
 namespace ttnn {
 namespace operations {
 namespace data_movement {
-void py_module(py::module& module) {
 
-    module.def("permute", &permute,
+void bind_permute(py::module& module) {
+    module.def(
+        "permute",
+        &permute,
         py::arg("input_tensor"),
         py::arg("order"),
         R"doc(
@@ -33,8 +36,12 @@ Example::
     [1, 1, 32, 64]
 
     )doc");
+}
 
-    module.def("concat", &concat,
+void bind_concat(py::module& module) {
+    module.def(
+        "concat",
+        &concat,
         py::arg("input_tensor"),
         py::arg("dim") = 0,
         py::kw_only(),
@@ -60,26 +67,57 @@ Example::
     [1, 1, 32, 64]
 
     )doc");
+}
+
+void bind_upsample(py::module& module) {
+    const auto doc = R"doc(
+ Upsamples a given multi-channel 2D (spatial) data.
+ The input data is assumed to be of the form [N, H, W, C].
+
+ The algorithms available for upsampling are 'nearest' for now.
+
+ Args:
+     * :attr:`input_tensor`: the input tensor
+     * :attr:`scale_factor`: multiplier for spatial size. Has to match input size if it is a tuple.
+     )doc";
 
     ttnn::bind_registered_operation(
         module,
         ttnn::upsample,
-        R"doc(
-Upsamples a given multi-channel 2D (spatial) data.
-The input data is assumed to be of the form [N, H, W, C].
+        doc ttnn::pybind_arguments_t{
+            py::arg("input_tensor"), py::arg("scale_factor"), py::arg("memory_config") = std::nullopt});
+}
 
-The algorithms available for upsampling are 'nearest' for now.
+void bind_pad(py::module& module) {
+    auto doc =
+        R"doc(pad(input_tensor: ttnn.Tensor, padding: Tuple[Tuple[int, int], ...], value: Union[int, float], *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+Pad tensor with constant value. Padded shape is accumulated if ttnn.pad is called on a tensor with padding.
 
 Args:
-    * :attr:`input_tensor`: the input tensor
-    * :attr:`scale_factor`: multiplier for spatial size. Has to match input size if it is a tuple.
-    )doc",
-        ttnn::pybind_arguments_t{
+    * :attr:`input_tensor`: input tensor
+    * :attr:`padding`: padding to apply. Each element of padding should be a tuple of 2 integers, with the first integer specifying the number of values to add before the tensor and the second integer specifying the number of values to add after the tensor.
+    * :attr:`value`: value to pad with
+
+Keyword Args:
+    * :attr:`memory_config`: the memory configuration to use for the operation)doc";
+
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::pad,
+        doc ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
-            py::arg("scale_factor"),
-            py::arg("memory_config") = std::nullopt
-        }
-    );
+            py::arg("padding"),
+            py::arg("value"),
+            py::kw_only(),
+            py::arg("memory_config") = nullopt,
+        });
+}
+
+void py_module(py::module& module) {
+    bind_permute(module);
+    bind_concat(module);
+    bind_upsample(module);
+    bind_pad(module);
 }
 
 }  // namespace data_movement
