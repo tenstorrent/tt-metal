@@ -43,7 +43,7 @@ std::vector<PackType> pack_vector(const std::vector<ValueType>& values) {
     unsigned int index = 0;
     std::for_each(results.begin(), results.end(), [&](PackType& result) {
         for (unsigned j = 0; j < num_values_to_pack; j++) {
-            result |= values[index].to_packed() << (index * ValueType::SIZEOF * CHAR_BIT);
+            result |= values[index].to_packed() << (j * ValueType::SIZEOF * CHAR_BIT);
             index++;
         }
         return result;

@@ -84,6 +84,41 @@ def test_run_unpadding_test(
         pytest.skip("Skipping test on Grayskull")
 
     for i in range(3):
+        # shift input/output tensor by creating very small tensor between loop
+        inp = torch.rand(1, 1, 32, 32)
+        test_tensor = (
+            ttl.tensor.Tensor(
+                inp.reshape(-1).tolist(),
+                inp.shape,
+                dtype,
+                ttl.tensor.Layout.ROW_MAJOR,
+            )
+            .to(ttl.tensor.Layout.TILE)
+            .to(device)
+        )
+        shard_spec_1_cores_grid = ttl.tensor.CoreRangeSet(
+            {
+                ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 0),
+                    ttl.tensor.CoreCoord(0, 0),
+                ),
+            }
+        )
+        test_mem_cfg = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.BufferType.L1,
+            ttl.tensor.ShardSpec(
+                shard_spec_1_cores_grid,  # Volume must match # of attn heads
+                [
+                    32,  # Each core has 32 users
+                    32,  # head dim
+                ],
+                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+        test_tensor = ttl.tensor.interleaved_to_sharded(test_tensor, sharded_mem_config=test_mem_cfg)
+
         a_pt, a_ref, memory_config, num_cache_entries = unpadding_test(
             kv_cache_shape,
             seq_len_start,
@@ -92,7 +127,7 @@ def test_run_unpadding_test(
             dtype,
         )
         assert a_pt.shape == a_ref.shape
-        assert num_cache_entries == 1
+        assert num_cache_entries == 2
         if dtype == ttl.tensor.DataType.BFLOAT8_B:
             # inevitable precision loss for bfloat8_b
             eq, pcc = comp_pcc(a_pt, a_ref, 0.999)
@@ -107,19 +142,6 @@ def test_run_unpadding_test(
         assert memory_config.shard_spec.shape[0] == a_ref.shape[-2]
         assert memory_config.shard_spec.shape[1] == a_ref.shape[-1]
 
-        # shift input/output tensor by creating very small tensor between loop
-        inp = torch.rand(1, 1, 32, 32)
-        test_tensor = (
-            ttl.tensor.Tensor(
-                inp.reshape(-1).tolist(),
-                inp.shape,
-                dtype,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-
     # hardcoded test 2 to check program caching
     kv_cache_shape = (2, 2, 128, 32)
     seq_len_start = 0
@@ -133,7 +155,7 @@ def test_run_unpadding_test(
             dtype,
         )
         assert a_pt.shape == a_ref.shape
-        assert num_cache_entries == 2
+        assert num_cache_entries == 3
         if dtype == ttl.tensor.DataType.BFLOAT8_B:
             # inevitable precision loss for bfloat8_b
             eq, pcc = comp_pcc(a_pt, a_ref, 0.999)

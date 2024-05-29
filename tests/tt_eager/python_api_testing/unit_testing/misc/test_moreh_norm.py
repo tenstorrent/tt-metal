@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import tt_lib as ttl
-from models.utility_functions import comp_allclose, skip_for_wormhole_b0
+from models.utility_functions import comp_allclose, is_wormhole_b0
 from loguru import logger
 
 TILE_HEIGHT = 32
@@ -87,7 +87,6 @@ def tt_norm(cpu_x, cpu_dy, *, p=2.0, dim=None, do_backward=False, device=None):
     return npu_y, npu_dx
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("p", [2.0, 2.5, -2.5], ids=["p=2.0", "p=2.5", "p=-2.5"])
 @pytest.mark.parametrize(
     "dim_rtol_atol",
@@ -139,6 +138,9 @@ def test_moreh_norm(input_shape, p, dim_rtol_atol, device):
 
     dim, rtol, atol = dim_rtol_atol
 
+    if dim in (None, [], [0, 1, 2, 3]) and p == 2.5 and is_wormhole_b0():
+        pytest.skip("TODO: Check why comp_allclose result is poor on WH_B0.")
+
     cpu_x, cpu_dy = make_cpu_tensors(input_shape, dim)
 
     # expected
@@ -153,7 +155,6 @@ def test_moreh_norm(input_shape, p, dim_rtol_atol, device):
     assert pass_y
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("p", [2.0], ids=["p=2.0"])
 @pytest.mark.parametrize(
     "dim_rtol_atol",

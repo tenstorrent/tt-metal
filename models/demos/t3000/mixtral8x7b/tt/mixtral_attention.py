@@ -32,7 +32,11 @@ class TtMixtralAttention(torch.nn.Module):
         self.model_config = self.model_args.get_model_config()
 
         layer_name = f"layers.{layer_num}.attention"
-        cache_name = lambda name: self.model_args.weight_cache_path(dtype) / (f"{layer_name}.{name}")
+
+        if args.dummy_weights:
+            cache_name = lambda _: None
+        else:
+            cache_name = lambda name: self.model_args.weight_cache_path(dtype) / (f"{layer_name}.{name}")
 
         wq_str = f"{layer_name}.wq.weight"
         wk_str = f"{layer_name}.wk.weight"

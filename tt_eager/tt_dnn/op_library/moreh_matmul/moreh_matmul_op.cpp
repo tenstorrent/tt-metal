@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
-
 #include "tt_dnn/op_library/moreh_dot/moreh_dot_op.hpp"
+#include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
@@ -291,15 +290,29 @@ Tensor moreh_matmul_(
     const std::optional<Tensor>& bias,
     const MemoryConfig& output_mem_config) {
     log_debug(LogOp, "{}:{} run matmul {} {}", __func__, __LINE__, transpose_input, transpose_other);
-    return operation::run(
-               MorehMatmul{
-                   .output_mem_config = output_mem_config,
-                   .transpose_input = transpose_input,
-                   .transpose_other = transpose_other},
-               {input, other},
-               {bias},
-               {output})
-        .at(0);
+
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input, other}, {bias}))};
+
+    operation::launch_op(
+        [output_mem_config, transpose_input, transpose_other](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehMatmul{
+                    .output_mem_config = output_mem_config,
+                    .transpose_input = transpose_input,
+                    .transpose_other = transpose_other},
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
+        {input, other},
+        output_tensors,
+        {bias},
+        {output});
+
+    return output_tensors.at(0);
 }
 
 Tensor moreh_matmul(

@@ -41,6 +41,10 @@ void DeviceModule(py::module &m_device) {
             &Device::compute_with_storage_grid_size,
             "Grid size (x, y) denoting region that can be targeted by ops")
         .def(
+            "dram_grid_size",
+            &Device::dram_grid_size,
+            "Grid size (x, y) denoting dram cores that can be targeted")
+        .def(
             "worker_core_from_logical_core",
             &Device::worker_core_from_logical_core,
             "Convert a logical core coordinate into a physical worker core coordinate")

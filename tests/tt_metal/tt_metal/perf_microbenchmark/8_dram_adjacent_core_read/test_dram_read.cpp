@@ -297,7 +297,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Parameters Setup
         ////////////////////////////////////////////////////////////////////////////
-        uint32_t input_size;
+        uint32_t input_size = 0;
         tt::DataFormat tile_format;
         uint32_t total_banks = 12;
         if (df == 0) {

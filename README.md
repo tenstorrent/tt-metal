@@ -24,7 +24,7 @@
 
 | Model                                                      | Batch               | End-to-end throughput [1]    | Device throughput [2]       | Target                              |
 |----------------------------------------------------------  |---------------------|------------------------------|-----------------------------|-------------------------------------|
-| [ResNet-50](./models/demos/resnet) (fps)                   | 20                  | 2,070                        | 7,200                       | 10,000                              |
+| [ResNet-50](./models/demos/resnet) (fps)                   | 20                  | 2,850                        | 7,200                       | 10,000                              |
 | [BERT-Large](./models/demos/bert) (sen/s)                  | 12                  | 362                          | 406                         | 410                                 |
 | [Falcon7B-decode](./models/demos/ttnn_falcon7b) (t/s)      | 32                  | 135                          | 135                         | 140                                 |
 | [ViT](./models/demos/grayskull/vit) (fps)                  | 8                   | 480                          | 1570                        | 2000                                |
@@ -32,7 +32,7 @@
 | [Bloom](.models/demos/grayskull/functional_bloom) (sen/s)  |                     | 70                           |                             |                                     |
 | U-Net                                                      | coming soon         |                              |                             |                                     |
 
-[1] - Observed from the host. Includes dispatch overahed and kernel execution time.
+[1] - Observed from the host. Includes dispatch overhead and kernel execution time.
 
 [2] - Ignoring host overhead. Kernel execution time only.
 
@@ -53,10 +53,10 @@
 | Model                                                     |   Technique        | Gen. Token [3]      |  Batch                | End-to-end throughput [1]    | Device throughput [2]        | Target          |
 |-----------------------------------------------------------|--------------------|---------------------|-----------------------|------------------------------|------------------------------|-----------------|
 | [Falcon7B-decode](./models/demos/t3000/falcon7b)          | Data Parallel      | 129th               |  256                  | 4.4 t/s/u - 1114 t/s         |  coming soon                 |   21 t/s/u      |
-| [LLaMA-2-70B-decode](./models/demos/t3000/llama2_70b)     | Tensor Parallel    | 129th               |  32                   | 8.4 t/s/u - 269 t/s          |  13.8 t/s/u - 441 t/s        |   20 t/s/u      |
-| [LLaMA-3-70B-decode](./models/demos/t3000/llama3_70b)     | Tensor Parallel    | 129th               |  32                   | 2.4 t/s/u - 75.4 t/s         |  7.7 t/s/u - 246.4 t/s       |   20 t/s/u      |
+| [LLaMA-2-70B-decode](./models/demos/t3000/llama2_70b)     | Tensor Parallel    | 129th               |  32                   | 8.5 t/s/u - 272 t/s          |  13.9 t/s/u - 445 t/s        |   20 t/s/u      |
+| [LLaMA-3-70B-decode](./models/demos/t3000/llama3_70b)     | Tensor Parallel    | 129th               |  32                   | 8.1 t/s/u - 257 t/s          |  13.9 t/s/u - 445 t/s        |   20 t/s/u      |
 | [Falcon40B-decode](./models/demos/t3000/falcon40b)        | Tensor Parallel    | 129th               |  32                   | 1.5 t/s/u - 48 t/s           |  14.0 t/s/u - 448 t/s        |   30 t/s/u      |
-| [Mixtral7Bx8-decode](./models/demos/t3000/mixtral8x7b)    | Tensor Parallel    | 129th               |  32                   | 0.3 t/s/u - 1.0 t/s          |  23.5 t/s/u - 752 t/s        |   28 t/s/u      |
+| [Mixtral7Bx8-decode](./models/demos/t3000/mixtral8x7b)    | Tensor Parallel    | 129th               |  32                   | 3.6 t/s/u - 114 t/s          |  23.5 t/s/u - 752 t/s        |   28 t/s/u      |
 | ResNet50                                                  | Data Parallel      | coming soon         |                       |                              |                              |                 |
 
 ## Using TT-NN ops and tensors

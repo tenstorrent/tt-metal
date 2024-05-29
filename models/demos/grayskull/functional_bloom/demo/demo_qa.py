@@ -100,6 +100,7 @@ def run_bloom_qa_inference(
     input_path,
     model_location_generator,
     device,
+    num_tokens_to_decode,
     reset_seeds,
 ):
     config = BloomConfig.from_pretrained(model_version)
@@ -141,13 +142,14 @@ def run_bloom_qa_inference(
         tokenizer=tokenizer,
         logits_processor=logits_processor,
         num_heads=num_heads,
-        num_tokens_to_decode=10,
+        num_tokens_to_decode=num_tokens_to_decode,
         attention_mask=attention_mask,
         device=device,
     )
 
     profiler.start("post_processing_output_to_string")
     generated_text = []
+    gen_answers = []
     for i in range(len(generated_ids)):
         generated_text.append(tokenizer.decode(generated_ids[i], skip_special_tokens=True))
     profiler.end("post_processing_output_to_string")
@@ -158,6 +160,7 @@ def run_bloom_qa_inference(
         logger.info("Output Prompt")
         input_prompt_length = len(input_text[i])
         answer = generated_text[i][input_prompt_length:].strip()
+        gen_answers.append(answer)
         logger.info(answer)
 
     measurements = {
@@ -165,7 +168,7 @@ def run_bloom_qa_inference(
         "post_processing": profiler.get("post_processing_output_to_string"),
     }
 
-    return measurements
+    return measurements, gen_answers
 
 
 def run_bloom_qa_inference_squad(
@@ -173,6 +176,7 @@ def run_bloom_qa_inference_squad(
     functional_model,
     batch_size,
     device,
+    num_tokens_to_decode,
     reset_seeds,
 ):
     config = BloomConfig.from_pretrained(model_version)
@@ -234,7 +238,7 @@ def run_bloom_qa_inference_squad(
         tokenizer=tokenizer,
         logits_processor=logits_processor,
         num_heads=num_heads,
-        num_tokens_to_decode=10,
+        num_tokens_to_decode=num_tokens_to_decode,
         attention_mask=attention_mask,
         device=device,
     )
@@ -266,6 +270,8 @@ def run_bloom_qa_inference_squad(
     logger.info("F1 Score :")
     logger.info(eval_score["f1"])
 
+    return eval_score
+
 
 @pytest.mark.parametrize(
     "functional_model",
@@ -281,6 +287,8 @@ def test_demo(
     device,
     use_program_cache,
     reset_seeds,
+    batch_size=8,
+    num_tokens_to_decode=10,
 ):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
@@ -288,10 +296,11 @@ def test_demo(
     return run_bloom_qa_inference(
         model_version="bigscience/bloom-560m",
         functional_model=functional_model,
-        batch_size=8,
+        batch_size=batch_size,
         input_path=input_path,
         model_location_generator=model_location_generator,
         device=device,
+        num_tokens_to_decode=num_tokens_to_decode,
         reset_seeds=reset_seeds,
     )
 
@@ -303,14 +312,22 @@ def test_demo(
         ttnn_optimized_functional_bloom,
     ),
 )
-def test_demo_squadv2(functional_model, device, use_program_cache, reset_seeds):
+def test_demo_squadv2(
+    functional_model,
+    device,
+    use_program_cache,
+    reset_seeds,
+    batch_size=8,
+    num_tokens_to_decode=10,
+):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
     return run_bloom_qa_inference_squad(
         model_version="bigscience/bloom-560m",
         functional_model=functional_model,
-        batch_size=8,
+        batch_size=batch_size,
         device=device,
+        num_tokens_to_decode=num_tokens_to_decode,
         reset_seeds=reset_seeds,
     )

@@ -85,7 +85,7 @@ inline ttnn::Tensor permute(const ttnn::Tensor& input_tensor, const std::vector<
         std::vector<uint32_t> full_shape_vec{};
         int i = 0;
         while (i < 3 and shape[i] == 1) i++;
-        for (i; i < shape.rank(); i++) {
+        for (; i < shape.rank(); i++) {
             shape_vec.push_back(shape[i]);
             full_shape_vec.push_back(full_shape[i]);
         }

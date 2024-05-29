@@ -11,7 +11,20 @@ MatmulProgramConfig = ttnn.experimental.operations.primary.MatmulProgramConfig
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
-    return input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
+    import torch
+
+    output_tensor = input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
+
+    if activation == "gelu":
+        output_tensor = torch.nn.functional.gelu(output_tensor)
+    elif activation == "relu":
+        output_tensor = torch.nn.functional.relu(output_tensor)
+    elif activation is not None:
+        raise RuntimeError(f"{activation} is not supported as activation function")
+
+    while len(output_tensor.shape) > len(input_tensor_a.shape):
+        output_tensor = output_tensor.squeeze(0)
+    return output_tensor
 
 
 @ttnn.register_operation(
@@ -25,11 +38,12 @@ def matmul(
     dtype: Optional[ttnn.DataType] = None,
     core_grid: Optional[ttnn.CoreGrid] = None,
     program_config: Optional[MatmulProgramConfig] = None,
+    activation: Optional[str] = None,
     use_1d_systolic_array: Optional[bool] = None,
     compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
 ) -> ttnn.Tensor:
     """
-    matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig=ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[ttnn.CoreGrid] = None, program_config: Optional[MatmulProgramConfig] = None, use_1d_systolic_array: Optional[bool] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None) -> ttnn.Tensor
+    matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig=ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[ttnn.CoreGrid] = None, program_config: Optional[MatmulProgramConfig] = None, activation: Optional[str] = None, use_1d_systolic_array: Optional[bool] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None) -> ttnn.Tensor
 
     Returns the matrix product of two tensors.
 
@@ -72,6 +86,7 @@ def matmul(
         * :attr:`dtype` (ttnn.DataType): the data type of the output tensor. Defaults to None
         * :attr:`core_grid` (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to None
         * :attr:`program_config` (ttnn.MatmulProgramConfig): the program configuration for the matmul operation. Defaults to None
+        * :attr:`activation` (Optional[str]): the activation function to be applied. Defaults to None
         * :attr:`use_1d_systolic_array` (bool): whether to use a 1D systolic array. Defaults to None which means it will be determined automatically
         * :attr:`compute_kernel_config` (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to None
 
@@ -108,27 +123,18 @@ def matmul(
         >>> print(output.shape)
         [10, 64, 128]
     """
-
     if use_1d_systolic_array is not None or core_grid is not None:
         if program_config is not None:
             raise RuntimeError(f"Cannot use program_config with use_1d_systolic_array or core_grid")
         core_grid = core_grid or input_tensor_a.device().core_grid
-
-    if program_config is not None:
-        return ttnn._ttnn.operations.matmul.matmul(
-            input_tensor_a,
-            input_tensor_b,
-            memory_config=memory_config,
-            dtype=dtype,
-            program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
-        )
 
     return ttnn._ttnn.operations.matmul.matmul(
         input_tensor_a,
         input_tensor_b,
         memory_config=memory_config,
         dtype=dtype,
+        program_config=program_config,
+        activation=activation,
         compute_kernel_config=compute_kernel_config,
         core_grid=core_grid,
     )
@@ -175,7 +181,7 @@ def linear(
     compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
 ) -> ttnn.Tensor:
     """
-    linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, bias: Optional[ttnn.Tensor] = None, memory_config: ttnn.MemoryConfig=ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[ttnn.CoreGrid] = None, proggram_config: Optional[MatmulProgramConfig] = None, activation: Optional[str] = None, use_1d_systolic_array: Optional[bool] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None) -> ttnn.Tensor
+    linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, bias: Optional[ttnn.Tensor] = None, memory_config: ttnn.MemoryConfig=ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[ttnn.CoreGrid] = None, program_config: Optional[MatmulProgramConfig] = None, activation: Optional[str] = None, use_1d_systolic_array: Optional[bool] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None) -> ttnn.Tensor
 
     Returns the linear transformation of the inputs
 
@@ -202,30 +208,19 @@ def linear(
         >>> print(output.shape)
         [10, 64, 128]
     """
-
     if use_1d_systolic_array is not None or core_grid is not None:
         if program_config is not None:
             raise RuntimeError(f"Cannot use program_config with use_1d_systolic_array or core_grid")
         core_grid = core_grid or input_tensor_a.device().core_grid
 
-    if program_config is not None:
-        return ttnn._ttnn.operations.matmul.linear(
-            input_tensor_a,
-            input_tensor_b,
-            bias=bias,
-            memory_config=memory_config,
-            dtype=dtype,
-            program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
-        )
-
     # FIXME: passing an fp32 compute_kernel_config will cause the underlying C++ function to fail
     return ttnn._ttnn.operations.matmul.linear(
         input_tensor_a,
         input_tensor_b,
-        memory_config=memory_config,
         bias=bias,
+        memory_config=memory_config,
         dtype=dtype,
+        program_config=program_config,
         activation=activation,
         compute_kernel_config=compute_kernel_config,
         core_grid=core_grid,

@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 # This script runs the performance tests for the falcon40b model with different sequence lengths
 seq_lens=(128 2048)
 

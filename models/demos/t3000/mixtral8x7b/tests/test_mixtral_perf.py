@@ -60,26 +60,22 @@ def test_mixtral_model_perf(
 ):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
-    model_args.n_layers = 32
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=True)
+    model_args.n_layers = 1
 
     # Clear global profiler state before starting measurements
     profiler.clear()
 
     profiler.start("weight_loading")
-    state_dict = torch.load(model_args.state_dict_path)
-    keys_dict = list(state_dict.keys())[:]
-    # If needed to test with fewer layers, remove the rest of the layers
-    remv = [f"layers.{i}" for i in range(model_args.n_layers, 32)]
-    for k in keys_dict:
-        if any([r in k for r in remv]):
-            state_dict.pop(k)
-
+    state_dict = model_args.load_state_dict()
     profiler.end("weight_loading")
 
     prompts = ["Once"] * 32
-    encoded_prompts = [tokenizer.encode(prompt) for prompt in prompts]
+    if model_args.dummy_weights:
+        encoded_prompts = [[1, 5713]] * len(prompts)  # manual encoding of the "Once" prompt
+    else:
+        tokenizer = Tokenizer(model_args.tokenizer_path)
+        encoded_prompts = [tokenizer.encode(prompt) for prompt in prompts]
 
     # Embedding on host
     embd = Emb()
@@ -187,6 +183,7 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
         profiler.end(f"torch_argmax_and_embed_{i}")
 
         profiler.start(f"deallocate_tt_tensors_{i}")
-        decode_input.deallocate(force=True)
+        # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
+        del decode_input, attn_mask, tt_decode_input
         tt_out.deallocate(force=True)
         profiler.end(f"deallocate_tt_tensors_{i}")

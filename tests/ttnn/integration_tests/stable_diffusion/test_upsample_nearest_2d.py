@@ -49,7 +49,8 @@ def test_upsample_nearest2d_512x512(reset_seeds, device, input_shape, scale_fact
 
     torch_tensor = torch.permute(torch_tensor, (0, 2, 3, 1))
     input_tensor = ttnn.from_torch(torch_tensor, device=device, dtype=ttnn.bfloat16)
-    tt_out = tt2_ttnn_upsample_nearest2d(input_tensor, scale_factor)
+    model = tt2_ttnn_upsample_nearest2d(input_shape[-1], input_shape[-2], input_shape[-3], scale_factor)
+    tt_out = model(input_tensor)
     tt_out = ttnn.from_device(tt_out)
     tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
     tt_output = ttnn.to_torch(tt_out)
