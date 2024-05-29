@@ -194,6 +194,64 @@ parameters = {
             ttnn.L1_MEMORY_CONFIG,
             ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         ),
+        # Matmul 1D mcast in0 (single core)
+        (
+            (1,),
+            (64, 64, 128),
+            False,
+            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(1, 1),
+                in0_block_w=2,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=2,
+                per_core_N=4,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+                    (64, 64),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            ),
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        ),
+        # Matmul 1D mcast in1 (single core)
+        (
+            (1,),
+            (64, 64, 128),
+            False,
+            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(1, 1),
+                in0_block_w=2,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=2,
+                per_core_N=4,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=False,
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+                    (64, 64),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            ),
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        ),
         # Matmul 2D mcast
         (
             (1,),

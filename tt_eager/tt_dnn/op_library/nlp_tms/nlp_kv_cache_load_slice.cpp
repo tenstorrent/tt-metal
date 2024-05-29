@@ -133,14 +133,17 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
     }
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
+    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0](
                                               const void *operation,
-                                              const Program &program,
+                                              Program &program,
                                               const std::vector<Tensor> &input_tensors,
                                               const std::vector<std::optional<const Tensor>> &,
                                               const std::vector<Tensor> &output_tensors) {
         auto src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
+        auto dst_tensor_buffer = dst_tensor.buffer();
+
+        UpdateDynamicCircularBufferAddress(program, cb_src0, *dst_tensor_buffer);
 
         auto shard_spec = dst_tensor.shard_spec().value();
         auto all_cores = shard_spec.grid;

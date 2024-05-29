@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
-
 #include <functional>
 #include <optional>
 #include <utility>
 #include <variant>
 #include <vector>
+
+#include "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
 
 namespace tt {
 
@@ -147,7 +147,7 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
 }
 
 // input_grad
-[[maybe_unused]] Tensor moreh_layernorm_backward_input_grad(
+Tensor moreh_layernorm_backward_input_grad(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& mean,
@@ -156,18 +156,30 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
     const tt_metal::Tensor& input_grad,
     const std::optional<std::reference_wrapper<const Tensor>> gamma,
     const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> dummy_output_tensors = {
+        Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd, input_grad}, {gamma}))};
     // Inplace
-    operation::run(
-        MorehLayerNormBackwardInputGrad{
-            .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
+    operation::launch_op(
+        [normalized_dims, output_mem_config](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehLayerNormBackwardInputGrad{
+                    .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
         {output_grad, input, mean, rstd, input_grad},
+        dummy_output_tensors,
         {gamma});
 
     return input_grad;
 }
 
 // gamma_grad and beta_grad
-[[maybe_unused]] std::vector<std::variant<Tensor, char*>> moreh_layernorm_backward_gamma_beta_grad(
+std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& mean,
@@ -176,16 +188,28 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
     const std::optional<std::reference_wrapper<const Tensor>> gamma_grad,
     const std::optional<std::reference_wrapper<const Tensor>> beta_grad,
     const MemoryConfig& output_mem_config) {
-    std::vector<std::variant<Tensor, char*>> outputs{nullptr, nullptr};
+    std::vector<std::optional<Tensor>> outputs(2);
     if (!gamma_grad.has_value() && !beta_grad.has_value()) {
         return outputs;
     }
 
+    std::vector<Tensor> dummy_output_tensors = {
+        Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma_grad, beta_grad}))};
     // Inplace
-    operation::run(
-        MorehLayerNormBackwardGammaBetaGrad{
-            .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
+    operation::launch_op(
+        [normalized_dims, output_mem_config](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehLayerNormBackwardGammaBetaGrad{
+                    .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
         {output_grad, input, mean, rstd},
+        dummy_output_tensors,
         {gamma_grad, beta_grad});
 
     if (gamma_grad.has_value()) {
@@ -194,12 +218,11 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
     if (beta_grad.has_value()) {
         outputs[1] = beta_grad.value();
     }
-
     return outputs;
 }
 
 // input_grad and gamma_grad and beta_grad
-[[maybe_unused]] std::vector<std::variant<Tensor, char*>> moreh_layernorm_backward(
+std::vector<std::optional<Tensor>> moreh_layernorm_backward(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& mean,
@@ -210,7 +233,7 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
     const std::optional<std::reference_wrapper<const Tensor>> gamma_grad,
     const std::optional<std::reference_wrapper<const Tensor>> beta_grad,
     const MemoryConfig& output_mem_config) {
-    std::vector<std::variant<Tensor, char*>> outputs;
+    std::vector<std::optional<Tensor>> outputs;
     outputs.reserve(3);
 
     // input_grad
@@ -218,7 +241,7 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
         outputs.push_back(moreh_layernorm_backward_input_grad(
             output_grad, input, mean, rstd, normalized_dims, input_grad->get(), gamma, output_mem_config));
     } else {
-        outputs.push_back(nullptr);
+        outputs.push_back(std::nullopt);
     }
 
     // gamma_grad and beta_grad

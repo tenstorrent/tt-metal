@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib as ttl
+import ttnn
 from loguru import logger
 from pathlib import Path
 from models.utility_functions import is_grayskull, is_wormhole_b0
@@ -94,9 +94,13 @@ def pretty_print_model_config(model_config):
 
 def get_model_config(model_config_str, prefill_seq_len=0):
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
-    DRAM_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-    L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
-    BFP8_DTYPE = ttl.tensor.DataType.BFLOAT8_B
+    DRAM_MEMCFG = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+    )
+    L1_MEMCFG = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+    )
+    BFP8_DTYPE = ttnn.experimental.tensor.DataType.BFLOAT8_B
 
     # Set default dtype and mem_config based on model_config_str
     if model_config_str in ("BFLOAT16-DRAM", "BFLOAT16-L1", "BFLOAT16-L1_SHARDED"):
@@ -104,7 +108,11 @@ def get_model_config(model_config_str, prefill_seq_len=0):
         # TODO: Set default memcfg for BFLOAT16-L1 to L1
         # mem_config = DRAM_MEMCFG if mem_config_str == "DRAM" else L1_MEMCFG
         mem_config = DRAM_MEMCFG
-        dtype = ttl.tensor.DataType.BFLOAT16 if dtype_str == "BFLOAT16" else ttl.tensor.DataType.BFLOAT8_B
+        dtype = (
+            ttnn.experimental.tensor.DataType.BFLOAT16
+            if dtype_str == "BFLOAT16"
+            else ttnn.experimental.tensor.DataType.BFLOAT8_B
+        )
     else:
         raise NotImplementedError(f"Model config {model_config_str} is not supported!")
 
@@ -120,7 +128,7 @@ def get_model_config(model_config_str, prefill_seq_len=0):
     model_config.update({f"{key}_DTYPE": dtype for key in OP_KEYS if key not in NO_DTYPE})
 
     # Input ids are UINT32
-    model_config["INPUT_DTYPE"] = ttl.tensor.DataType.UINT32
+    model_config["INPUT_DTYPE"] = ttnn.experimental.tensor.DataType.UINT32
 
     # Matmul Weights must always be BFP8_B
     # Override defaults for certain configs
@@ -140,16 +148,18 @@ def get_model_config(model_config_str, prefill_seq_len=0):
 
     if model_config_str in ("BFLOAT16-L1_SHARDED"):
         # Q, K, V are batch sharded across cores
-        model_config["ATTN_BATCH_SHARDED_MEMCFG"] = lambda shard_height, shard_width: ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config[
+            "ATTN_BATCH_SHARDED_MEMCFG"
+        ] = lambda shard_height, shard_width: ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.BufferType.L1,
+            ttnn.experimental.tensor.ShardSpec(
+                ttnn.experimental.tensor.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreRange(
                             # Volume must match batch size
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
+                            ttnn.experimental.tensor.CoreCoord(0, 0),
+                            ttnn.experimental.tensor.CoreCoord(7, 3),
                         ),
                     }
                 ),
@@ -157,14 +167,14 @@ def get_model_config(model_config_str, prefill_seq_len=0):
                     shard_height,
                     shard_width,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
 
         model_config[
             "ATTN_BATCHED_MM_PROGCFG"
-        ] = lambda block_w, per_core_M, per_core_N: ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        ] = lambda block_w, per_core_M, per_core_N: ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=[8, 4],
             in0_block_w=block_w,
             out_subblock_h=1,  # TODO: Maximize
@@ -174,15 +184,15 @@ def get_model_config(model_config_str, prefill_seq_len=0):
         )
 
         if is_wormhole_b0():
-            model_config["COMPUTE_KERNEL_CONFIG"] = ttl.tensor.WormholeComputeKernelConfig(
-                math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            model_config["COMPUTE_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
                 math_approx_mode=True,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
         else:
-            model_config["COMPUTE_KERNEL_CONFIG"] = ttl.tensor.GrayskullComputeKernelConfig(
-                math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            model_config["COMPUTE_KERNEL_CONFIG"] = ttnn.experimental.tensor.GrayskullComputeKernelConfig(
+                math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
                 math_approx_mode=True,
             )
 
@@ -195,19 +205,25 @@ def get_model_config(model_config_str, prefill_seq_len=0):
 
 def set_prefill_config(model_config, seq_len, dram_memcfg):
     model_config["PREFILL_OPTIMIZED_MODE"] = not is_grayskull()
-    model_config["PREFILL_ATTENTION_OPTIMIZED_MODE"] = False  # enable when #8349 is fixed
     model_config["MLP_SEQ_LEN"] = seq_len
     model_config["MLP_PADDING_VALUE"] = 4608
     model_config["MLP_GRID_SIZE"] = (8, 8)
 
-    model_config["MLP_KERNEL_CONFIG"] = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.LoFi,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
+    if is_wormhole_b0():
+        default_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+    else:
+        default_kernel_config = ttnn.experimental.tensor.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+            math_approx_mode=True,
+        )
+    model_config["MLP_KERNEL_CONFIG"] = default_kernel_config
 
-    mm_h_to_4h_prog_cfg = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    mm_h_to_4h_prog_cfg = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=model_config["MLP_GRID_SIZE"],
         in0_block_w=3,
         out_subblock_h=1,
@@ -215,11 +231,11 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
         per_core_M=4,
         per_core_N=72,
         transpose_mcast=False,
-        fused_activation=[ttl.tensor.FusibleActivation.GELU, True],
+        fused_activation=[ttnn.experimental.tensor.FusibleActivation.GELU, True],
     )
     model_config["DENSE_H_TO_4H_MM_PROGCFG"] = mm_h_to_4h_prog_cfg
 
-    mm_4h_to_h_prog_cfg = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    mm_4h_to_h_prog_cfg = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=model_config["MLP_GRID_SIZE"],
         in0_block_w=8,
         out_subblock_h=1,
@@ -233,7 +249,9 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
     model_config["MLP_INTERLEAVED_TO_SHARDED_MEM_CFG"] = dram_memcfg
 
     model_config["FUSED_QKV_MM_OPTIMIZED_MEMCFG"] = dram_memcfg
-    model_config["FUSED_QKV_MM_OPTIMIZED_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    model_config[
+        "FUSED_QKV_MM_OPTIMIZED_PROGCFG"
+    ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(8, 8),
         in0_block_w=2,
         per_core_M=8,
@@ -243,19 +261,23 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
         transpose_mcast=False,
         fused_activation=None,
     )
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi2,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
     model_config["FUSED_QKV_MM_OPTIMIZED_KERNEL_CONFIG"] = compute_kernel_config
+    model_config["SELFOUT_MM_OPTIMIZED_KERNEL_CONFIG"] = compute_kernel_config
     model_config["ATTN_OPTIMIZED_GRID_SIZE"] = (8, 8)
     model_config["ATTN_OPTIMIZED_MEMCFG"] = dram_memcfg
+    model_config[
+        "ATTN_OPTIMIZED_ALLOWED_NUM_CORES"
+    ] = 57  # We can't use full grid for attention, as it causes di/dt problems. Use 64 cores when issue #8644 is resolved.
 
     model_config[
         "QKT_OPTIMIZED_PROGCFG"
-    ] = lambda tiles_per_shard, seq_len, subblock_h, subblock_w: ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    ] = lambda tiles_per_shard, seq_len, subblock_h, subblock_w: ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=model_config["ATTN_OPTIMIZED_GRID_SIZE"],
         in0_block_w=2,
         per_core_M=tiles_per_shard,
@@ -266,12 +288,13 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
         fused_activation=None,
         mcast_in0=False,
     )
-    model_config["QKTV_MM_OPTIMIZED_MEMCFG"] = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttl.tensor.BufferType.L1
+    model_config["QKTV_MM_OPTIMIZED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.experimental.tensor.BufferType.L1,
     )
 
-    model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"] = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+    model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi2,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
@@ -279,7 +302,7 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
 
     model_config[
         "SOFTMAX_OPTIMIZED_PROGCFG"
-    ] = lambda grid_size, subblock_w, block_h, block_w: ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+    ] = lambda grid_size, subblock_w, block_h, block_w: ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
         subblock_w=subblock_w,
         block_h=block_h,
@@ -288,7 +311,7 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
 
     model_config[
         "QKTV_MM_OPTIMIZED_PROGCFG"
-    ] = lambda tiles_per_shard, seq_len, subblock_h: ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    ] = lambda tiles_per_shard, seq_len, subblock_h: ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=model_config["ATTN_OPTIMIZED_GRID_SIZE"],
         in0_block_w=seq_len // 32,
         per_core_M=tiles_per_shard,
@@ -299,6 +322,8 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
         fused_activation=None,
         mcast_in0=False,
     )
+
+    model_config["LM_HEAD_KERNEL_CONFIG"] = default_kernel_config
 
 
 model_config_entries = {

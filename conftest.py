@@ -432,13 +432,31 @@ def reset_default_device():
 def use_program_cache(request):
     import tt_lib as ttl
 
-    if "device" in request.fixturenames:
+    if "device" in request.fixturenames or "device_l1_small_size" in request.fixturenames:
         dev = ttl.device.GetDefaultDevice()
         dev.enable_program_cache()
     elif "all_devices" in request.fixturenames:
         devices = request.getfixturevalue("all_devices")
         for dev in devices:
             dev.enable_program_cache()
+    elif "pcie_devices" in request.fixturenames:
+        devices = request.getfixturevalue("pcie_devices")
+        for dev in devices:
+            dev.enable_program_cache()
+    elif "device_mesh" in request.fixturenames:
+        mesh = request.getfixturevalue("device_mesh")
+        for device_id in mesh.get_device_ids():
+            mesh.get_device(device_id).enable_program_cache()
+    elif "t3k_device_mesh" in request.fixturenames:
+        mesh = request.getfixturevalue("t3k_device_mesh")
+        for device_id in mesh.get_device_ids():
+            mesh.get_device(device_id).enable_program_cache()
+    elif "pcie_device_mesh" in request.fixturenames:
+        mesh = request.getfixturevalue("pcie_device_mesh")
+        for device_id in mesh.get_device_ids():
+            mesh.get_device(device_id).enable_program_cache()
+    else:
+        logger.warning("No device fixture found to apply program cache to: PROGRAM CACHE DISABLED")
     yield
 
 

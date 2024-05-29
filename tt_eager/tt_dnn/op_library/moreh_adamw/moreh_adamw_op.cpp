@@ -2,13 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/moreh_adamw/moreh_adamw_op.hpp"
-
 #include <optional>
 #include <utility>
 
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_eager/tensor/tensor.hpp"
+#include "tt_eager/tt_dnn/op_library/moreh_adamw/moreh_adamw_op.hpp"
 
 using namespace tt::constants;
 using namespace std;
@@ -55,14 +54,12 @@ void MorehAdamW::validate(
     }
 }
 
-std::vector<Shape> MorehAdamW::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<Shape> MorehAdamW::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     // inplace
     return {};
 }
 
-std::vector<Tensor> MorehAdamW::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<Tensor> MorehAdamW::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     // inplace
     return {};
 }
@@ -78,7 +75,6 @@ operation::ProgramWithCallbacks MorehAdamW::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-
     const auto& param = input_tensors.at(0);
     const auto& grad = input_tensors.at(1);
     const auto& exp_avg = input_tensors.at(2);
@@ -86,30 +82,62 @@ operation::ProgramWithCallbacks MorehAdamW::create_program(
     const auto& max_exp_avg_sq = optional_input_tensors.at(0);
 
     return moreh_adamw_(
-        param, grad, exp_avg, exp_avg_sq,
-        this->lr, this->beta1, this->beta2, this->eps, this->weight_decay, this->step, this->amsgrad,
+        param,
+        grad,
+        exp_avg,
+        exp_avg_sq,
+        this->lr,
+        this->beta1,
+        this->beta2,
+        this->eps,
+        this->weight_decay,
+        this->step,
+        this->amsgrad,
         max_exp_avg_sq);
 }
 
-[[maybe_unused]] std::vector<std::variant<Tensor, char*>> moreh_adamw(
+std::vector<std::optional<Tensor>> moreh_adamw(
     const Tensor& param,
     const Tensor& grad,
     const Tensor& exp_avg,
     const Tensor& exp_avg_sq,
-    float lr, float beta1, float beta2, float eps, float weight_decay, uint32_t step, bool amsgrad,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    float weight_decay,
+    uint32_t step,
+    bool amsgrad,
     const std::optional<std::reference_wrapper<const Tensor>> max_exp_avg_sq,
     const MemoryConfig& mem_config) {
+    std::vector<Tensor> dummy_output_tensors = {
+        Tensor(operation::get_workers_for_op_output({param, grad, exp_avg, exp_avg_sq}, {max_exp_avg_sq}))};
 
-    std::vector<std::variant<Tensor, char*>> outputs{nullptr, nullptr, nullptr, nullptr, nullptr};
-
-    operation::run(
-        MorehAdamW{
-            .inplace = true,
-            .lr = lr, .beta1 = beta1, .beta2 = beta2, .eps = eps, .weight_decay = weight_decay, .step = step, .amsgrad = amsgrad,
-            .output_mem_config = mem_config},
+    operation::launch_op(
+        [lr, beta1, beta2, eps, weight_decay, step, amsgrad, mem_config](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehAdamW{
+                    .inplace = true,
+                    .lr = lr,
+                    .beta1 = beta1,
+                    .beta2 = beta2,
+                    .eps = eps,
+                    .weight_decay = weight_decay,
+                    .step = step,
+                    .amsgrad = amsgrad,
+                    .output_mem_config = mem_config},
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
         {param, grad, exp_avg, exp_avg_sq},
+        dummy_output_tensors,
         {max_exp_avg_sq});
 
+    std::vector<std::optional<Tensor>> outputs(5);
     outputs[0] = param;
     outputs[1] = grad;
     outputs[2] = exp_avg;

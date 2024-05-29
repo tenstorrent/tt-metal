@@ -113,6 +113,7 @@ def test_upsample_single_core(device, input_shapes, scale_h, scale_w):
         [2, 1280, 16, 16],
         [1, 64, 132, 10],
         [1, 32, 8, 8],
+        [2, 640, 32, 32],
     ],
 )
 @pytest.mark.parametrize("scale_h", [2])

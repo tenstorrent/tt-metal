@@ -1,6 +1,5 @@
 
 set(TENSOR_SRCS
-    ${CMAKE_CURRENT_SOURCE_DIR}/tensor_impl_wrapper.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/types.cpp

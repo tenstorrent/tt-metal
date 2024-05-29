@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn
 
-from models.utility_functions import torch2tt_tensor, pad_by_zero
+from models.utility_functions import is_wormhole_b0, torch2tt_tensor, pad_by_zero
 
 
 def get_weights_cached(
@@ -17,12 +17,12 @@ def get_weights_cached(
     weights_to_cache,
     overwrite=False,
     padzero=False,
-    tt_layout=tt_lib.tensor.Layout.TILE,
+    tt_layout=ttnn.experimental.tensor.Layout.TILE,
     weights_dict=None,
     custom_output_shape=None,
 ):
     if padzero:
-        assert tt_layout == tt_lib.tensor.Layout.TILE, "padding by zero currently only uses TILE layout"
+        assert tt_layout == ttnn.experimental.tensor.Layout.TILE, "padding by zero currently only uses TILE layout"
 
     """Load weights from weights_dict or cache and duplicate per device. Store if not cached."""
     custom_output_shape_str = ""
@@ -37,7 +37,7 @@ def get_weights_cached(
         weights = weights_dict[str(path)]
     elif not overwrite and path.exists():
         # Load cached weights
-        weights_host = tt_lib.tensor.load_tensor(str(path))
+        weights_host = ttnn.experimental.tensor.load_tensor(str(path))
         # Duplicate weights on all devices
         weights = [weights_host.to(device, model_config[f"{weight_config_str}_MEMCFG"]) for device in devices]
         # Add to weights_dict
@@ -77,6 +77,14 @@ def get_weights_cached(
         if weights_dict is not None:
             weights_dict[str(path)] = weights[0]
         # Store weights
-        tt_lib.tensor.dump_tensor(str(path), weights_host)
+        ttnn.experimental.tensor.dump_tensor(str(path), weights_host)
 
     return weights
+
+
+# TODO: Remove this once there are no more hangs on 8x8 (Issue #6795)
+def get_falcon_default_core_grid(device):
+    grid_size = device.compute_with_storage_grid_size()
+    if is_wormhole_b0() and grid_size.y >= 8:
+        return ttnn.CoreGrid(y=7, x=grid_size.x)
+    return ttnn.CoreGrid(y=grid_size.y, x=grid_size.x)

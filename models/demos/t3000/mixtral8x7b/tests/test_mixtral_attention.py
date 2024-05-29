@@ -29,7 +29,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
     pcc = 0.99
     dtype = ttnn.bfloat8_b
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
-    state_dict = torch.load(model_args.consolidated_weights_path(0), map_location="cpu")
+    state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {k[19:]: v for k, v in state_dict.items() if (k.startswith("layers.0.attention."))}
@@ -49,7 +49,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
     )
 
     generation_start_pos = 0
-    generation_length = 1
+    generation_length = 2
     all_tests_pass = True
 
     for i in range(generation_length):
@@ -73,6 +73,8 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
             attn_mask,
             rot_mat,
         )
+        # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
+        del attention_input, attn_mask
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
             .squeeze(2)

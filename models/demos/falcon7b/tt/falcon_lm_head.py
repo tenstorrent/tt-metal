@@ -2,10 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 from typing import List
 
 import tt_lib
+import ttnn
 
 from models.utility_functions import nearest_y
 
@@ -15,12 +15,12 @@ from models.utility_functions import nearest_y
 # it also takes in number of slices since this should be determined at the moment of pushing weights,
 # but in general with 512 < seq_len <= 1024 we should use 4 slices, with 1024 < seq_len <= 2048 we should use 8 slices
 def falcon_lm_head_matmul_2d(
-    hidden_states: tt_lib.tensor.Tensor,
-    weights: List[tt_lib.tensor.Tensor],
+    hidden_states: ttnn.experimental.tensor.Tensor,
+    weights: List[ttnn.experimental.tensor.Tensor],
     num_slices: int,
-    lm_head_padding: tt_lib.tensor.Tensor,
-    out_mem_config: tt_lib.tensor.MemoryConfig,
-    out_dtype: tt_lib.tensor.DataType,
+    lm_head_padding: ttnn.experimental.tensor.Tensor,
+    out_mem_config: ttnn.experimental.tensor.MemoryConfig,
+    out_dtype: ttnn.experimental.tensor.DataType,
 ):
     assert (
         hidden_states.device().arch() == tt_lib.device.Arch.WORMHOLE_B0
@@ -40,10 +40,10 @@ def falcon_lm_head_matmul_2d(
         weights_inner_dim_in_tiles == 144
     ), f"Weights are expected to be padded to the inner dim 144 in tiles, instead they are {weights_inner_dim_in_tiles}"
 
-    hidden_states = tt_lib.tensor.concat([hidden_states, lm_head_padding], -1)
+    hidden_states = ttnn.experimental.tensor.concat([hidden_states, lm_head_padding], -1)
 
-    compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
-        math_fidelity=tt_lib.tensor.MathFidelity.LoFi,
+    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi2,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
@@ -61,7 +61,7 @@ def falcon_lm_head_matmul_2d(
     per_core_N = nearest_y(weights_n_in_tiles / grid.x, out_subblock_w)
     in0_block_w = 4 if seq_len <= 1024 else 8
 
-    program_config = tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -75,7 +75,7 @@ def falcon_lm_head_matmul_2d(
     out_slices = []
     for i in range(num_slices):
         out_slices.append(
-            tt_lib.operations.primary.matmul(
+            ttnn.experimental.operations.primary.matmul(
                 hidden_states,
                 weights[i],
                 program_config=program_config,
@@ -85,7 +85,7 @@ def falcon_lm_head_matmul_2d(
             )
         )
 
-    out = tt_lib.tensor.concat(out_slices, -1)
+    out = ttnn.experimental.tensor.concat(out_slices, -1)
     for i in range(num_slices):
         out_slices[i].deallocate(True)
 

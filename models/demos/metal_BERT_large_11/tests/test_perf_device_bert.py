@@ -50,7 +50,7 @@ def test_perf_device_bare_metal(batch_size, test, expected_perf):
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        # [7, "BERT_LARGE-batch_8-BFLOAT8_B-SHARDED", 280],
+        [7, "BERT_LARGE-batch_8-BFLOAT8_B-SHARDED", 280],
         [8, "BERT_LARGE-batch_8-BFLOAT8_B-SHARDED", 340],
     ],
 )

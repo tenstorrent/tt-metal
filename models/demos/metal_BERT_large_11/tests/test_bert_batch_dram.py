@@ -284,8 +284,8 @@ def test_bert_batch_dram(
         pytest.skip(f"Bert large 11 is not supported on E75")
 
     if device.arch() == tt_lib.device.Arch.WORMHOLE_B0:
-        if (batch != 7 and batch != 8) or (model_config_str != "BFLOAT8_B-SHARDED"):
-            pytest.skip("Only batch_7-BFLOAT8_B-SHARDED and batch_8-BFLOAT8_B-SHARDED supported for WH B0")
+        if (batch != 8) or (model_config_str != "BFLOAT8_B-SHARDED"):
+            pytest.skip("Only batch_8-BFLOAT8_B-SHARDED supported for WH B0")
         elif batch == 8 and device.core_grid.y == 7:
             pytest.skip("This test is only supported for 8x8 grids")
 
@@ -373,8 +373,8 @@ def test_bert_batch_dram_with_program_cache(
         pytest.skip(f"Bert large 11 is not supported on E75")
 
     if device.arch() == tt_lib.device.Arch.WORMHOLE_B0:
-        if (batch != 7 and batch != 8) or (model_config_str != "BFLOAT8_B-SHARDED"):
-            pytest.skip("Only batch_7-BFLOAT8_B-SHARDED and batch_8-BFLOAT8_B-SHARDED supported for WH B0")
+        if (batch != 8) or (model_config_str != "BFLOAT8_B-SHARDED"):
+            pytest.skip("Only batch_8-BFLOAT8_B-SHARDED supported for WH B0")
         elif batch == 8 and device.core_grid.y == 7:
             pytest.skip("This test is only supported for 8x8 grids")
 

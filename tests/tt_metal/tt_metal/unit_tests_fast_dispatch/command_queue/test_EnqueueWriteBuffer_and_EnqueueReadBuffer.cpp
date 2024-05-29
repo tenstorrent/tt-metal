@@ -208,7 +208,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
 }
 
 void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
-    Device *device, CommandQueue &cq, BufferStressTestConfigSharded config, bool read_only) {
+    Device *device, CommandQueue &cq, BufferStressTestConfigSharded &config, BufferType buftype, bool read_only) {
     srand(config.seed);
 
     for (const bool cq_write : {true, false}) {
@@ -235,15 +235,17 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                     src.at(i) = i;
                 }
 
-                BufferType buftype = BufferType::L1;
-
                 Buffer buf(device, buf_size, config.page_size(), buftype, config.mem_config, shard_spec);
                 vector<uint32_t> src2 = src;
                 if (cq_write) {
                     EnqueueWriteBuffer(cq, buf, src2.data(), false);
                 } else {
                     ::detail::WriteToBuffer(buf, src);
-                    tt::Cluster::instance().l1_barrier(device->id());
+                    if (buftype == BufferType::DRAM) {
+                        tt::Cluster::instance().dram_barrier(device->id());
+                    } else {
+                        tt::Cluster::instance().l1_barrier(device->id());
+                    }
                 }
 
                 if (cq_write and not cq_read) {
@@ -669,7 +671,7 @@ TEST_F(CommandQueueSingleCardFixture, WritesToRandomBufferTypeAndThenReadsNonblo
 }
 
 // TODO: Split this into separate tests
-TEST_F(CommandQueueSingleCardFixture, ShardedBufferReadWrites) {
+TEST_F(CommandQueueSingleCardFixture, ShardedBufferL1ReadWrites) {
     for (Device *device : devices_) {
         for (const std::array<uint32_t, 2> cores :
              {std::array<uint32_t, 2>{1, 1},
@@ -712,7 +714,7 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferReadWrites) {
                             config.page_shape = page_shape;
                             tt::log_info(tt::LogTest, fmt::format("cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, num_iterations: {}", cores[0],cores[1], num_pages[0],num_pages[1], page_shape[0],page_shape[1], magic_enum::enum_name(shard_strategy).data(), num_iterations).c_str());
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
-                                device, device->command_queue(), config, false);
+                                device, device->command_queue(), config, BufferType::L1, false);
                         }
                     }
                 }
@@ -721,7 +723,53 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferReadWrites) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, ShardedBufferLargeReadWrites) {
+TEST_F(CommandQueueSingleCardFixture, ShardedBufferDRAMReadWrites) {
+    for (Device *device : devices_) {
+        for (const std::array<uint32_t, 2> cores :
+             {std::array<uint32_t, 2>{1, 1},
+              std::array<uint32_t, 2>{5, 1},
+              std::array<uint32_t, 2>{static_cast<uint32_t>(device->dram_grid_size().x), static_cast<uint32_t>(device->dram_grid_size().y)}}) {
+            for (const std::array<uint32_t, 2> num_pages : {
+                     std::array<uint32_t, 2>{1, 1},
+                     std::array<uint32_t, 2>{2, 1},
+                     std::array<uint32_t, 2>{1, 2},
+                     std::array<uint32_t, 2>{2, 2},
+                     std::array<uint32_t, 2>{7, 11},
+                     std::array<uint32_t, 2>{3, 65},
+                     std::array<uint32_t, 2>{67, 4},
+                     std::array<uint32_t, 2>{3, 137},
+                 }) {
+                for (const std::array<uint32_t, 2> page_shape : {
+                         std::array<uint32_t, 2>{32, 32},
+                         std::array<uint32_t, 2>{1, 4},
+                         std::array<uint32_t, 2>{1, 120},
+                         std::array<uint32_t, 2>{1, 1024},
+                         std::array<uint32_t, 2>{1, 2048},
+                     }) {
+                    for (const TensorMemoryLayout shard_strategy :
+                         {TensorMemoryLayout::HEIGHT_SHARDED,
+                          TensorMemoryLayout::WIDTH_SHARDED,
+                          TensorMemoryLayout::BLOCK_SHARDED}) {
+                        for (const uint32_t num_iterations : {
+                                 1,
+                             }) {
+                            BufferStressTestConfigSharded config(num_pages, cores);
+                            config.seed = 0;
+                            config.num_iterations = num_iterations;
+                            config.mem_config = shard_strategy;
+                            config.page_shape = page_shape;
+                            tt::log_info(tt::LogTest, fmt::format("cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, num_iterations: {}", cores[0],cores[1], num_pages[0],num_pages[1], page_shape[0],page_shape[1], magic_enum::enum_name(shard_strategy).data(), num_iterations).c_str());
+                            local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
+                                device, device->command_queue(), config, BufferType::DRAM, false);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, ShardedBufferLargeL1ReadWrites) {
     for (Device *device : devices_) {
         for (const std::array<uint32_t, 2> cores :
              {std::array<uint32_t, 2>{1, 1},
@@ -754,7 +802,49 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferLargeReadWrites) {
                             config.page_shape = page_shape;
                             tt::log_info(tt::LogTest, fmt::format("cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, num_iterations: {}", cores[0],cores[1], num_pages[0],num_pages[1], page_shape[0],page_shape[1], magic_enum::enum_name(shard_strategy).data(), num_iterations).c_str());
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
-                                device, device->command_queue(), config, true);
+                                device, device->command_queue(), config, BufferType::L1, true);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, ShardedBufferLargeDRAMReadWrites) {
+    for (Device *device : devices_) {
+        for (const std::array<uint32_t, 2> cores :
+             {std::array<uint32_t, 2>{1, 1},
+              std::array<uint32_t, 2>{6, 1}}) {
+            for (const std::array<uint32_t, 2> num_pages : {
+                     std::array<uint32_t, 2>{1, 1},
+                     std::array<uint32_t, 2>{1, 2},
+                     std::array<uint32_t, 2>{2, 3},
+                 }) {
+                for (const std::array<uint32_t, 2> page_shape : {
+                         std::array<uint32_t, 2>{1, 65536},
+                         std::array<uint32_t, 2>{1, 65540},
+                         std::array<uint32_t, 2>{1, 65568},
+                         std::array<uint32_t, 2>{1, 65520},
+                         std::array<uint32_t, 2>{1, 132896},
+                         std::array<uint32_t, 2>{256, 256},
+                         std::array<uint32_t, 2>{336, 272},
+                     }) {
+                    for (const TensorMemoryLayout shard_strategy :
+                         {TensorMemoryLayout::HEIGHT_SHARDED,
+                          TensorMemoryLayout::WIDTH_SHARDED,
+                          TensorMemoryLayout::BLOCK_SHARDED}) {
+                        for (const uint32_t num_iterations : {
+                                 1,
+                             }) {
+                            BufferStressTestConfigSharded config(num_pages, cores);
+                            config.seed = 0;
+                            config.num_iterations = num_iterations;
+                            config.mem_config = shard_strategy;
+                            config.page_shape = page_shape;
+                            tt::log_info(tt::LogTest, fmt::format("cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, num_iterations: {}", cores[0],cores[1], num_pages[0],num_pages[1], page_shape[0],page_shape[1], magic_enum::enum_name(shard_strategy).data(), num_iterations).c_str());
+                            local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
+                                device, device->command_queue(), config, BufferType::DRAM, true);
                         }
                     }
                 }

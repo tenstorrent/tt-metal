@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/moreh_mean/moreh_mean_op.hpp"
-
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -88,12 +87,25 @@ inline Shape compute_output_shape(const Shape& input_shape, const int64_t& dim) 
 inline Tensor create_output_tensor(
     const Tensor& input_tensor, const Shape& output_shape, const MemoryConfig& mem_config) {
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
-    return create_device_tensor(output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config);
+    return create_device_tensor(
+        output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config);
 }
 
 // output as arg
 Tensor moreh_mean_(const Tensor& input, const Tensor& output, const int64_t& dim) {
-    operation::run(MorehMean{.dim = dim}, {input, output});
+    std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({input, output}))};
+
+    operation::launch_op(
+        [dim](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehMean{.dim = dim}, input_tensors, optional_input_tensors, optional_output_tensors);
+        },
+        {input, output},
+        dummy_output_tensors);
+
     return output;
 }
 
@@ -103,16 +115,24 @@ Tensor moreh_mean_(const Tensor& input, const int64_t& dim, const MemoryConfig& 
     const auto& output_shape = compute_output_shape(input_shape, dim);
     auto output = create_output_tensor(input, output_shape, mem_config);
 
-    const auto& output_shape_wo_padding = output.get_legacy_shape().without_padding();
-    operation::run(MorehMean{.dim = dim}, {input, output});
+    std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({input, output}))};
+
+    operation::launch_op(
+        [dim](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehMean{.dim = dim}, input_tensors, optional_input_tensors, optional_output_tensors);
+        },
+        {input, output},
+        dummy_output_tensors);
+
     return output;
 }
 
 Tensor moreh_mean(
-    const Tensor& input,
-    const Tensor& output,
-    std::vector<int64_t>& dims,
-    const MemoryConfig& mem_config) {
+    const Tensor& input, const Tensor& output, std::vector<int64_t>& dims, const MemoryConfig& mem_config) {
     // reduce for all dims
     if (dims.empty()) {
         dims = {0, 1, 2, 3};
@@ -129,6 +149,7 @@ Tensor moreh_mean(
     }
     log_debug(LogTest, "{}:{} dim {}", __func__, __LINE__, sorted_dims.front());
     moreh_mean_(temp_input, output, sorted_dims.front());
+
     return output;
 }
 

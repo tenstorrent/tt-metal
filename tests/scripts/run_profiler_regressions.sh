@@ -31,6 +31,8 @@ run_async_mode_T3000_test(){
 
         ./tt_metal/tools/profiler/profile_this.py -c "pytest -svv models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-True-True-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" > $PROFILER_ARTIFACTS_DIR/test_out.log
 
+        cat $PROFILER_ARTIFACTS_DIR/test_out.log
+
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then
             echo "No verification as test was skipped"
@@ -41,7 +43,6 @@ run_async_mode_T3000_test(){
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
         fi
-        cat $PROFILER_ARTIFACTS_DIR/test_out.log
     fi
 }
 
@@ -104,6 +105,9 @@ run_post_proc_test(){
 }
 
 cd $TT_METAL_HOME
+
+#
+TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false}'
 
 if [[ $1 == "PROFILER" ]]; then
     run_profiling_test

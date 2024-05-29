@@ -3,9 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
 import ttnn
-from models.demos.falcon7b.tt.model_utils import get_weights_cached
+from models.demos.falcon7b.tt.model_utils import get_falcon_default_core_grid, get_weights_cached
 from torch import nn
 
 
@@ -115,7 +114,7 @@ class TtFalconMLPPrefill(nn.Module):
         ]
         self.model_config["MLP_OUTPUT_TENSORS"] = out_tt
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         if self.model_config["PREFILL_OPTIMIZED_MODE"] and self.seq_len in [1024, 2048]:
             for device_id in range(self.num_devices):
                 tt_padding = self.model_config["MLP_PREFILL_PADDING_TENSORS"][device_id][self.seq_len]
@@ -130,14 +129,14 @@ class TtFalconMLPPrefill(nn.Module):
 
             for slice_idx in range(num_slices):
                 slices = [
-                    tt_lib.tensor.interleaved_to_sharded_partial(
+                    ttnn.experimental.tensor.interleaved_to_sharded_partial(
                         x[device_id],
                         grid_size,
                         [self.seq_len // num_slices // grid_size[1], padded_hidden_size // grid_size[0]],
                         num_slices,
                         slice_idx,
-                        tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                        tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                        ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+                        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
                     )
                     for device_id in range(len(self.devices))
                 ]
@@ -171,7 +170,7 @@ class TtFalconMLPPrefill(nn.Module):
                     hidden_states[i].deallocate()
 
                 for device_id in range(len(self.devices)):
-                    tt_lib.tensor.sharded_to_interleaved_partial(
+                    ttnn.experimental.tensor.sharded_to_interleaved_partial(
                         out_data[device_id],
                         out_tt[device_id],
                         num_slices,
@@ -190,22 +189,27 @@ class TtFalconMLPPrefill(nn.Module):
             hidden_states = []
             for device_id in range(len(x)):
                 hidden_states.append(
-                    tt_lib.tensor.falcon_dense_h_to_4h_matmul(
+                    ttnn.linear(
                         x[device_id],
                         self.dense_h_to_4h_weights[device_id],
-                        fused_activation=[tt_lib.tensor.FusibleActivation.GELU, True],
-                        output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
-                        output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
+                        memory_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
+                        dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
+                        core_grid=get_falcon_default_core_grid(x[device_id].device()),
+                        use_1d_systolic_array=True,
+                        compute_kernel_config=self.model_config["MLP_KERNEL_CONFIG"],
+                        activation="gelu",
                     )
                 )
                 x[device_id].deallocate()
             for device_id in range(len(x)):
-                hidden_states[device_id] = tt_lib.tensor.falcon_dense_4h_to_h_matmul(
+                hidden_states[device_id] = ttnn.matmul(
                     hidden_states[device_id],
                     self.dense_4h_to_h_weights[device_id],
-                    output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
-                    packer_l1_acc=True,
+                    memory_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
+                    dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
+                    core_grid=get_falcon_default_core_grid(hidden_states[device_id].device()),
+                    use_1d_systolic_array=True,
+                    compute_kernel_config=self.model_config["MLP_KERNEL_CONFIG"],
                 )
 
         # return TT Tensor
@@ -229,6 +233,7 @@ class TtFalconMLPDecode(nn.Module):
 
         self.state_dict = state_dict
         self.devices = devices
+        self.num_devices = len(devices)
         self.hidden_size = hidden_size
         self.model_config = model_config
         self.padding_value = model_config["MLP_PADDING_VALUE"]
@@ -274,7 +279,7 @@ class TtFalconMLPDecode(nn.Module):
 
     def _load_mlp_padded_tensors(self):
         tt_paddings = []
-        for device_id in range(len(self.devices)):
+        for device_id in range(self.num_devices):
             tt_padding = torch.zeros((1, 1, 32, 64)).bfloat16().float()  # 4608 - 4544 = 64, batch=32
             tt_padding = ttnn.from_torch(
                 tt_padding,
@@ -287,30 +292,32 @@ class TtFalconMLPDecode(nn.Module):
 
         self.model_config["MLP_DECODE_PADDING_TENSORS"] = tt_paddings
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
+        batch_size = x[0].shape[-2]  # assume all devices have same shape
         hidden_states = []
-        for device_id in range(len(x)):
-            # pad inputs with padding tensor if not already padded
-            if (
-                self.model_config["PREFILL_OPTIMIZED_MODE"]
-                and x[device_id].shape[-1] < self.padding_value
-                and self.prefill_seq_len in [1024, 2048]
-            ):
-                x[device_id] = ttnn.concat(
+        # pad inputs with padding tensor if not already padded
+        if (
+            self.model_config["PREFILL_OPTIMIZED_MODE"]
+            and self.hidden_size < self.padding_value
+            and self.prefill_seq_len in [1024, 2048]
+        ):
+            for device_id in range(self.num_devices):
+                x[device_id] = ttnn.experimental.tensor.concat(
                     [x[device_id], self.model_config["MLP_DECODE_PADDING_TENSORS"][device_id]], dim=3
                 )
+        for device_id in range(self.num_devices):
             hidden_states.append(
-                tt_lib.tensor.falcon_dense_h_to_4h_matmul(
+                ttnn.experimental.tensor.falcon_dense_h_to_4h_matmul(
                     x[device_id],
                     self.dense_h_to_4h_weights[device_id],
-                    fused_activation=[tt_lib.tensor.FusibleActivation.GELU, True],
+                    fused_activation=[ttnn.experimental.tensor.FusibleActivation.GELU, True],
                     output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
                 )
             )
             x[device_id].deallocate()
-        for device_id in range(len(x)):
-            hidden_states[device_id] = tt_lib.tensor.falcon_dense_4h_to_h_matmul(
+        for device_id in range(self.num_devices):
+            hidden_states[device_id] = ttnn.experimental.tensor.falcon_dense_4h_to_h_matmul(
                 hidden_states[device_id],
                 self.dense_4h_to_h_weights[device_id],
                 output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
@@ -319,7 +326,13 @@ class TtFalconMLPDecode(nn.Module):
             )
         # remove padding from output
         if self.model_config["PREFILL_OPTIMIZED_MODE"] and self.prefill_seq_len in [1024, 2048]:
-            hidden_states = [hidden_states[i][:, :, :, : self.hidden_size] for i in range(len(self.devices))]
+            for i in range(self.num_devices):
+                hidden_states[i] = ttnn.experimental.tensor.unpad(
+                    hidden_states[i],
+                    [0, 0, 0, 0],
+                    [0, 0, batch_size - 1, self.hidden_size - 1],
+                    output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
+                )
 
         # return TT Tensor
         return hidden_states
