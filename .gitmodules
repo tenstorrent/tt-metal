@@ -28,3 +28,78 @@
 [submodule "tt_metal/third_party/tt_llk_blackhole"]
 	path = tt_metal/third_party/tt_llk_blackhole
 	url = https://github.com/tenstorrent/tt-llk-bh.git
+[submodule "tt_metal/third_party/boost/interprocess"]
+	path = tt_metal/third_party/boost/interprocess
+	url = https://github.com/boostorg/interprocess.git
+[submodule "tt_metal/third_party/boost/core"]
+	path = tt_metal/third_party/boost/core
+	url = https://github.com/boostorg/core.git
+[submodule "tt_metal/third_party/boost/format"]
+	path = tt_metal/third_party/boost/format
+	url = https://github.com/boostorg/format.git
+[submodule "tt_metal/third_party/boost/align"]
+	path = tt_metal/third_party/boost/align
+	url = https://github.com/boostorg/align.git
+[submodule "tt_metal/third_party/boost/container_hash"]
+	path = tt_metal/third_party/boost/container_hash
+	url = https://github.com/boostorg/container_hash.git
+[submodule "tt_metal/third_party/boost/assert"]
+	path = tt_metal/third_party/boost/assert
+	url = https://github.com/boostorg/assert.git
+[submodule "tt_metal/third_party/boost/config"]
+	path = tt_metal/third_party/boost/config
+	url = https://github.com/boostorg/config.git
+[submodule "tt_metal/third_party/boost/detail"]
+	path = tt_metal/third_party/boost/detail
+	url = https://github.com/boostorg/detail.git
+[submodule "tt_metal/third_party/boost/integer"]
+	path = tt_metal/third_party/boost/integer
+	url = https://github.com/boostorg/integer.git
+[submodule "tt_metal/third_party/boost/intrusive"]
+	path = tt_metal/third_party/boost/intrusive
+	url = https://github.com/boostorg/intrusive.git
+[submodule "tt_metal/third_party/boost/move"]
+	path = tt_metal/third_party/boost/move
+	url = https://github.com/boostorg/move.git
+[submodule "tt_metal/third_party/boost/optional"]
+	path = tt_metal/third_party/boost/optional
+	url = https://github.com/boostorg/optional.git
+[submodule "tt_metal/third_party/boost/smart_ptr"]
+	path = tt_metal/third_party/boost/smart_ptr
+	url = https://github.com/boostorg/smart_ptr.git
+[submodule "tt_metal/third_party/boost/static_assert"]
+	path = tt_metal/third_party/boost/static_assert
+	url = https://github.com/boostorg/static_assert.git
+[submodule "tt_metal/third_party/boost/throw_exception"]
+	path = tt_metal/third_party/boost/throw_exception
+	url = https://github.com/boostorg/throw_exception.git
+[submodule "tt_metal/third_party/boost/type_traits"]
+	path = tt_metal/third_party/boost/type_traits
+	url = https://github.com/boostorg/type_traits.git
+[submodule "tt_metal/third_party/boost/unordered"]
+	path = tt_metal/third_party/boost/unordered
+	url = https://github.com/boostorg/unordered.git
+[submodule "tt_metal/third_party/boost/utility"]
+	path = tt_metal/third_party/boost/utility
+	url = https://github.com/boostorg/utility.git
+[submodule "tt_metal/third_party/boost/winapi"]
+	path = tt_metal/third_party/boost/winapi
+	url = https://github.com/boostorg/winapi.git
+[submodule "tt_metal/third_party/boost/predef"]
+	path = tt_metal/third_party/boost/predef
+	url = https://github.com/boostorg/predef.git
+[submodule "tt_metal/third_party/boost/mp11"]
+	path = tt_metal/third_party/boost/mp11
+	url = https://github.com/boostorg/mp11.git
+[submodule "tt_metal/third_party/boost/io"]
+	path = tt_metal/third_party/boost/io
+	url = https://github.com/boostorg/io.git
+[submodule "tt_metal/third_party/boost/preprocessor"]
+	path = tt_metal/third_party/boost/preprocessor
+	url = https://github.com/boostorg/preprocessor.git
+[submodule "tt_metal/third_party/boost/describe"]
+	path = tt_metal/third_party/boost/describe
+	url = https://github.com/boostorg/describe.git
+[submodule "tt_metal/third_party/boost/container"]
+	path = tt_metal/third_party/boost/container
+	url = https://github.com/boostorg/container.git
