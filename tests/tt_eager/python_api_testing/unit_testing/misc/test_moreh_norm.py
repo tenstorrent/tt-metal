@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import tt_lib as ttl
-from models.utility_functions import comp_allclose
+from models.utility_functions import comp_allclose, is_wormhole_b0
 from loguru import logger
 
 TILE_HEIGHT = 32
@@ -138,7 +138,7 @@ def test_moreh_norm(input_shape, p, dim_rtol_atol, device):
 
     dim, rtol, atol = dim_rtol_atol
 
-    if dim in (None, [], [0, 1, 2, 3]) and p == 2.5:
+    if dim in (None, [], [0, 1, 2, 3]) and p == 2.5 and is_wormhole_b0():
         pytest.skip("TODO: Check why comp_allclose result is poor on WH_B0.")
 
     cpu_x, cpu_dy = make_cpu_tensors(input_shape, dim)
