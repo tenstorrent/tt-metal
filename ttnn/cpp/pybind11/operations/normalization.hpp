@@ -13,7 +13,8 @@
 namespace py = pybind11;
 
 namespace {
-    MemoryConfig dram_memory_config = tt::tt_metal::MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED,.buffer_type=tt::tt_metal::BufferType::DRAM};
+MemoryConfig dram_memory_config = tt::tt_metal::MemoryConfig{
+    .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::DRAM};
 }
 
 namespace ttnn {
@@ -90,9 +91,7 @@ void py_module(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
-            py::arg("inplace") = true
-        }
-    );
+            py::arg("inplace") = true});
 }
 
 }  // namespace normalization

@@ -48,7 +48,9 @@ DeviceInfo get_device_info(const Device &device) {
     info.num_storage_cores = descriptor.relative_storage_cores.size();
     info.num_compute_cores = descriptor.relative_compute_cores.size();
     info.total_l1_memory = (info.num_storage_cores + info.num_compute_cores) * device.allocator_->config.worker_l1_size;
-    info.total_l1_for_interleaved_buffers = (info.num_storage_cores + info.num_compute_cores + (info.num_banks_per_storage_core * info.num_storage_cores)) * info.l1_bank_size;
+    info.total_l1_for_interleaved_buffers =
+        (info.num_storage_cores + info.num_compute_cores + (info.num_banks_per_storage_core * info.num_storage_cores)) *
+        info.l1_bank_size;
     info.total_l1_for_sharded_buffers = info.num_compute_cores * info.l1_bank_size;
     info.cb_limit = device.allocator_->config.worker_l1_size - L1_UNRESERVED_BASE;
     return info;
@@ -89,7 +91,8 @@ std::vector<BufferInfo> get_buffers() {
             auto buffer_page_mapping = generate_buffer_page_mapping(*buffer);
             for (int page_index = 0; page_index < num_pages; page_index++) {
                 auto dev_page_index = buffer_page_mapping.host_page_to_dev_page_mapping_[page_index];
-                auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_index]];
+                auto core =
+                    buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_index]];
                 auto bank_id = device->bank_ids_from_logical_core(buffer->buffer_type(), core)[0];
 
                 if (bank_to_num_pages.find(bank_id) == bank_to_num_pages.end()) {
@@ -164,7 +167,8 @@ std::vector<BufferPageInfo> get_buffer_pages() {
             auto buffer_page_mapping = generate_buffer_page_mapping(*buffer);
             for (int page_index = 0; page_index < num_pages; page_index++) {
                 auto dev_page_index = buffer_page_mapping.host_page_to_dev_page_mapping_[page_index];
-                auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_index]];
+                auto core =
+                    buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_index]];
                 auto bank_id = device->bank_ids_from_logical_core(buffer->buffer_type(), core)[0];
                 auto page_address = buffer->sharded_page_address(bank_id, dev_page_index);
 

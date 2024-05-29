@@ -43,12 +43,11 @@ void bind_fill_cache_for_user_(py::module& module, const kv_cache_operation_t& o
             [](const kv_cache_operation_t& self,
                const ttnn::Tensor& cache,
                const ttnn::Tensor& input,
-               const uint32_t batch_index) -> ttnn::Tensor {
-                return self(cache, input, batch_index);
-            },
-            py::arg("cache"), py::arg("input"), py::arg("batch_index")});
+               const uint32_t batch_index) -> ttnn::Tensor { return self(cache, input, batch_index); },
+            py::arg("cache"),
+            py::arg("input"),
+            py::arg("batch_index")});
 }
-
 
 template <typename kv_cache_operation_t>
 void bind_update_cache_for_token_(py::module& module, const kv_cache_operation_t& operation) {
@@ -76,14 +75,14 @@ void bind_update_cache_for_token_(py::module& module, const kv_cache_operation_t
                const ttnn::Tensor& cache,
                const ttnn::Tensor& input,
                const uint32_t update_index,
-               const uint32_t batch_offset) -> ttnn::Tensor {
-                return self(cache, input, update_index, batch_offset);
-            },
-            py::arg("cache"), py::arg("input"), py::arg("update_index"), py::arg("batch_offset") = 0});
+               const uint32_t batch_offset) -> ttnn::Tensor { return self(cache, input, update_index, batch_offset); },
+            py::arg("cache"),
+            py::arg("input"),
+            py::arg("update_index"),
+            py::arg("batch_offset") = 0});
 }
 
 }  // namespace detail
-
 
 void py_module(py::module& module) {
     detail::bind_fill_cache_for_user_(module, ttnn::fill_cache_for_user_);

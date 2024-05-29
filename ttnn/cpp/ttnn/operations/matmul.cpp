@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "matmul.hpp"
-#include "ttnn/cpp/ttnn/validation.hpp"
+
 #include "ttnn/cpp/ttnn/operations/core.hpp"
+#include "ttnn/cpp/ttnn/validation.hpp"
 namespace ttnn {
 
 using MatmulMultiCoreReuseProgramConfig = tt::operations::primary::MatmulMultiCoreReuseProgramConfig;
@@ -50,8 +51,7 @@ ttnn::Tensor matmul(
     const std::optional<const DataType> dtype,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::CoreGrid> core_grid)
-    {
+    const std::optional<const ttnn::CoreGrid> core_grid) {
     ttnn::validate_input_tensor("ttnn.matmul", input_tensor_a, input_tensor_schemas()[0]);
     ttnn::validate_input_tensor("ttnn.matmul", input_tensor_b, input_tensor_schemas()[1]);
 
@@ -73,10 +73,20 @@ ttnn::Tensor matmul(
     std::optional<CoreCoord> user_core_coord;
     const bool has_user_grid = core_grid.has_value();
     if (has_user_grid) {
-	user_core_coord = CoreCoord(core_grid->x, core_grid->y);
+        user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
     auto output_tensor = tt::operations::primary::matmul(
-        input_tensor_a_4d, input_tensor_b_4d, /*bias=*/std::nullopt, program_config, memory_config, dtype, compute_kernel_config, /*untilize_out=*/false,  user_core_coord, get_fused_activation(activation), input_b_is_batched);
+        input_tensor_a_4d,
+        input_tensor_b_4d,
+        /*bias=*/std::nullopt,
+        program_config,
+        memory_config,
+        dtype,
+        compute_kernel_config,
+        /*untilize_out=*/false,
+        user_core_coord,
+        get_fused_activation(activation),
+        input_b_is_batched);
 
     if (activation.has_value() && !has_user_grid) {
         if (activation.value() == "relu") {
@@ -98,7 +108,7 @@ ttnn::Tensor matmul(
 
 std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std::string>& activation) {
     if (!activation.has_value()) {
-	return std::nullopt;
+        return std::nullopt;
     }
     return string_to_unary_with_param(activation.value());
 }
@@ -137,8 +147,8 @@ ttnn::Tensor linear(
     if (bias.has_value()) {
         bias_4d = ttnn::unsqueeze_to_4D(bias.value());
         if (!has_program_config && !has_user_grid) {
-	    post_process_bias = true;
-	}
+            post_process_bias = true;
+        }
     }
 
     if (width_a != height_b) {
@@ -146,11 +156,20 @@ ttnn::Tensor linear(
     }
     std::optional<CoreCoord> user_core_coord;
     if (has_user_grid) {
-	user_core_coord = CoreCoord(core_grid->x, core_grid->y);
+        user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
 
     auto output_tensor = tt::operations::primary::matmul(
-        input_tensor_a_4d, input_tensor_b_4d, post_process_bias ? std::nullopt : bias_4d, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/, user_core_coord, get_fused_activation(activation));
+        input_tensor_a_4d,
+        input_tensor_b_4d,
+        post_process_bias ? std::nullopt : bias_4d,
+        program_config,
+        memory_config,
+        dtype,
+        compute_kernel_config,
+        false /*untilize_out*/,
+        user_core_coord,
+        get_fused_activation(activation));
 
     if (post_process_bias) {
         output_tensor = tt::tt_metal::bcast(

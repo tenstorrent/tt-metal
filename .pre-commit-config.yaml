@@ -23,8 +23,9 @@ repos:
   hooks:
     - id: black
       language_version: python3
-# - repo: https://github.com/pre-commit/mirrors-clang-format
-#   rev: v18.1.5
-#   hooks:
-#     - id: clang-format
-#       types_or: [c++, c]
+- repo: https://github.com/pre-commit/mirrors-clang-format
+  rev: v18.1.5
+  hooks:
+    - id: clang-format
+      types_or: [c++, c]
+      files: ^ttnn/

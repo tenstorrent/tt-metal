@@ -41,7 +41,6 @@ void bind_ccl_operation(py::module& module, const ccl_operation_t& operation, co
 
 }  // namespace detail
 
-
 void py_module(py::module& module) {
     detail::bind_ccl_operation(
         module,
