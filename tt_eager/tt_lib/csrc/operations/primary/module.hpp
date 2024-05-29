@@ -129,10 +129,7 @@ void py_module(py::module& m_primary) {
                 std::size_t,
                 std::size_t,
                 bool,
-                std::optional<UnaryWithParam>,
-                bool,
-                bool,
-                bool>(),
+                std::optional<UnaryWithParam>>(),
             py::kw_only(),
             py::arg("in0_block_w").noconvert(),
             py::arg("out_subblock_h").noconvert(),
@@ -140,10 +137,7 @@ void py_module(py::module& m_primary) {
             py::arg("per_core_M").noconvert(),
             py::arg("per_core_N").noconvert(),
             py::arg("fuse_batch").noconvert(),
-            py::arg("fused_activation"),
-            py::arg("skip_compute").noconvert(),
-            py::arg("skip_in0_mcast").noconvert(),
-            py::arg("skip_write_back").noconvert())
+            py::arg("fused_activation"))
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::fused_activation)
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
             return fmt::format("{}", config);
@@ -364,6 +358,49 @@ void py_module(py::module& m_primary) {
         )doc");
 
     m_primary.def(
+        "matmul",
+        [](const Tensor& input_tensor_a,
+           const Tensor& input_tensor_b,
+           std::optional<const Tensor> bias,
+           const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& program_config,
+           const MemoryConfig& out_mem_config,
+           std::optional<DataType> output_dtype,
+           std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+           const bool untilize_out) {
+            return matmul(
+                input_tensor_a,
+                input_tensor_b,
+                bias,
+                program_config,
+                out_mem_config,
+                output_dtype,
+                compute_kernel_config,
+                untilize_out);
+        },
+        py::arg("input_tensor_a").noconvert(),
+        py::arg("input_tensor_b").noconvert(),
+        py::kw_only(),
+        py::arg("bias").noconvert() = std::nullopt,
+        py::arg("program_config").noconvert(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("output_dtype").noconvert() = std::nullopt,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        py::arg("untilize_out").noconvert() = false,
+        R"doc(
+            Perform a matrix multiplication ``input_tensor_a x input_tensor_b``.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input_tensor_a",    "First tensor to multiply",                               "Tensor",                                     "Tensor of shape [B_a, C_a, M, K]",                               "Yes"
+                "input_tensor_b",    "Second tensor to multiply",                              "Tensor",                                     "Tensor of shape [B_b, C_b, K, N]",                               "Yes"
+                "bias",              "Bias to add",                                            "Tensor",                                     "Tensor of shape [1, 1, 1, N]",                                   "Yes"
+                "program_config",    "",                                                       "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig", "",                                                               "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig",                               "Default is interleaved in DRAM",                                 "No"
+                "output_dtype",      "Output Data Type",                                       "DataType",                                   "By default it will be set to the data type of `input_tensor_a`", "No"
+        )doc");
+
+    m_primary.def(
         "matmul_1d",
         [](const Tensor& input_tensor_a,
            const Tensor& input_tensor_b,
@@ -380,41 +417,6 @@ void py_module(py::module& m_primary) {
                 out_mem_config,
                 output_dtype,
                 compute_kernel_config);
-        },
-        py::arg("input_tensor_a").noconvert(),
-        py::arg("input_tensor_b").noconvert(),
-        py::kw_only(),
-        py::arg("bias").noconvert() = std::nullopt,
-        py::arg("program_config").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("output_dtype").noconvert() = std::nullopt,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-            Perform a matrix multiplication ``input_tensor_a x input_tensor_b``.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input_tensor_a",    "First tensor to multiply",                               "Tensor",                                     "Tensor of shape [B_a, C_a, M, K]",                               "Yes"
-                "input_tensor_b",    "Second tensor to multiply",                              "Tensor",                                     "Tensor of shape [B_b, C_b, K, N]",                               "Yes"
-                "bias",              "Bias to add",                                            "Tensor",                                     "Tensor of shape [1, 1, 1, N]",                                   "Yes"
-                "program_config",    "",                                                       "MatmulMultiCoreReuseMultiCast1DProgramConfig", "Config will be automatically determined if not passed",        "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig",                               "Default is interleaved in DRAM",                                 "No"
-                "output_dtype",      "Output Data Type",                                       "DataType",                                   "By default it will be set to the data type of `input_tensor_a`", "No"
-        )doc");
-
-    m_primary.def(
-        "matmul_dram_sharded",
-        [](const Tensor& input_tensor_a,
-           const Tensor& input_tensor_b,
-           std::optional<const Tensor> bias,
-           const std::optional<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>& program_config,
-           const MemoryConfig& out_mem_config,
-           std::optional<DataType> output_dtype,
-           std::optional<DeviceComputeKernelConfig> compute_kernel_config
-           ) {
-            return matmul_dram_sharded(
-                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, compute_kernel_config);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),

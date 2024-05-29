@@ -141,19 +141,6 @@ ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t
     PACK(( llk_setup_outputs()  ));
     PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>()  ));
 }
-ALWI void mm_block_init_new(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16, const uint32_t transpose = 0, uint32_t ct_dim = 1, uint32_t rt_dim = 1, uint32_t kt_dim = 1) {
-    // UNPACK(( llk_setup_operands() ));
-    // UNPACK(( llk_unpack_reconfig_data_format_srca(24, in1_cb_id) ));
-    UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id) ));
-    UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim) ));
-    MATH(( llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim) ));
-    // MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>()  ));
-
-    PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(out_cb_id) ));
-    PACK(( llk_pack_init<false, false>(out_cb_id)  ));
-    // PACK(( llk_setup_outputs()  ));
-    // PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>()  ));
-}
 
 /**
  * Performs block-sized matrix multiplication *C=A\*B* between the blocks in two

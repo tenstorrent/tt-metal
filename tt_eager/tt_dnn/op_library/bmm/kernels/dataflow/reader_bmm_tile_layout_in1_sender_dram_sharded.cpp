@@ -6,8 +6,6 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
-// #include "debug/dprint.h"
-
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -76,9 +74,10 @@ void kernel_main() {
     }
     #else
     constexpr uint32_t total_num_blocks_in_buffer = 3;
+    constexpr uint32_t total_num_trid = 4;
     uint32_t num_free_blocks_in_buffer = total_num_blocks_in_buffer;
-    uint32_t curr_block_trid = 0;
-    uint32_t block_trid_to_wait = 0;
+    uint32_t curr_block_trid = 1;
+    uint32_t block_trid_to_wait = 1;
 
     cb_reserve_back(cb_id_in1, in1_block_num_tiles);
     uint32_t l1_write_addr_in1_offset = 0;
@@ -88,7 +87,7 @@ void kernel_main() {
         noc_async_read_tile_dram_sharded_set_trid(curr_block_trid);
 
         for(uint32_t h = 0; h < in1_num_pages; ++h) {
-            noc_async_read_tile_dram_sharded_with_state_with_trid(in1_base_addr, l1_read_addr_in1, l1_write_addr_in1);
+            noc_async_read_tile_dram_sharded_with_state_with_trid(in1_base_addr, l1_read_addr_in1, l1_write_addr_in1, curr_block_trid);
             l1_read_addr_in1 += in1_page_size;
             l1_write_addr_in1 += in1_page_size;
         }
@@ -97,16 +96,16 @@ void kernel_main() {
             noc_async_read_barrier_with_trid(block_trid_to_wait);
             cb_push_back(cb_id_in1, in1_block_num_tiles);
             // wait for next block trid
-            block_trid_to_wait = (block_trid_to_wait + 1) % total_num_blocks_in_buffer;
+            block_trid_to_wait = block_trid_to_wait == 3 ? 1 : (block_trid_to_wait + 1);
             // reserve for next block
             cb_reserve_back(cb_id_in1, in1_block_num_tiles * 2);
         } else {
             num_free_blocks_in_buffer -= 1;
         }
 
-        if (curr_block_trid == total_num_blocks_in_buffer - 1) {
+        if (curr_block_trid == total_num_blocks_in_buffer) {
             l1_write_addr_in1_offset = 0;
-            curr_block_trid = 0;
+            curr_block_trid = 1;
         } else {
             l1_write_addr_in1_offset += in1_block_size_bytes;
             curr_block_trid += 1;

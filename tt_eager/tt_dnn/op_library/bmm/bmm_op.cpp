@@ -1039,7 +1039,6 @@ void Matmul::validate(
                 TT_FATAL(per_core_M == (shard_shape[0] / TILE_HEIGHT));
                 TT_FATAL(K % program_config.in0_block_w == 0);
                 TT_FATAL((shard_shape[1] / TILE_WIDTH) % program_config.in0_block_w == 0);
-                // TT_FATAL(div_up(N, per_core_N) == input_tensor_a.shard_spec().value().grid.num_cores());
 
                 // subbblock constraint
                 TT_FATAL(program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1);
@@ -1195,22 +1194,6 @@ std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& inpu
     return {Shape(output_shape, padding)};
 }
 
-std::vector<Shape> Matmul::compute_output_shapes_dram_sharded(
-    const std::vector<Tensor>& input_tensors, uint32_t N_unpadded) const {
-    const auto input_shape_a = input_tensors.at(0).get_legacy_shape();
-    const auto input_shape_b = input_tensors.at(1).get_legacy_shape();
-
-    auto output_shape = input_shape_a;
-    output_shape[-1] = N_unpadded;
-    auto dimensions_pads = std::vector<Padding::PadDimension>();
-    for (auto index = 0; index < input_shape_a.rank() - 1; index++) {
-        dimensions_pads.push_back(input_shape_a.padding()[index]);
-    }
-    dimensions_pads.push_back(input_shape_b.padding()[input_shape_b.rank() - 1]);
-    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    return {Shape(output_shape, padding)};
-};
-
 std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
@@ -1250,12 +1233,9 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                                          MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                     uint32_t M =
                         (program_config.fuse_batch ? input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1]
-                                                   : input_tensor_a.get_legacy_shape()[-2]) /
-                        TILE_HEIGHT;
+                                                   : input_tensor_a.get_legacy_shape()[-2]) / TILE_HEIGHT;
                     uint32_t N = input_tensor_b.get_legacy_shape()[-1] / TILE_WIDTH;
                     auto input_tensor_b_shape = input_tensor_b.get_legacy_shape();
-                    uint32_t N_unpaddded = input_tensor_b.get_legacy_shape()[-1] -
-                                           input_tensor_b_shape.padding()[input_tensor_b_shape.rank() - 1].back;
 
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;
@@ -1266,7 +1246,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
                     return {create_device_tensor(
-                        this->compute_output_shapes_dram_sharded(input_tensors, N_unpaddded).at(0),
+                        this->compute_output_shapes(input_tensors).at(0),
                         this->output_dtype,
                         output_layout,
                         input_tensor_a.device(),
@@ -1454,9 +1434,9 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.fuse_batch,
                     program_config.fused_activation,
                     this->untilize_out,
-                    program_config.skip_compute,
-                    program_config.skip_in0_mcast,
-                    program_config.skip_write_back);
+                    false,
+                    false,
+                    false);
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreNonOptimizedReuseProgramConfig>) {
                 TT_FATAL(!bias.has_value(), "Bias is not supported for matmul multi core non-optimized reuse");
                 return matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
@@ -1517,42 +1497,6 @@ Tensor matmul_1d(
     return output_tensors.at(0);
 }
 
-Tensor matmul_dram_sharded(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    std::optional<const Tensor> bias,
-    std::optional<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig> program_config,
-    const MemoryConfig& mem_config,
-    std::optional<const DataType> output_dtype,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    bool untilize_out) {
-    std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}, {bias}))};
-    operation::launch_op(
-        [program_config, mem_config, output_dtype, compute_kernel_config, untilize_out](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_tensor_a = input_tensors.at(0);
-            const auto& input_tensor_b = input_tensors.at(1);
-
-            auto kernel_config_val =
-                init_device_compute_kernel_config(input_tensor_a.device()->arch(), compute_kernel_config);
-            return {operations::primary::matmul(
-                input_tensor_a,
-                input_tensor_b,
-                optional_input_tensors.at(0),
-                program_config.value(),
-                mem_config,
-                output_dtype,
-                kernel_config_val,
-                untilize_out)};
-        },
-        {input_tensor_a, input_tensor_b},
-        output_tensors,
-        {bias});
-    return output_tensors.at(0);
-}
 
 operation::OpPerformanceModel Matmul::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
