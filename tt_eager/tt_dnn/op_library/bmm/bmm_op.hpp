@@ -224,9 +224,6 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
     std::size_t per_core_N;
     bool fuse_batch;
     std::optional<UnaryWithParam> fused_activation;
-    bool skip_compute;
-    bool skip_in0_mcast;
-    bool skip_write_back;
 
     static constexpr auto attribute_names = std::make_tuple(
         "in0_block_w",
@@ -235,10 +232,7 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
         "per_core_M",
         "per_core_N",
         "fuse_batch",
-        "fused_activation",
-        "skip_compute",
-        "skip_in0_mcast",
-        "skip_write_back");
+        "fused_activation");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->in0_block_w),
@@ -247,10 +241,7 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
             std::cref(this->per_core_M),
             std::cref(this->per_core_N),
             std::cref(this->fuse_batch),
-            std::cref(this->fused_activation),
-            std::cref(this->skip_compute),
-            std::cref(this->skip_in0_mcast),
-            std::cref(this->skip_write_back));
+            std::cref(this->fused_activation));
     }
 };
 
@@ -401,7 +392,6 @@ inline Tensor matmul(
 }
 
 Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt, bool untilize_out = false);
-Tensor matmul_dram_sharded(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig> program_config = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt, bool untilize_out = false);
 
 MatmulProgramConfig generate_matmul_program_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig &mem_config, const std::optional<const DeviceComputeKernelConfig> compute_kernel_config, const std::optional<const CoreCoord> user_core_coord, const std::optional<const UnaryWithParam> user_fused_activation, const std::optional<const bool> user_run_batched);
 

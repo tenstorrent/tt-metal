@@ -130,13 +130,13 @@ void get_dram_reader_core_coords_wormhole_b0(
     // get dram banks and coords
     uint32_t num_banks = device->num_dram_channels();
     uint32_t max_bank_id = num_banks - 1;
-    std::vector<CoreCoord> dram_coord_phy;
+    std::vector<CoreCoord> dram_coord_phy; dram_coord_phy.reserve(num_banks);
     for (int i = 0; i < num_banks; ++i) {
         dram_coord_phy.push_back(device->dram_core_from_dram_channel(i));
     }
 
     // get worker logical coords
-    std::vector<CoreCoord> all_worker_cores_logical;
+    std::vector<CoreCoord> all_worker_cores_logical; all_worker_cores_logical.reserve(num_cores_x * num_cores_y);
     for (int i = 0; i < num_cores_x; ++i) {
         for (int j = 0; j < num_cores_y; ++j) {
             all_worker_cores_logical.push_back(CoreCoord(i, j));
@@ -144,7 +144,7 @@ void get_dram_reader_core_coords_wormhole_b0(
     }
 
     // get y coords of the workers
-    std::vector<uint32_t> all_worker_cores_y_physical;
+    std::vector<uint32_t> all_worker_cores_y_physical; all_worker_cores_y_physical.reserve(num_cores_y);
     uint32_t max_worker_y_physical = 0;
     uint32_t min_worker_y_physical = 10000;
     for (int i = 0; i < num_cores_y; ++i) {
@@ -170,7 +170,7 @@ void get_dram_reader_core_coords_wormhole_b0(
     }
 
     // get the ajacent cores of DRAM banks
-    std::vector<CoreCoord> adj_core_physical;
+    std::vector<CoreCoord> adj_core_physical; adj_core_physical.reserve(num_banks);
     for (int i = 0; i < num_banks; ++i) {
         auto dram_core = dram_coord_phy[i];
         uint32_t adj_core_x = dram_core.x + 1;
@@ -179,10 +179,10 @@ void get_dram_reader_core_coords_wormhole_b0(
     }
 
     // split the adjacent coords into two groups, because DRAM banks has two cols
-    std::vector<CoreCoord> adj_core_physical_g1;
-    std::vector<size_t> adj_core_physical_y_g1;
-    std::vector<CoreCoord> adj_core_physical_g2;
-    std::vector<size_t> adj_core_physical_y_g2;
+    std::vector<CoreCoord> adj_core_physical_g1; adj_core_physical_g1.reserve(num_banks);
+    std::vector<size_t> adj_core_physical_y_g1; adj_core_physical_y_g1.reserve(num_banks);
+    std::vector<CoreCoord> adj_core_physical_g2; adj_core_physical_g2.reserve(num_banks);
+    std::vector<size_t> adj_core_physical_y_g2; adj_core_physical_y_g2.reserve(num_banks);
     for (auto core : adj_core_physical) {
         if (core.x == adj_core_physical.front().x) {
             adj_core_physical_g1.push_back(core);
@@ -260,7 +260,7 @@ void get_dram_reader_core_coords_wormhole_b0(
     process_group(adj_core_physical_g2, adj_core_physical_y_g2, x_step);
 
     // merge two group into one
-    std::vector<CoreCoord> adj_core_physical_realloc;
+    std::vector<CoreCoord> adj_core_physical_realloc; adj_core_physical_realloc.reserve(num_banks);
     for (int i = 0; i < indices_g1_realloc.size(); ++i) {
         adj_core_physical_realloc.push_back(adj_core_physical_g1[indices_g1_realloc[i]]);
     }
@@ -269,7 +269,7 @@ void get_dram_reader_core_coords_wormhole_b0(
     }
 
     // find the logical coord from physical coord
-    std::vector<CoreCoord> adj_core_logical_realloc;
+    std::vector<CoreCoord> adj_core_logical_realloc; adj_core_logical_realloc.reserve(num_banks);
     for (int i = 0; i < adj_core_physical_realloc.size(); ++i) {
         for (int j = 0; j < all_worker_cores_logical.size(); ++j) {
             auto core = device->worker_core_from_logical_core(all_worker_cores_logical[j]);
@@ -552,7 +552,6 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         (std::uint32_t)num_blocks_per_shard};
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
-        // (std::uint32_t)  in1_buffer->address(),
         (std::uint32_t)in1_buffer_page_size,
         (std::uint32_t)in1_buffer_num_pages,
         // in1 block args

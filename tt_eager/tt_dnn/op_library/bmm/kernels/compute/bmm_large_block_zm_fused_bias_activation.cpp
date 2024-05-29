@@ -15,8 +15,6 @@
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
-// #include "debug/dprint.h"
-
 
 namespace NAMESPACE {
 
