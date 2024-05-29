@@ -172,7 +172,7 @@ run_microbenchmarks_pipeline_tests() {
 
     export TT_METAL_DEVICE_PROFILER=1
 
-    source build/python_env/bin/activate
+    source python_env/bin/activate
     ./tests/scripts/run_moreh_microbenchmark.sh
     pytest -svv tests/tt_metal/microbenchmarks
 }

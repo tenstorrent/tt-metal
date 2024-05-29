@@ -15,7 +15,7 @@ If the test involves multiple words you have to do "test_file":
 END
 
 cd $TT_METAL_HOME
-source build/python_env/bin/activate
+source python_env/bin/activate
 export PYTHONPATH=$TT_METAL_HOME
 unset TT_METAL_SLOW_DISPATCH_MODE
 

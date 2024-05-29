@@ -54,7 +54,7 @@ run_profiling_test(){
 
     echo "Make sure this test runs in a build with ENABLE_PROFILER=1 ENABLE_TRACY=1"
 
-    source build/python_env/bin/activate
+    source python_env/bin/activate
     export PYTHONPATH=$TT_METAL_HOME
 
     run_additional_T3000_test
@@ -89,7 +89,7 @@ run_profiling_no_reset_test(){
 
     echo "Make sure this test runs in a build with ENABLE_PROFILER=1 ENABLE_TRACY=1"
 
-    source build/python_env/bin/activate
+    source python_env/bin/activate
     export PYTHONPATH=$TT_METAL_HOME
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py::test_multi_op -vvv
@@ -98,7 +98,7 @@ run_profiling_no_reset_test(){
 }
 
 run_post_proc_test(){
-    source build/python_env/bin/activate
+    source python_env/bin/activate
     export PYTHONPATH=$TT_METAL_HOME
 
     pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_logs.py -vvv

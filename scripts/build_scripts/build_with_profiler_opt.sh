@@ -22,4 +22,4 @@ fi
 
 cmake --build build --target install
 cmake --build build --target programming_examples
-PYTHON_ENV_DIR=$(pwd)/build/python_env ./create_venv.sh
+./create_venv.sh
