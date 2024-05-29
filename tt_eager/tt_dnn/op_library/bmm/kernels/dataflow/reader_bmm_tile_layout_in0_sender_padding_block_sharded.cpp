@@ -45,7 +45,7 @@ void kernel_main() {
 
     const bool transpose_core                             = (bool)get_arg_val<uint32_t>(7);
     const uint32_t noc_same_coord                         = get_arg_val<uint32_t>(8);
-    volatile tt_l1_ptr uint32_t * noc_diff_coord          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(9));
+    tt_l1_ptr uint32_t * noc_diff_coord          = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in2 = 2; // Sharded cb

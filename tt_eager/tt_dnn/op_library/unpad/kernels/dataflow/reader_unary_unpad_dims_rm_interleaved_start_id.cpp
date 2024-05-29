@@ -14,7 +14,7 @@ void kernel_main() {
     const uint32_t start_id                 = get_arg_val<uint32_t>(4);
     const uint32_t num_sticks               = get_arg_val<uint32_t>(5);
 
-    volatile tt_l1_ptr uint32_t * num_unpadded_sticks = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(6));
+    tt_l1_ptr uint32_t * num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(6));
     volatile tt_l1_ptr uint32_t * num_padded_sticks = num_unpadded_sticks + num_dims;
     volatile tt_l1_ptr uint32_t * id_per_dim = num_padded_sticks + num_dims;
 

@@ -610,7 +610,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
 }
 
 // Return base address in L1 for Runtime Args given processor type (and eth mode in case of ERISC).
-uint32_t GetL1ArgBaseAddr(std::shared_ptr<Kernel> kernel) {
+static uint32_t GetL1ArgBaseAddr(std::shared_ptr<Kernel> kernel) {
     const RISCV &riscv = kernel->processor();
     uint32_t l1_arg_base = 0;
 
@@ -663,7 +663,7 @@ void WriteRuntimeArgsToDevice(Device *device, const Program &program) {
 
         // Unicast common runtime args to all cores for kernel. Fast-Dispatch will multicast as perf opt.
         const auto &common_rt_args = kernel->common_runtime_args();
-        auto common_rt_args_offset = kernel->get_common_runtime_args_offset();
+        auto common_rt_args_offset = kernel->get_common_runtime_args_index() * sizeof(uint32_t);
 
         if (common_rt_args.size() > 0) {
             for (auto &core_range : kernel->logical_coreranges()) {
