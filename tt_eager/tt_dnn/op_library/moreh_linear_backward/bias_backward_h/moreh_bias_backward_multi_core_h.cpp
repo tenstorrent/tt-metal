@@ -41,9 +41,8 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
     Device *device = output_grad.device();
-    CoreGridDesc core_grid(device);
-    const auto num_cores_y = core_grid.y_;
-    CoreCoord core_grid_coord(core_grid.x_, num_cores_y);
+    auto grid = device->compute_with_storage_grid_size();
+    const auto num_cores_y = grid.y;
 
     const auto
         [num_cores_to_be_used,
@@ -51,7 +50,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
          core_group_1,
          core_group_2,
          num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt_metal::split_work_to_cores(core_grid_coord, Wt);
+         num_cols_per_core_group_2] = tt_metal::split_work_to_cores(grid, Wt);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup

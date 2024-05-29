@@ -63,9 +63,8 @@ operation::ProgramWithCallbacks moreh_mean_backward_program(const Tensor &output
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    CoreGridDesc core_grid(device);
-    const auto num_cores_y = core_grid.y_;
-    CoreCoord core_grid_coord(core_grid.x_, num_cores_y);
+    auto grid = device->compute_with_storage_grid_size();
+    const auto num_cores_y = grid.y;
 
     const uint32_t in0_t = 2;        // input
     const uint32_t in1_t = 1;        // zero
@@ -78,7 +77,7 @@ operation::ProgramWithCallbacks moreh_mean_backward_program(const Tensor &output
          core_group_1,
          core_group_2,
          num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt_metal::split_work_to_cores(core_grid_coord, num_input_grad_tiles);
+         num_cols_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_input_grad_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
