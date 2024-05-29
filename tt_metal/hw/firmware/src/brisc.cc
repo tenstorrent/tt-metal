@@ -76,10 +76,15 @@ void enable_power_management() {
     // Mask and Hyst taken from tb_tensix math_tests
     uint32_t pm_mask = 0xFFFF;
     uint32_t pm_hyst = 32;
-    {
-        // Important: program hyteresis first then enable, otherwise the en_pulse will fail to latch the value
-        uint32_t hyst_val = pm_hyst & 0x7f;
 
+    #ifdef ARCH_BLACKHOLE
+    uint32_t hyst_val = pm_hyst;
+    #else
+    // Important: program hyteresis first then enable, otherwise the en_pulse will fail to latch the value
+    uint32_t hyst_val = pm_hyst & 0x7f;
+    #endif
+
+    {
         // Program slightly off values for each CG
         uint32_t hyst0_reg_data = ((hyst_val) << 24) | ((hyst_val) << 16) | ((hyst_val) << 8) | hyst_val;
         uint32_t hyst1_reg_data = ((hyst_val) << 24) | ((hyst_val) << 16) | ((hyst_val) << 8) | hyst_val;
@@ -94,8 +99,14 @@ void enable_power_management() {
         WRITE_REG(RISCV_DEBUG_REG_CG_CTRL_HYST2, hyst2_reg_data);
     }
 
+    #ifdef ARCH_BLACKHOLE
+    /*FIXME: need to deal with srcb ctrl bit not fitting in 16 bits. For  */
+    /*now just always turn it on */
+    *((uint32_t volatile*)RISCV_DEBUG_REG_CG_CTRL_EN) = 0x10000 | (pm_mask);
+    #else
     // core.ex_setc16(CG_CTRL_EN_Hyst_ADDR32, command_data[1] >> 16, instrn_buf[0]);
     core.ex_setc16(CG_CTRL_EN_Regblocks_ADDR32, pm_mask, instrn_buf[0]);
+    #endif
 
     if (((pm_mask & 0x0100) >> 8) == 1) {  // enable noc clk gatting
 
@@ -136,12 +147,21 @@ void enable_power_management() {
 void set_deassert_addresses() {
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
 
+#ifdef ARCH_BLACKHOLE
+    WRITE_REG(RISCV_DEBUG_REG_NCRISC_RESET_PC, MEM_NCRISC_IRAM_BASE);
+    WRITE_REG(RISCV_DEBUG_REG_TRISC0_RESET_PC, MEM_TRISC0_BASE);
+    WRITE_REG(RISCV_DEBUG_REG_TRISC1_RESET_PC, MEM_TRISC1_BASE);
+    WRITE_REG(RISCV_DEBUG_REG_TRISC2_RESET_PC, MEM_TRISC2_BASE);
+    WRITE_REG(RISCV_DEBUG_REG_TRISC_RESET_PC_OVERRIDE, 0b111);
+    WRITE_REG(RISCV_DEBUG_REG_NCRISC_RESET_PC_OVERRIDE, 0x1);
+#else
     cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = MEM_NCRISC_IRAM_BASE;
     cfg_regs[TRISC_RESET_PC_SEC0_PC_ADDR32] = MEM_TRISC0_BASE;
     cfg_regs[TRISC_RESET_PC_SEC1_PC_ADDR32] = MEM_TRISC1_BASE;
     cfg_regs[TRISC_RESET_PC_SEC2_PC_ADDR32] = MEM_TRISC2_BASE;
     cfg_regs[TRISC_RESET_PC_OVERRIDE_Reset_PC_Override_en_ADDR32] = 0b111;
     cfg_regs[NCRISC_RESET_PC_OVERRIDE_Reset_PC_Override_en_ADDR32] = 0x1;
+#endif
 }
 
 void l1_to_ncrisc_iram_copy(uint32_t src, uint32_t dst, uint16_t size) {
@@ -167,6 +187,11 @@ void device_setup() {
 
     // FIXME MT: enable later
     // enable_power_management();
+
+#ifdef ARCH_BLACKHOLE
+    // Disable DEST CG
+    *((uint32_t volatile*)RISCV_DEBUG_REG_DEST_CG_CTRL) = 0;
+#endif
 
     WRITE_REG(RISCV_TDMA_REG_CLK_GATE_EN, 0x3f);  // Enable clock gating
 
@@ -246,7 +271,11 @@ inline void set_ncrisc_kernel_resume_deassert_address() {
     DEBUG_STATUS("INW");
     while (mailboxes->ncrisc_halt.resume_addr == 0);
     DEBUG_STATUS("IND");
+#ifdef ARCH_BLACKHOLE
+    WRITE_REG(RISCV_DEBUG_REG_NCRISC_RESET_PC, mailboxes->ncrisc_halt.resume_addr);
+#else
     cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
+#endif
 }
 
 inline void run_triscs() {
