@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include "tt_eager/tensor/types.hpp"
 #include "tt_eager/tt_dnn/op_library/concat/concat_op.hpp"
+#include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_eager/tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_eager/tt_dnn/op_library/repeat/repeat_op.hpp"
 #include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
@@ -14,6 +16,35 @@
 namespace ttnn {
 namespace operations {
 namespace data_movement {
+
+inline ttnn::Tensor squeeze(const ttnn::Tensor& input_tensor, size_t dimension) {
+    Shape shape = input_tensor.get_shape();
+    Shape full_shape = input_tensor.get_shape().with_tile_padding();
+
+    TT_FATAL(dimension == 0, "Can squeeze only at dimension=0");
+    TT_FATAL(
+        shape.rank == 1, "Cannot squeeze a tensor of rank 1 because tensors with rank 0 are not supported by ttnn");
+
+    if (input_tensor.get_shape()[0] != 1)
+        return tensor;
+
+    while (output_tensor.get_shape().rank() > rank) {
+        const auto shape = output_tensor.get_shape();
+        const auto full_shape = output_tensor.get_shape().with_tile_padding();
+        std::vector<uint32_t> shape_vec{};
+        std::vector<uint32_t> full_shape_vec{};
+        // int i = 0;
+        // while(i < 3 and shape[i] == 1) i++;
+        for (int i = 1; i < shape.rank(); i++) {
+            shape_vec.push_back(shape[i]);
+            full_shape_vec.push_back(full_shape[i]);
+        }
+        auto metal_shape = tt::tt_metal::Shape(shape_vec, full_shape_vec);
+        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(metal_shape));
+    }
+
+    return reshape(input_tensor, Shape(shape, full_shape))
+}
 
 inline bool is_on_device(const Tensor& t) {
     return t.storage_type() == tt::tt_metal::StorageType::DEVICE or
@@ -315,9 +346,106 @@ struct RepeatInterleave {
     }
 };
 
+struct Pad {
+    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
+        return {ttnn::TensorSchema{
+            2,  // min rank
+            4,  // max rank
+            {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::uint16, ttnn::int32, ttnn::uint32},
+            {ttnn::TILE_LAYOUT},
+            true,   // can_be_on_device
+            false,  // can_be_on_cpu
+            false,  // can_be_scalar
+            false   // is_optional}
+        }};
+    }
+
+    template <typename... Args>
+    static auto input_tensors_to_validate(const ttnn::Tensor& input_tensor, Args&&... args) {
+        return std::make_tuple(input_tensor);
+    }
+
+    static ttnn::Tensor execute_on_worker_thread(
+        const ttnn::Tensor& input_tensor,
+        const std::vector<std::pair<size_t, size_t>>& padding,
+        const float value,
+        const std::optional<MemoryConfig>& memory_config_arg) {
+        const int original_rank = input_tensor.get_shape().rank();
+        TT_FATAL(padding.size() == original_rank, "ttnn.pad: padding must be the same length as the input tensor rank");
+        TT_FATAL(
+            input_tensor.get_layout() != ttnn::ROW_MAJOR_LAYOUT,
+            "ttnn.pad: row-major tensors have to use fallback because the kernel currently causes a PCC error");
+
+        const bool padding_has_negative_value =
+            std::any_of(padding.begin(), padding.end(), [](const auto& p) { return p.first < 0 || p.second < 0; });
+        TT_FATAL(!padding_has_negative_value, "ttnn.pad: padding must be non-negative");
+
+        const bool padding_starts_from_zero = std::accumulate(pad_start.begin(), pad_start.end(), 0) == 0;
+        TT_FATAL(!padding_starts_from_zero, "ttnn.pad: padding start must be 0 currently");
+
+        ttnn::Tensor adjusted_input_tensor = input_tensor;
+        auto adjusted_padding = padding;
+        if (original_rank < 4) {
+            adjusted_input_tensor = ttnn::unsqueeze_to_4D(input_tensor);
+            for (size_t i = 0; i < 4 - original_rank; ++i) {
+                adjusted_padding.insert(adjusted_padding.begin(), std::make_pair(0, 0));
+                ;
+            }
+        }
+
+        std::vector<size_t> pad_start(adjusted_padding.size());
+        std::vector<size_t> pad_end(adjusted_padding.size());
+        std::transform(
+            adjusted_padding.begin(), adjusted_padding.end(), pad_start.begin(), [](const std::pair<int, int>& p) {
+                return p.first;
+            });
+        std::transform(
+            adjusted_padding.begin(), adjusted_padding.end(), pad_end.begin(), [](const std::pair<int, int>& p) {
+                return p.second;
+            });
+
+        const int pad_end_height = pad_end[pad_end.size() - 2];
+        const int pad_end_width = pad_end[pad_end.size() - 1];
+        TT_FATAL(
+            pad_end_height % ttnn::TILE_SIZE == 0 || pad_end_width % ttnn::TILE_SIZE == 0,
+            "ttnn.pad: for tiled tensors padding end must be a multiple of the tile size on height and width for a "
+            "tensor in tile layout");
+
+        auto output_shape_with_tile_padding = adjusted_input_tensor.get_shape().with_tile_padding();
+        std::vector<int> padded_shape(adjusted_padding.size());
+        std::transform(
+            input_shape_with_tile_padding.begin(),
+            input_shape_with_tile_padding.end(),
+            pad_end.begin(),
+            padded_shape.begin(),
+            std::plus<int>());
+
+        auto output_tensor = ttl::tensor::pad(
+            adjusted_input_tensor,
+            ttnn::Shape(shape, padding),
+            pad_start,
+            value,
+            memory_config.value_or(input_tensor.memory_config()),
+            true  // use_multicore
+        );
+
+        while (output_tensor.get_shape().rank() > original_rank) {
+            output_tensor = ttnn::squeeze(output_tensor, 0);
+        }
+
+        // Padding always turns the intended shape to the shape with tile padding. For simplicity of the operation
+        output_tensor = ttnn::reshape(output_tensor, output_tensor.get_shape().with_tile_padding());
+
+        return output_tensor;
+    }
+};
+
 }  // namespace data_movement
-}  // namespace operations
+
+constexpr auto pad = ttnn::register_operation<ttnn::operations::data_movement::Pad>("ttnn::pad");
 constexpr auto upsample = ttnn::register_operation<ttnn::operations::data_movement::UpSample>("ttnn::upsample");
 constexpr auto repeat = ttnn::register_operation<ttnn::operations::data_movement::Repeat>("ttnn::repeat");
 constexpr auto repeat_interleave = ttnn::register_operation<ttnn::operations::data_movement::RepeatInterleave>("ttnn::repeat_interleave");
+
+}  // namespace operations
 }  // namespace ttnn
