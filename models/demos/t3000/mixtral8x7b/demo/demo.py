@@ -220,7 +220,8 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
 
         # Run ttnn mixtral model
         tt_out_11BH = tt_model(decode_input_11BH, start_pos, current_pos, attn_mask, rot_mats)
-
+        # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
+        del decode_input_11BH, attn_mask
         if embed_on_host:
             # Convert ttnn tensor to torch tensor
             tt_output_torch = (

@@ -162,7 +162,8 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
         # Run TT model
         profiler.start(f"model_run_for_inference_{i}")
         tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask, rot_mat)
-
+        # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
+        del decode_input, attn_mask
         # Convert ttnn tensor to torch tensor
         profiler.start(f"result_wait_for_inference_{i}")
         tt_output_torch = (

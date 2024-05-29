@@ -118,7 +118,8 @@ def test_mixtral_model_inference(
 
         # Run TT model
         tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask, rot_mat)
-
+        # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
+        del decode_input, attn_mask
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
