@@ -531,7 +531,7 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
     Finish(device->command_queue());
 
     // Verify Unique/Common Args. Incr values match kernel used.
-    auto common_args_addr = unique_args_addr + kernel->get_common_runtime_args_offset();
+    auto common_args_addr = unique_args_addr + kernel->get_common_runtime_args_index() * sizeof(uint32_t);
     constexpr uint32_t unique_arg_incr_val = 10;
     constexpr uint32_t common_arg_incr_val = 100;
     for (auto &core_range : kernel->logical_coreranges()) {

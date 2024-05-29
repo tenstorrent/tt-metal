@@ -63,7 +63,7 @@ void kernel_main() {
     uint32_t act_mcast_sender_size_bytes                 = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_mcast_sender_id                         = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_mcast_sender_noc_x                      = get_arg_val<uint32_t>(i); i+=1;
-    volatile tt_l1_ptr uint32_t *act_mcast_sender_noc_y  = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(i));
+    tt_l1_ptr uint32_t *act_mcast_sender_noc_y  = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
     constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t stride_h = get_compile_time_arg_val(1);

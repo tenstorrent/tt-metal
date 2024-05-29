@@ -22,8 +22,8 @@ void kernel_main() {
     constexpr uint32_t num_storage_cores = num_blocks / num_blocks_per_shard;
 
     // RUNTIME ARGS
-    volatile tt_l1_ptr uint32_t * in0_mcast_sender_noc_x          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(0));
-    volatile tt_l1_ptr uint32_t * in0_mcast_sender_noc_y          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(0 + num_storage_cores));
+    tt_l1_ptr uint32_t * in0_mcast_sender_noc_x          = (tt_l1_ptr uint32_t*)(get_arg_addr(0));
+    tt_l1_ptr uint32_t * in0_mcast_sender_noc_y          = (tt_l1_ptr uint32_t*)(get_arg_addr(0 + num_storage_cores));
 
     constexpr uint32_t cb_id_in0 = 0;
 

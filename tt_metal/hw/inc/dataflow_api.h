@@ -27,6 +27,7 @@
 #include "dev_msgs.h"
 
 extern uint8_t noc_index;
+extern uint32_t tt_l1_ptr *l1_arg_base;
 
 /** @file */
 
@@ -42,8 +43,8 @@ extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
 
 // JIT Build flow will set this as needed.
-#ifndef COMMON_RT_ARGS_OFFSET
-    #define COMMON_RT_ARGS_OFFSET 0
+#ifndef COMMON_RT_ARGS_INDEX
+    #define COMMON_RT_ARGS_INDEX 0
 #endif
 
 inline uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
@@ -57,13 +58,9 @@ inline uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | 
  * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
  * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 255                                       | True     |
  */
-constexpr static uint32_t get_arg_addr(int arg_idx) {
-    // args are 4B in size
-    #if defined(COMPILE_FOR_ERISC)
-        return eth_l1_mem::address_map::ERISC_L1_ARG_BASE + (arg_idx << 2);
-    #else
-        return L1_ARG_BASE + (arg_idx << 2);
-    #endif
+static FORCE_INLINE
+uint32_t get_arg_addr(int arg_idx) {
+    return (uint32_t)&l1_arg_base[arg_idx];;
 }
 
 /**
@@ -75,9 +72,9 @@ constexpr static uint32_t get_arg_addr(int arg_idx) {
  * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
  * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 255                                       | True     |
  */
-constexpr static uint32_t get_common_arg_addr(int arg_idx) {
-    // args are 4B in size
-    return L1_ARG_BASE + COMMON_RT_ARGS_OFFSET + (arg_idx << 2);
+static FORCE_INLINE
+uint32_t get_common_arg_addr(int arg_idx) {
+    return (uint32_t)&l1_arg_base[arg_idx + COMMON_RT_ARGS_INDEX];
 }
 
 /**
@@ -94,7 +91,7 @@ template <typename T>
 FORCE_INLINE T get_arg_val(int arg_idx) {
     // only 4B args are supported (eg int32, uint32)
     static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
-    return *((volatile tt_l1_ptr T*)(get_arg_addr(arg_idx)));
+    return *((tt_l1_ptr T*)(get_arg_addr(arg_idx)));
 }
 
 /**
