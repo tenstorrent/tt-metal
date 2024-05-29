@@ -486,7 +486,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
         if (common_rt_args.size() > 0) {
             common_kernels.insert(kernel_id);
             uint32_t common_args_addr =
-                unique_processor_to_l1_arg_base_addr[processor_idx] + kernel->get_common_runtime_args_offset();
+                unique_processor_to_l1_arg_base_addr[processor_idx] + kernel->get_common_runtime_args_index() * sizeof(uint32_t);
             common_processor_to_l1_arg_base_addr[kernel_id] = common_args_addr;
             common_rt_data_and_sizes[kernel_id].emplace_back(
                 common_rt_args.data(), common_rt_args.size() * sizeof(uint32_t));

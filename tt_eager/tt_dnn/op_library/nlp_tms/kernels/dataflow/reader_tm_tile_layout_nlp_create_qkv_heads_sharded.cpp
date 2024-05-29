@@ -21,8 +21,8 @@ void kernel_main() {
     bool read_kv_heads                     = get_arg_val<uint32_t>(9);
 
     uint32_t num_x                         = get_arg_val<uint32_t>(18);
-    volatile tt_l1_ptr uint32_t * in0_mcast_noc_x          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(19));
-    volatile tt_l1_ptr uint32_t * in0_mcast_noc_y          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(19 + num_x));
+    tt_l1_ptr uint32_t * in0_mcast_noc_x          = (tt_l1_ptr uint32_t*)(get_arg_addr(19));
+    tt_l1_ptr uint32_t * in0_mcast_noc_y          = (tt_l1_ptr uint32_t*)(get_arg_addr(19 + num_x));
 
     uint32_t q_x = start_q_x;
     uint32_t q_y = start_q_y;

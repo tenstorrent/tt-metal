@@ -27,29 +27,13 @@
 #define TILE_WORD_16_BIT ((32 * 32 * 2 + 32) >> 4)
 #define TILE_WORD_32_BIT ((32 * 32 * 4 + 32) >> 4)
 
-#ifdef COMPILE_FOR_BRISC
-constexpr std::uint32_t L1_ARG_BASE = BRISC_L1_ARG_BASE;
-constexpr std::uint32_t L1_RESULT_BASE = BRISC_L1_RESULT_BASE;
-#elif defined(COMPILE_FOR_NCRISC)
-constexpr std::uint32_t L1_ARG_BASE = NCRISC_L1_ARG_BASE;
-constexpr std::uint32_t L1_RESULT_BASE = NCRISC_L1_RESULT_BASE;
-#elif defined(COMPILE_FOR_TRISC)
-constexpr std::uint32_t L1_ARG_BASE = TRISC_L1_ARG_BASE;
-constexpr std::uint32_t L1_RESULT_BASE = TRISC_L1_ARG_BASE + 1024;
-#elif defined(COMPILE_FOR_ERISC)
-constexpr std::uint32_t L1_ARG_BASE = eth_l1_mem::address_map::ERISC_L1_ARG_BASE;
-constexpr std::uint32_t L1_RESULT_BASE = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
-#elif defined(COMPILE_FOR_IDLE_ERISC)
-constexpr std::uint32_t L1_ARG_BASE = IDLE_ERISC_L1_ARG_BASE;
-constexpr std::uint32_t L1_RESULT_BASE = IDLE_ERISC_L1_RESULT_BASE;
-#endif
-
 const uint32_t STREAM_RESTART_CHECK_MASK = (0x1 << 3) - 1;
 
 const uint32_t MAX_TILES_PER_PHASE = 2048;
 
 extern uint8_t my_x[NUM_NOCS];
 extern uint8_t my_y[NUM_NOCS];
+extern uint32_t *l1_arg_base;
 
 inline void WRITE_REG(uint32_t addr, uint32_t val) {
     volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)addr;

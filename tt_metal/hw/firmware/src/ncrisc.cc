@@ -34,6 +34,8 @@ uint32_t atomic_ret_val __attribute__((section("l1_data"))) __attribute__((used)
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
+uint32_t tt_l1_ptr *l1_arg_base __attribute__((used));
+
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
     uint32_t wIndex __attribute__((used));
@@ -91,6 +93,8 @@ int main(int argc, char *argv[]) {
         DeviceZoneScopedMainN("NCRISC-FW");
 
         setup_cb_read_write_interfaces(0, mailboxes->launch.max_cb_index, true, true);
+
+        l1_arg_base = (uint32_t tt_l1_ptr *)NCRISC_L1_ARG_BASE;
 
         DEBUG_STATUS("R");
         kernel_init();

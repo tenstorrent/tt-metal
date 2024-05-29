@@ -99,8 +99,8 @@ class Kernel : public JitBuildSettings {
     inline uint16_t get_binary_size16() const { return binary_size16_; }
     void set_binary_path ( const std::string & binary_path) { binary_path_ = binary_path; }
     void set_binaries(uint32_t build_key, std::vector<ll_api::memory> &&binaries);
-    uint32_t get_common_runtime_args_offset();
-    void set_common_runtime_args_offset();
+    uint32_t get_common_runtime_args_index();
+    void set_common_runtime_args_index();
     virtual void read_binaries(Device *device) = 0;
 
     void validate_runtime_args_size(size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core);

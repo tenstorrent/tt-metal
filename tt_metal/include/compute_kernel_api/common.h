@@ -12,9 +12,11 @@
 
 
 // JIT Build flow will set this as needed.
-#ifndef COMMON_RT_ARGS_OFFSET
-    #define COMMON_RT_ARGS_OFFSET 0
+#ifndef COMMON_RT_ARGS_INDEX
+    #define COMMON_RT_ARGS_INDEX 0
 #endif
+
+extern uint32_t *l1_arg_base;
 
 /**
  * Returns the address in L1 for a given runtime argument index for unique (per core) runtime arguments set via SetRuntimeArgs() API.
@@ -25,9 +27,9 @@
  * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
  * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 255                                       | True     |
  */
-constexpr static uint32_t get_arg_addr(int arg_idx) {
-    // args are 4B in size
-    return TRISC_L1_ARG_BASE + (arg_idx << 2);
+static FORCE_INLINE
+uint32_t get_arg_addr(int arg_idx) {
+    return (uint32_t)&l1_arg_base[arg_idx];
 }
 
 /**
@@ -39,9 +41,9 @@ constexpr static uint32_t get_arg_addr(int arg_idx) {
  * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
  * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 255                                       | True     |
  */
-constexpr static uint32_t get_common_arg_addr(int arg_idx) {
-    // args are 4B in size
-    return TRISC_L1_ARG_BASE + COMMON_RT_ARGS_OFFSET + (arg_idx << 2);
+static FORCE_INLINE
+uint32_t get_common_arg_addr(int arg_idx) {
+    return (uint32_t)&l1_arg_base[arg_idx + COMMON_RT_ARGS_INDEX];
 }
 
 /**
@@ -58,7 +60,7 @@ template <typename T>
 FORCE_INLINE T get_arg_val(int arg_idx) {
     // only 4B args are supported (eg int32, uint32)
     static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
-    return *((volatile tt_l1_ptr T*)(get_arg_addr(arg_idx)));
+    return *((tt_l1_ptr T*)(get_arg_addr(arg_idx)));
 }
 
 /**

@@ -71,7 +71,7 @@ void kernel_main() {
     uint32_t act_mcast_sender_id        = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_mcast_sender_noc_x     = get_arg_val<uint32_t>(i); i+=1;
 
-    volatile tt_l1_ptr uint32_t *act_mcast_sender_noc_y  = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(i));
+    tt_l1_ptr uint32_t *act_mcast_sender_noc_y  = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
     constexpr uint32_t cb_id_act = tt::CB::c_in0;
     constexpr uint32_t tilized_in0_cb_id = tt::CB::c_intermed1;

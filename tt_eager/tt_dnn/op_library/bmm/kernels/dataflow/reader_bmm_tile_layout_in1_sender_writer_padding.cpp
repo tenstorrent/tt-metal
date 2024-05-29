@@ -99,8 +99,8 @@ void kernel_main() {
     const uint32_t vc                                               = get_arg_val<uint32_t>(18);
     const uint32_t num_dram_shards_to_read                          = get_arg_val<uint32_t>(19);
     const uint32_t dram_tensor_start_offset                         = get_arg_val<uint32_t>(20);
-    volatile tt_l1_ptr uint32_t * in1_block_w_dram_stride_bytes     = (volatile tt_l1_ptr uint32_t*)get_arg_addr(21);
-    volatile tt_l1_ptr uint32_t * current_dram_bank_id              = (volatile tt_l1_ptr uint32_t*)get_arg_addr(22);
+    tt_l1_ptr uint32_t * in1_block_w_dram_stride_bytes     = (tt_l1_ptr uint32_t*)get_arg_addr(21);
+    tt_l1_ptr uint32_t * current_dram_bank_id              = (tt_l1_ptr uint32_t*)get_arg_addr(22);
 
     constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(26);
     constexpr uint32_t in1_block_w_dram_bytes= get_compile_time_arg_val(27);

@@ -34,8 +34,8 @@ void kernel_main() {
     const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(2);
     const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(3);
     const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(4);
-    volatile tt_l1_ptr uint32_t* in0_mcast_noc_x = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(5));
-    volatile tt_l1_ptr uint32_t* in0_mcast_noc_y = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_x));
+    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(5));
+    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_x));
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in2 = 2;  // Sharded cb

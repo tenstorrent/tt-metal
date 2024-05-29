@@ -17,7 +17,7 @@ void kernel_main() {
     const uint32_t start_id                 = get_arg_val<uint32_t>(0);
     const uint32_t num_tiles                = get_arg_val<uint32_t>(1);
 
-    volatile tt_l1_ptr uint32_t * id_per_dim = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(2));
+    tt_l1_ptr uint32_t * id_per_dim = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
 
     constexpr uint32_t tile_size = get_tile_size(cb_id_in0);
     constexpr DataFormat data_format = get_dataformat(cb_id_in0);

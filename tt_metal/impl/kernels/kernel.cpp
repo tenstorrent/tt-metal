@@ -342,23 +342,24 @@ void ComputeKernel::generate_binaries(Device *device, JitBuildOptions &build_opt
 }
 
 // Calculate 16B aligned offset to reach common runtime args from core with most unique runtime args.
-uint32_t Kernel::get_common_runtime_args_offset() {
+uint32_t Kernel::get_common_runtime_args_index() {
     uint32_t max_unique_rt_args = 0;
     for (const auto &logical_core : this->cores_with_runtime_args()) {
-        auto rt_args = this->runtime_args(logical_core);
+        auto& rt_args = this->runtime_args(logical_core);
         max_unique_rt_args = rt_args.size() > max_unique_rt_args ? rt_args.size() : max_unique_rt_args;
     }
 
-    uint32_t common_rt_args_offset = align(max_unique_rt_args * sizeof(uint32_t), L1_ALIGNMENT);
-    return common_rt_args_offset;
+    uint32_t common_rt_args_index = align(max_unique_rt_args, L1_ALIGNMENT / sizeof(uint32_t));
+    return common_rt_args_index;
 }
 
 // Validate that all cores have same number of unique-runtime-args, and then calculate and set
 // define for offset to reach common-runtime-args per core.
-void Kernel::set_common_runtime_args_offset() {
-    auto offset = get_common_runtime_args_offset();
-    log_trace(tt::LogMetal, "Setting COMMON_RT_ARGS_OFFSET: {} for kernel: {}", offset, this->name());
-    this->defines_["COMMON_RT_ARGS_OFFSET"] = std::to_string(offset);
+
+void Kernel::set_common_runtime_args_index() {
+    auto offset = get_common_runtime_args_index();
+    log_trace(tt::LogMetal, "Setting COMMON_RT_ARGS_INDEX: {} for kernel: {}", offset, this->name());
+    this->defines_["COMMON_RT_ARGS_INDEX"] = std::to_string(offset);
 }
 
 void Kernel::set_binaries(uint32_t build_key, std::vector<ll_api::memory> &&binaries) {

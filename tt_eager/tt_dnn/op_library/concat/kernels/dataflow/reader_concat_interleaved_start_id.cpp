@@ -33,7 +33,7 @@ void kernel_main() {
     constexpr uint32_t is_dram_base_offset = num_tensors;
     constexpr uint32_t num_tiles_per_block_base_offset = is_dram_base_offset + num_tensors;
     constexpr uint32_t tile_id_per_tensor_offset = num_tiles_per_block_base_offset + num_tensors;
-    volatile tt_l1_ptr uint32_t * arg_ptr = (volatile tt_l1_ptr uint32_t*) get_arg_addr(src_addr_base_idx);
+    tt_l1_ptr uint32_t * arg_ptr = (tt_l1_ptr uint32_t*) get_arg_addr(src_addr_base_idx);
     for (uint32_t i = 0; i < num_tensors; ++i) {
         uint32_t src_addr  = arg_ptr[i];
         is_dram[i] = (bool)arg_ptr[is_dram_base_offset + i];
