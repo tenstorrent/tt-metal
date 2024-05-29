@@ -67,11 +67,13 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, sliding_window, device_
 
     x_1SBH = x_bsh.view(1, seq_len, batch, hidden_size)
 
+    # input goes to L1
     xs_1SBH = ttnn.from_torch(
         x_1SBH,
         device=device_mesh,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
     )
     xs_1SBH = ttnn.to_device(xs_1SBH, device_mesh)
