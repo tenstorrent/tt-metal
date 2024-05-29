@@ -119,3 +119,6 @@ compile_commands.json
 # rpath_check
 tt_eager/tt_lib/.rpath_checked*
 ttnn/ttnn/.rpath_checked
+
+# exclude packages brough in from CPM
+.cpmcache
