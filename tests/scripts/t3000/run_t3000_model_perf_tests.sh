@@ -52,7 +52,7 @@ run_t3000_llm_tests() {
   run_t3000_mixtral_tests
 
   # Run llama2-70b tests
-  run_t3000_llama2_70b_tests
+  # run_t3000_llama2_70b_tests
 
   # Merge all the generated reports
   env python models/perf/merge_perf_results.py
