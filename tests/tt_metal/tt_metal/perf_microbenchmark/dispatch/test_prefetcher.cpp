@@ -30,8 +30,7 @@ constexpr uint32_t DRAM_EXEC_BUF_DEFAULT_PAGE_SIZE = 1 << DRAM_EXEC_BUF_DEFAULT_
 constexpr uint32_t DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_PREFETCH_Q_ENTRIES = 1024;
-constexpr uint32_t DEFAULT_MAX_PREFETCH_COMMAND_SIZE = 64 * 1024;
-constexpr uint32_t DEFAULT_CMDDAT_Q_SIZE = 128 * 1024;
+constexpr uint32_t DEFAULT_CMDDAT_Q_SIZE = 128 * 1024 + 2 * sizeof(CQPrefetchCmd) + 2 * sizeof(CQDispatchCmd);
 constexpr uint32_t DEFAULT_SCRATCH_DB_SIZE = 128 * 1024;
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
@@ -128,7 +127,6 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -cs: cmddat q size (default {})", DEFAULT_CMDDAT_Q_SIZE);
         log_info(LogTest, "-pdcs: prefetch_d cmddat cb size (default {})", dispatch_constants::get(CoreType::WORKER).prefetch_d_buffer_size());
         log_info(LogTest, "  -ss: scratch cb size (default {})", DEFAULT_SCRATCH_DB_SIZE);
-        log_info(LogTest, "  -mc: max command size (default {})", DEFAULT_MAX_PREFETCH_COMMAND_SIZE);
         log_info(LogTest, " -pcies: size of data to transfer in pcie bw test type (default: {})", PCIE_TRANSFER_SIZE_DEFAULT);
         log_info(LogTest, " -dpgs: dram page size in dram bw test type (default: {})", DRAM_PAGE_SIZE_DEFAULT);
         log_info(LogTest, " -dpgr: dram pages to read in dram bw test type (default: {})", DRAM_PAGES_TO_READ_DEFAULT);
@@ -148,8 +146,8 @@ void init(int argc, char **argv) {
     hugepage_issue_buffer_size_g = test_args::get_command_option_uint32(input_args, "-hp", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
     prefetch_q_entries_g = test_args::get_command_option_uint32(input_args, "-hq", DEFAULT_PREFETCH_Q_ENTRIES);
     cmddat_q_size_g = test_args::get_command_option_uint32(input_args, "-cs", DEFAULT_CMDDAT_Q_SIZE);
+    max_prefetch_command_size_g = cmddat_q_size_g;  // note: half this for best perf
     scratch_db_size_g = test_args::get_command_option_uint32(input_args, "-ss", DEFAULT_SCRATCH_DB_SIZE);
-    max_prefetch_command_size_g = test_args::get_command_option_uint32(input_args, "-mc", DEFAULT_MAX_PREFETCH_COMMAND_SIZE);
     use_coherent_data_g = test_args::has_command_option(input_args, "-c");
     readback_every_iteration_g = !test_args::has_command_option(input_args, "-rb");
     pcie_transfer_size_g = test_args::get_command_option_uint32(input_args, "-pcies", PCIE_TRANSFER_SIZE_DEFAULT);
@@ -309,8 +307,8 @@ void add_prefetcher_cmd_to_hostq(vector<uint32_t>& cmds,
         cmds.push_back(0);
     }
     uint32_t new_size = (cmds.size() - prior_end) * sizeof(uint32_t);
-    TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
-    TT_ASSERT((new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
+    TT_FATAL(new_size <= max_prefetch_command_size_g, "Generated prefetcher command {} exceeds max command size {}", new_size, max_prefetch_command_size_g);
+    TT_FATAL((new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
     sizes.push_back(new_size >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE);
 }
 
@@ -2608,11 +2606,11 @@ int main(int argc, char **argv) {
         if (test_type_g >= 2) {
             perf_test_g = true;
         }
-        if (test_type_g == 2) {
+        if (test_type_g == 3) {
             perf_test_g = true;
             log_info(LogTest, "PCIE transfer size {}", std::to_string(pcie_transfer_size_g));
         }
-        if (test_type_g == 3) {
+        if (test_type_g == 4) {
             perf_test_g = true;
             log_info(LogTest, "DRAM page size {}", std::to_string(dram_page_size_g));
             log_info(LogTest, "DRAM pages to read {}", std::to_string(dram_pages_to_read_g));
@@ -2675,6 +2673,7 @@ int main(int argc, char **argv) {
                 float bw = (long int)bytes_of_data_g * iterations_g / (elapsed_seconds.count() * 1000.0 * 1000.0 * 1000.0);
                 std::stringstream ss;
                 ss << std::fixed << std::setprecision(3) << bw;
+                log_info(LogTest, "Sent {} bytes", bytes_of_data_g * iterations_g);
                 log_info(LogTest, "BW: {} GB/s", ss.str());
             }
         }
