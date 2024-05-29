@@ -17,13 +17,8 @@ set(TT_METAL_OBJECTS
 )
 
 add_library(tt_metal ${TT_METAL_OBJECTS})
-if(BUILD_SHARED_LIBS)
-    target_link_libraries(tt_metal PUBLIC device metal_common_libs)
-    add_dependencies(tt_metal umd_device)
-else()
-    target_link_libraries(tt_metal PUBLIC ${UMD_STATIC_LIB} metal_common_libs)
-    add_dependencies(tt_metal umd_static_lib_target)
-endif()
+target_link_libraries(tt_metal PUBLIC device metal_common_libs)
+add_dependencies(tt_metal umd_device)
 
 target_link_libraries(tt_metal PUBLIC compiler_flags linker_flags metal_header_directories yaml-cpp $<$<BOOL:$ENV{ENABLE_TRACY}>:TracyClient>)  # linker_flags = -rdynamic if tracy enabled
 target_link_directories(tt_metal PUBLIC ${CMAKE_BINARY_DIR}/lib)    # required so tt_metal can find device library
