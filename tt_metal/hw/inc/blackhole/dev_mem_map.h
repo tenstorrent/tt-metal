@@ -61,11 +61,6 @@
 #define MEM_TRISC1_BASE (MEM_TRISC0_BASE + MEM_TRISC0_SIZE)
 #define MEM_TRISC2_BASE (MEM_TRISC1_BASE + MEM_TRISC1_SIZE)
 
-// These are used in ncrisc-halt.S, asserted in ncrisc.cc to be valid
-// Better way to do this would be to generate a file w/ these addresses
-#define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 4
-#define MEM_SLAVE_RUN_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 28
-
 /////////////
 // Initialization relocation L1 memory
 // Host downloads to these addresses, fw copies to destination
