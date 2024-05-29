@@ -22,11 +22,12 @@ if($ENV{ENABLE_TRACY})
 endif()
 
 # MUST have the RPATH set, or else can't find the tracy lib
-set(LDFLAGS_ "-L${CMAKE_BINARY_DIR}/lib -L/usr/local/lib -Wl,-rpath,${CMAKE_BINARY_DIR}/lib -Wl,-rpath,/usr/local/lib ${CONFIG_LDFLAGS} -ldl -lz -lboost_thread -lboost_filesystem -lboost_system -lboost_regex -lpthread -latomic -lhwloc -lstdc++")
+# set(LDFLAGS_ "-L${CMAKE_BINARY_DIR}/lib -L/usr/local/lib -Wl,-rpath,${CMAKE_BINARY_DIR}/lib -Wl,-rpath,/usr/local/lib ${CONFIG_LDFLAGS} -ldl -lz -lboost_thread -lboost_filesystem -lboost_system -lboost_regex -lpthread -latomic -lhwloc -lstdc++")
+set(LDFLAGS_ "-L${CMAKE_BINARY_DIR}/lib -Wl,-rpath,${CMAKE_BINARY_DIR}/lib ${CONFIG_LDFLAGS} -ldl -lz -lpthread -latomic -lhwloc -lstdc++")
 set(SHARED_LIB_FLAGS_ "-shared -fPIC")
 set(STATIC_LIB_FLAGS_ "-fPIC")
 
-set (CMAKE_CXX_FLAGS_ "--std=c++17 -fvisibility-inlines-hidden")
+set (CMAKE_CXX_FLAGS_ "--std=c++17 -fvisibility-inlines-hidden -I${CMAKE_SOURCE_DIR}/tt_metal/third_party/boost/headers")
 
 # This will build the shared library libdevice.so in build/lib where tt_metal can then find and link it
 include(ExternalProject)
@@ -56,6 +57,7 @@ ExternalProject_Add(
         LDFLAGS=${LDFLAGS_}
         CXXFLAGS=${CMAKE_CXX_FLAGS_}
 )
+# add_dependencies(umd_device umd_boost)
 if($ENV{ENABLE_TRACY})
     add_dependencies(umd_device TracyClient)
 endif()

@@ -31,7 +31,7 @@ CHECK_COMPILERS()
 ############################################################################################################################
 # Find all required libraries to build
 ############################################################################################################################
-find_package(Boost REQUIRED COMPONENTS thread filesystem system regex)
+# find_package(Boost REQUIRED COMPONENTS thread filesystem system regex)
 find_package(GTest REQUIRED)
 find_package (Python3 COMPONENTS Interpreter Development)
 
@@ -85,8 +85,8 @@ set(CMAKE_INSTALL_DATAROOTDIR "${CMAKE_BINARY_DIR}/tmp/share")
 ############################################################################################################################
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(metal_common_libs INTERFACE
-    dl z pthread atomic stdc++ # system libraries
-    Boost::thread Boost::filesystem Boost::system Boost::regex hwloc    # hwloc has no cmake support, find_package won't find it
+    dl z pthread atomic stdc++ hwloc # system libraries; hwloc has no cmake support, find_package won't find it
+    # boost_interprocess boost_format boost_core boost_container_hash boost_align
 )
 
 # Note on flags:
@@ -96,7 +96,7 @@ add_library(linker_flags INTERFACE)
 
 add_library(compiler_warnings INTERFACE)
 target_compile_options(compiler_warnings INTERFACE -Werror -Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter
-                        -Wno-deprecated-this-capture -Wno-deprecated-volatile
+                        -Wno-deprecated-this-capture -Wno-deprecated-volatile -Wno-deprecated-builtins
 )
 CHECK_COMPILER_WARNINGS()      # <- add any extra compile warning flags for building with Clang-17
 
@@ -120,7 +120,9 @@ if($ENV{ENABLE_TRACY})
 endif()
 
 add_library(metal_header_directories INTERFACE)
-target_include_directories(metal_header_directories INTERFACE tt_metal/hw/inc)
+target_include_directories(metal_header_directories INTERFACE ${CMAKE_SOURCE_DIR}/tt_metal/hw/inc
+    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/boost/headers
+)
 if ("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
     target_include_directories(metal_header_directories INTERFACE tt_metal/hw/inc/wormhole
         tt_metal/hw/inc/wormhole/wormhole_b0_defines
@@ -146,6 +148,8 @@ target_precompile_headers(pch_pybinds INTERFACE
 ############################################################################################################################
 # Build subdirectories
 ############################################################################################################################
+# add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/boost)
+
 if($ENV{ENABLE_TRACY})
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/tracy.cmake)
 endif()
