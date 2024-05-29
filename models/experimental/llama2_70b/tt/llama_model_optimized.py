@@ -249,10 +249,6 @@ class TtLlamaModel_optimized:
                 self.device_mesh,
             )
             attn_masks = ttnn.to_device(attn_masks, self.device_mesh)
-            repeat_shape = (1, self.n_local_heads, 1, 1)
-            attn_masks = tt_lib.tensor.repeat(
-                attn_masks, repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
-            )
 
         elif self.model_config["LLM_MODE"] == "decode":
             assert seq_len == 1, "Decode mode only supports seq_len=1"
