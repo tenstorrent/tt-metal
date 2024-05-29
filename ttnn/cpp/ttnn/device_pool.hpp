@@ -15,6 +15,6 @@ namespace device_pool {
 
 extern std::vector<Device *> devices;
 
-} // namespace device_pool
+}  // namespace device_pool
 
-} // namespace ttnn::device
+}  // namespace ttnn::device

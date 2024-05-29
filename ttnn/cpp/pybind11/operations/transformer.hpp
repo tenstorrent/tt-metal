@@ -16,8 +16,7 @@ namespace ttnn {
 namespace operations {
 namespace transformer {
 
-void py_module(py::module& module) {
-
+void py_module(py::module &module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::transformer::rotary_embedding,
@@ -35,7 +34,13 @@ void py_module(py::module& module) {
                 * :attr:`memory_config`: Memory Config of the output tensor
                 * :attr:`compute_kernel_config`: Optional[DeviceComputeKernelConfig] = None
         )doc",
-        ttnn::pybind_arguments_t{py::arg("input_tensor"),py::arg("cos_cache"),py::arg("sin_cache"),py::arg("token_index"), py::arg("memory_config") = std::nullopt, py::arg("compute_kernel_config") = std::nullopt});
+        ttnn::pybind_arguments_t{
+            py::arg("input_tensor"),
+            py::arg("cos_cache"),
+            py::arg("sin_cache"),
+            py::arg("token_index"),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("compute_kernel_config") = std::nullopt});
 
     ttnn::bind_registered_operation(
         module,

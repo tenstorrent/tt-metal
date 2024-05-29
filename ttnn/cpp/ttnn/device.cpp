@@ -11,9 +11,9 @@ namespace device {
 namespace device_pool {
 
 // Definition of the global device vector
-std::vector<Device*> devices;
+std::vector<Device *> devices;
 
-} // device_pool
+}  // namespace device_pool
 
 Device &open_device(int device_id, size_t l1_small_size) {
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -28,7 +28,7 @@ Device &open_device(int device_id, size_t l1_small_size) {
     return *device_pool::devices[device_id];
 }
 
-bool is_device_open(int device_id){
+bool is_device_open(int device_id) {
     return device_id < device_pool::devices.size() && device_pool::devices[device_id] != nullptr;
 }
 

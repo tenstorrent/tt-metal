@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "operations/__init__.hpp"
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include "core.hpp"
 #include "device.hpp"
 #include "multi_device.hpp"
-#include "types.hpp"
 #include "reports.hpp"
-
-#include "operations/__init__.hpp"
+#include "types.hpp"
 
 namespace py = pybind11;
 

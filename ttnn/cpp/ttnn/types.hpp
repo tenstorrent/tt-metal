@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_eager/tensor/tensor.hpp"
 #include "tt_eager/tensor/types.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 namespace ttnn {
 namespace types {
@@ -47,47 +47,45 @@ struct CoreGrid {
     std::size_t y;
 
     CoreGrid(std::size_t x, std::size_t y) : x(x), y(y) {}
-    CoreCoord to_CoreCoord(){
-        return CoreCoord(int(x), int(y));
-    }
+    CoreCoord to_CoreCoord() { return CoreCoord(int(x), int(y)); }
 };
 
 // This buffer class is compatible with multithreaded runtime (which lives in tt_eager)
 // It is derived from the tt_metal::Buffer class, but defines its own asynchronous allocation functions
 class Buffer : public tt::tt_metal::Buffer {
-    public:
-        Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferType buffer_type,
-                const TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
-                std::optional< ShardSpecBuffer> shard_parameters = std::nullopt
-            ) : tt::tt_metal::Buffer(device, size, page_size, buffer_type, buffer_layout, shard_parameters, false) {
-                this->allocate();
-            }
-        ~Buffer() {
-            this->deallocate();
-        }
-    private:
-        void allocate() {
-            TT_ASSERT(this->device());
-            this->device()->push_work([this] () mutable {
-                bool bottom_up = this->buffer_type() == BufferType::DRAM;
-                tt::tt_metal::detail::AllocateBuffer(this, bottom_up);
+   public:
+    Buffer(
+        Device *device,
+        uint64_t size,
+        uint64_t page_size,
+        const BufferType buffer_type,
+        const TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
+        std::optional<ShardSpecBuffer> shard_parameters = std::nullopt) :
+        tt::tt_metal::Buffer(device, size, page_size, buffer_type, buffer_layout, shard_parameters, false) {
+        this->allocate();
+    }
+    ~Buffer() { this->deallocate(); }
 
-            });
+   private:
+    void allocate() {
+        TT_ASSERT(this->device());
+        this->device()->push_work([this]() mutable {
+            bool bottom_up = this->buffer_type() == BufferType::DRAM;
+            tt::tt_metal::detail::AllocateBuffer(this, bottom_up);
+        });
+    }
+    void deallocate() {
+        if (this->device() == nullptr or not this->device()->initialized_ or this->size() == 0) {
+            return;
         }
-        void deallocate() {
-            if (this->device() == nullptr or not this->device()->initialized_ or this->size() == 0) {
-                return;
-            }
-            this->set_size(0);
-            TT_ASSERT(this->device()->allocator_ != nullptr, "Expected allocator to be initialized!");
-            this->device()->push_work([this] () mutable {
-                tt::tt_metal::detail::DeallocateBuffer(this);
-            });
-        }
+        this->set_size(0);
+        TT_ASSERT(this->device()->allocator_ != nullptr, "Expected allocator to be initialized!");
+        this->device()->push_work([this]() mutable { tt::tt_metal::detail::DeallocateBuffer(this); });
+    }
 };
 
 static std::ostream &operator<<(std::ostream &os, const CoreGrid &core_grid) {
-    os << "ttnn.CoreGrid(x=" <<core_grid.x<<", y="<<core_grid.y<<")";
+    os << "ttnn.CoreGrid(x=" << core_grid.x << ", y=" << core_grid.y << ")";
     return os;
 }
 

@@ -6,6 +6,7 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+
 #include "ttnn/operations/data_movement.hpp"
 
 namespace py = pybind11;
@@ -14,8 +15,9 @@ namespace ttnn {
 namespace operations {
 namespace data_movement {
 void py_module(py::module& module) {
-
-    module.def("permute", &permute,
+    module.def(
+        "permute",
+        &permute,
         py::arg("input_tensor"),
         py::arg("order"),
         R"doc(
@@ -34,7 +36,9 @@ Example::
 
     )doc");
 
-    module.def("concat", &concat,
+    module.def(
+        "concat",
+        &concat,
         py::arg("input_tensor"),
         py::arg("dim") = 0,
         py::kw_only(),
@@ -75,11 +79,7 @@ Args:
     * :attr:`scale_factor`: multiplier for spatial size. Has to match input size if it is a tuple.
     )doc",
         ttnn::pybind_arguments_t{
-            py::arg("input_tensor"),
-            py::arg("scale_factor"),
-            py::arg("memory_config") = std::nullopt
-        }
-    );
+            py::arg("input_tensor"), py::arg("scale_factor"), py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace data_movement

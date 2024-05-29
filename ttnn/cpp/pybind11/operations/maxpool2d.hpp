@@ -20,16 +20,26 @@ void py_module(py::module& module) {
     module.def(
         "maxpool2d",
         [](const ttnn::Tensor& input_tensor,
-            uint32_t batch_size,
-            uint32_t input_height,
-            uint32_t input_width,
-            uint32_t channels,
-            array2_t kernel_size,
-            array2_t stride,
-            array2_t padding,
-            array2_t dilation,
-            Device& device) -> Tensor {
-            return maxpool2d(input_tensor, batch_size, input_height, input_width, channels, kernel_size, stride, padding, dilation, device);
+           uint32_t batch_size,
+           uint32_t input_height,
+           uint32_t input_width,
+           uint32_t channels,
+           array2_t kernel_size,
+           array2_t stride,
+           array2_t padding,
+           array2_t dilation,
+           Device& device) -> Tensor {
+            return maxpool2d(
+                input_tensor,
+                batch_size,
+                input_height,
+                input_width,
+                channels,
+                kernel_size,
+                stride,
+                padding,
+                dilation,
+                device);
         },
         py::kw_only(),
         py::arg("input_tensor"),
@@ -44,4 +54,4 @@ void py_module(py::module& module) {
         py::arg("device"));
 }
 
-}  // namespace ttnn::operations::maxpool
+}  // namespace ttnn::operations::maxpool2d
