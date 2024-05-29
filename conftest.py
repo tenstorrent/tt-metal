@@ -16,6 +16,9 @@ import json
 from loguru import logger
 
 from tests.scripts.common import run_process_and_get_result
+import sys
+import time
+import random
 
 
 @pytest.fixture(scope="function")
@@ -256,14 +259,18 @@ def reset_tensix(request, silicon_arch_name):
 
 
 @pytest.fixture(scope="function")
-def device_l1_small_size(request):
+def device_l1_small_size(request, device_id):
     import tt_lib as ttl
 
-    device_id = request.config.getoption("device_id")
-
-    num_devices = ttl.device.GetNumPCIeDevices()
-    assert device_id < num_devices, "CreateDevice not supported for non-mmio device"
-
+    if device_id < 0:
+        device_id = request.config.getoption("device_id")
+        num_devices = ttl.device.GetNumPCIeDevices()
+        assert device_id < num_devices, "CreateDevice not supported for non-mmio device"
+    sys.stdout = sys.stderr
+    time.sleep(
+        device_id / 2 + random.random() * 2
+    )  # Many of the shared resources, when accessed simultanously leads to erros. So, adding a random sleep to avoid that.
+    # print("Using Device ID ",device_id," for ",request.node.name)
     if hasattr(request, "param"):
         l1_small_size = request.param
         device = ttl.device.CreateDevice(device_id, l1_small_size)
@@ -281,10 +288,9 @@ def device_l1_small_size(request):
 def device(device_l1_small_size):
     import tt_lib as ttl
 
-    device = ttl.device.GetDefaultDevice()
-    yield device
-    ttl.device.DumpDeviceProfiler(device, True)
-    ttl.device.DeallocateBuffers(device)
+    yield device_l1_small_size
+    ttl.device.DumpDeviceProfiler(device_l1_small_size, True)
+    ttl.device.DeallocateBuffers(device_l1_small_size)
 
 
 @pytest.fixture(scope="function")
@@ -430,11 +436,9 @@ def reset_default_device():
 
 @pytest.fixture(scope="function")
 def use_program_cache(request):
-    import tt_lib as ttl
-
     if "device" in request.fixturenames or "device_l1_small_size" in request.fixturenames:
-        dev = ttl.device.GetDefaultDevice()
-        dev.enable_program_cache()
+        device = request.getfixturevalue("device")
+        device.enable_program_cache()
     elif "all_devices" in request.fixturenames:
         devices = request.getfixturevalue("all_devices")
         for dev in devices:
@@ -474,3 +478,19 @@ def tracy_profile():
 @pytest.fixture
 def input_path(request):
     return request.config.getoption("--input-path")
+
+
+def pytest_xdist_auto_num_workers(config):
+    import tt_lib as ttl
+
+    sys.stdout = sys.stderr
+    return ttl.device.GetNumPCIeDevices()
+
+
+@pytest.fixture(scope="function")
+def device_id(worker_id):
+    device_id = "".join([x for x in worker_id if x.isdigit()])
+    try:
+        yield int(device_id)
+    except:
+        yield -1
