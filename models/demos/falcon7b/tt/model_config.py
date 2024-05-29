@@ -5,7 +5,7 @@
 import ttnn
 from loguru import logger
 from pathlib import Path
-from models.utility_functions import is_grayskull, is_wormhole_b0
+from models.utility_functions import is_grayskull, is_wormhole_b0, nearest_y
 
 OP_KEYS = (
     # Inputs
@@ -205,9 +205,6 @@ def get_model_config(model_config_str, prefill_seq_len=0):
 
 def set_prefill_config(model_config, seq_len, dram_memcfg):
     model_config["PREFILL_OPTIMIZED_MODE"] = not is_grayskull()
-    model_config["MLP_SEQ_LEN"] = seq_len
-    model_config["MLP_PADDING_VALUE"] = 4608
-    model_config["MLP_GRID_SIZE"] = (8, 8)
 
     if is_wormhole_b0():
         default_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
@@ -221,6 +218,11 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
             math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
             math_approx_mode=True,
         )
+
+    # ---- mlp config
+    model_config["MLP_SEQ_LEN"] = seq_len
+    model_config["MLP_PADDING_VALUE"] = 4608
+    model_config["MLP_GRID_SIZE"] = (8, 8)
     model_config["MLP_KERNEL_CONFIG"] = default_kernel_config
 
     mm_h_to_4h_prog_cfg = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -248,6 +250,7 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
     model_config["DENSE_4H_TO_H_MM_PROGCFG"] = mm_4h_to_h_prog_cfg
     model_config["MLP_INTERLEAVED_TO_SHARDED_MEM_CFG"] = dram_memcfg
 
+    # ---- attention config
     model_config["FUSED_QKV_MM_OPTIMIZED_MEMCFG"] = dram_memcfg
     model_config[
         "FUSED_QKV_MM_OPTIMIZED_PROGCFG"
@@ -323,7 +326,35 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
         mcast_in0=False,
     )
 
+    # ---- lm head config
     model_config["LM_HEAD_KERNEL_CONFIG"] = default_kernel_config
+    model_config["LM_HEAD_NUM_SLICES"] = {1024: 4, 2048: 8}
+
+    model_config["LM_HEAD_PROGCFG"] = {}
+    for seq_len in [1024, 2048]:
+        grid = (8, 8)
+        activations_m_in_tiles = seq_len // 32
+        weights_n_in_tiles = 65024 // model_config["LM_HEAD_NUM_SLICES"][seq_len] // 32
+
+        # calculate parameters for the given sequence length
+        out_subblock_h = 2
+        out_subblock_w = 4
+        per_core_M = nearest_y(activations_m_in_tiles / grid[0], out_subblock_h)
+        per_core_N = nearest_y(weights_n_in_tiles / grid[1], out_subblock_w)
+        in0_block_w = 4 if seq_len <= 1024 else 8
+
+        model_config["LM_HEAD_PROGCFG"][
+            seq_len
+        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
 
 
 model_config_entries = {
