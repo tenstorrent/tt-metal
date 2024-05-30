@@ -640,7 +640,6 @@ class resnet50:
         x = ttnn.reshape(x, (1, 1, 56 * 56 * self.batch_size, 64))
         if is_wormhole_b0():
             # TODO: fix the need to do the reshard here
-            x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)  # 8952 Remove this after fixing the issue
             x = ttnn.to_memory_config(x, self.layer1_module1.conv1.conv.input_sharded_memory_config)
 
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, dtype=self.model_config["ACTIVATIONS_DTYPE"])
