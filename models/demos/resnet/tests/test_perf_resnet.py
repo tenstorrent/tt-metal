@@ -216,7 +216,7 @@ def run_perf_resnet_trace(
         tt_lib.device.DumpDeviceProfiler(device)
 
         # Capture
-        tid = tt_lib.device.BeginTraceCapture(device, 0, 1304576)
+        tid = tt_lib.device.BeginTraceCapture(device, 0, 1327328)
         tt_output_res = tt_resnet50(tt_image_res)
         tt_lib.device.EndTraceCapture(device, 0, tid)
         tt_lib.device.DumpDeviceProfiler(device)
