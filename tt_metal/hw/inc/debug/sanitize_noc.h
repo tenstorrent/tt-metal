@@ -262,7 +262,7 @@ inline void debug_insert_delay(uint8_t transaction_type) {
     }
     if (delay) {
         // WATCHER_DEBUG_DELAY is a compile time constant passed with -D
-        for (volatile uint32_t i = 0; i < WATCHER_DEBUG_DELAY; i++);  // Spin loop
+        riscv_wait (WATCHER_DEBUG_DELAY);
         v[0].feedback |= (1 << transaction_type); // Mark that we have delayed on this transaction type
     }
 #endif  // WATCHER_DEBUG_DELAY
