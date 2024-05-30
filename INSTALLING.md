@@ -4,6 +4,8 @@ These instructions will guide you through the installation of Tenstorrent system
 
 ---
 
+## Installation Steps
+
 ### Step 1. Driver & Firmware
 
 Follow the Software Setup instructions for your specific board or system provided on our [general docs](https://docs.tenstorrent.com/tenstorrent).
@@ -111,13 +113,13 @@ are less familiar with Python and its various environment tools, just use
 
 5. Start coding
 
-You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent.github.io/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://github.com/tenstorrent/tt-metal/blob/main/README.md)
+You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent.github.io/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://tenstorrent.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
 
 ---
 
 ### Step 5. Software dependencies for codebase contributions
 
-Please follow the next additional steps if you want to contribute to the codebase
+Please follow the next additional steps if you want to contribute to the codebase.
 
 1. Install dependencies
 

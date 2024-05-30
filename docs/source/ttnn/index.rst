@@ -9,6 +9,7 @@ Welcome to TT-NN documentation!
 .. toctree::
    :caption: TTNN
 
+   ttnn/installing
    ttnn/about
    ttnn/usage
    ttnn/tensor
