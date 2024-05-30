@@ -655,11 +655,6 @@ class TtLlamaAttention_optimized:
         # )
 
         # SPDA
-        program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[8, 8],
-            q_chunk_size=128,
-            k_chunk_size=128,
-        )
         attn_output = tt_lib.operations.primary.transformers.scaled_dot_product_attention(
             query_layer,
             key_layer,
@@ -667,7 +662,7 @@ class TtLlamaAttention_optimized:
             attn_masks,
             is_causal=True,
             scale=self.scale,
-            program_config=program_config,
+            program_config=self.model_config["SDPA_PROGCFG"],
         )
 
         # deallocate keys and values
@@ -691,9 +686,7 @@ class TtLlamaAttention_optimized:
             memory_config=self.model_config["DRAM_MEMCFG"],
         )
 
-        seq_tiles = attn_output.shape[2] // 32
-        cores_y = 8 if seq_tiles % 8 == 0 else 4
-        dense_out_prog_cfg = self.model_config["SELFOUT_MM_PROGCFG_LAMBDA"](seq_tiles, cores_y)
+        dense_out_prog_cfg = self.model_config["SELFOUT_MM_PROGCFG_LAMBDA"]
         # print('wo matmul')
         attn_output = tt_lib.operations.primary.matmul(
             attn_output,

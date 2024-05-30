@@ -535,7 +535,7 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
         # Input shape is [1,1,seq_len,8192]
         # qkv_list shape is [8192,1280]
         seq_len_tiles = seq_len // 32
-        cores_y = 8 if seq_len_tiles % 8 == 0 else 4
+        cores_y = 4  # 8 if seq_len_tiles % 8 == 0 else 4
         per_core_M = seq_len // 32 // 4
         in0_block_w = 32 if seq_len == 128 else 8  # smaller in0_block_w for larger seq_len to fit in L1)
         model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -689,33 +689,10 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
                 ),
             )
         else:
-            # (Pdb) query_layer[0].shape: ttnn.Shape([1, 8, 128, 128])
-            # (Pdb) key_layer_transposed[0].shape: ttnn.Shape([1, 1, 128, 128])
-            model_config[
-                "ATTN_BATCHED_MM_PROGCFG"
-            ] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4 if seq_len == 128 else 8),
-                in0_block_w=head_dim // 32,
-                out_subblock_h=1,
-                out_subblock_w=1,
-                per_core_M=32 // 32,  # 128 * 8 // 32 cores // TILE_SIZE
-                per_core_N=seq_len // 32,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=False,
-            )
-            model_config[
-                "SCORES_BATCHED_MM_PROGCFG"
-            ] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4 if seq_len == 128 else 8),
-                in0_block_w=seq_len // 32,
-                out_subblock_h=1,
-                out_subblock_w=1,
-                per_core_M=32 // 32,  # 128 * 8 // 32 cores // TILE_SIZE
-                per_core_N=head_dim // 32,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=False,
+            model_config["SDPA_PROGCFG"] = ttl.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+                compute_with_storage_grid_size=[8, 7],
+                q_chunk_size=128,
+                k_chunk_size=128,
             )
     elif num_devices == 32:
         model_config["Q_TRANSPOSE_MEMCFG"] = ttl.tensor.MemoryConfig(
@@ -849,14 +826,14 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             mcast_in0=True,
         )
     else:
-        model_config[
-            "SELFOUT_MM_PROGCFG_LAMBDA"
-        ] = lambda seq_tiles, cores_y: ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        seq_len_tiles = seq_len // 32
+        cores_y = 4  # 8 if seq_len_tiles % 8 == 0 else 4
+        model_config["SELFOUT_MM_PROGCFG_LAMBDA"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, cores_y),
             in0_block_w=8,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
-            out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=seq_len_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
             per_core_N=4,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
             fused_activation=None,
@@ -925,12 +902,12 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
         else:
             # Llama 2 MLP Module Prefill
             seq_tiles = seq_len // 32
-            cores_y = 8 if seq_tiles % 8 == 0 else 4
+            cores_y = 4  # 8 if seq_tiles % 8 == 0 else 4
             model_config["PADDED_FF1_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, cores_y),
-                in0_block_w=8,  # how much inner dim you take each time
+                in0_block_w=4,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=16,  # N / TILE_WIDTH / Grid_Size
                 transpose_mcast=False,
@@ -939,9 +916,9 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
 
             model_config["PADDED_FF3_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, cores_y),
-                in0_block_w=8,  # how much inner dim you take each time
+                in0_block_w=4,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=16,  # N / TILE_WIDTH / Grid_Size
                 transpose_mcast=False,
@@ -952,9 +929,9 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             # input1: [1,1,32k,1k]
             model_config["PADDED_FF2_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, cores_y),
-                in0_block_w=8,  # how much inner dim you take each time
+                in0_block_w=4,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=4,  # N / TILE_WIDTH / Grid_Size
                 transpose_mcast=False,
