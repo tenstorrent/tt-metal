@@ -93,6 +93,7 @@ operation::ProgramWithCallbacks MorehAdam::create_program(
         this->weight_decay,
         this->step,
         this->amsgrad,
+        this->compute_kernel_config,
         max_exp_avg_sq);
 }
 
@@ -109,12 +110,18 @@ std::vector<std::optional<Tensor>> moreh_adam(
     uint32_t step,
     bool amsgrad,
     const std::optional<std::reference_wrapper<const Tensor>> max_exp_avg_sq,
-    const MemoryConfig& mem_config) {
+    const MemoryConfig& mem_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    auto device = param.device();
+
+    auto compute_kernel_config_val =
+        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+
     std::vector<Tensor> dummy_output_tensors = {
         Tensor(operation::get_workers_for_op_output({param, grad, exp_avg, exp_avg_sq}, {max_exp_avg_sq}))};
 
     operation::launch_op(
-        [lr, beta1, beta2, eps, weight_decay, step, amsgrad, mem_config](
+        [lr, beta1, beta2, eps, weight_decay, step, amsgrad, mem_config, compute_kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -128,7 +135,8 @@ std::vector<std::optional<Tensor>> moreh_adam(
                     .weight_decay = weight_decay,
                     .step = step,
                     .amsgrad = amsgrad,
-                    .output_mem_config = mem_config},
+                    .output_mem_config = mem_config,
+                    .compute_kernel_config = compute_kernel_config_val},
                 input_tensors,
                 optional_input_tensors,
                 optional_output_tensors);

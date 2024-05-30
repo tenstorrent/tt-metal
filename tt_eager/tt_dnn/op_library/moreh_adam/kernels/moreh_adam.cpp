@@ -117,7 +117,7 @@ void MAIN {
         // bias_correction2 = 1 - pow(beta2, step);
         // cb_tmp1 = pow(beta2, step);
         tile_regs_acquire();
-        copy_tile_init();
+        copy_tile_init_with_dt(cb_scalar_args);
         copy_tile(cb_scalar_args, beta2_tile, dst0);
         power_tile_init();
         power_tile(dst0, step);
@@ -125,7 +125,7 @@ void MAIN {
 
         tile_regs_wait();
         cb_reserve_back(cb_tmp1, onetile);
-        pack_tile(dst0, cb_tmp1);
+        pack_tile_with_dt(dst0, cb_tmp1);
         cb_push_back(cb_tmp1, onetile);
         tile_regs_release();
 
@@ -133,6 +133,7 @@ void MAIN {
         tile_regs_acquire();
         cb_wait_front(cb_tmp1, onetile);
         cb_reserve_back(cb_tmp1, onetile);
+        unpack_reconfig_data_format(cb_one, cb_tmp1);
         sub_tiles_init();
         sub_tiles(cb_one, cb_tmp1, first_tile, first_tile, dst0);
         recip_tile_init();
@@ -140,7 +141,7 @@ void MAIN {
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(dst0, cb_tmp1);
+        pack_tile_with_dt(dst0, cb_tmp1);
         cb_pop_front(cb_tmp1, onetile);
         cb_push_back(cb_tmp1, onetile);
         tile_regs_release();
@@ -149,15 +150,16 @@ void MAIN {
         // tmp_cb_max_exp_avg_sq = max(cb_max_exp_avg_sq_in, tmp_cb_exp_avg_sq);
         tile_regs_acquire();
         cb_reserve_back(tmp_cb_max_exp_avg_sq, onetile);
-        copy_tile_init();
+        copy_tile_init_with_dt(cb_max_exp_avg_sq_in);
         copy_tile(cb_max_exp_avg_sq_in, first_tile, dst0);
+        copy_tile_init_with_dt(tmp_cb_exp_avg_sq);
         copy_tile(tmp_cb_exp_avg_sq, first_tile, dst1);
         max_tile_init();
         max_tile(dst0, dst1);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(dst0, tmp_cb_max_exp_avg_sq);
+        pack_tile_with_dt(dst0, tmp_cb_max_exp_avg_sq);
         cb_push_back(tmp_cb_max_exp_avg_sq, onetile);
         tile_regs_release();
 
@@ -165,12 +167,12 @@ void MAIN {
         tile_regs_acquire();
         cb_wait_front(tmp_cb_max_exp_avg_sq, onetile);
         cb_reserve_back(cb_max_exp_avg_sq_out, onetile);
-        copy_tile_init();
+        copy_tile_init_with_dt(tmp_cb_max_exp_avg_sq);
         copy_tile(tmp_cb_max_exp_avg_sq, first_tile, dst0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(dst0, cb_max_exp_avg_sq_out);
+        pack_tile_with_dt(dst0, cb_max_exp_avg_sq_out);
         cb_push_back(cb_max_exp_avg_sq_out, onetile);
         tile_regs_release();
 #endif
@@ -179,15 +181,19 @@ void MAIN {
         tile_regs_acquire();
         cb_wait_front(cb_tmp1, onetile);
         cb_reserve_back(cb_tmp1, onetile);
-        mul_tiles_init();
+
 #ifdef AMSGRAD
+        mul_tiles_init();
+        unpack_reconfig_data_format(tmp_cb_max_exp_avg_sq, cb_tmp1);
         mul_tiles(tmp_cb_max_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
 #else
+        mul_tiles_init();
+        unpack_reconfig_data_format(tmp_cb_exp_avg_sq, cb_tmp1);
         mul_tiles(tmp_cb_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
 #endif
         sqrt_tile_init();
         sqrt_tile(dst0);
-        pack_tile(dst0, cb_tmp1);
+        pack_tile_with_dt(dst0, cb_tmp1);
         tile_regs_commit();
 
         tile_regs_wait();
@@ -203,6 +209,7 @@ void MAIN {
         tile_regs_acquire();
         cb_wait_front(cb_tmp1, onetile);
         cb_reserve_back(cb_tmp1, onetile);
+        unpack_reconfig_data_format(cb_tmp1, cb_scalar_args);
         add_tiles_init();
         add_tiles(cb_tmp1, cb_scalar_args, first_tile, eps_tile, dst0);
         recip_tile_init();
@@ -210,7 +217,7 @@ void MAIN {
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(dst0, cb_tmp1);
+        pack_tile_with_dt(dst0, cb_tmp1);
         cb_pop_front(cb_tmp1, onetile);
         cb_push_back(cb_tmp1, onetile);
         tile_regs_release();
@@ -219,20 +226,21 @@ void MAIN {
         // cb_tmp2 = pow(beta1, step);
         tile_regs_acquire();
         cb_reserve_back(cb_tmp2, onetile);
-        copy_tile_init();
+        copy_tile_init_with_dt(cb_scalar_args);
         copy_tile(cb_scalar_args, beta1_tile, dst0);
         power_tile_init();
         power_tile(dst0, step);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(dst0, cb_tmp2);
+        pack_tile_with_dt(dst0, cb_tmp2);
         cb_push_back(cb_tmp2, onetile);
         tile_regs_release();
 
         // cb_tmp2 = 1 / (1 - cb_tmp2);
         tile_regs_acquire();
         cb_wait_front(cb_tmp2, onetile);
+        unpack_reconfig_data_format(cb_one, cb_tmp2);
         sub_tiles_init();
         sub_tiles(cb_one, cb_tmp2, first_tile, first_tile, dst0);
         recip_tile_init();
@@ -242,7 +250,7 @@ void MAIN {
 
         tile_regs_wait();
         cb_reserve_back(cb_tmp2, onetile);
-        pack_tile(dst0, cb_tmp2);
+        pack_tile_with_dt(dst0, cb_tmp2);
         cb_push_back(cb_tmp2, onetile);
         tile_regs_release();
 

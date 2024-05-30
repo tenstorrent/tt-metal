@@ -558,6 +558,7 @@ void py_module(py::module& m_primary) {
         py::arg("amsgrad").noconvert(),
         py::arg("max_exp_avg_sq").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
         "Performs a moreh_adam operation.
         )doc");
