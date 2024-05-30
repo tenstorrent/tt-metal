@@ -29,7 +29,7 @@ from models.utility_functions import (
 MODEL_NAME = "microsoft/resnet-50"
 
 model_config = {
-    "MATH_FIDELITY": ttnn.MathFidelity.HiFi2,
+    "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
     "WEIGHTS_DTYPE": ttnn.bfloat8_b,
     "ACTIVATIONS_DTYPE": ttnn.bfloat8_b,
 }
