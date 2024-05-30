@@ -268,7 +268,7 @@ const std::vector<uint32_t> &bank_ids_from_logical_core(
     const Allocator &allocator, BufferType buffer_type, const CoreCoord &logical_core) {
     if (allocator.logical_core_to_bank_ids.at(buffer_type).find(logical_core) ==
         allocator.logical_core_to_bank_ids.at(buffer_type).end()) {
-        TT_THROW("No L1 bank exists for core {}", logical_core.str());
+        TT_THROW("No {} bank exists for core {}", magic_enum::enum_name(buffer_type), logical_core.str());
     }
     return allocator.logical_core_to_bank_ids.at(buffer_type).at(logical_core);
 }
