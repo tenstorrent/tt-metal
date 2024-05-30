@@ -108,15 +108,9 @@ void kernel_main() {
         cb_reserve_back(cb_weight, onetile);
         cb_reserve_back(cb_tmp_weight, onetile);
 
-#if defined(FP32_DEST_ACC_EN)
         uint32_t l1_write_addr_tmp_weight = get_write_ptr(cb_tmp_weight);
-        volatile tt_l1_ptr float* tmp_weight_l1_ptr =
-            reinterpret_cast<volatile tt_l1_ptr float*>(l1_write_addr_tmp_weight);
-#else
-        uint32_t l1_write_addr_tmp_weight = get_write_ptr(cb_tmp_weight);
-        volatile tt_l1_ptr uint16_t* tmp_weight_l1_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_tmp_weight);
-#endif
+        volatile tt_l1_ptr FP32_DEST_ACC_FTYPE* tmp_weight_l1_ptr =
+            reinterpret_cast<volatile tt_l1_ptr FP32_DEST_ACC_FTYPE*>(l1_write_addr_tmp_weight);
 #endif
 
         cb_reserve_back(cb_input, onetile);
@@ -153,17 +147,9 @@ void kernel_main() {
 
                 uint32_t buffer_idx = target_val % 16;
 
-#if defined(FP32_DEST_ACC_EN)
-                tmp_input_l1_ptr[tilized_idx] = bfloat16_to_float(input_l1_ptr[buffer_idx]);
-#else
-                tmp_input_l1_ptr[tilized_idx] = input_l1_ptr[buffer_idx];
-#endif
+                tmp_input_l1_ptr[tilized_idx] = fp32_dest_acc_cast(input_l1_ptr[buffer_idx]);
             } else {
-#if defined(FP32_DEST_ACC_EN)
-                tmp_input_l1_ptr[tilized_idx] = 0.0f;
-#else
-                tmp_input_l1_ptr[tilized_idx] = u16_zero;
-#endif
+                tmp_input_l1_ptr[tilized_idx] = fp32_dest_acc_cast(0.0f);
             }
 
 #if defined(WEIGHT)
@@ -184,11 +170,7 @@ void kernel_main() {
 
             uint32_t buffer_idx = target_val % 16;
 
-#if defined(FP32_DEST_ACC_EN)
-            tmp_weight_l1_ptr[tilized_idx] = bfloat16_to_float(weight_l1_ptr[buffer_idx]);
-#else
-            tmp_weight_l1_ptr[tilized_idx] = weight_l1_ptr[buffer_idx];
-#endif
+            tmp_weight_l1_ptr[tilized_idx] = fp32_dest_acc_cast(weight_l1_ptr[buffer_idx]);
 #endif
         }
         cb_push_back(cb_tmp_input, onetile);
