@@ -10,12 +10,12 @@ Ensure that you have the base TT-Metalium source and environment configuration
 `built and ready
 <https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md>`_.
 
-Now, from the project root, get the Python virtual environment in which you'll
-be working in ready.
+Now, from the project root, activate the provided Python virtual environment in
+which you'll be working.
 
 ::
 
-    source build/python_env/bin/activate
+    source python_env/bin/activate
 
 Set ``PYTHONPATH`` to the root for running models. This is a common practice.
 
