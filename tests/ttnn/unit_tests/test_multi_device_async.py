@@ -243,6 +243,35 @@ def test_multi_device_data_parallel_op_chain(pcie_device_mesh, program_cache, in
         pcie_device_mesh.get_device(device).enable_async(False)
 
 
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_multi_device_argmax(pcie_device_mesh, layout, mem_config):
+    for device in pcie_device_mesh.get_device_ids():
+        pcie_device_mesh.get_device(device).enable_async(True)
+
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 1, 32, 4096)
+    reference_output = torch_input.squeeze(1).view(32, 1, -1).float().squeeze().argmax(axis=-1)
+
+    tt_out_11BH = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        device=pcie_device_mesh,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(pcie_device_mesh),
+    )
+
+    tt_out_11BH = ttnn.experimental.tensor.argmax(tt_out_11BH, dim=-1)
+    tt_out_1B = ttnn.reshape(tt_out_11BH[:1, :, :, :], ttnn.Shape([1, 32]))
+    tt_out_1B = ttnn.to_torch(tt_out_1B, mesh_composer=ttnn.ConcatMeshToTensor(pcie_device_mesh, dim=0))[0]
+
+    assert_with_pcc(tt_out_1B, reference_output, pcc=0.97)
+
+    for device in pcie_device_mesh.get_device_ids():
+        pcie_device_mesh.get_device(device).enable_async(False)
+
+
 @pytest.mark.parametrize("pcie_device_mesh", [2], indirect=True)
 def test_multi_device_explicit_dealloc(pcie_device_mesh):
     """Multidevice API: Ensure that deallocating multi-device tensors works as expected"""

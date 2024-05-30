@@ -1608,6 +1608,7 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig
                         tindex = tt::numpy::index_height<bfloat16>(input_shape, DataType::BFLOAT16);
                         max_tensor = bcast(max_tensor, max_val, BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
                     }
+                    tindex = tindex.to(input_a.device());
                     max_val.deallocate();
                     Tensor cmp_results = eq(input_a, max_tensor, std::nullopt, output_mem_config);
                     max_tensor.deallocate();
@@ -1650,6 +1651,7 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig
                     {
                         tindex = tt::numpy::index_batch<bfloat16>(input_shape, DataType::BFLOAT16);
                     }
+                    tindex = tindex.to(input_a.device());
                     Tensor max_indices =  mul(cmp_results, tindex, std::nullopt, output_mem_config);
                     cmp_results.deallocate();
                     Tensor midx = full_like(max_indices, size);
@@ -1673,6 +1675,7 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig
             }
             //TODO: Fix the index generation code. With the fix the code will work for argmax that return entire maximum value index
             Tensor tindex = tt::numpy::index_all<bfloat16>(input_shape, DataType::BFLOAT16);
+            tindex = tindex.to(input_a.device());
             Tensor max_val = global_max(input_a, output_mem_config);
             Tensor max_tensor = zeros_like(input_a, output_mem_config);
             max_tensor = bcast(max_tensor, max_val, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
