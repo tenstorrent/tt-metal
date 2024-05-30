@@ -49,16 +49,6 @@ void kernel_main() {
         .data_format = output_grad_data_format};
     constexpr uint32_t onetile = 1;
 
-    union {
-        float f;
-        uint32_t u;
-    } one, zero;
-    one.f = 1.0f;
-    zero.f = 0.0f;
-
-    const auto u16_one = uint16_t(one.u >> 16);
-    const auto u16_zero = uint16_t(zero.u >> 16);
-
 #if defined(WEIGHT)
     const InterleavedAddrGen<weight_is_dram> addrg_weight = {
         .bank_base_address = weight_addr,
