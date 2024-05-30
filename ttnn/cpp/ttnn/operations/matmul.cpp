@@ -153,7 +153,7 @@ ttnn::Tensor linear(
         input_tensor_a, input_tensor_b, post_process_bias ? std::nullopt : bias, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/, user_core_coord, get_fused_activation(activation));
 
     if (post_process_bias) {
-        output_tensor = tt::tt_metal::bcast(
+        output_tensor = tt::operations::primary::bcast(
             output_tensor, bias.value(), tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, memory_config);
     }
 
