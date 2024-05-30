@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/dprint.h"  // required in all kernels using DPRINT
 #include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 
