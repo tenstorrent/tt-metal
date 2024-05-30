@@ -98,7 +98,7 @@ void kernel_main() {
         uint32_t inner = i % num_inner_tile;
         uint32_t nct = i / num_inner_tile;
         uint32_t n = nct / Ct;
-        int32_t ct = static_cast<int32_t>(nct % Ct);
+        uint32_t ct = nct % Ct;
 
         // target: (N, W)
         // noc_id: nt * Wt + wt
