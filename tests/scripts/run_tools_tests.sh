@@ -15,7 +15,7 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter=*PrintHanging
 
     # Run dump tool w/ minimum data - no error expected.
-    ./build/tools/watcher_dump -d=0
+    ./build/tools/watcher_dump -d=0 -w -c
 
     # Verify the kernel we ran shows up in the log.
     grep "tests/tt_metal/tt_metal/test_kernels/misc/print_hang.cpp" generated/watcher/watcher.log > /dev/null || { echo "Error: couldn't find expected string in watcher log after dump." ; exit 1; }
@@ -23,7 +23,7 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
 
     # Now run with all watcher features, expect it to throw.
     ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter=*WatcherAssertBrisc
-    ./build/tools/watcher_dump -d=0 &> tmp.log || { echo "Above failure is expected."; }
+    ./build/tools/watcher_dump -d=0 -w &> tmp.log || { echo "Above failure is expected."; }
 
     # Verify the error we expect showed up in the program output.
     grep "brisc tripped an assert" tmp.log > /dev/null || { echo "Error: couldn't find expected string in command output:" ; cat tmp.log; exit 1; }
@@ -32,6 +32,7 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     # Remove created files.
     rm tmp.log
     rm generated/watcher/watcher.log
+    rm generated/watcher/command_queue_dump/*
     echo "Watcher dump tool tests finished..."
 
 
