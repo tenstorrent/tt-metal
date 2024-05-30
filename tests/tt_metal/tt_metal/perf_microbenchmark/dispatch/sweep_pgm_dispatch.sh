@@ -208,3 +208,13 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 20
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -x $max_x -y $max_y -S 4 -c 32 -a 128
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -x $max_x -y $max_y -S 4 -c 32 -a 128
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336 -x $max_x -y $max_y -S 4 -c 32 -a 128
+
+# Kernel groups (perhaps even worse)
+echo "###" worst case
+build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 256 -x $max_x -y $max_y -kg $max_x
+build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 512 -x $max_x -y $max_y -kg $max_x
+build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -x $max_x -y $max_y -kg $max_x
+build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -x $max_x -y $max_y -kg $max_x
+build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -x $max_x -y $max_y -kg $max_x
+build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -x $max_x -y $max_y -kg $max_x
+#build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336 -x $max_x -y $max_y -kg $max_x
