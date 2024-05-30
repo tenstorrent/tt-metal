@@ -4,10 +4,8 @@
 
 import torch
 import pytest
-import math
 from loguru import logger
 
-import tt_lib as ttl
 import ttnn
 from models.demos.t3000.falcon40b.tt.ops.falcon_layernorm import TtFalconLayernorm
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -76,65 +74,65 @@ def run_test_FalconLayernorm_inference(pcc, devices, model_location_generator, g
 
     input_torch = (torch.rand(input_shape) * 2) - 1
     input = torch2tt_tensor(
-        input_torch, None, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
-    )  # ttl.tensor.DataType.BFLOAT16 # TODO: should be BF16!!
+        input_torch, None, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B
+    )  # ttnn.experimental.tensor.DataType.BFLOAT16 # TODO: should be BF16!!
     input = input.to(devices[0], model_config["DEFAULT_MEMCFG"])
 
     if is_sharded:
         # # Option1 : width sharded; produces bad PCC
-        # shard_spec_32_cores_grid = ttl.tensor.CoreRangeSet(
+        # shard_spec_32_cores_grid = ttnn.experimental.tensor.CoreRangeSet(
         #     {
-        #         ttl.tensor.CoreRange(
-        #             ttl.tensor.CoreCoord(0, 0),
-        #             ttl.tensor.CoreCoord(7, 3),
+        #         ttnn.experimental.tensor.CoreRange(
+        #             ttnn.experimental.tensor.CoreCoord(0, 0),
+        #             ttnn.experimental.tensor.CoreCoord(7, 3),
         #         ),
         #     }
         # )
-        # input = ttl.tensor.interleaved_to_sharded(
+        # input = ttnn.experimental.tensor.interleaved_to_sharded(
         #     input,
-        #     sharded_mem_config=ttl.tensor.MemoryConfig(
-        #         ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        #         ttl.tensor.BufferType.L1,
-        #         ttl.tensor.ShardSpec(
+        #     sharded_mem_config=ttnn.experimental.tensor.MemoryConfig(
+        #         ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        #         ttnn.experimental.tensor.BufferType.L1,
+        #         ttnn.experimental.tensor.ShardSpec(
         #             shard_spec_32_cores_grid,
         #             [
         #                 seqlen,
         #                 config.hidden_size // 32,
         #             ],
-        #             ttl.tensor.ShardOrientation.ROW_MAJOR,
+        #             ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         #             False,
         #         ),
         #     ),
         # )
 
         # # Option 2: block sharded hardcoded for S=128 and 8x4 grid of cores; produces good PCC!
-        # shard_spec_32_cores_grid = ttl.tensor.CoreRangeSet(
+        # shard_spec_32_cores_grid = ttnn.experimental.tensor.CoreRangeSet(
         #         {
-        #             ttl.tensor.CoreRange(
-        #                 ttl.tensor.CoreCoord(0, 0),
-        #                 ttl.tensor.CoreCoord(7, 3),
+        #             ttnn.experimental.tensor.CoreRange(
+        #                 ttnn.experimental.tensor.CoreCoord(0, 0),
+        #                 ttnn.experimental.tensor.CoreCoord(7, 3),
         #             ),
         #         }
         #     )
-        # input = ttl.tensor.interleaved_to_sharded(
+        # input = ttnn.experimental.tensor.interleaved_to_sharded(
         #     input,
-        #     sharded_mem_config=ttl.tensor.MemoryConfig(
-        #     ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        #     ttl.tensor.BufferType.L1,
-        #     ttl.tensor.ShardSpec(
+        #     sharded_mem_config=ttnn.experimental.tensor.MemoryConfig(
+        #     ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        #     ttnn.experimental.tensor.BufferType.L1,
+        #     ttnn.experimental.tensor.ShardSpec(
         #         shard_spec_32_cores_grid,
         #         [
         #             32,
         #             1024,
         #         ],
-        #         ttl.tensor.ShardOrientation.ROW_MAJOR,
+        #         ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         #         False,
         #     ),
         #     )
         # )
 
         # # Version according to model_config for debug
-        input = ttl.tensor.interleaved_to_sharded(
+        input = ttnn.experimental.tensor.interleaved_to_sharded(
             input,
             sharded_mem_config=model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"],
         )

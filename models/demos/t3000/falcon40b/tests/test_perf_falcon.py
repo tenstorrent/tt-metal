@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 
 import tt_lib
+import ttnn
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
@@ -97,7 +98,7 @@ def run_test_FalconCausalLM_end_to_end(
     else:
         raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
@@ -115,7 +116,7 @@ def run_test_FalconCausalLM_end_to_end(
         use_global_cos_sin_cache,
     )
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
     profiler.end("TtFalcon_model_setup")
 
     del state_dict
@@ -181,7 +182,7 @@ def run_test_FalconCausalLM_end_to_end(
         tt_out = [tt_o.cpu() for tt_o in tt_out]
     profiler.end("first_model_run_with_compile", force_enable=True)
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
 
     del tt_out
     del tt_layer_present
@@ -244,7 +245,7 @@ def run_test_FalconCausalLM_end_to_end(
             tt_out = [tt_o.cpu() for tt_o in tt_out]
     profiler.end(f"model_warmup_run_for_inference")
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
 
     # Run for perf iteration - profiler enabled
     for device in devices:
@@ -280,7 +281,7 @@ def run_test_FalconCausalLM_end_to_end(
         tt_out = [tt_o.cpu() for tt_o in tt_out]
     profiler.end(f"model_run_for_inference")
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
 
     profiler.print()
 

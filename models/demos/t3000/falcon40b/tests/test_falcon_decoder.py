@@ -6,7 +6,7 @@ import torch
 import pytest
 from loguru import logger
 
-import tt_lib
+import ttnn
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
@@ -93,7 +93,7 @@ def run_test_FalconDecoder_inference(
                 torch2tt_tensor(
                     tt_decoder_input_host[i],
                     devices[i],
-                    tt_layout=tt_lib.tensor.Layout.TILE,
+                    tt_layout=ttnn.experimental.tensor.Layout.TILE,
                     tt_memory_config=model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
                     tt_dtype=model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
                 )
@@ -132,7 +132,7 @@ def run_test_FalconDecoder_inference(
                 torch2tt_tensor(
                     tt_k_cache_host[j],
                     devices[j],
-                    tt_lib.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.Layout.TILE,
                     model_config["KV_CACHE_MEMCFG"],
                     model_config["KV_CACHE_DTYPE"],
                 )
@@ -141,7 +141,7 @@ def run_test_FalconDecoder_inference(
                 torch2tt_tensor(
                     tt_v_cache_host[j],
                     devices[j],
-                    tt_lib.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.Layout.TILE,
                     model_config["KV_CACHE_MEMCFG"],
                     model_config["KV_CACHE_DTYPE"],
                 )
@@ -183,7 +183,7 @@ def run_test_FalconDecoder_inference(
                 torch2tt_tensor(
                     tt_decoder_input_host[i],
                     devices[i],
-                    tt_layout=tt_lib.tensor.Layout.TILE,
+                    tt_layout=ttnn.experimental.tensor.Layout.TILE,
                     tt_memory_config=model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
                     tt_dtype=model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
                 )
@@ -233,7 +233,7 @@ def run_test_FalconDecoder_inference(
                 torch2tt_tensor(
                     tt_k_cache_host[j],
                     devices[j],
-                    tt_lib.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.Layout.TILE,
                     model_config["KV_CACHE_MEMCFG"],
                     model_config["KV_CACHE_DTYPE"],
                 )
@@ -242,7 +242,7 @@ def run_test_FalconDecoder_inference(
                 torch2tt_tensor(
                     tt_v_cache_host[j],
                     devices[j],
-                    tt_lib.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.Layout.TILE,
                     model_config["KV_CACHE_MEMCFG"],
                     model_config["KV_CACHE_DTYPE"],
                 )

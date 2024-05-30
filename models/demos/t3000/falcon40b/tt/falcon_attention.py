@@ -7,7 +7,6 @@ import math
 from torch import nn
 from typing import Optional, Tuple
 
-import tt_lib
 import ttnn
 
 from models.utility_functions import (
@@ -21,6 +20,8 @@ from models.demos.t3000.falcon40b.tt.model_utils import (
 )
 
 from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
+
+from ttnn.experimental.operations.primary.transformers import scale_causal_mask_hw_dims_softmax_in_place
 
 
 def generate_cos_sin_cache(
@@ -46,7 +47,7 @@ def generate_cos_sin_cache(
     layer_name = f"{base_url}.rotary_embedding_base_{base}_head_dim_{head_dim}_seq_len_{max_position_embeddings}"
     cos_cached_path = tt_cache_path / f"{layer_name}.cos_cached_{model_config['COS_CACHED_WEIGHTS_DTYPE'].name}.bin"
     if (cos_cached_path).exists():
-        tt_cos_cached_host = tt_lib.tensor.load_tensor(str(cos_cached_path))
+        tt_cos_cached_host = ttnn.experimental.tensor.load_tensor(str(cos_cached_path))
         tt_cos_cached = [
             tt_cos_cached_host.to(tt_device, model_config["COS_CACHED_WEIGHTS_MEMCFG"]) for tt_device in tt_devices
         ]
@@ -60,13 +61,13 @@ def generate_cos_sin_cache(
         tt_cos_cached = [
             tt_cos_cached_host.to(tt_device, model_config["COS_CACHED_WEIGHTS_MEMCFG"]) for tt_device in tt_devices
         ]
-        tt_lib.tensor.dump_tensor(
+        ttnn.experimental.tensor.dump_tensor(
             str(cos_cached_path),
             tt_cos_cached_host,
         )
     sin_cached_path = tt_cache_path / f"{layer_name}.sin_cached_{model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}.bin"
     if (sin_cached_path).exists():
-        tt_sin_cached_host = tt_lib.tensor.load_tensor(str(sin_cached_path))
+        tt_sin_cached_host = ttnn.experimental.tensor.load_tensor(str(sin_cached_path))
         tt_sin_cached = [
             tt_sin_cached_host.to(tt_device, model_config["SIN_CACHED_WEIGHTS_MEMCFG"]) for tt_device in tt_devices
         ]
@@ -80,7 +81,7 @@ def generate_cos_sin_cache(
         tt_sin_cached = [
             tt_sin_cached_host.to(tt_device, model_config["SIN_CACHED_WEIGHTS_MEMCFG"]) for tt_device in tt_devices
         ]
-        tt_lib.tensor.dump_tensor(
+        ttnn.experimental.tensor.dump_tensor(
             str(sin_cached_path),
             tt_sin_cached_host,
         )
@@ -120,14 +121,16 @@ class TtFalconRotaryEmbedding:
                 tt_cache_path,
             )
 
-    def __call__(self, layer: tt_lib.tensor.Tensor, token_idx: Optional[int] = None) -> tt_lib.tensor.Tensor:
+    def __call__(
+        self, layer: ttnn.experimental.tensor.Tensor, token_idx: Optional[int] = None
+    ) -> ttnn.experimental.tensor.Tensor:
         seq_len = layer[0].get_legacy_shape()[2]
         assert seq_len <= self.max_seq_len_cached, "seq_len exceeds max_seq_len_cached in RotaryEmbedding!"
         # TODO: Make rotary embedding in place
         output = []
         for i in range(len(layer)):
             output.append(
-                tt_lib.tensor.rotary_embedding(
+                ttnn.experimental.tensor.rotary_embedding(
                     layer[i],
                     self.tt_cos_cached[i],
                     self.tt_sin_cached[i],
@@ -188,7 +191,7 @@ class TtFalconAttention:
             )
             if (query_key_value_path).exists():
                 self.query_key_value_weights.append(
-                    tt_lib.tensor.load_tensor(str(query_key_value_path)).to(
+                    ttnn.experimental.tensor.load_tensor(str(query_key_value_path)).to(
                         devices[i], self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"]
                     )
                 )
@@ -207,7 +210,7 @@ class TtFalconAttention:
                 self.query_key_value_weights.append(
                     query_key_value_weights_host.to(devices[i], self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"])
                 )
-                tt_lib.tensor.dump_tensor(
+                ttnn.experimental.tensor.dump_tensor(
                     str(query_key_value_path),
                     query_key_value_weights_host,
                 )
@@ -218,7 +221,7 @@ class TtFalconAttention:
             )
             if (selfout_path).exists():
                 self.dense_weights.append(
-                    tt_lib.tensor.load_tensor(str(selfout_path)).to(
+                    ttnn.experimental.tensor.load_tensor(str(selfout_path)).to(
                         devices[i], self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"]
                     )
                 )
@@ -232,7 +235,7 @@ class TtFalconAttention:
                 self.dense_weights.append(
                     dense_weights_host.to(devices[i], self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"])
                 )
-                tt_lib.tensor.dump_tensor(
+                ttnn.experimental.tensor.dump_tensor(
                     str(selfout_path),
                     dense_weights_host,
                 )
@@ -269,12 +272,12 @@ class TtFalconAttention:
             if (kvcache_path).exists():
                 for i in range(len(self.devices)):
                     k_cache.append(
-                        tt_lib.tensor.load_tensor(str(kvcache_path)).to(
+                        ttnn.experimental.tensor.load_tensor(str(kvcache_path)).to(
                             self.devices[i], self.model_config["DRAM_MEMCFG"]
                         )
                     )
                     v_cache.append(
-                        tt_lib.tensor.load_tensor(str(kvcache_path)).to(
+                        ttnn.experimental.tensor.load_tensor(str(kvcache_path)).to(
                             self.devices[i], self.model_config["DRAM_MEMCFG"]
                         )
                     )
@@ -291,7 +294,7 @@ class TtFalconAttention:
                 for i in range(len(self.devices)):
                     v_cache.append(tt_attn_cache.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
 
-                tt_lib.tensor.dump_tensor(
+                ttnn.experimental.tensor.dump_tensor(
                     str(kvcache_path),
                     tt_attn_cache,
                 )
@@ -325,16 +328,16 @@ class TtFalconAttention:
 
     def __call__(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.experimental.tensor.Tensor,
         alibi: torch.Tensor,
-        attention_mask: tt_lib.tensor.Tensor,
+        attention_mask: ttnn.experimental.tensor.Tensor,
         llm_mode: str,
         user_id: int = 0,
-        layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: bool = False,
         use_cache: bool = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, Optional[Tuple[tt_lib.tensor.Tensor]]]:
+    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[ttnn.experimental.tensor.Tensor]]]:
         """
         Prefill input shape: [batch, 1, seq_len, hidden_size]
         Decode input shape: [seq_len, 1, batch, hidden_size]
@@ -368,16 +371,16 @@ class TtFalconAttention:
 
     def fwd_prefill(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.experimental.tensor.Tensor,
         alibi: torch.Tensor,
-        attention_mask: tt_lib.tensor.Tensor,
+        attention_mask: ttnn.experimental.tensor.Tensor,
         llm_mode: str,
         user_id: int = 0,
-        layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: bool = False,
         use_cache: bool = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, Optional[Tuple[tt_lib.tensor.Tensor]]]:
+    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[ttnn.experimental.tensor.Tensor]]]:
         """
         Prefill input shape: [batch, 1, seq_len, hidden_size]
         Decode input shape: [seq_len, 1, batch, hidden_size]
@@ -408,7 +411,7 @@ class TtFalconAttention:
         key_layer = []
         value_layer = []
         for i in range(len(fused_query_key_value)):
-            q_layer, k_layer, v_layer = tt_lib.tensor.nlp_create_qkv_heads(
+            q_layer, k_layer, v_layer = ttnn.experimental.tensor.nlp_create_qkv_heads(
                 fused_query_key_value[i],
                 num_heads=self.num_heads // len(self.devices),
                 num_kv_heads=self.num_kv_heads // len(self.devices),
@@ -426,15 +429,17 @@ class TtFalconAttention:
 
         # K Cache update
         for i in range(len(layer_past[0])):
-            tt_lib.tensor.fill_cache(
-                layer_past[0][i], tt_lib.tensor.typecast(key_layer[i], self.model_config["KV_CACHE_DTYPE"]), user_id
+            ttnn.experimental.tensor.fill_cache(
+                layer_past[0][i],
+                ttnn.experimental.tensor.typecast(key_layer[i], self.model_config["KV_CACHE_DTYPE"]),
+                user_id,
             )
 
         # V Cache update
         for i in range(len(layer_past[1])):
-            tt_lib.tensor.fill_cache(
+            ttnn.experimental.tensor.fill_cache(
                 layer_past[1][i],
-                tt_lib.tensor.typecast(value_layer[i], self.model_config["KV_CACHE_DTYPE"]),
+                ttnn.experimental.tensor.typecast(value_layer[i], self.model_config["KV_CACHE_DTYPE"]),
                 user_id,
             )
 
@@ -442,7 +447,7 @@ class TtFalconAttention:
         key_layer_transposed = []
         for i in range(len(key_layer)):
             key_layer_transposed.append(
-                tt_lib.tensor.transpose(
+                ttnn.experimental.tensor.transpose(
                     key_layer[i],
                     -2,
                     -1,
@@ -460,14 +465,14 @@ class TtFalconAttention:
                 q_slices = []
                 for i in range(len(query_layer)):
                     q_slices.append(
-                        tt_lib.tensor.interleaved_to_sharded_partial(
+                        ttnn.experimental.tensor.interleaved_to_sharded_partial(
                             query_layer[i],
                             (8, 8),
                             [slice_size * 16 // 64, self.head_dim],  # each slice is [1,16,128,64], we use 64 cores
                             num_slices,  # num_slices
                             slice_i,  # slice_index
-                            tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                            tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
                         )
                     )
 
@@ -477,7 +482,7 @@ class TtFalconAttention:
 
                 # write output slices to attn_output
                 for i in range(len(attn_output_slice)):
-                    tt_lib.tensor.sharded_to_interleaved_partial(
+                    ttnn.experimental.tensor.sharded_to_interleaved_partial(
                         attn_output_slice[i],
                         self.attn_output[i],
                         num_slices,
@@ -507,12 +512,12 @@ class TtFalconAttention:
 
         # Output projection
         for i in range(len(attn_output)):
-            attn_output[i] = tt_lib.tensor.nlp_concat_heads(
+            attn_output[i] = ttnn.experimental.tensor.nlp_concat_heads(
                 attn_output[i],
                 output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )
 
-        attn_output = tt_lib.tensor.all_gather(
+        attn_output = ttnn.experimental.tensor.all_gather(
             attn_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
@@ -545,7 +550,7 @@ class TtFalconAttention:
         attn_weights = []
         for i in range(len(q_slices)):
             attn_weights.append(
-                tt_lib.operations.primary.matmul(
+                ttnn.experimental.operations.primary.matmul(
                     q_slices[i],
                     key_layer_transposed[i],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
@@ -557,7 +562,7 @@ class TtFalconAttention:
 
         # Softmax
         for i in range(len(attn_weights)):
-            attn_weights[i] = tt_lib.operations.primary.transformers.scale_causal_mask_hw_dims_softmax_in_place(
+            attn_weights[i] = scale_causal_mask_hw_dims_softmax_in_place(
                 attn_weights[i],
                 self.scalar,
                 attn_mask_slices[i],
@@ -568,7 +573,7 @@ class TtFalconAttention:
         attn_output_slice = []
         for i in range(len(attn_weights)):
             attn_output_slice.append(
-                tt_lib.operations.primary.matmul(
+                ttnn.experimental.operations.primary.matmul(
                     attn_weights[i],
                     value_layer[i],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
@@ -583,16 +588,16 @@ class TtFalconAttention:
 
     def fwd_decode(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.experimental.tensor.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
         llm_mode: str,
         user_id: int = 0,
-        layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: bool = False,
         use_cache: bool = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, Optional[Tuple[tt_lib.tensor.Tensor]]]:
+    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[ttnn.experimental.tensor.Tensor]]]:
         """
         Prefill input shape: [batch, 1, seq_len, hidden_size]
         Decode input shape: [seq_len, 1, batch, hidden_size]
@@ -610,11 +615,11 @@ class TtFalconAttention:
         # Reshard
         if self.model_config["LN_ATTN_OUTPUT_MEMCFG"] != self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]:
             for i in range(len(hidden_states)):
-                hidden_states[i] = tt_lib.tensor.sharded_to_interleaved(
+                hidden_states[i] = ttnn.experimental.tensor.sharded_to_interleaved(
                     hidden_states[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
                 )
             for i in range(len(hidden_states)):
-                hidden_states[i] = tt_lib.tensor.interleaved_to_sharded(
+                hidden_states[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                     hidden_states[i], sharded_mem_config=self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]
                 )
 
@@ -624,7 +629,7 @@ class TtFalconAttention:
         fused_query_key_value = []
         for i in range(len(hidden_states)):
             fused_query_key_value.append(
-                tt_lib.operations.primary.matmul_1d(
+                ttnn.experimental.operations.primary.matmul_1d(
                     hidden_states[i],
                     self.query_key_value_weights[i],
                     program_config=self.model_config["QKV_MM_PROGCFG"],
@@ -639,11 +644,11 @@ class TtFalconAttention:
         ###########
         if self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] != self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]:
             for i in range(len(fused_query_key_value)):
-                fused_query_key_value[i] = tt_lib.tensor.sharded_to_interleaved(
+                fused_query_key_value[i] = ttnn.experimental.tensor.sharded_to_interleaved(
                     fused_query_key_value[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
                 )
             for i in range(len(fused_query_key_value)):
-                fused_query_key_value[i] = tt_lib.tensor.interleaved_to_sharded(
+                fused_query_key_value[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                     fused_query_key_value[i], sharded_mem_config=self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]
                 )
 
@@ -652,7 +657,7 @@ class TtFalconAttention:
         value_layer = []
 
         for i in range(len(fused_query_key_value)):
-            q_layer, k_layer, v_layer = tt_lib.tensor.nlp_create_qkv_heads(
+            q_layer, k_layer, v_layer = ttnn.experimental.tensor.nlp_create_qkv_heads(
                 fused_query_key_value[i],
                 num_heads=self.num_heads // len(self.devices),
                 num_kv_heads=self.num_kv_heads // len(self.devices),
@@ -680,11 +685,11 @@ class TtFalconAttention:
             kv_cache_memcfg.shard_spec.shape = kv_cache_shard_shape
         # Update kv_cache in place
         for i in range(len(key_layer)):
-            tt_lib.tensor.update_cache(layer_past[0][i], key_layer[i], layer_past_len)
+            ttnn.experimental.tensor.update_cache(layer_past[0][i], key_layer[i], layer_past_len)
             key_layer[i].deallocate(True)
         # key and value layers will have kv_seq_len padded to nearest 32
         for i in range(len(layer_past[0])):
-            key_layer[i] = tt_lib.tensor.unpad(
+            key_layer[i] = ttnn.experimental.tensor.unpad(
                 layer_past[0][i],
                 [0, 0, 0, 0],
                 [
@@ -696,7 +701,9 @@ class TtFalconAttention:
                 output_mem_config=self.model_config["DEFAULT_MEMCFG"],
             )
         for i in range(len(key_layer)):
-            key_layer[i] = tt_lib.tensor.interleaved_to_sharded(key_layer[i], sharded_mem_config=kv_cache_memcfg)
+            key_layer[i] = ttnn.experimental.tensor.interleaved_to_sharded(
+                key_layer[i], sharded_mem_config=kv_cache_memcfg
+            )
 
         ######################
         ### PRE-SOFTMAX MM ###
@@ -705,7 +712,7 @@ class TtFalconAttention:
         key_layer_transposed = []
         for i in range(len(key_layer)):
             key_layer_transposed.append(
-                tt_lib.tensor.transpose(
+                ttnn.experimental.tensor.transpose(
                     key_layer[i],
                     -2,
                     -1,
@@ -717,7 +724,7 @@ class TtFalconAttention:
         attn_weights = []
         for i in range(len(query_layer)):
             attn_weights.append(
-                tt_lib.operations.primary.transformers.group_attn_matmul(
+                ttnn.experimental.operations.primary.transformers.group_attn_matmul(
                     query_layer[i],
                     key_layer_transposed[i],
                     compute_with_storage_grid_size=self.devices[i].compute_with_storage_grid_size(),
@@ -734,7 +741,7 @@ class TtFalconAttention:
         softmax_progcfg = self.model_config["SOFTMAX_PROGCFG"]
         softmax_progcfg.block_w = padded_layer_past_len // 32
         for i in range(len(attn_weights)):
-            attn_weights[i] = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
+            attn_weights[i] = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
                 attn_weights[i],
                 self.scalar,
                 attention_mask[i],
@@ -748,10 +755,10 @@ class TtFalconAttention:
 
         # Update kv_cache in place
         for i in range(len(value_layer)):
-            tt_lib.tensor.update_cache(layer_past[1][i], value_layer[i], layer_past_len)
+            ttnn.experimental.tensor.update_cache(layer_past[1][i], value_layer[i], layer_past_len)
             value_layer[i].deallocate(True)
         for i in range(len(layer_past[1])):
-            value_layer[i] = tt_lib.tensor.unpad(
+            value_layer[i] = ttnn.experimental.tensor.unpad(
                 layer_past[1][i],
                 [0, 0, 0, 0],
                 [
@@ -763,7 +770,9 @@ class TtFalconAttention:
                 output_mem_config=self.model_config["DEFAULT_MEMCFG"],
             )
         for i in range(len(value_layer)):
-            value_layer[i] = tt_lib.tensor.interleaved_to_sharded(value_layer[i], sharded_mem_config=kv_cache_memcfg)
+            value_layer[i] = ttnn.experimental.tensor.interleaved_to_sharded(
+                value_layer[i], sharded_mem_config=kv_cache_memcfg
+            )
 
         layer_present = layer_past if use_cache else None
 
@@ -774,7 +783,7 @@ class TtFalconAttention:
         attn_output = []
         for i in range(len(attn_weights)):
             attn_output.append(
-                tt_lib.operations.primary.transformers.group_attn_matmul(
+                ttnn.experimental.operations.primary.transformers.group_attn_matmul(
                     attn_weights[i],
                     value_layer[i],
                     compute_with_storage_grid_size=self.devices[i].compute_with_storage_grid_size(),
@@ -789,16 +798,16 @@ class TtFalconAttention:
         ### ATTENTION SELFOUT ###
         #########################
         for i in range(len(attn_output)):
-            attn_output[i] = tt_lib.tensor.nlp_concat_heads(
+            attn_output[i] = ttnn.experimental.tensor.nlp_concat_heads(
                 attn_output[i],
                 output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )
         for i in range(len(attn_output)):
-            attn_output[i] = tt_lib.tensor.sharded_to_interleaved(
+            attn_output[i] = ttnn.experimental.tensor.sharded_to_interleaved(
                 attn_output[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
             )
 
-        attn_output = tt_lib.tensor.all_gather(
+        attn_output = ttnn.experimental.tensor.all_gather(
             attn_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
@@ -806,11 +815,11 @@ class TtFalconAttention:
         )
 
         for i in range(len(attn_output)):
-            attn_output[i] = tt_lib.tensor.interleaved_to_sharded(
+            attn_output[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                 attn_output[i], sharded_mem_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"]
             )
         for i in range(len(attn_output)):
-            attn_output[i] = tt_lib.operations.primary.matmul_1d(
+            attn_output[i] = ttnn.experimental.operations.primary.matmul_1d(
                 attn_output[i],
                 self.dense_weights[i],
                 program_config=self.model_config["SELFOUT_MM_PROGCFG"],

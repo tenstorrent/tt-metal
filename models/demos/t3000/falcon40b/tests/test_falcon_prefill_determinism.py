@@ -6,7 +6,7 @@ import torch
 import pytest
 from loguru import logger
 
-import tt_lib
+import ttnn
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM, FalconConfig
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model_config_entries
@@ -75,7 +75,7 @@ def run_test_falcon_prefill_end_to_end_determinism(
                 torch2tt_tensor(
                     tt_k_cache_host[j],
                     devices[j],
-                    tt_lib.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.Layout.TILE,
                     model_config["KV_CACHE_MEMCFG"],
                     model_config["KV_CACHE_DTYPE"],
                 )
@@ -84,7 +84,7 @@ def run_test_falcon_prefill_end_to_end_determinism(
                 torch2tt_tensor(
                     tt_v_cache_host[j],
                     devices[j],
-                    tt_lib.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.Layout.TILE,
                     model_config["KV_CACHE_MEMCFG"],
                     model_config["KV_CACHE_DTYPE"],
                 )
@@ -106,7 +106,7 @@ def run_test_falcon_prefill_end_to_end_determinism(
         use_global_cos_sin_cache,
     )
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
     logger.info("Done loading TT Falcon Model")
 
     # Prepare inputs -----------------------------------------------------------------------
@@ -141,7 +141,7 @@ def run_test_falcon_prefill_end_to_end_determinism(
     logger.info("Done running TT Falcon model")
 
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
 
     reference_out = torch.vstack(
         [torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_out], -1) for tt_out in tt_outs]

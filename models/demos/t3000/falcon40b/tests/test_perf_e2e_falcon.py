@@ -5,9 +5,9 @@
 import torch
 import pytest
 import time
+import ttnn
 from loguru import logger
 
-import tt_lib
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
@@ -92,7 +92,7 @@ def run_test_FalconCausalLM_end_to_end(
     else:
         raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
@@ -110,7 +110,7 @@ def run_test_FalconCausalLM_end_to_end(
         use_global_cos_sin_cache,
     )
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
 
     del state_dict
 
@@ -163,7 +163,7 @@ def run_test_FalconCausalLM_end_to_end(
         tt_out = [tt_o.cpu() for tt_o in tt_out]
     compile_duration = time.time() - compile_time_start
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
 
     del tt_out
     del tt_layer_present
@@ -219,7 +219,7 @@ def run_test_FalconCausalLM_end_to_end(
             )
             tt_out = [tt_o.cpu() for tt_o in tt_out]
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
 
     logger.info(f"Enable binary and compile cache, and start timing.")
     enable_persistent_kernel_cache()
@@ -253,7 +253,7 @@ def run_test_FalconCausalLM_end_to_end(
     inference_duration = time.time() - start_time
 
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
 
     logger.info(f"falcon 40b compile time: {compile_duration}")
     logger.info(f"falcon 40b inference time: {inference_duration}")

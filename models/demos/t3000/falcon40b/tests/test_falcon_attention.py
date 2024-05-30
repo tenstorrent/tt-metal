@@ -6,7 +6,7 @@ import torch
 import pytest
 from loguru import logger
 
-import tt_lib
+import ttnn
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
@@ -124,7 +124,7 @@ def run_test_FalconAttention_inference(
                 torch2tt_tensor(
                     tt_k_cache_host[j],
                     devices[j],
-                    tt_lib.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.Layout.TILE,
                     model_config["KV_CACHE_MEMCFG"],
                     model_config["KV_CACHE_DTYPE"],
                 )
@@ -133,7 +133,7 @@ def run_test_FalconAttention_inference(
                 torch2tt_tensor(
                     tt_v_cache_host[j],
                     devices[j],
-                    tt_lib.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.Layout.TILE,
                     model_config["KV_CACHE_MEMCFG"],
                     model_config["KV_CACHE_DTYPE"],
                 )
@@ -209,7 +209,7 @@ def run_test_FalconAttention_inference(
                 torch2tt_tensor(
                     tt_k_cache_host[j],
                     devices[j],
-                    tt_lib.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.Layout.TILE,
                     model_config["KV_CACHE_MEMCFG"],
                     model_config["KV_CACHE_DTYPE"],
                 )
@@ -218,7 +218,7 @@ def run_test_FalconAttention_inference(
                 torch2tt_tensor(
                     tt_v_cache_host[j],
                     devices[j],
-                    tt_lib.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.Layout.TILE,
                     model_config["KV_CACHE_MEMCFG"],
                     model_config["KV_CACHE_DTYPE"],
                 )

@@ -6,7 +6,7 @@ import torch
 import pytest
 from loguru import logger
 
-import tt_lib
+
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )

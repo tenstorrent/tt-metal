@@ -7,7 +7,6 @@ from abc import abstractmethod
 from typing import Optional, Tuple
 from tqdm import tqdm
 
-import tt_lib
 import ttnn
 
 from models.demos.t3000.falcon40b.tt.falcon_decoder import TtFalconDecoderLayer
@@ -98,37 +97,37 @@ class TtFalconModelShared:
         layernorm_bias_path = tt_cache_path / f"{layernorm_bias_str}_rm_{self.model_config['LN_F_BIAS_DTYPE'].name}.bin"
 
         if (layernorm_weights_path).exists():
-            layernorm_gamma_host = tt_lib.tensor.load_tensor(str(layernorm_weights_path))
+            layernorm_gamma_host = ttnn.experimental.tensor.load_tensor(str(layernorm_weights_path))
             self.layernorm_gamma = [
                 layernorm_gamma_host.to(device, self.model_config["LN_F_WEIGHTS_MEMCFG"]) for device in devices
             ]
         else:
-            layernorm_gamma_host = tt_lib.tensor.Tensor(
+            layernorm_gamma_host = ttnn.experimental.tensor.Tensor(
                 self.state_dict[layernorm_weights_str].reshape([1, 1, -1, 32]),
                 self.model_config["LN_F_WEIGHTS_DTYPE"],
             )
             self.layernorm_gamma = [
                 layernorm_gamma_host.to(device, self.model_config["LN_F_WEIGHTS_MEMCFG"]) for device in devices
             ]
-            tt_lib.tensor.dump_tensor(
+            ttnn.experimental.tensor.dump_tensor(
                 str(layernorm_weights_path),
                 layernorm_gamma_host,
             )
 
         if (layernorm_bias_path).exists():
-            layernorm_beta_host = tt_lib.tensor.load_tensor(str(layernorm_bias_path))
+            layernorm_beta_host = ttnn.experimental.tensor.load_tensor(str(layernorm_bias_path))
             self.layernorm_beta = [
                 layernorm_beta_host.to(device, self.model_config["LN_F_BIAS_MEMCFG"]) for device in devices
             ]
         else:
-            layernorm_beta_host = tt_lib.tensor.Tensor(
+            layernorm_beta_host = ttnn.experimental.tensor.Tensor(
                 self.state_dict[layernorm_bias_str].reshape([1, 1, -1, 32]),
                 self.model_config["LN_F_BIAS_DTYPE"],
             )
             self.layernorm_beta = [
                 layernorm_beta_host.to(device, self.model_config["LN_F_BIAS_MEMCFG"]) for device in devices
             ]
-            tt_lib.tensor.dump_tensor(
+            ttnn.experimental.tensor.dump_tensor(
                 str(layernorm_bias_path),
                 layernorm_beta_host,
             )
@@ -193,14 +192,14 @@ class TtFalconModelShared:
                 torch2tt_tensor(
                     attention_mask_bool_chunks[i],
                     self.devices[i],
-                    tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+                    tt_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
                     tt_memory_config=attention_mask_memconfig,
                     tt_dtype=self.model_config["BFLOAT16_DTYPE"],  # subsequent tilize op expects bfloat16 inputs
                 )
                 for i in range(len(self.devices))
             ]
             for i in range(self.num_devices):
-                tt_attention_mask[i] = tt_lib.tensor.tilize(
+                tt_attention_mask[i] = ttnn.experimental.tensor.tilize(
                     tt_attention_mask[i],
                     output_mem_config=attention_mask_memconfig,
                     output_dtype=self.model_config["ATTN_MASK_DTYPE"],
@@ -253,14 +252,14 @@ class TtFalconModelShared:
                 torch2tt_tensor(
                     attention_mask_bool_padded[i],
                     self.devices[i],
-                    tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+                    tt_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
                     tt_memory_config=attention_mask_memconfig,
                     tt_dtype=self.model_config["BFLOAT16_DTYPE"],  # subsequent tilize op expects bfloat16 inputs
                 )
                 for i in range(len(self.devices))
             ]
             for i in range(self.num_devices):
-                tt_attention_mask[i] = tt_lib.tensor.tilize(
+                tt_attention_mask[i] = ttnn.experimental.tensor.tilize(
                     tt_attention_mask[i],
                     output_mem_config=attention_mask_memconfig,
                     output_dtype=self.model_config["ATTN_MASK_DTYPE"],
@@ -277,14 +276,14 @@ class TtFalconModelShared:
     @abstractmethod
     def __call__(
         self,
-        input_ids: tt_lib.tensor.Tensor,
+        input_ids: ttnn.experimental.tensor.Tensor,
         llm_mode: str,
-        attention_mask: tt_lib.tensor.Tensor = None,
+        attention_mask: ttnn.experimental.tensor.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.experimental.tensor.Tensor:
         input_embeddings = self.embeddings(input_ids)
 
         if llm_mode == "prefill":
@@ -312,14 +311,14 @@ class TtFalconModelShared:
 
     def fwd_prefill(
         self,
-        input_embeddings: tt_lib.tensor.Tensor,
+        input_embeddings: ttnn.experimental.tensor.Tensor,
         llm_mode: str,
-        attention_mask: tt_lib.tensor.Tensor = None,
+        attention_mask: ttnn.experimental.tensor.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.experimental.tensor.Tensor:
         layer_output = input_embeddings
         presents = ()
         for idx, layer in enumerate(self.layers):
@@ -338,9 +337,9 @@ class TtFalconModelShared:
 
         if layer_output[0].dtype != self.model_config["BFP8_DTYPE"]:
             for i in range(len(layer_output)):
-                layer_output[i] = tt_lib.tensor.typecast(layer_output[i], self.model_config["BFP8_DTYPE"])
+                layer_output[i] = ttnn.experimental.tensor.typecast(layer_output[i], self.model_config["BFP8_DTYPE"])
 
-        layer_output = tt_lib.tensor.all_gather(
+        layer_output = ttnn.experimental.tensor.all_gather(
             layer_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
@@ -349,7 +348,9 @@ class TtFalconModelShared:
 
         if self.model_config["LN_INPUT_DTYPE"] != self.model_config["BFP8_DTYPE"]:
             for i in range(len(layer_output)):
-                layer_output[i] = tt_lib.tensor.typecast(layer_output[i], self.model_config["LN_INPUT_DTYPE"])
+                layer_output[i] = ttnn.experimental.tensor.typecast(
+                    layer_output[i], self.model_config["LN_INPUT_DTYPE"]
+                )
 
         # apply final norm layer
         layer_output = partial_layernorm(
@@ -370,14 +371,14 @@ class TtFalconModelShared:
 
     def fwd_decode(
         self,
-        input_embeddings: tt_lib.tensor.Tensor,
+        input_embeddings: ttnn.experimental.tensor.Tensor,
         llm_mode: str,
-        attention_mask: tt_lib.tensor.Tensor = None,
+        attention_mask: ttnn.experimental.tensor.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.experimental.tensor.Tensor:
         layer_output = input_embeddings
         presents = ()
         for idx, layer in enumerate(self.layers):
@@ -395,23 +396,23 @@ class TtFalconModelShared:
             layer_output = layer_output[0]
 
         for i in range(len(layer_output)):
-            layer_output[i] = tt_lib.tensor.sharded_to_interleaved(
+            layer_output[i] = ttnn.experimental.tensor.sharded_to_interleaved(
                 layer_output[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
             )
-        layer_output = tt_lib.tensor.all_gather(
+        layer_output = ttnn.experimental.tensor.all_gather(
             layer_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )
         for i in range(len(layer_output)):
-            layer_output[i] = tt_lib.tensor.interleaved_to_sharded(
+            layer_output[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                 layer_output[i], sharded_mem_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"]
             )
 
         # apply final norm layer
         for i in range(len(layer_output)):
-            layer_output[i] = tt_lib.operations.primary.layernorm(
+            layer_output[i] = ttnn.experimental.operations.primary.layernorm(
                 layer_output[i],
                 self.layernorm_eps,
                 self.layernorm_gamma[i],
@@ -450,14 +451,14 @@ class TtFalconModel(TtFalconModelShared):
 
     def __call__(
         self,
-        input_ids: tt_lib.tensor.Tensor,
+        input_ids: ttnn.experimental.tensor.Tensor,
         llm_mode: str,
-        attention_mask: tt_lib.tensor.Tensor = None,
+        attention_mask: ttnn.experimental.tensor.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.experimental.tensor.Tensor:
         hidden_states, presents = super().__call__(
             input_ids=input_ids,
             llm_mode=llm_mode,
