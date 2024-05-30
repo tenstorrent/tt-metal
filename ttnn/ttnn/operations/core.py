@@ -4,7 +4,7 @@
 
 import math
 import pathlib
-from typing import Union, Tuple, Optional, Any, Callable
+from typing import Union, Tuple, Optional, Any, Callable, Dict
 
 from loguru import logger
 import torch
@@ -578,9 +578,11 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = No
 
 
 @ttnn.register_operation(name="ttnn.dump_tensor", validate_input_tensors=lambda *args, **kwargs: None)
-def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> None:
+def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor, distribute: Dict[str, str] = None) -> None:
+    if distribute is None:
+        distribute = dict()
     file_name = pathlib.Path(file_name)
-    ttl.tensor.dump_tensor(str(file_name), tensor)
+    ttl.tensor.dump_tensor(str(file_name), tensor, distribute)
 
 
 def _as_tensor_validate_input_tensors(operation_name, tensor, *args, **kwargs):
@@ -661,16 +663,21 @@ def as_tensor(
                 )
                 tensor = ttnn.to_layout(tensor, layout, dtype=dtype, memory_config=memory_config, device=device)
             else:
-                tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+                tensor = ttnn.from_torch(
+                    tensor,
+                    dtype=dtype,
+                    layout=layout,
+                    mesh_mapper=mesh_mapper,
+                    memory_config=memory_config,
+                    device=device,
+                )
             logger.debug(
                 f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
             )
             pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
-            ttnn.dump_tensor(cache_file_name, tensor)
+            distributed_config = mesh_mapper.config() if mesh_mapper else dict()
+            ttnn.dump_tensor(cache_file_name, tensor, distributed_config)
             return tensor
-
-        def dispatch_to_device_on_load(device) -> bool:
-            return isinstance(device, ttnn.DeviceMesh)
 
         if isinstance(mesh_mapper, ttnn.ReplicateTensorToMesh):
             storage_type = f"_multi_device" if mesh_mapper else ""
@@ -682,11 +689,7 @@ def as_tensor(
         cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
 
         try:
-            tensor = (
-                ttnn.load_tensor(cache_file_name, device=device)
-                if dispatch_to_device_on_load(device)
-                else ttnn.load_tensor(cache_file_name)
-            )
+            tensor = ttnn.load_tensor(cache_file_name, device=device)
             if tuple(tensor.shape) != tuple(tensor.shape):
                 logger.warning(
                     f"Cached file {cache_file_name} has shape {tensor.shape}, expected {tensor.shape}, regenerating cache"
@@ -695,8 +698,6 @@ def as_tensor(
             logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
         except (FileNotFoundError, RuntimeError):
             tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name)
-        if not dispatch_to_device_on_load(device):
-            tensor = ttnn.to_device(tensor, device, memory_config=memory_config)
         return tensor
 
 
