@@ -7,7 +7,6 @@ import pytest
 import math
 from loguru import logger
 
-import tt_lib as ttl
 import ttnn
 from models.demos.t3000.falcon40b.tt.ops.falcon_softmax import TtFalconSoftmax
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -69,70 +68,72 @@ def run_test_FalconSoftmax_inference(
 
     input_shape = [1, num_attention_heads, seqlen, seqlen]
     input_torch = (torch.rand(input_shape) * 2) - 1
-    input = torch2tt_tensor(input_torch, None, tt_dtype=ttl.tensor.DataType.BFLOAT16)
+    input = torch2tt_tensor(input_torch, None, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16)
     input = input.to(device, model_config["DEFAULT_MEMCFG"])
 
     attention_mask_bool = torch.ones(1, 1, seqlen, seqlen, dtype=bool).triu(diagonal=1)
 
     if is_sharded:
         if num_attention_heads == 32:  # 4 chip setup
-            shard_spec_cores_grid = ttl.tensor.CoreRangeSet(
+            shard_spec_cores_grid = ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 3),
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0),
+                        ttnn.experimental.tensor.CoreCoord(7, 3),
                     ),
                 }
             )
         elif num_attention_heads == 16:  # 8 chip setup
-            shard_spec_cores_grid = ttl.tensor.CoreRangeSet(
+            shard_spec_cores_grid = ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 1),
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0),
+                        ttnn.experimental.tensor.CoreCoord(7, 1),
                     ),
                 }
             )
         else:
             assert False
 
-        softmax_memcfg = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
+        softmax_memcfg = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.BufferType.L1,
+            ttnn.experimental.tensor.ShardSpec(
                 shard_spec_cores_grid,
                 [
                     seqlen,
                     seqlen,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
-        input = ttl.tensor.interleaved_to_sharded(input, sharded_mem_config=softmax_memcfg)
+        input = ttnn.experimental.tensor.interleaved_to_sharded(input, sharded_mem_config=softmax_memcfg)
 
         attention_mask_bool = attention_mask_bool.expand(1, num_attention_heads, seqlen, seqlen)
 
-        attention_mask_memconfig = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
+        attention_mask_memconfig = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.BufferType.L1,
+            ttnn.experimental.tensor.ShardSpec(
                 shard_spec_cores_grid,
                 [
                     seqlen,
                     seqlen,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
 
     attention_mask = attention_mask_bool * -100000
 
-    tt_attention_mask_per_device_host = torch2tt_tensor(attention_mask, None, tt_dtype=ttl.tensor.DataType.BFLOAT16)
+    tt_attention_mask_per_device_host = torch2tt_tensor(
+        attention_mask, None, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16
+    )
     tt_attention_mask_per_device = tt_attention_mask_per_device_host.to(device, model_config["DEFAULT_MEMCFG"])
     if is_sharded:
-        tt_attention_mask_per_device = ttl.tensor.interleaved_to_sharded(
+        tt_attention_mask_per_device = ttnn.experimental.tensor.interleaved_to_sharded(
             tt_attention_mask_per_device, sharded_mem_config=attention_mask_memconfig
         )
 

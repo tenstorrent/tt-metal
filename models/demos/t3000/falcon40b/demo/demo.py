@@ -5,7 +5,7 @@
 import json
 import pytest
 from functools import partial
-import tt_lib
+import ttnn
 import torch
 import torch.nn.functional as F
 from loguru import logger
@@ -120,7 +120,7 @@ def initialize_and_fill_kv_cache(
                 torch2tt_tensor(
                     tt_k_cache_host[j],
                     devices[j],
-                    tt_lib.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.Layout.TILE,
                     model_config["KV_CACHE_MEMCFG"],
                     model_config["KV_CACHE_DTYPE"],
                 )
@@ -129,7 +129,7 @@ def initialize_and_fill_kv_cache(
                 torch2tt_tensor(
                     tt_v_cache_host[j],
                     devices[j],
-                    tt_lib.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.Layout.TILE,
                     model_config["KV_CACHE_MEMCFG"],
                     model_config["KV_CACHE_DTYPE"],
                 )
@@ -147,7 +147,7 @@ def print_output_prompts(generated_ids, tokenizer, num_users_to_display=None):
 
 def synchronize_devices(devices):
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
 
 
 def top_pk_logits(logits, p=0.9, k=10, temperature=1.0, return_probs=False):
