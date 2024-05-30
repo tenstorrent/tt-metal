@@ -84,7 +84,7 @@ followed the instructions for [installing and building the software](https://git
         *   `export TT_METAL_LOGGER_LEVEL=DEBUG`
     * In addition, you can add the following environment variable to print currently executing ttnn operations. This makes every op blocking, ensuring that what is printed is actually executing. Otherwise, logging may not be representative of where the error occurs. Note: you may want to omit this when using gdb since there may be interactions with gdb.
         * `export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false, "enable_logging": true}'`
-            * `enable_fast_runtime_mode`: When turned on, op validation is always skipped
+            * `enable_fast_runtime_mode`: When turned on, op validation is always skipped (disabled by default)
             * `enable_logging`: Turns on ttnn logging feature for ops, which makes every op blocking
     * For the location of the operations use the following environment variable
         * `export OPERATION_HISTORY_CSV=<filename>`

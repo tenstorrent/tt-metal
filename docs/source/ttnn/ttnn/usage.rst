@@ -251,7 +251,7 @@ Set the following environment variables as needed
 
 .. code-block:: bash
 
-    # enable_fast_runtime_mode - This has to be disabled to enable logging
+    # enable_fast_runtime_mode - This has to be disabled to enable logging (disabled by default)
     # enable_logging - Synchronize main thread after every operation and log the operation
     # report_name (optional) - Name of the report used by the visualizer. If not provided, then no data will be dumped to disk
     # enable_detailed_buffer_report (if report_name is set) - Enable to visualize the detailed buffer report after every operation
