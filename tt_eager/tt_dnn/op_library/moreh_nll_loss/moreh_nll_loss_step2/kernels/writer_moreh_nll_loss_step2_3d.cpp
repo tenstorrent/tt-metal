@@ -17,9 +17,11 @@ void kernel_main() {
 
     constexpr bool output_is_dram = get_compile_time_arg_val(0) == 1;
 
+    const uint32_t output_tile_bytes = get_tile_size(cb_output);
+
     const InterleavedAddrGen<output_is_dram> output_addrg = {
         .bank_base_address = output_addr,
-        .page_size = 1024 * element_size,
+        .page_size = output_tile_bytes,
     };
 
     uint32_t Wf = (W + FACE_WIDTH - 1) / FACE_WIDTH;

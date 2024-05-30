@@ -39,7 +39,7 @@ void kernel_main() {
     const DataFormat weight_data_format = get_dataformat(cb_weight);
     const InterleavedAddrGen<weight_is_dram> addrg_weight = {
         .bank_base_address = weight_addr,
-        .page_size = 1024 * element_size,
+        .page_size = weight_tile_bytes,
     };
 #endif
 
