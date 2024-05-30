@@ -113,13 +113,8 @@ void kernel_main() {
         uint32_t l1_write_addr_tmp_weight = get_write_ptr(cb_tmp_weight);
 
 
-#if defined(FP32_DEST_ACC_EN)
-        volatile tt_l1_ptr float* tmp_weight_l1_ptr =
-            reinterpret_cast<volatile tt_l1_ptr float*>(l1_write_addr_tmp_weight);
-#else
-        volatile tt_l1_ptr uint16_t* tmp_weight_l1_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_tmp_weight);
-#endif
+        volatile tt_l1_ptr FP32_DEST_ACC_FTYPE* tmp_weight_l1_ptr =
+            reinterpret_cast<volatile tt_l1_ptr FP32_DEST_ACC_FTYPE*>(l1_write_addr_tmp_weight);
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {
