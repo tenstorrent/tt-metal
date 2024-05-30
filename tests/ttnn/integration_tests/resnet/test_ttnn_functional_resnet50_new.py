@@ -276,10 +276,10 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
         # (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
         (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
         # (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
-        # (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+        (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
     ),
 )
-def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
+def test_resnet_50(device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity):
     test_infra = create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
     enable_memory_reports()
     test_infra.preprocess_torch_input()
