@@ -9,7 +9,7 @@
 void kernel_main() {
     uint32_t num_unpadded_output_rows       = get_arg_val<uint32_t>(0);
     uint32_t num_padded_tiles_per_batch     = get_arg_val<uint32_t>(1);
-    uint32_t num_padded_rows_per_batch      = get_arg_val<uint32_t>(2);
+    uint32_t num_unpadded_rows_per_batch    = get_arg_val<uint32_t>(2);
     uint32_t padded_block_row_size_bytes    = get_arg_val<uint32_t>(3);
     uint32_t unpadded_block_row_size_bytes  = get_arg_val<uint32_t>(4);
     uint32_t batch                          = get_arg_val<uint32_t>(5);
@@ -24,7 +24,7 @@ void kernel_main() {
         cb_wait_front(cb_id_untilize_out, num_padded_tiles_per_batch);
         uint64_t noc_l1_read_addr = get_noc_addr(get_read_ptr(cb_id_untilize_out));
 
-        for (uint32_t row = 0; row < num_padded_rows_per_batch; ++row) {
+        for (uint32_t row = 0; row < num_unpadded_rows_per_batch; ++row) {
             noc_async_read(noc_l1_read_addr, l1_write_addr, unpadded_block_row_size_bytes);
             noc_l1_read_addr += padded_block_row_size_bytes;
             l1_write_addr += unpadded_block_row_size_bytes;
