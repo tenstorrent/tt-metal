@@ -7,7 +7,7 @@ import time
 import pytest
 
 from tests.ttnn.integration_tests.resnet.test_ttnn_functional_resnet50 import create_test_infra
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
 import ttnn
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 from models.utility_functions import (
@@ -18,6 +18,7 @@ from models.perf.perf_utils import prep_perf_report
 
 
 @skip_for_wormhole_b0("This will be enabled after WH testing")
+@skip_for_grayskull("#9168: Resnet50 performance test failing after removing 1x1s2 matmul fallback into conv")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
@@ -50,6 +51,7 @@ def test_perf_device_bare_metal(batch_size, test, expected_perf):
 
 
 @skip_for_wormhole_b0("This will be enabled after WH testing")
+@skip_for_grayskull("#9168: Resnet50 performance test failing after removing 1x1s2 matmul fallback into conv")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
