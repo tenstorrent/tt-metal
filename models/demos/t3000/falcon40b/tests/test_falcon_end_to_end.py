@@ -6,7 +6,7 @@ import torch
 import pytest
 from loguru import logger
 
-import tt_lib
+import ttnn
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
@@ -134,7 +134,7 @@ def run_test_FalconCausalLM_end_to_end(
         use_global_cos_sin_cache,
     )
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
     profiler.end("TtFalcon_model_setup")
     logger.info("Done loading TT Falcon Model")
 
@@ -190,7 +190,7 @@ def run_test_FalconCausalLM_end_to_end(
         tt_out = [tt_o.cpu() for tt_o in tt_out]
     profiler.end("first_model_run_with_compile", force_enable=True)
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
 
     del tt_out
     del tt_inputs
@@ -241,7 +241,7 @@ def run_test_FalconCausalLM_end_to_end(
             )
             tt_out = [tt_o.cpu() for tt_o in tt_out]
         for device in devices:
-            tt_lib.device.Synchronize(device)
+            ttnn.device.synchronize_device(device)
 
         del tt_out
         del tt_inputs
@@ -265,7 +265,7 @@ def run_test_FalconCausalLM_end_to_end(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
     profiler.start(f"model_run_for_inference")
 
     if llm_mode == "prefill":
@@ -295,7 +295,7 @@ def run_test_FalconCausalLM_end_to_end(
         tt_out = [tt_o.cpu() for tt_o in tt_out]
     profiler.end(f"model_run_for_inference")
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.device.synchronize_device(device)
 
     if llm_mode == "prefill":
         tt_out = torch.vstack(

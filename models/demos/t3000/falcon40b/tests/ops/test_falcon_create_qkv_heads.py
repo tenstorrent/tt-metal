@@ -6,7 +6,6 @@ import torch
 import pytest
 from loguru import logger
 
-import tt_lib as ttl
 import ttnn
 from models.demos.t3000.falcon40b.tt.ops.falcon_nlp_create_qkv_heads import TtFalconCreateQKVHeads
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -103,9 +102,12 @@ def run_test_FalconMLP_inference(
         device, model_config=model_config, num_heads=num_heads, num_kv_heads=num_kv_heads, head_dim=head_dim
     )
 
-    input_host = torch2tt_tensor(input, None, tt_dtype=ttl.tensor.DataType.BFLOAT16)
+    input_host = torch2tt_tensor(input, None, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16)
     input = input_host.to(
-        device, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+        device,
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
     )
 
     q_tt_out, k_tt_out, v_tt_out = tt_Falconcreate_qkv_heads_model(input)
