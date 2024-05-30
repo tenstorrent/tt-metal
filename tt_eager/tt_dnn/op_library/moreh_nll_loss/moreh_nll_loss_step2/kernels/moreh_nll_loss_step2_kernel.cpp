@@ -4,7 +4,6 @@
 
 #include <cstdint>
 
-#include "debug/dprint.h"  // required in all kernels using DPRINT
 #include "tt_eager/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
