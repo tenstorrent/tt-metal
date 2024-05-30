@@ -95,7 +95,7 @@ void kernel_main() {
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
         uint32_t nt = i / Ct;
-        int32_t ct = static_cast<int32_t>(i % Ct);
+        uint32_t ct = i % Ct;
 
         // target: (1, N)
         // noc_id: nt
