@@ -67,16 +67,6 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    union {
-        float f;
-        uint32_t u;
-    } one, zero;
-    one.f = 1.0f;
-    zero.f = 0.0f;
-
-    const auto u16_one = uint16_t(one.u >> 16);
-    const auto u16_zero = uint16_t(zero.u >> 16);
-
 #if defined(DIVISOR)
     cb_reserve_back(cb_divisor, onetile);
     uint32_t l1_write_addr_divisor = get_write_ptr(cb_divisor);
