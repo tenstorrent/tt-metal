@@ -231,14 +231,12 @@ FORCE_INLINE void matmul_with_transpose_and_mask(uint32_t output_tidx, uint32_t 
 
             ////////////////////
             // mask: the first two arguments (mm_src0, need_input_mask) are passed by reference.
-            ////////////////////
-            mask_tile_to_cb(mm_src0, need_input_mask, need_input_mask_h, need_input_mask_w, last_out, input_last_row, transpose_input, true);
-            mask_tile_to_cb(mm_src1, need_other_mask, need_other_mask_h, need_other_mask_w, last_out, other_last_col, transpose_other, false);
-
-            ////////////////////
             // transpose: the first argument (mm_src0) is passed by reference.
             ////////////////////
+            mask_tile_to_cb(mm_src0, need_input_mask, need_input_mask_h, need_input_mask_w, last_out, input_last_row, transpose_input, true);
             transpose_tile(mm_src0, transpose_input, need_input_mask, true);
+
+            mask_tile_to_cb(mm_src1, need_other_mask, need_other_mask_h, need_other_mask_w, last_out, other_last_col, transpose_other, false);
             transpose_tile(mm_src1, transpose_other, need_other_mask, false);
 
             ////////////////////
