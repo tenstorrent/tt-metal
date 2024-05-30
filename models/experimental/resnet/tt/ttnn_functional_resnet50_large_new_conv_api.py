@@ -342,7 +342,6 @@ class resnet50:
         super().__init__()
         layers = [3, 4, 6, 3]
         num_classes = 1000
-        # conv_input_face_shape_hw = [224, 224]
         conv_input_face_shape_hw = [512, 512]
         self.device = device
         self.conv_input_face_shape_hw = conv_input_face_shape_hw
@@ -381,8 +380,6 @@ class resnet50:
             batch_size=self.batch_size,
             input_height=256,
             input_width=256,
-            # input_height=112,
-            # input_width=112,
             reader_patterns_cache=self.max_pool_reader_patterns_cache,
             deallocate_activation=True,
             parallel_config_override=max_pool_parallel_config_override,
@@ -519,21 +516,6 @@ class resnet50:
         else:
             act_block_h = None
 
-        print(f"=================================== layer: 2, module: 1")
-        print(f"=================================== layer: 2, module: 2")
-        print(f"=================================== layer: 2, module: 3")
-        print(f"=================================== layer: 2, module: 4")
-        print(f"=================================== layer: 3, module: 1")
-        print(f"=================================== layer: 3, module: 2")
-        print(f"=================================== layer: 3, module: 3")
-        print(f"=================================== layer: 3, module: 4")
-        print(f"=================================== layer: 3, module: 5")
-        print(f"=================================== layer: 3, module: 6")
-        print(f"=================================== layer: 4, module: 1")
-        print(f"=================================== layer: 4, module: 2")
-        print(f"=================================== layer: 4, module: 3")
-        print(f"=================================== layers done.")
-
         x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.conv1_weight_tensor,
@@ -545,8 +527,8 @@ class resnet50:
             stride=(1, 1),
             padding=(0, 0),
             batch_size=self.batch_size,
-            input_height=115,
-            input_width=115,
+            input_height=259,
+            input_width=259,
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
@@ -570,13 +552,10 @@ class resnet50:
             x = ttnn.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
         x = self.max_pool(x)
 
-        # x_height = 56
-        # x_width = 56
         x_height = 128
         x_width = 128
 
         x = ttnn.reshape(x, (1, 1, x_height * x_width * self.batch_size, 64))
-
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, dtype=self.model_config["ACTIVATIONS_DTYPE"])
 
         if self.batch_size == 20 and not is_wormhole_b0():
@@ -688,6 +667,8 @@ class resnet50:
             conv_op_cache,
             eltwise_binary_out_in_place=False,
         )
+
+        return x
 
         print(f"=================================== layer: 4, module: 1")
         layer4_module1_input_shape = [
@@ -830,6 +811,7 @@ class resnet50:
                 act_block_h = 640
         else:
             act_block_h = None
+
         x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.conv1_weight_tensor,
@@ -841,8 +823,8 @@ class resnet50:
             stride=(1, 1),
             padding=(0, 0),
             batch_size=self.batch_size,
-            input_height=115,
-            input_width=115,
+            input_height=259,
+            input_width=259,
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
@@ -866,7 +848,10 @@ class resnet50:
             x = ttnn.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
         x = self.max_pool(x)
 
-        x = ttnn.reshape(x, (1, 1, 56 * 56 * self.batch_size, 64))
+        x_height = 128
+        x_width = 128
+
+        x = ttnn.reshape(x, (1, 1, x_height * x_width * self.batch_size, 64))
         # if is_wormhole_b0():
         #     # TODO: fix the need to do the reshard here
         #     x = ttnn.to_memory_config(x, self.layer1_module1.conv1.conv.input_sharded_memory_config)
@@ -875,9 +860,6 @@ class resnet50:
 
         if self.batch_size == 20 and not is_wormhole_b0():
             x = ttnn.reallocate(x)
-        # todo: return maxpool output shape from maxpool op
-        x_height = 56
-        x_width = 56
 
         if is_wormhole_b0() and batch_size == 20:
             x = ttnn.to_memory_config(x, ops_parallel_config["layer1_module1_input"])
