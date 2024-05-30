@@ -287,6 +287,7 @@ def test_rotary_embedding_llama_with_program_cache(
 
     max_seq_len = max(4096, seq_len)
 
+    cache_tensors = []
     for _ in range(3):
         run_test_rotary_embedding_llama(
             devices, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, max_seq_len, datatype
@@ -304,5 +305,7 @@ def test_rotary_embedding_llama_with_program_cache(
             .to(ttnn.Layout.TILE)
             .to(devices[0])
         )
+
+        cache_tensors.append(test_tensor)
 
     assert devices[0].num_program_cache_entries() == 2
