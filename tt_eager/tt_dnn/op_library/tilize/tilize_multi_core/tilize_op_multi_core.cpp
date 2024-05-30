@@ -34,7 +34,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     Device* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        split_blocks_for_tilize(grid_size, nblocks);
+        split_blocks_for_tilize(grid_size, nblocks, true);
 
     create_cb(CB::c_in0, program, all_cores, input_single_tile_size, ntiles_per_block, input_cb_data_format);
 
@@ -290,7 +290,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     uint32_t num_tiles_per_row = output.get_legacy_shape()[-1] / TILE_WIDTH;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        split_blocks_for_tilize(grid_size, num_blocks);
+        split_blocks_for_tilize(grid_size, num_blocks, true);
 
     bool has_cliff = core_range_cliff.size() > 0;
 

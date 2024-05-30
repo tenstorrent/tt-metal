@@ -53,7 +53,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     auto grid_size = device->compute_with_storage_grid_size();
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        split_blocks_for_tilize(grid_size, nblocks);
+        split_blocks_for_tilize(grid_size, nblocks, true);
     uint32_t ncores_x = grid_size.x;
     uint32_t ncores_y = std::ceil(static_cast<float>(ncores) / ncores_x);
 
@@ -451,7 +451,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     uint32_t num_tiles_per_row = a.get_legacy_shape()[-1] / TILE_WIDTH;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        split_blocks_for_tilize(grid_size, num_blocks);
+        split_blocks_for_tilize(grid_size, num_blocks, true);
 
     bool has_cliff = core_range_cliff.size() > 0;
 

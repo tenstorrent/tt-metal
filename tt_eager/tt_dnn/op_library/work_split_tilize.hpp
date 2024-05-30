@@ -22,36 +22,38 @@ struct BlockSplit {
     uint32_t nblocks_per_core_cliff;
 };
 
-inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks) {
+inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks, bool row_wise) {
     const uint32_t nblocks_per_core = std::ceil(static_cast<float>(nblocks) / (grid_size.x * grid_size.y));
     const uint32_t ncores = std::ceil(static_cast<float>(nblocks) / nblocks_per_core);
     const uint32_t nblocks_per_core_cliff = nblocks % nblocks_per_core;
-    const uint32_t ncores_x = grid_size.x;
-    const uint32_t ncores_y = std::ceil(static_cast<float>(ncores) / ncores_x);
-    const uint32_t ncores_x_cliff = ncores - (ncores_y - 1) * ncores_x;
+    const uint32_t n_primary = row_wise ? grid_size.x : grid_size.y;
+    const uint32_t n_secondary = std::ceil(static_cast<float>(ncores) / n_primary);
+    const uint32_t n_cliff = ncores - n_primary * (n_secondary - 1);
 
     std::set<CoreRange> core_range, cliff_core_range;
     std::optional<CoreCoord> cliff_core;
 
-    // Top non-cliff range (full rows)
-    const uint32_t top_range_end_y = ncores_y - (ncores_x_cliff < ncores_x || nblocks_per_core_cliff > 0);
+    auto tr = [row_wise](CoreCoord coord) { return row_wise ? coord : CoreCoord{coord.y, coord.x}; };
 
-    if (top_range_end_y > 0) {
-        auto range = CoreRange{CoreCoord{0, 0}, CoreCoord{ncores_x - 1, top_range_end_y - 1}};
+    // Top non-cliff range (full rows)
+    const uint32_t top_range_end = n_secondary - (n_cliff < n_primary || nblocks_per_core_cliff > 0);
+
+    if (top_range_end > 0) {
+        auto range = CoreRange{CoreCoord{0, 0}, tr(CoreCoord{n_primary - 1, top_range_end - 1})};
         core_range.insert(range);
     }
 
-    if (ncores_x_cliff < ncores_x && nblocks_per_core_cliff == 0) {
+    if (n_cliff < n_primary && nblocks_per_core_cliff == 0) {
         // Last partial row (non-cliff)
-        auto range = CoreRange{CoreCoord{0, ncores_y - 1}, CoreCoord{ncores_x_cliff - 1, ncores_y - 1}};
+        auto range = CoreRange{tr(CoreCoord{0, n_secondary - 1}), tr(CoreCoord{n_cliff - 1, n_secondary - 1})};
         core_range.insert(range);
     } else if (nblocks_per_core_cliff > 0) {
         // Last partial row (excluding last core) and single cliff core
-        if (ncores_x_cliff > 1) {  // Add range only if there are cores before the cliff core
-            auto range = CoreRange{CoreCoord{0, ncores_y - 1}, CoreCoord{ncores_x_cliff - 2, ncores_y - 1}};
+        if (n_cliff > 1) {  // Add range only if there are cores before the cliff core
+            auto range = CoreRange{tr(CoreCoord{0, n_secondary - 1}), tr(CoreCoord{n_cliff - 2, n_secondary - 1})};
             core_range.insert(range);
         }
-        cliff_core = CoreCoord{ncores_x_cliff - 1, ncores_y - 1};
+        cliff_core = tr(CoreCoord{n_cliff - 1, n_secondary - 1});
     }
 
     std::set<CoreRange> all_cores = core_range;
@@ -174,7 +176,12 @@ struct FullRep {
 };
 
 inline std::vector<std::vector<BlockRep>> distribute_work(
-    const Shape& unpadded, const Padding& padding, uint32_t num_cores, uint32_t blocks_per_core, bool has_cliff, uint32_t nblocks_per_core_cliff) {
+    const Shape& unpadded,
+    const Padding& padding,
+    uint32_t num_cores,
+    uint32_t blocks_per_core,
+    bool has_cliff,
+    uint32_t nblocks_per_core_cliff) {
     auto input_w = unpadded.rank() >= 4 ? unpadded[-4] : 1;
     auto input_z = unpadded.rank() >= 3 ? unpadded[-3] : 1;
     auto input_y = unpadded.rank() >= 2 ? unpadded[-2] : 1;

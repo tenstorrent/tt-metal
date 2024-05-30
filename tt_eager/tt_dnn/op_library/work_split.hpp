@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "tt_dnn/op_library/work_split_tilize.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/core_coord.h"
 #include "tt_metal/common/math.hpp"
@@ -156,69 +157,73 @@ inline CoreRangeSet num_cores_to_core_range_set(
 inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
     const CoreCoord grid_size, const uint32_t units_to_divide, const bool row_wise = false) {
     ZoneScoped;
-    uint32_t num_cores_x = grid_size.x, num_cores_y = grid_size.y;
-    auto target_num_cores = std::min(units_to_divide, num_cores_x * num_cores_y);
-    CoreRangeSet all_cores(num_cores_to_corerange_set(target_num_cores, grid_size, row_wise));
 
-    std::set<CoreRange> core_group_1_set;
-    std::set<CoreRange> core_group_2_set;
-    uint32_t units_per_core_group_1 = units_to_divide / target_num_cores;
-    uint32_t units_per_core_group_2 = 0;
-    // Evenly divided units to all target cores
-    if (units_to_divide % target_num_cores == 0) {
-        core_group_1_set = all_cores.ranges();
-        // Uneven division of units across cores
-        // This case should only be hit when there are more units of work than a full grid of cores
-        // which is implicitly assumed in the following logic
-    } else {
-        // Group of cores that do more work
-        core_group_1_set = num_cores_to_corerange_set(units_to_divide % target_num_cores, grid_size, row_wise);
-        auto last_block_group_1 = (*core_group_1_set.rbegin());
-        auto last_block_all_cores = (*all_cores.ranges().rbegin());
-        if (row_wise) {
-            // Case where only the last row is divided between core group 1 and 2
-            if (last_block_group_1.end.y == last_block_all_cores.end.y &&
-                last_block_group_1.end.x != last_block_all_cores.end.x) {
-                CoreRange leftover_block(
-                    {last_block_group_1.end.x + 1, last_block_group_1.end.y}, last_block_all_cores.end);
-                core_group_2_set.insert(leftover_block);
-            } else {
-                // Case where a middle row is divided between core group 1 and 2
-                if (last_block_group_1.end.x != num_cores_x - 1) {
-                    CoreRange leftover_stick(
-                        {last_block_group_1.end.x + 1, last_block_group_1.end.y},
-                        {num_cores_x - 1, last_block_group_1.end.y});
-                    core_group_2_set.insert(leftover_stick);
-                }
-                // Remaining rows of cores that does less work
-                CoreRange leftover_block({0, last_block_group_1.end.y + 1}, last_block_all_cores.end);
-                core_group_2_set.insert(leftover_block);
-            }
-        } else {
-            // Case where only the last column is divided between core group 1 and 2
-            if (last_block_group_1.end.x == last_block_all_cores.end.x &&
-                last_block_group_1.end.y != last_block_all_cores.end.y) {
-                CoreRange leftover_block(
-                    {last_block_group_1.end.x, last_block_group_1.end.y + 1}, last_block_all_cores.end);
-                core_group_2_set.insert(leftover_block);
-            } else {
-                // Case where a middle column is divided between core group 1 and 2
-                if (last_block_group_1.end.y != num_cores_y - 1) {
-                    CoreRange leftover_stick(
-                        {last_block_group_1.end.x, last_block_group_1.end.y + 1},
-                        {last_block_group_1.end.x, num_cores_y - 1});
-                    core_group_2_set.insert(leftover_stick);
-                }
-                // Remaining columns of cores that does less work
-                CoreRange leftover_block({last_block_group_1.end.x + 1, 0}, last_block_all_cores.end);
-                core_group_2_set.insert(leftover_block);
-            }
-        }
-        units_per_core_group_2 = units_per_core_group_1;
-        units_per_core_group_1++;
-    }
-    CoreRangeSet core_group_1(core_group_1_set);
-    CoreRangeSet core_group_2(core_group_2_set);
+    auto [target_num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
+        split_blocks_for_tilize(grid_size, units_to_divide, row_wise);
+
+    // uint32_t num_cores_x = grid_size.x, num_cores_y = grid_size.y;
+    // auto target_num_cores = std::min(units_to_divide, num_cores_x * num_cores_y);
+    // CoreRangeSet all_cores(num_cores_to_corerange_set(target_num_cores, grid_size, row_wise));
+
+    // std::set<CoreRange> core_group_1_set;
+    // std::set<CoreRange> core_group_2_set;
+    // uint32_t units_per_core_group_1 = units_to_divide / target_num_cores;
+    // uint32_t units_per_core_group_2 = 0;
+    // // Evenly divided units to all target cores
+    // if (units_to_divide % target_num_cores == 0) {
+    //     core_group_1_set = all_cores.ranges();
+    //     // Uneven division of units across cores
+    //     // This case should only be hit when there are more units of work than a full grid of cores
+    //     // which is implicitly assumed in the following logic
+    // } else {
+    //     // Group of cores that do more work
+    //     core_group_1_set = num_cores_to_corerange_set(units_to_divide % target_num_cores, grid_size, row_wise);
+    //     auto last_block_group_1 = (*core_group_1_set.rbegin());
+    //     auto last_block_all_cores = (*all_cores.ranges().rbegin());
+    //     if (row_wise) {
+    //         // Case where only the last row is divided between core group 1 and 2
+    //         if (last_block_group_1.end.y == last_block_all_cores.end.y &&
+    //             last_block_group_1.end.x != last_block_all_cores.end.x) {
+    //             CoreRange leftover_block(
+    //                 {last_block_group_1.end.x + 1, last_block_group_1.end.y}, last_block_all_cores.end);
+    //             core_group_2_set.insert(leftover_block);
+    //         } else {
+    //             // Case where a middle row is divided between core group 1 and 2
+    //             if (last_block_group_1.end.x != num_cores_x - 1) {
+    //                 CoreRange leftover_stick(
+    //                     {last_block_group_1.end.x + 1, last_block_group_1.end.y},
+    //                     {num_cores_x - 1, last_block_group_1.end.y});
+    //                 core_group_2_set.insert(leftover_stick);
+    //             }
+    //             // Remaining rows of cores that does less work
+    //             CoreRange leftover_block({0, last_block_group_1.end.y + 1}, last_block_all_cores.end);
+    //             core_group_2_set.insert(leftover_block);
+    //         }
+    //     } else {
+    //         // Case where only the last column is divided between core group 1 and 2
+    //         if (last_block_group_1.end.x == last_block_all_cores.end.x &&
+    //             last_block_group_1.end.y != last_block_all_cores.end.y) {
+    //             CoreRange leftover_block(
+    //                 {last_block_group_1.end.x, last_block_group_1.end.y + 1}, last_block_all_cores.end);
+    //             core_group_2_set.insert(leftover_block);
+    //         } else {
+    //             // Case where a middle column is divided between core group 1 and 2
+    //             if (last_block_group_1.end.y != num_cores_y - 1) {
+    //                 CoreRange leftover_stick(
+    //                     {last_block_group_1.end.x, last_block_group_1.end.y + 1},
+    //                     {last_block_group_1.end.x, num_cores_y - 1});
+    //                 core_group_2_set.insert(leftover_stick);
+    //             }
+    //             // Remaining columns of cores that does less work
+    //             CoreRange leftover_block({last_block_group_1.end.x + 1, 0}, last_block_all_cores.end);
+    //             core_group_2_set.insert(leftover_block);
+    //         }
+    //     }
+    //     units_per_core_group_2 = units_per_core_group_1;
+    //     units_per_core_group_1++;
+    // }
+    // CoreRangeSet core_group_1(core_group_1_set);
+    // CoreRangeSet core_group_2(core_group_2_set);
 
     return std::make_tuple(
         target_num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2);
