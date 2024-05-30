@@ -41,24 +41,20 @@ void kernel_main() {
 
     constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t stride_h = get_compile_time_arg_val(1);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(2);
     constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(3);
-    constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(4) - 1;
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
-    // need to have these as compile-time since we unroll loops based on them
-    constexpr uint32_t window_outer = get_compile_time_arg_val(6);
     constexpr uint32_t window_inner = get_compile_time_arg_val(7);
     constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(8);
-
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(10);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(14);
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(15);
     constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(16);
-
     constexpr uint32_t act_mcast_num_dests = get_compile_time_arg_val(17);
     constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(18);
     constexpr uint32_t act_mcast_sender_semaphore_addr = get_compile_time_arg_val(19);
     constexpr uint32_t act_mcast_receiver_semaphore_addr = get_compile_time_arg_val(20);
     constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(21);
+    constexpr uint32_t pad_w = get_compile_time_arg_val(22);
 
     constexpr bool transpose_mcast = get_compile_time_arg_val(22) == 1;
 
@@ -114,8 +110,7 @@ void kernel_main() {
 
     // TODO: need to make the read coalescing optimization cleaner
     // currently works for the case of num_coalesced_reads == weight_size_w since these reads are contiguous on both src/dst side
-    constexpr uint32_t num_coalesced_reads = 3;
-    constexpr uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_c_read_bytes;
+    constexpr uint32_t coalesced_read_bytes = weight_size_w * conv_act_c_read_bytes;
 
 
     // Fully create act matrix and tilize it before mcast
@@ -129,7 +124,7 @@ void kernel_main() {
         cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
         uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
 
-        constexpr uint32_t stride_h_bytes = (conv_act_size_w + 2) * conv_act_c_read_bytes;
+        constexpr uint32_t stride_h_bytes = (conv_act_size_w + (2 * pad_w)) * conv_act_c_read_bytes;
         static_assert(act_block_h_datums % 2 == 0); // need to be even to read 2 in the body, due to packing of 2 indices in 1 uint32_t word
         // #pragma GCC unroll 4 // didn't seem to help (neutral), manual unroll 2x perf drop
         for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
