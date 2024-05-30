@@ -220,8 +220,17 @@ Tensor moreh_nll_loss_step1(
 
     auto kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
-    return operation::run(
-               MorehNllLossStep1{
+
+    std::vector<Tensor> output_tensors = {Tensor(
+        operation::get_workers_for_op_output({target_tensor}, {weight_tensor}))};
+
+    operation::launch_op(
+        [ignore_index, reduction_mean, output_dtype, channel_size, output_mem_config, all_cores, kernel_config_val](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehNllLossStep1{
                    .ignore_index = ignore_index,
                    .reduction_mean = reduction_mean,
                    .output_dtype = output_dtype,
@@ -229,10 +238,16 @@ Tensor moreh_nll_loss_step1(
                    .output_mem_config = output_mem_config,
                    .core_range = all_cores,
                    .compute_kernel_config = kernel_config_val,
-               },
-               {target_tensor},
-               {weight_tensor})
-        .at(0);
+                },
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
+        {target_tensor},
+        output_tensors,
+        {weight_tensor},
+        {});
+    return output_tensors.at(0);
 }
 
 Tensor moreh_nll_loss_step2(
@@ -250,17 +265,32 @@ Tensor moreh_nll_loss_step2(
 
     auto kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
-    return operation::run(
-               MorehNllLossStep2{
+
+    std::vector<Tensor> output_tensors = {Tensor(
+        operation::get_workers_for_op_output({input_tensor, target_tensor}, {weight_tensor, divisor_tensor}))};
+
+    operation::launch_op(
+        [ignore_index, reduction_mean, output_mem_config, all_cores, kernel_config_val](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehNllLossStep2{
                    .ignore_index = ignore_index,
                    .reduction_mean = reduction_mean,
                    .output_mem_config = output_mem_config,
                    .core_range = all_cores,
                    .compute_kernel_config = kernel_config_val,
-               },
-               {input_tensor, target_tensor},
-               {weight_tensor, divisor_tensor})
-        .at(0);
+                },
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
+        {input_tensor, target_tensor},
+        output_tensors,
+        {weight_tensor, divisor_tensor},
+        {});
+    return output_tensors.at(0);
 }
 
 Tensor moreh_nll_loss(
