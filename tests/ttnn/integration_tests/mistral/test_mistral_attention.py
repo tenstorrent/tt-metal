@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
+
 import torch
 import ttnn
 import tt_lib
@@ -19,6 +21,7 @@ from models.utility_functions import skip_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/9076")
 @skip_for_wormhole_b0()
 def test_mistral_attention_inference(model_location_generator, device, reset_seeds):
     model_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
