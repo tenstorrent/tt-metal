@@ -45,10 +45,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    union {
-        float f;
-        uint32_t u;
-    } one, zero;
+    Scalar one, zero;
     one.f = 1.0f;
     zero.f = 0.0f;
 
