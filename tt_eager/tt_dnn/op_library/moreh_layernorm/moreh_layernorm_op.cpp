@@ -127,9 +127,8 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto NCHt = N * C * Ht;
-    tt_metal::CoreGridDesc core_grid(device);
-    const auto num_cores_y = core_grid.y_;
-    CoreCoord core_grid_coord = {core_grid.x_, num_cores_y};
+    auto grid = device->compute_with_storage_grid_size();
+    const auto num_cores_y = grid.y;
 
     // core_group_2 works more.
     // If number of working cores is 108 and NCHt is 110,
@@ -140,7 +139,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
          core_group_1,
          core_group_2,
          num_rows_per_core_group_1,
-         num_rows_per_core_group_2] = tt_metal::split_work_to_cores(core_grid_coord, NCHt);
+         num_rows_per_core_group_2] = tt_metal::split_work_to_cores(grid, NCHt);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
