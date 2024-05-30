@@ -4,6 +4,7 @@
 
 #include <math.h>
 
+#include "tt_dnn/op_library/cb_utils.hpp"
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_dnn/op_library/work_split_tilize.hpp"
@@ -88,27 +89,25 @@ operation::ProgramWithCallbacks untilize_multi_core(
         end_core = (*shard_spec.grid.ranges().begin()).end;
     }
 
-    uint32_t src0_cb_index = CB::c_in0;
     uint32_t num_input_tiles = src_sharded ? ntiles_per_block * nblocks_per_core : ntiles_per_block * 2;
-    tt_metal::CircularBufferConfig src0_cb_config =
-        tt_metal::CircularBufferConfig(
-            num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
-            .set_page_size(src0_cb_index, input_single_tile_size);
-    if (src_sharded) {
-        src0_cb_config = src0_cb_config.set_globally_allocated_address(*a.buffer());
-    }
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    auto [src0_cb_index, cb_src0] = create_cb(
+        CB::c_in0,
+        program,
+        all_cores,
+        input_single_tile_size,
+        num_input_tiles,
+        input_cb_data_format,
+        src_sharded ? a.buffer() : nullptr);
 
-    uint32_t output_cb_index = CB::c_out0;
     uint32_t num_output_tiles = out_sharded ? ntiles_per_block * nblocks_per_core : ntiles_per_block * 2;
-    tt_metal::CircularBufferConfig output_cb_config =
-        tt_metal::CircularBufferConfig(
-            num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
-            .set_page_size(output_cb_index, output_single_tile_size);
-    if (out_sharded) {
-        output_cb_config = output_cb_config.set_globally_allocated_address(*output.buffer());
-    }
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    auto [output_cb_index, cb_output] = create_cb(
+        CB::c_out0,
+        program,
+        all_cores,
+        output_single_tile_size,
+        num_output_tiles,
+        output_cb_data_format,
+        out_sharded ? output.buffer() : nullptr);
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -459,19 +458,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     uint32_t padded_row_size_bytes = input_shape[-1] * a.element_size();     // Assuming bfloat16 dataformat
     uint32_t unpadded_row_size_bytes = output_shape[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
-    uint32_t src0_cb_index = CB::c_in0;
-    tt_metal::CircularBufferConfig src0_cb_config =
-        tt_metal::CircularBufferConfig(
-            num_tiles_per_row * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
-            .set_page_size(src0_cb_index, input_single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
-
-    uint32_t output_cb_index = CB::c_out0;
-    tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(
-            num_tiles_per_row * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
-            .set_page_size(output_cb_index, output_single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    create_cb(CB::c_in0, program, all_cores, input_single_tile_size, num_tiles_per_row, input_cb_data_format);
+    create_cb(CB::c_out0, program, all_cores, output_single_tile_size, num_tiles_per_row, output_cb_data_format);
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -666,35 +654,30 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     if (!row_major) {
         std::swap(end_core.x, end_core.y);
     }
-    uint32_t src0_cb_index = CB::c_in0;
+
     uint32_t num_input_tiles = ntiles_per_block * nblocks_per_core;
-    tt_metal::CircularBufferConfig src0_cb_config =
-        tt_metal::CircularBufferConfig(
-            num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
-            .set_page_size(src0_cb_index, input_single_tile_size);
-    if (src_sharded) {
-        src0_cb_config = src0_cb_config.set_globally_allocated_address(*a.buffer());
-    }
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    auto [src0_cb_index, cb_src0] = create_cb(
+        CB::c_in0,
+        program,
+        all_cores,
+        input_single_tile_size,
+        num_input_tiles,
+        input_cb_data_format,
+        src_sharded ? a.buffer() : nullptr);
 
-    uint32_t output_cb_index = CB::c_out0;
     uint32_t num_output_tiles = out_sharded ? ntiles_per_batch * 2 : ntiles_per_block * 2;
-    tt_metal::CircularBufferConfig output_cb_config =
-        tt_metal::CircularBufferConfig(
-            num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
-            .set_page_size(output_cb_index, output_single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    auto [output_cb_index, cb_output] =
+        create_cb(CB::c_out0, program, all_cores, output_single_tile_size, num_output_tiles, output_cb_data_format);
 
-    CBHandle cb_sharded_output = 0;
-    uint32_t sharded_output_cb_index = CB::c_out1;
-    if (out_sharded) {
-        tt_metal::CircularBufferConfig sharded_output_cb_config =
-            tt_metal::CircularBufferConfig(
-                num_output_rows_unpadded * block_row_size, {{sharded_output_cb_index, output_cb_data_format}})
-                .set_page_size(sharded_output_cb_index, block_row_size)
-                .set_globally_allocated_address(*output.buffer());
-        cb_sharded_output = tt_metal::CreateCircularBuffer(program, all_cores, sharded_output_cb_config);
-    }
+    auto [sharded_output_cb_index, cb_sharded_output] = out_sharded ? create_cb(
+                                                                          CB::c_out1,
+                                                                          program,
+                                                                          all_cores,
+                                                                          block_row_size,
+                                                                          num_output_rows_unpadded,
+                                                                          output_cb_data_format,
+                                                                          output.buffer())
+                                                                    : std::make_tuple(CB::c_out1, CBHandle{});
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
