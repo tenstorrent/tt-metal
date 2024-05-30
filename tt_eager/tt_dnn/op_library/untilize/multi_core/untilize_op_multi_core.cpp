@@ -748,7 +748,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
             num_output_rows_unpadded,
             ntiles_per_batch,
             out_shard_spec.shape[0] / batch,
-            shard_spec.shape[1] * a.element_size(),
+            shard_spec.shape[1] * output.element_size(),
             block_row_size,
             batch};
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, writer_rt_args);

@@ -1676,7 +1676,7 @@ class ResNet(nn.Module):
             layer_input_shape=self.layer1_output_shape,
             batch_size=batch_size,
             sharded=tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED if sharded else None,
-            out_sharded=False,
+            out_sharded=True,
             use_downsample_op_and_mm_for_conv1x1_s2=True if sharded else False,
             conv_halo=True if sharded else False,
             model_config=model_config,
@@ -1692,7 +1692,7 @@ class ResNet(nn.Module):
             layer_input_shape=self.layer2_output_shape,
             batch_size=batch_size,
             sharded=tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED if sharded else None,
-            out_sharded=False,
+            out_sharded=True,
             use_downsample_op_and_mm_for_conv1x1_s2=True if sharded else False,
             model_config=model_config,
             conv_halo=True if sharded else False,
@@ -2187,15 +2187,29 @@ class ResNet(nn.Module):
         x = self.layer2_module4(x)
         if self.sharded:
             x_shape = x.get_legacy_shape()
-            x = tt_lib.tensor.interleaved_to_sharded(
-                x,
-                self.layer_3_grid_size,
-                [
-                    math.ceil((x_shape[-2] // 32) / self.layer_3_grid_size[0]) * 32,
-                    x_shape[-1] // self.layer_3_grid_size[1],
-                ],
+            reshard_mem_config = tt_lib.tensor.MemoryConfig(
                 tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                tt_lib.tensor.ShardOrientation.COL_MAJOR,
+                tt_lib.tensor.BufferType.L1,
+                tt_lib.tensor.ShardSpec(
+                    tt_lib.tensor.CoreRangeSet(
+                        {
+                            tt_lib.tensor.CoreRange(
+                                tt_lib.tensor.CoreCoord(0, 0),
+                                tt_lib.tensor.CoreCoord(self.layer_3_grid_size[0] - 1, self.layer_3_grid_size[1] - 1),
+                            )
+                        }
+                    ),
+                    [
+                        math.ceil((x_shape[-2] // 32) / self.layer_3_grid_size[0]) * 32,
+                        x_shape[-1] // self.layer_3_grid_size[1],
+                    ],
+                    tt_lib.tensor.ShardOrientation.COL_MAJOR,
+                    False,
+                ),
+            )
+            x = tt_lib.tensor.reshard(
+                x,
+                reshard_mem_config,
             )
         x = self.layer3_module1(x)
         x = self.layer3_module2(x)
@@ -2205,25 +2219,64 @@ class ResNet(nn.Module):
         x = self.layer3_module6(x)
         if self.sharded:
             x_shape = x.get_legacy_shape()
-            x = tt_lib.tensor.interleaved_to_sharded(
-                x,
-                self.layer_4_grid_size,
-                [
-                    math.ceil((x_shape[-2] // 32) / self.layer_4_grid_size[0]) * 32,
-                    x_shape[-1] // self.layer_4_grid_size[1],
-                ],
+            reshard_mem_config = tt_lib.tensor.MemoryConfig(
                 tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                tt_lib.tensor.ShardOrientation.COL_MAJOR,
+                tt_lib.tensor.BufferType.L1,
+                tt_lib.tensor.ShardSpec(
+                    tt_lib.tensor.CoreRangeSet(
+                        {
+                            tt_lib.tensor.CoreRange(
+                                tt_lib.tensor.CoreCoord(0, 0),
+                                tt_lib.tensor.CoreCoord(self.layer_4_grid_size[0] - 1, self.layer_4_grid_size[1] - 1),
+                            )
+                        }
+                    ),
+                    [
+                        math.ceil((x_shape[-2] // 32) / self.layer_4_grid_size[0]) * 32,
+                        x_shape[-1] // self.layer_4_grid_size[1],
+                    ],
+                    tt_lib.tensor.ShardOrientation.COL_MAJOR,
+                    False,
+                ),
+            )
+            x = tt_lib.tensor.reshard(
+                x,
+                reshard_mem_config,
             )
         x = self.layer4_module1(x)
         x = self.layer4_module2(x)
         x = self.layer4_module3(x)
 
+        if self.sharded:
+            x_shape = x.get_legacy_shape()
+            reshard_mem_config = tt_lib.tensor.MemoryConfig(
+                tt_lib.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+                tt_lib.tensor.BufferType.L1,
+                tt_lib.tensor.ShardSpec(
+                    tt_lib.tensor.CoreRangeSet(
+                        {
+                            tt_lib.tensor.CoreRange(
+                                tt_lib.tensor.CoreCoord(0, 0),
+                                tt_lib.tensor.CoreCoord(self.end_grid_size[0] - 1, self.end_grid_size[1] - 1),
+                            )
+                        }
+                    ),
+                    [x.volume() // x_shape[-1], x_shape[-1] // (self.end_grid_size[0] * self.end_grid_size[1])],
+                    tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            )
+            x = tt_lib.tensor.reshard(
+                x,
+                reshard_mem_config,
+            )
+
         unpadded_shape = x.shape_without_padding()
+
         x = tt_lib.tensor.untilize_with_unpadding(
             x,
             (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
-            self.memory_config,
+            self.width_sharded_memory_config,
         )
 
         x_shape = x.get_legacy_shape()
@@ -2233,15 +2286,6 @@ class ResNet(nn.Module):
             x_shape[2] // self.batch_size,
             x_shape[3],
         )
-        if self.sharded:
-            x_shape = x.get_legacy_shape()
-            x = tt_lib.tensor.interleaved_to_sharded(
-                x,
-                self.end_grid_size,
-                [x.volume() // x_shape[-1], x_shape[-1] // (self.end_grid_size[0] * self.end_grid_size[1])],
-                tt_lib.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
-            )
 
         unpadded_shape = x.get_legacy_shape()
         padded_shape = [
