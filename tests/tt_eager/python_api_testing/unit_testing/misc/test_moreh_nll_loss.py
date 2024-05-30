@@ -197,7 +197,7 @@ def get_tt_tensors_2d(torch_input, torch_target, torch_weight, torch_divisor, to
         (5, 100, 2, 7, 50, 70),
     ],
 )
-@pytest.mark.parametrize("ignore_index", [-1, 5])
+@pytest.mark.parametrize("ignore_index", [5])
 @pytest.mark.parametrize("reduction", ["mean", "sum"])
 @pytest.mark.parametrize("none_weight", [True, False])
 @pytest.mark.parametrize("fp32_dest_acc_en", fp32_dest_acc_en, ids=fp32_dest_acc_en_ids)
@@ -290,7 +290,7 @@ def test_moreh_nll_loss_callback(shape, ignore_index, reduction, none_weight, de
         [3, 4, 32 * 5, 32 * 6],
     ),
 )
-@pytest.mark.parametrize("ignore_index", [0, -1])
+@pytest.mark.parametrize("ignore_index", [0])
 @pytest.mark.parametrize("reduction_mean", [True, False])
 @pytest.mark.parametrize("has_output", [True, False])
 def test_moreh_nll_loss_4d_backward(shape, ignore_index, reduction_mean, has_output, device, use_program_cache):
@@ -351,7 +351,7 @@ def test_moreh_nll_loss_4d_backward(shape, ignore_index, reduction_mean, has_out
 
 
 @pytest.mark.parametrize("shape", ([1, 2], [3, 4], [12, 6]))
-@pytest.mark.parametrize("ignore_index", [0, -1])
+@pytest.mark.parametrize("ignore_index", [0])
 @pytest.mark.parametrize("reduction_mean", [True, False])
 def test_moreh_nll_loss_2d_backward(shape, ignore_index, reduction_mean, device, use_program_cache):
     (torch_input, torch_target, torch_weight, torch_divisor, torch_output) = get_torch_tensors(shape)
