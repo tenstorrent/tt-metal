@@ -528,9 +528,6 @@ struct DeviceOperation final {
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors,
                const OptionalTensors& optional_output_tensors) -> void {
-                if (ttnn::CONFIG.enable_fast_runtime_mode) {
-                    return;
-                }
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (
                     (detail::implements_validate<T>() or
