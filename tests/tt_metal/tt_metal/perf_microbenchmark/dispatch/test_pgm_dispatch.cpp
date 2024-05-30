@@ -35,6 +35,7 @@ uint32_t n_cbs_g;
 uint32_t n_args_g;
 uint32_t n_common_args_g;
 uint32_t n_sems_g;
+uint32_t n_kgs_g;
 bool brisc_enabled_g;
 bool ncrisc_enabled_g;
 bool trisc_enabled_g;
@@ -56,6 +57,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -a: number of runtime args (default {}, max {})", 0, MAX_ARGS);
         log_info(LogTest, "  -ca: number of common runtime args multicast to all cores (default {}, max {})", 0, MAX_ARGS);
         log_info(LogTest, "  -S: number of semaphores (default {}, max {})", 0, NUM_SEMAPHORES);
+        log_info(LogTest, " -kg: number of kernel groups (default 1)");
         log_info(LogTest, "  -rs:run \"slow\" kernels for exactly <n> cycles (default 0)");
         log_info(LogTest, "  -rf:run \"fast\" kernels for exactly <n> cycles (default 0)");
         log_info(LogTest, "  -nf:run <n> fast kernels between slow kernels (default 0)");
@@ -76,6 +78,7 @@ void init(int argc, char **argv) {
     n_args_g = test_args::get_command_option_uint32(input_args, "-a", 0);
     n_common_args_g = test_args::get_command_option_uint32(input_args, "-ca", 0);
     n_sems_g = test_args::get_command_option_uint32(input_args, "-S", 0);
+    n_kgs_g = test_args::get_command_option_uint32(input_args, "-kg", 1);
     lazy_g = test_args::has_command_option(input_args, "-z");
     time_just_finish_g = test_args::has_command_option(input_args, "-f");
     fast_kernel_cycles_g = test_args::get_command_option_uint32(input_args, "-rf", 0);
@@ -101,7 +104,10 @@ void init(int argc, char **argv) {
         log_fatal("Sem count must be 0..{}", NUM_SEMAPHORES);
         exit(0);
     }
-
+    if (n_kgs_g > core_x + 1) {
+        log_fatal("This test uses columns for kernel groups so number of kernel groups must be <= x core range");
+        exit(0);
+    }
     brisc_enabled_g = !test_args::has_command_option(input_args, "-b");
     ncrisc_enabled_g = !test_args::has_command_option(input_args, "-n");
     trisc_enabled_g = !test_args::has_command_option(input_args, "-t");
@@ -116,9 +122,9 @@ void init(int argc, char **argv) {
     }
 }
 
-void set_runtime_args(Program& program, tt_metal::KernelHandle kernel_id, vector<uint32_t>& args) {
-    for (int core_idx_y = workers_g.start.y; core_idx_y <= workers_g.end.y; core_idx_y++) {
-        for (int core_idx_x = workers_g.start.x; core_idx_x <= workers_g.end.x; core_idx_x++) {
+void set_runtime_args(Program& program, tt_metal::KernelHandle kernel_id, vector<uint32_t>& args, CoreRange kg) {
+    for (int core_idx_y = kg.start.y; core_idx_y <= kg.end.y; core_idx_y++) {
+        for (int core_idx_x = kg.start.x; core_idx_x <= kg.end.x; core_idx_x++) {
             CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
             tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
         }
@@ -129,11 +135,11 @@ void initialize_program(tt_metal::Program& program, uint32_t run_cycles) {
 
     program = tt_metal::CreateProgram();
 
-    std::map<string, string> pad_defines = {
+    std::map<string, string> defines = {
         {"KERNEL_BYTES", std::to_string(kernel_size_g)}
     };
     if (run_cycles != 0) {
-        pad_defines.insert(std::pair<string, string>("KERNEL_RUN_TIME", std::to_string(run_cycles)));
+        defines.insert(std::pair<string, string>("KERNEL_RUN_TIME", std::to_string(run_cycles)));
     }
 
     for (uint32_t i = 0; i < n_sems_g; i++) {
@@ -151,34 +157,43 @@ void initialize_program(tt_metal::Program& program, uint32_t run_cycles) {
         auto cb = tt_metal::CreateCircularBuffer(program, workers_g, cb_config);
     }
 
-    if (brisc_enabled_g) {
-        auto dm0 = tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
-            workers_g,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = pad_defines});
-        set_runtime_args(program, dm0, args);
-        tt_metal::SetCommonRuntimeArgs(program, dm0, common_args);
-    }
+    // first kernel group is possibly wide, remaining kernel groups are 1 column each
+    CoreRange kg = { workers_g.start, { workers_g.end.x - n_kgs_g + 1, workers_g.end.y }};
+    for (uint32_t i = 0; i < n_kgs_g; i++) {
+        defines.insert(std::pair<string, string>(string("KG_") + std::to_string(i), ""));
 
-    if (ncrisc_enabled_g) {
-        auto dm1 = tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
-            workers_g,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .defines = pad_defines});
-        set_runtime_args(program, dm1, args);
-        tt_metal::SetCommonRuntimeArgs(program, dm1, common_args);
-    }
+        if (brisc_enabled_g) {
+            auto dm0 = tt_metal::CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
+                kg,
+                tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = defines});
+            set_runtime_args(program, dm0, args, kg);
+            tt_metal::SetCommonRuntimeArgs(program, dm0, common_args);
+        }
 
-    if (trisc_enabled_g) {
-        auto compute = tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
-            workers_g,
-            tt_metal::ComputeConfig{.defines = pad_defines});
-        set_runtime_args(program, compute, args);
-        tt_metal::SetCommonRuntimeArgs(program, compute, common_args);
+        if (ncrisc_enabled_g) {
+            auto dm1 = tt_metal::CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
+                kg,
+                tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .defines = defines});
+            set_runtime_args(program, dm1, args, kg);
+            tt_metal::SetCommonRuntimeArgs(program, dm1, common_args);
+        }
+
+        if (trisc_enabled_g) {
+            auto compute = tt_metal::CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
+                kg,
+                tt_metal::ComputeConfig{.defines = defines});
+            set_runtime_args(program, compute, args, kg);
+            tt_metal::SetCommonRuntimeArgs(program, compute, common_args);
+        }
+
+        kg.start = { kg.end.x + 1, kg.end.y };
+        kg.end = kg.start;
     }
 }
 
@@ -235,6 +250,7 @@ int main(int argc, char **argv) {
         } else {
             log_info(LogTest, "Kernel cycles: {}", slow_kernel_cycles_g);
         }
+        log_info(LogTest, "KGs: {}", n_kgs_g);
         log_info(LogTest, "CBs: {}", n_cbs_g);
         log_info(LogTest, "UniqueRTArgs: {}", n_args_g);
         log_info(LogTest, "CommonRTArgs: {}", n_common_args_g);
