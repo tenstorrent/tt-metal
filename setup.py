@@ -34,15 +34,6 @@ def get_is_srcdir_build():
     return git_dir.exists()
 
 
-def get_is_dev_build():
-    try:
-        is_dev_build = attempt_get_env_var("TT_METAL_ENV") == "dev"
-    except EnvVarNotFoundException as e:
-        is_dev_build = False
-
-    return is_dev_build
-
-
 def get_arch_name():
     return attempt_get_env_var("ARCH_NAME")
 
@@ -87,7 +78,6 @@ def get_version(metal_build_config):
 
 @dataclass(frozen=True)
 class MetalliumBuildConfig:
-    is_dev_build = get_is_dev_build()
     is_srcdir_build = get_is_srcdir_build()
     arch_name = get_arch_name()
 
@@ -106,7 +96,6 @@ class CMakeBuild(build_ext):
         return {
             **os.environ.copy(),
             "TT_METAL_HOME": Path(__file__).parent,
-            "TT_METAL_ENV": "production",
             "CXX": "clang++-17",
             # Currently, the ttnn (ttnn/_ttnn.so) and tt_lib (tt_lib/_C.so)
             # both link to the tt_metal runtime. The specific thing in
