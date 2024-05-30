@@ -565,13 +565,15 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     uint32_t window_outer;
     uint32_t window_inner;
-    if (weight_width_sliced) {
+
+    if (weight_width_sliced and weight_size_w == 3) {
         window_outer = 1;  // window_outer = 1 becasue all of filter window is processed in the inner loop
         window_inner = 3;  // window_inner = 9 / 3, ie. read 3 width coalesced
     } else {
         window_outer = num_blocks_act_w;                                  // window_outer
         window_inner = weight_size_h * weight_size_w / num_blocks_act_w;  // window_inner
     }
+
     reader_defines["WINDOW_INNER"] = std::to_string(window_inner);
     log_debug(LogOp, "window_outer: {}, window_inner: {}", window_outer, window_inner);
 
@@ -709,17 +711,17 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         }
     }
 
-    bool read_3x3_window_in_inner_loop = false;
+    bool read_window_in_inner_loop = false;
     uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles / conv_act_c_blocks;
     bool fully_buffer_weights = false;
     uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles / conv_act_c_blocks;
     // TODO: This flag should be set in kernel logic but need this for create_CB
-    if (a.memory_config().is_sharded() and weight_size_h == 3 and weight_size_w == 3 and
-        (stride_h == 1 or stride_h == 2) and weight_width_sliced) {
+    if (a.memory_config().is_sharded() and ((weight_size_h == 3 and weight_size_w == 3 and
+        (stride_h == 1 or stride_h == 2)) or (weight_size_h == 1 and weight_size_w == 1 and stride_h == 2)) and weight_width_sliced) {
         // If conv_act_c_blocks > 1 and we have 2D conv with sharded input, we always read entire 3x3 window before
         // pushing in reader/writer
         // TODO: Generalize this to not make this assumption
-        read_3x3_window_in_inner_loop = true;
+        read_window_in_inner_loop = true;
         num_weight_cb_tiles *= weight_size_h * weight_size_w;
         num_act_cb_tiles *= weight_size_h * weight_size_w;
     } else if (num_blocks_act_h_per_core > 1) {
@@ -800,10 +802,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
     // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
-    if (weight_size_h == weight_size_w and weight_size_w > 1 and (stride_h == 1 or stride_h == 2)) {
+    if (weight_size_h == weight_size_w and weight_size_w >= 1 and (stride_h == 1 or stride_h == 2)) {
         if (weight_width_sliced) {
             // 2D conv
-            assert(read_3x3_window_in_inner_loop == true);
+            assert(read_window_in_inner_loop == true);
             reader_kernel =
                 "tt_eager/tt_dnn/op_library/conv/kernels/"
                 "reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp";
@@ -872,7 +874,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         TT_ASSERT(false, "Sharded input not supported for this conv yet!");
     }
 
-    if (read_3x3_window_in_inner_loop) {
+    if (read_window_in_inner_loop) {
         const uint32_t window_size = weight_size_h * weight_size_w;
         in0_block_w *= window_size;
         in0_block_num_tiles *= window_size;
