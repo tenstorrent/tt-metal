@@ -250,7 +250,7 @@ struct MemoryConfig {
 bool operator==(const MemoryConfig &config_a, const MemoryConfig &config_b);
 bool operator!=(const MemoryConfig &config_a, const MemoryConfig &config_b);
 
-void dump_memory_config(std::ofstream &output_stream, const MemoryConfig &memory_config);
+void dump_memory_config(std::ostream &output_stream, const MemoryConfig &memory_config);
 void dump_memory_config(const std::string &file_name, const MemoryConfig &memory_config);
 
 MemoryConfig load_memory_config(std::ifstream &input_stream);
