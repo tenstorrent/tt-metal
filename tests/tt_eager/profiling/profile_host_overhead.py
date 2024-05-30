@@ -70,27 +70,16 @@ def measure_host_overhead_binary(
     op,
     num_call_to_stack,
     num_repeats,
-    bcast=False,
-    bcast_dim=tt_lib.tensor.BcastOpDim.W,
-    norm_shapes=False,
-    embeddings_shapes=False,
+    shape_func=None,
 ):
-    input_shape_2 = input_shape
+    input_shape_0 = input_shape
+    input_shape_1 = input_shape
 
-    if bcast:
-        if bcast_dim == tt_lib.tensor.BcastOpDim.W:
-            input_shape_2 = [input_shape[-4], input_shape[-3], input_shape[-2], 32]
-        elif bcast_dim == tt_lib.tensor.BcastOpDim.H:
-            input_shape_2 = [input_shape[-4], input_shape[-3], 32, input_shape[-1]]
-        else:
-            input_shape_2 = [input_shape[-4], input_shape[-3], 32, 32]
+    if shape_func is not None:
+        input_shape_0, input_shape_1 = shape_func(input_shape)
 
-    if embeddings_shapes:
-        input_shape = (input_shape[0], 1, 1, input_shape[-1])
-        input_shape_2 = (input_shape_2[0], 1, 1, input_shape_2[-1])
-
-    x = torch.Tensor(size=input_shape).uniform_(-100, 100)
-    y = torch.Tensor(size=input_shape_2).uniform_(-100, 100)
+    x = torch.Tensor(size=input_shape_0).uniform_(-100, 100)
+    y = torch.Tensor(size=input_shape_1).uniform_(-100, 100)
 
     x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
     y = torch2tt_tensor(y, device, dlayout, in_mem_config, dtype)
@@ -119,10 +108,7 @@ def measure_host_overhead_unary(
     op,
     num_call_to_stack,
     num_repeats,
-    bcast=False,
-    bcast_dim=tt_lib.tensor.BcastOpDim.W,
-    norm_shapes=False,
-    embeddings_shapes=False,
+    **kwargs,
 ):
     x = torch.Tensor(size=input_shape).uniform_(-100, 100)
     x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
@@ -151,18 +137,17 @@ def measure_host_overhead_ternary(
     op,
     num_call_to_stack,
     num_repeats,
-    bcast=False,
-    bcast_dim=tt_lib.tensor.BcastOpDim.W,
-    norm_shapes=False,
-    embeddings_shapes=False,
+    shape_func=None,
 ):
+    input_shape_0 = input_shape
+    input_shape_1 = input_shape
     input_shape_2 = input_shape
 
-    if norm_shapes:
-        input_shape_2 = [input_shape[0], input_shape[1], 32, input_shape[3]]
+    if shape_func is not None:
+        input_shape_0, input_shape_1, input_shape_2 = shape_func(input_shape)
 
-    x = torch.Tensor(size=input_shape).uniform_(-100, 100)
-    y = torch.Tensor(size=input_shape_2).uniform_(-100, 100)
+    x = torch.Tensor(size=input_shape_0).uniform_(-100, 100)
+    y = torch.Tensor(size=input_shape_1).uniform_(-100, 100)
     z = torch.Tensor(size=input_shape_2).uniform_(-100, 100)
 
     x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
@@ -194,10 +179,7 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
         if "layout" in op and op["layout"] == "ROW_MAJOR":
             dlayout = tt_lib.tensor.Layout.ROW_MAJOR
 
-        norm_shapes = False if "norm_shapes" not in op else op["norm_shapes"]
-        embeddings_shapes = False if "embeddings_shapes" not in op else op["embeddings_shapes"]
-        bcast = False if "bcast" not in op else op["bcast"]
-        bcast_dim = tt_lib.tensor.BcastOpDim.W if "bcast_dim" not in op else op["bcast_dim"]
+        shape_func = None if "shape_func" not in op else op["shape_func"]
 
         # Warmup
         measuring_func(
@@ -210,10 +192,7 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
             op["op"],
             1,
             1,
-            bcast=bcast,
-            bcast_dim=bcast_dim,
-            norm_shapes=norm_shapes,
-            embeddings_shapes=embeddings_shapes,
+            shape_func=shape_func,
         )
 
         for num_call_to_stack in all_num_call_to_stack:
@@ -227,10 +206,7 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
                 op["op"],
                 num_call_to_stack,
                 num_repeats,
-                bcast=bcast,
-                bcast_dim=bcast_dim,
-                norm_shapes=norm_shapes,
-                embeddings_shapes=embeddings_shapes,
+                shape_func=shape_func,
             )
 
             results_overhead += overhead_ms
