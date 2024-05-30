@@ -439,18 +439,6 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
         if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
             return;
 
-    // Helper lambda to convert CoreType to string for printing purposes.
-    auto core_type_to_str = [](CoreType core_type){
-        switch(core_type) {
-            case CoreType::WORKER:
-                return "worker";
-            case CoreType::ETH:
-                return "ethernet";
-            default:
-                TT_THROW("DPRINT server unrecognized CoreType");
-        }
-    };
-
     // Handle specifically disabled cores
     std::unordered_set<CoreCoord> disabled_phys_cores;
     for (auto &type_and_cores : tt::llrt::OptionsG.get_feature_disabled_cores(tt::llrt::RunTimeDebugFeatureDprint)) {
@@ -475,7 +463,7 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
                 tt::LogMetal,
                 "DPRINT enabled on device {}, all {} cores.",
                 device->id(),
-                core_type_to_str(core_type)
+                tt::llrt::get_core_type_name(core_type)
             );
         } else {
             // Only print from the cores specified by the user
@@ -501,7 +489,7 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
                         tt::LogMetal,
                         "DPRINT enabled on device {}, {} core {} (physical {}).",
                         device->id(),
-                        core_type_to_str(core_type),
+                        tt::llrt::get_core_type_name(core_type),
                         logical_core.str(),
                         phys_core.str()
                     );
@@ -509,7 +497,7 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
                     log_warning(
                         tt::LogMetal,
                         "TT_METAL_DPRINT_CORES included {} core with logical coordinates {} (physical coordinates {}), which is not a valid core on device {}. This coordinate will be ignored by the dprint server.",
-                        core_type_to_str(core_type),
+                        tt::llrt::get_core_type_name(core_type),
                         logical_core.str(),
                         valid_logical_core? phys_core.str() : "INVALID",
                         device->id()

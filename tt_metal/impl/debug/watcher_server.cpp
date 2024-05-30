@@ -934,6 +934,17 @@ void watcher_init(Device *device) {
                         } else {
                             debug_delays_val.insert({phys_core, delay_setup});
                         }
+                    } else {
+                        log_warning(
+                            tt::LogMetal,
+                            "TT_METAL_{}_CORES included {} core with logical coordinates {} (physical coordinates {}), which is not a valid core on device {}. This coordinate will be ignored by {} feature.",
+                            tt::llrt::RunTimeDebugFeatureNames[delay_feature],
+                            tt::llrt::get_core_type_name(core_type),
+                            logical_core.str(),
+                            valid_logical_core? phys_core.str() : "INVALID",
+                            device->id(),
+                            tt::llrt::RunTimeDebugFeatureNames[delay_feature]
+                        );
                     }
                 }
             }
