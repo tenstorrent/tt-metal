@@ -284,7 +284,7 @@ def from_torch(
             memory_config = ttnn.DRAM_MEMORY_CONFIG
         tensor = ttnn.to_device(tensor, device, memory_config=memory_config)
 
-    if shape_with_padding is not None and shape_with_padding != tensor.shape and mesh_mapper is None:
+    if shape_with_padding is not None and shape_with_padding != tensor.shape:
         tensor = ttnn.reshape(tensor, shape_with_padding)
 
     return tensor
