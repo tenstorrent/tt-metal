@@ -49,15 +49,15 @@ void kernel_main() {
 
     const InterleavedAddrGen<input_is_dram> addrg_input = {
         .bank_base_address = input_addr,
-        .page_size = 1024 * element_size,
+        .page_size = input_tile_bytes,
     };
 
     const InterleavedAddrGen<target_is_dram> addrg_target = {
-        .bank_base_address = target_addr, .page_size = 1024 * target_element_size};
+        .bank_base_address = target_addr, .page_size = target_tile_bytes};
 
     const InterleavedAddrGen<weight_is_dram> addrg_weight = {
         .bank_base_address = weight_addr,
-        .page_size = 1024 * element_size,
+        .page_size = weight_tile_bytes,
     };
 
     const InterleavedAddrGenFast<divisor_is_dram> addrg_divisor = {

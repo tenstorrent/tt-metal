@@ -53,7 +53,7 @@ void kernel_main() {
 #if defined(WEIGHT)
     const InterleavedAddrGen<weight_is_dram> addrg_weight = {
         .bank_base_address = weight_addr,
-        .page_size = 1024 * element_size,
+        .page_size = weight_tile_bytes,
     };
 
     cb_reserve_back(cb_weight, weight_num_tile);
