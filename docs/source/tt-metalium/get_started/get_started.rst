@@ -26,7 +26,7 @@ hardware.
 
 Install tt-metal and build the project by following the instructions in the
 `installation guide
-<https://github.com/tenstorrent/tt-metal#installing>`_.
+<https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md>`_.
 
 2. Explore the Falcon 7B Demo
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

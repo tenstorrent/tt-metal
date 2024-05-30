@@ -38,6 +38,10 @@
 
 ## Wormhole (WH) Models
 
+> [!NOTE]
+>
+> We currently test our demo models for Wormhole on N300 boards only.
+
 | Model                                                       | Gen. Token [3]     |  Batch               | End-to-end throughput [1]    | Device throughput [2]       | Target         |
 |-------------------------------------------------------------|--------------------|----------------------|------------------------------|-----------------------------|----------------|
 | [Falcon7B-decode](./models/demos/wormhole/falcon7b)         | 129th              | 32                   | 11.6 t/s/u - 371 t/s         | 15.4 t/s/u - 493 t/s        | 21 t/s/u       |
@@ -46,7 +50,7 @@
 | [BERT-Large](./models/demos/metal_BERT_large_11/) (sen/s)   | any                |  8                   | 270                          | 340                         | 400            |
 | [Stable Diffusion 1.4](./models/demos/wormhole/stable_diffusion) 512x512  (sec/img)                              |          | 1                    |      8s                        |    5s                         |                |
 
-[3] - Generating the i'th token in a sequence while the kv_cache is filled with i-1 rows.
+[3] - Generating the `i`'th token in a sequence while the kv_cache is filled with `i-1` rows.
 
 ## T3000 (2x4 mesh of WHs) Models
 
