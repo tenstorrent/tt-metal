@@ -48,6 +48,8 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
     Tensor input_4d = input;
     input_4d = input_4d.reshape(input_4d_shape);
 
+    auto input_4d_shape_without_padding = input_4d_shape.without_padding();
+
     IndexInfo index_info[4] = {0};
 
 
@@ -163,6 +165,11 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
             input_stick_idx_stride_n,
             input_stick_idx_stride_c,
             input_stick_idx_stride_h,
+
+            input_4d_shape_without_padding[0],
+            input_4d_shape_without_padding[1],
+            input_4d_shape_without_padding[2],
+            input_4d_shape_without_padding[3],
 
             // index
             index_info[0].is_defined,

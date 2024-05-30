@@ -26,7 +26,7 @@ void MorehGetitem::validate_with_output_tensors(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
     auto dtype = input_tensor.get_dtype();
-    TT_FATAL(dtype == DataType::UINT32 || dtype == DataType::BFLOAT16);
+    TT_FATAL(dtype == DataType::INT32 || dtype == DataType::BFLOAT16);
 
     // validate index tensors
     uint32_t index_size = input_tensors.at(1).get_legacy_shape()[-1];
@@ -34,7 +34,7 @@ void MorehGetitem::validate_with_output_tensors(
         auto& index_tensor = input_tensors.at(i);
         TT_FATAL(index_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
         TT_FATAL(index_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
-        TT_FATAL(index_tensor.get_dtype() == DataType::UINT32);
+        TT_FATAL(index_tensor.get_dtype() == DataType::INT32);
 
         auto index_shape = index_tensor.get_legacy_shape();
         auto index_layout = index_tensor.get_layout();

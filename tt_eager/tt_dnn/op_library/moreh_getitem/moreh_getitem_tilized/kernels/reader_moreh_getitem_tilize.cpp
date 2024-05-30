@@ -27,6 +27,11 @@ void kernel_main() {
     uint32_t input_noc_id_stride_h = get_arg_val<uint32_t>(i++);
     uint32_t input_num_stick_width = get_arg_val<uint32_t>(i++);
 
+    uint32_t input_size_n = get_arg_val<uint32_t>(i++);
+    uint32_t input_size_c = get_arg_val<uint32_t>(i++);
+    uint32_t input_size_h = get_arg_val<uint32_t>(i++);
+    uint32_t input_size_w = get_arg_val<uint32_t>(i++);
+
     // index
     uint32_t index0_is_defined = get_arg_val<uint32_t>(i++);
     uint32_t index1_is_defined = get_arg_val<uint32_t>(i++);
@@ -91,6 +96,13 @@ void kernel_main() {
         cb_in4,
     };
 
+    uint32_t input_size_list[4] = {
+        input_size_n,
+        input_size_c,
+        input_size_h,
+        input_size_w,
+    };
+
     uint32_t output_size_list[4] = {
         output_size_n,
         output_size_c,
@@ -145,14 +157,14 @@ void kernel_main() {
                 noc_async_read(index_noc_addr, index_l1_addr, INDEX_TILE_SIZE);
                 noc_async_read_barrier();
 
-                volatile tt_l1_ptr uint32_t* index_l1_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_l1_addr);
+                volatile tt_l1_ptr int32_t* index_l1_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
                 uint32_t index_dim_offset;
                 uint32_t index_tile_idx = index_index % TILE_WIDTH;
                 if (index_tile_idx < FACE_WIDTH) index_dim_offset = index_tile_idx;
                 else index_dim_offset = index_tile_idx + 256 - 16;
 
-                uint32_t index_val = index_l1_ptr[index_dim_offset];
+                int32_t index_val = index_l1_ptr[index_dim_offset];
                 #endif
                 #ifdef ROW_MAJOR_INDEX
                 uint32_t noc_offset = ((uint32_t)((index_index * INDEX_SIZE) / NOC_MINIMUM_READ_SIZE)) * NOC_MINIMUM_READ_SIZE;
@@ -168,13 +180,17 @@ void kernel_main() {
                 noc_async_read(index_noc_addr, index_l1_addr, NOC_MINIMUM_READ_SIZE);
                 noc_async_read_barrier();
 
-                volatile tt_l1_ptr uint32_t* index_l1_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_l1_addr);
+                volatile tt_l1_ptr int32_t* index_l1_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
 
                 uint32_t index_dim_offset = (index_index * INDEX_SIZE - noc_offset) / INDEX_SIZE;
-                uint32_t index_val = index_l1_ptr[index_dim_offset];
+                int32_t index_val = index_l1_ptr[index_dim_offset];
 
                 #endif
+
+                if (index_val < 0) {
+                    index_val += input_size_list[dim];
+                }
 
                 input_stick_idx += index_val * input_stick_idx_stride;
             } else {
