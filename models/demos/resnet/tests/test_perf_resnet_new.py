@@ -9,9 +9,6 @@ from transformers import AutoImageProcessor
 import pytest
 import ttnn
 
-from models.utility_functions import is_e75
-from models.utility_functions import profiler
-from models.utility_functions import disable_persistent_kernel_cache, skip_for_wormhole_b0
 from models.perf.perf_utils import prep_perf_report
 
 from loguru import logger
@@ -22,6 +19,10 @@ from ttnn.model_preprocessing import (
     convert_torch_model_to_ttnn_model,
 )
 from models.utility_functions import (
+    profiler,
+    is_e75,
+    disable_persistent_kernel_cache,
+    skip_for_wormhole_b0,
     pad_and_fold_conv_filters_for_unity_stride,
 )
 
@@ -83,6 +84,8 @@ def run_perf_resnet(
 ):
     disable_persistent_kernel_cache()
 
+    profiler.clear()
+
     cpu_key = f"ref_key_batchsize{batch_size}"
 
     image = hf_cat_image_sample_input
@@ -119,7 +122,6 @@ def run_perf_resnet(
                 tt_inputs, device=device, batch_size=batch_size, ops_parallel_config=ops_parallel_config
             ).cpu(blocking=True)
             profiler.end(f"iter_{iter}_key")
-            ttnn.device.DumpDeviceProfiler(device)
 
         num_warm_iterations = 15
         warm_start = warmup_end
@@ -128,10 +130,13 @@ def run_perf_resnet(
         outputs = []
         profiler.start(f"run")
         for iter in range(warm_start, warm_end):
-            outputs.append(tt_resnet50(tt_inputs).cpu(blocking=False))
-        ttnn.device.Synchronize(device)
+            outputs.append(
+                tt_resnet50(
+                    tt_inputs, device=device, batch_size=batch_size, ops_parallel_config=ops_parallel_config
+                ).cpu(blocking=False)
+            )
+        ttnn.synchronize_device(device)
         profiler.end(f"run")
-        ttnn.device.DumpDeviceProfiler(device)
 
         # enable_persistent_kernel_cache()
 
@@ -139,6 +144,10 @@ def run_perf_resnet(
 
     # ensuring inference time fluctuations is not noise
     inference_time_avg = profiler.get("run") / num_warm_iterations
+
+    for iter in range(0, 5):
+        logger.info(f'iter_{iter}_key: {profiler.get(f"iter_{iter}_key")}')
+    logger.info(f'{warm_start} to {warm_end} run: {profiler.get("run")}')
 
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - inference_time_avg
@@ -158,7 +167,7 @@ def run_perf_resnet(
 
 
 @skip_for_wormhole_b0(reason_str="Not tested on single WH")
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
