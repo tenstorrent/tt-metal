@@ -3,7 +3,32 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from models.demos.falcon7b.reference.hf_modeling_falcon import FalconForCausalLM
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+
+
+def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, devices):
+    head_dim = configuration.hidden_size // configuration.num_attention_heads
+    kv_cache = ()
+    for _ in range(num_layers):
+        kv_cache_cur_layer = []
+        for device in devices:
+            k_cache = torch.zeros(batch_size, 1, max_seq_len, head_dim)
+            v_cache = torch.zeros(batch_size, 1, max_seq_len, head_dim)
+            tt_k_cache = torch2tt_tensor(k_cache, device)
+            tt_v_cache = torch2tt_tensor(v_cache, device)
+            kv_cache_cur_layer.append((tt_k_cache, tt_v_cache))
+        kv_cache += (kv_cache_cur_layer,)
+    return kv_cache
+
+
+def load_hf_model(model_location_generator, model_version):
+    model_name = model_location_generator(model_version, model_subdir="Falcon")
+    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
+    hugging_face_reference_model.eval()
+    state_dict = hugging_face_reference_model.state_dict()
+
+    return hugging_face_reference_model, state_dict
 
 
 def create_prefill_attn_mask_for_sharded_softmax(attention_mask, num_attn_heads, seq_len):

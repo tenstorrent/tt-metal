@@ -662,7 +662,7 @@ class TtFalconAttentionDecode(nn.Module):
         # We always store max_position_embeddings for kv_cache,
         # so we need separate variable to store the actual len of the kv_cache
         assert layer_past is not None
-        assert layer_past_len > 0 and layer_past_len <= self.max_position_embeddings
+        assert layer_past_len <= self.max_position_embeddings
 
         #################
         ### FUSED QKV ###

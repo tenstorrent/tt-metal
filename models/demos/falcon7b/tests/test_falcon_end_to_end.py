@@ -7,8 +7,11 @@ import pytest
 import torch
 import tt_lib
 from loguru import logger
-from models.demos.falcon7b.reference.hf_modeling_falcon import FalconForCausalLM
-from models.demos.falcon7b.tests.test_utils import concat_device_out_layer_present, get_rand_falcon_inputs
+from models.demos.falcon7b.tests.test_utils import (
+    concat_device_out_layer_present,
+    get_rand_falcon_inputs,
+    load_hf_model,
+)
 from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 
 # TODO: Remove this?
@@ -61,13 +64,10 @@ def run_test_FalconCausalLM_end_to_end(
 ):
     num_devices = len(devices)
     global_batch = batch * num_devices
-    model_name = model_location_generator(model_version, model_subdir="Falcon")
 
     profiler.start("hugging_face_model_setup")
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
-    hugging_face_reference_model.eval()
+    hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
     configuration = hugging_face_reference_model.config
-    state_dict = hugging_face_reference_model.state_dict()
     pytorch_FalconCausalLM = PytorchFalconCausalLM(hugging_face_reference_model, num_layers)
     profiler.end("hugging_face_model_setup")
 

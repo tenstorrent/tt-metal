@@ -13,9 +13,10 @@ import torch.nn.functional as F
 import ttnn
 import tt_lib
 from loguru import logger
-from models.demos.falcon7b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
+from models.demos.falcon7b.reference.hf_modeling_falcon import FalconConfig
 from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b.tt.model_config import get_model_config, model_config_entries
+from models.demos.falcon7b.tests.test_utils import initialize_kv_cache, load_hf_model
 from models.utility_functions import (
     disable_compilation_reports,
     disable_persistent_kernel_cache,
@@ -77,21 +78,6 @@ def preprocess_and_validate_inputs(input_prompts, tokenizer, max_seq_len, perf_m
     logger.info(f"# of input tokens per user: {num_input_tokens}")
 
     return prefill_ids, num_users, num_input_tokens
-
-
-def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, devices):
-    head_dim = configuration.hidden_size // configuration.num_attention_heads
-    kv_cache = ()
-    for _ in range(num_layers):
-        kv_cache_cur_layer = []
-        for device in devices:
-            k_cache = torch.zeros(batch_size, 1, max_seq_len, head_dim)
-            v_cache = torch.zeros(batch_size, 1, max_seq_len, head_dim)
-            tt_k_cache = torch2tt_tensor(k_cache, device)
-            tt_v_cache = torch2tt_tensor(v_cache, device)
-            kv_cache_cur_layer.append((tt_k_cache, tt_v_cache))
-        kv_cache += (kv_cache_cur_layer,)
-    return kv_cache
 
 
 def print_output_prompts(generated_ids, tokenizer, batch_size, num_users_to_display=None):
@@ -204,10 +190,7 @@ def run_falcon_demo_kv(
     profiler.start(f"loading_weights")
     if len(os.listdir(tt_cache_path)) < 337:
         logger.info("Weights not found on machine; downloading weights...")
-        model_name = model_location_generator(model_version, model_subdir="Falcon")
-        hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
-        hugging_face_reference_model.eval()
-        state_dict = hugging_face_reference_model.state_dict()
+        _, state_dict = load_hf_model(model_location_generator, model_version)
     else:
         state_dict = None
 
