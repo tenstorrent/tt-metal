@@ -213,6 +213,11 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
                 input_noc_id_stride_c,
                 input_noc_id_stride_h,
 
+                input_shape_without_padding[0],
+                input_shape_without_padding[1],
+                input_shape_without_padding[2],
+                input_shape_without_padding[3],
+
                 // index
                 index_info[0].is_defined,
                 index_info[1].is_defined,
@@ -465,6 +470,11 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
                 input_noc_id_stride_c,
                 input_noc_id_stride_h,
                 input_num_stick_width,
+
+                input_shape_without_padding[0],
+                input_shape_without_padding[1],
+                input_shape_without_padding[2],
+                input_shape_without_padding[3],
 
                 // index
                 index_info[0].is_defined,
