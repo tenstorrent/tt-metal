@@ -230,16 +230,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
             auto src_buffer = input_tensors.at(0).buffer();
-            auto padding_config_buffer = input_tensors.at(1).buffer();
-            auto local_config_buffer = input_tensors.at(2).buffer();
-            auto remote_config_buffer = input_tensors.at(3).buffer();
             auto dst_buffer = output_tensors.at(0).buffer();
 
             UpdateDynamicCircularBufferAddress(program, src_cb, *src_buffer);
             UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
-            UpdateDynamicCircularBufferAddress(program, padding_config_cb, *padding_config_buffer);
-            UpdateDynamicCircularBufferAddress(program, local_config_cb, *local_config_buffer);
-            UpdateDynamicCircularBufferAddress(program, remote_config_cb, *remote_config_buffer);
         };
 
     return {
