@@ -57,6 +57,21 @@ def bcast_mul_hw(x, y):
     tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
 
 
+def bcast_h_shape_func(input_shape):
+    input_shape_1 = [input_shape[-4], input_shape[-3], 32, input_shape[-1]]
+    return input_shape, input_shape_1
+
+
+def bcast_w_shape_func(input_shape):
+    input_shape_1 = [input_shape[-4], input_shape[-3], input_shape[-2], 32]
+    return input_shape, input_shape_1
+
+
+def bcast_hw_shape_func(input_shape):
+    input_shape_1 = [input_shape[-4], input_shape[-3], 32, 32]
+    return input_shape, input_shape_1
+
+
 def complex_add(x, y):
     tt_lib.tensor.complex_add(
         x, y, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
@@ -107,6 +122,12 @@ def lerp_binary(x, y):
     tt_lib.tensor.lerp(x, y, 0.7)
 
 
+def embeddings_shape_func(input_shape):
+    input_shape_0 = (input_shape[0], 1, 1, input_shape[-1])
+    input_shape_1 = (input_shape[0], 1, 1, input_shape[-1])
+    return input_shape_0, input_shape_1
+
+
 def unary_mul_bw(x, y):
     tt_lib.tensor.unary_mul_bw(x, y, 3)
 
@@ -145,6 +166,145 @@ def gelu_bw_none(x, y):
 
 def gelu_bw_tanh(x, y):
     tt_lib.tensor.gelu_bw(x, y, approximate="tanh")
+
+
+def bias_gelu_unary_bw_none(x, y):
+    tt_lib.tensor.bias_gelu_unary_bw(x, y, bias=3.1, approximate="None")
+
+
+def bias_gelu_unary_bw_tanh(x, y):
+    tt_lib.tensor.bias_gelu_unary_bw(x, y, bias=3.1, approximate="tanh")
+
+
+def softplus_bw(x, y):
+    tt_lib.tensor.softplus_bw(x, y, beta=2, threshold=10)
+
+
+def polygamma_bw(x, y):
+    tt_lib.tensor.polygamma_bw(x, y, n=3)
+
+
+def elu_bw(x, y):
+    tt_lib.tensor.elu_bw(x, y, alpha=0.7)
+
+
+def hardtanh_bw(x, y):
+    tt_lib.tensor.hardtanh_bw(x, y, min=-0.8, max=0.8)
+
+
+def rpow_bw(x, y):
+    tt_lib.tensor.rpow_bw(x, y, exponent=3.1)
+
+
+def threshold_bw(x, y):
+    tt_lib.tensor.threshold_bw(x, y, threshold=0.7, value=10)
+
+
+def unary_eq_bw(x, y):
+    tt_lib.tensor.unary_eq_bw(x, y, other=0.7)
+
+
+def logiteps_bw(x, y):
+    tt_lib.tensor.logiteps_bw(x, y, eps=0.0001)
+
+
+def unary_fmod_bw(x, y):
+    tt_lib.tensor.unary_fmod_bw(x, y, scalar=0.5)
+
+
+def unary_remainder_bw(x, y):
+    tt_lib.tensor.unary_remainder_bw(x, y, scalar=0.5)
+
+
+def repeat_bw(x, y):
+    tt_lib.tensor.repeat_bw(x, y, shape=(1, 1, 1, 4))
+
+
+def repeat_bw_shape_func(input_shape):
+    input_shape_1 = [1, 1, input_shape[2], input_shape[3]]
+    return input_shape, input_shape_1
+
+
+def unary_div_no_nan_bw(x, y):
+    tt_lib.tensor.unary_div_no_nan_bw(x, y, scalar=3.0)
+
+
+def mseloss(x, y):
+    tt_lib.tensor.mseloss(
+        x,
+        y,
+        reduce_mode=tt_lib.tensor.LossReductionMode.SUM,
+        output_mem_config=tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+        ),
+    )
+
+
+def maeloss(x, y):
+    tt_lib.tensor.maeloss(
+        x,
+        y,
+        reduce_mode=tt_lib.tensor.LossReductionMode.SUM,
+        output_mem_config=tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+        ),
+    )
+
+
+def primary_moreh_softmax_backward_0(x, y):
+    tt_lib.operations.primary.moreh_softmax_backward(x, y, dim=0)
+
+
+def primary_moreh_softmax_backward_1(x, y):
+    tt_lib.operations.primary.moreh_softmax_backward(x, y, dim=1)
+
+
+def primary_moreh_softmax_backward_2(x, y):
+    tt_lib.operations.primary.moreh_softmax_backward(x, y, dim=2)
+
+
+def primary_moreh_softmax_backward_3(x, y):
+    tt_lib.operations.primary.moreh_softmax_backward(x, y, dim=3)
+
+
+def primary_moreh_softmin_backward_0(x, y):
+    tt_lib.operations.primary.moreh_softmin_backward(x, y, dim=0)
+
+
+def primary_moreh_softmin_backward_1(x, y):
+    tt_lib.operations.primary.moreh_softmin_backward(x, y, dim=1)
+
+
+def primary_moreh_softmin_backward_2(x, y):
+    tt_lib.operations.primary.moreh_softmin_backward(x, y, dim=2)
+
+
+def primary_moreh_softmin_backward_3(x, y):
+    tt_lib.operations.primary.moreh_softmin_backward(x, y, dim=3)
+
+
+def primary_moreh_logsoftmax_backward_0(x, y):
+    tt_lib.operations.primary.moreh_logsoftmax_backward(x, y, dim=0)
+
+
+def primary_moreh_logsoftmax_backward_1(x, y):
+    tt_lib.operations.primary.moreh_logsoftmax_backward(x, y, dim=1)
+
+
+def primary_moreh_logsoftmax_backward_2(x, y):
+    tt_lib.operations.primary.moreh_logsoftmax_backward(x, y, dim=2)
+
+
+def primary_moreh_logsoftmax_backward_3(x, y):
+    tt_lib.operations.primary.moreh_logsoftmax_backward(x, y, dim=3)
+
+
+def primary_scale_mask_softmax_in_place(x, y):
+    tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(x, scale=3.3, mask=y)
+
+
+def scale_mask_softmax_in_place_shape_func(input_shape):
+    return input_shape, [1, 1, input_shape[-2], input_shape[-1]]
 
 
 all_binary_ops = [
@@ -271,56 +431,47 @@ all_binary_ops = [
     {
         "op": bcast_add_h,
         "name": "tt_lib.tensor.bcast(add h)",
-        "bcast": True,
-        "bcast_dim": tt_lib.tensor.BcastOpDim.H,
+        "shape_func": bcast_h_shape_func,
     },
     {
         "op": bcast_add_w,
         "name": "tt_lib.tensor.bcast(add w)",
-        "bcast": True,
-        "bcast_dim": tt_lib.tensor.BcastOpDim.W,
+        "shape_func": bcast_w_shape_func,
     },
     {
         "op": bcast_add_hw,
         "name": "tt_lib.tensor.bcast(add hw)",
-        "bcast": True,
-        "bcast_dim": tt_lib.tensor.BcastOpDim.HW,
+        "shape_func": bcast_hw_shape_func,
     },
     {
         "op": bcast_sub_h,
         "name": "tt_lib.tensor.bcast(sub h)",
-        "bcast": True,
-        "bcast_dim": tt_lib.tensor.BcastOpDim.H,
+        "shape_func": bcast_h_shape_func,
     },
     {
         "op": bcast_sub_w,
         "name": "tt_lib.tensor.bcast(sub w)",
-        "bcast": True,
-        "bcast_dim": tt_lib.tensor.BcastOpDim.W,
+        "shape_func": bcast_w_shape_func,
     },
     {
         "op": bcast_sub_hw,
         "name": "tt_lib.tensor.bcast(sub hw)",
-        "bcast": True,
-        "bcast_dim": tt_lib.tensor.BcastOpDim.HW,
+        "shape_func": bcast_hw_shape_func,
     },
     {
         "op": bcast_mul_h,
         "name": "tt_lib.tensor.bcast(mul h)",
-        "bcast": True,
-        "bcast_dim": tt_lib.tensor.BcastOpDim.H,
+        "shape_func": bcast_h_shape_func,
     },
     {
         "op": bcast_mul_w,
         "name": "tt_lib.tensor.bcast(mul w)",
-        "bcast": True,
-        "bcast_dim": tt_lib.tensor.BcastOpDim.W,
+        "shape_func": bcast_w_shape_func,
     },
     {
         "op": bcast_mul_hw,
         "name": "tt_lib.tensor.bcast(mul hw)",
-        "bcast": True,
-        "bcast_dim": tt_lib.tensor.BcastOpDim.HW,
+        "shape_func": bcast_hw_shape_func,
     },
     {
         "op": complex_add,
@@ -370,7 +521,7 @@ all_binary_ops = [
         "op": tt_lib.tensor.embeddings,
         "name": "tt_lib.tensor.embeddings",
         "layout": "ROW_MAJOR",
-        "embeddings_shapes": True,
+        "shape_func": embeddings_shape_func,
     },
     {
         "op": tt_lib.tensor.nextafter,
@@ -484,12 +635,342 @@ all_binary_ops = [
         "op": gelu_bw_tanh,
         "name": "tt_lib.tensor.gelu_bw('tanh')",
     },
+    {
+        "op": bias_gelu_unary_bw_none,
+        "name": "tt_lib.tensor.bias_gelu_unary_bw('none')",
+    },
+    {
+        "op": bias_gelu_unary_bw_tanh,
+        "name": "tt_lib.tensor.bias_gelu_unary_bw('tanh')",
+    },
+    {
+        "op": tt_lib.tensor.hardsigmoid_bw,
+        "name": "tt_lib.tensor.hardsigmoid_bw",
+    },
+    {
+        "op": tt_lib.tensor.i0_bw,
+        "name": "tt_lib.tensor.i0_bw",
+    },
+    {
+        "op": tt_lib.tensor.hardshrink_bw,
+        "name": "tt_lib.tensor.hardshrink_bw",
+    },
+    {
+        "op": tt_lib.tensor.softshrink_bw,
+        "name": "tt_lib.tensor.softshrink_bw",
+    },
+    {
+        "op": tt_lib.tensor.hardswish_bw,
+        "name": "tt_lib.tensor.hardswish_bw",
+    },
+    {
+        "op": softplus_bw,
+        "name": "tt_lib.tensor.softplus_bw",
+    },
+    {
+        "op": polygamma_bw,
+        "name": "tt_lib.tensor.polygamma_bw",
+    },
+    {
+        "op": tt_lib.tensor.atan_bw,
+        "name": "tt_lib.tensor.atan_bw",
+    },
+    {
+        "op": tt_lib.tensor.atanh_bw,
+        "name": "tt_lib.tensor.atanh_bw",
+    },
+    {
+        "op": tt_lib.tensor.asin_bw,
+        "name": "tt_lib.tensor.asin_bw",
+    },
+    {
+        "op": tt_lib.tensor.asinh_bw,
+        "name": "tt_lib.tensor.asinh_bw",
+    },
+    {
+        "op": tt_lib.tensor.cosh_bw,
+        "name": "tt_lib.tensor.cosh_bw",
+    },
+    {
+        "op": tt_lib.tensor.cos_bw,
+        "name": "tt_lib.tensor.cos_bw",
+    },
+    {
+        "op": tt_lib.tensor.acosh_bw,
+        "name": "tt_lib.tensor.acosh_bw",
+    },
+    {
+        "op": tt_lib.tensor.acos_bw,
+        "name": "tt_lib.tensor.acos_bw",
+    },
+    {
+        "op": tt_lib.tensor.erfinv_bw,
+        "name": "tt_lib.tensor.erfinv_bw",
+    },
+    {
+        "op": tt_lib.tensor.leaky_relu_bw,
+        "name": "tt_lib.tensor.leaky_relu_bw",
+    },
+    {
+        "op": elu_bw,
+        "name": "tt_lib.tensor.elu_bw",
+    },
+    {
+        "op": hardtanh_bw,
+        "name": "tt_lib.tensor.hardtanh_bw",
+    },
+    {
+        "op": tt_lib.tensor.sin_bw,
+        "name": "tt_lib.tensor.sin_bw",
+    },
+    {
+        "op": tt_lib.tensor.sinh_bw,
+        "name": "tt_lib.tensor.sinh_bw",
+    },
+    {
+        "op": tt_lib.tensor.celu_bw,
+        "name": "tt_lib.tensor.celu_bw",
+    },
+    {
+        "op": tt_lib.tensor.binary_lt_bw,
+        "name": "tt_lib.tensor.binary_lt_bw",
+    },
+    {
+        "op": tt_lib.tensor.log10_bw,
+        "name": "tt_lib.tensor.log10_bw",
+    },
+    {
+        "op": tt_lib.tensor.log1p_bw,
+        "name": "tt_lib.tensor.log1p_bw",
+    },
+    {
+        "op": tt_lib.tensor.binary_ne_bw,
+        "name": "tt_lib.tensor.binary_ne_bw",
+    },
+    {
+        "op": tt_lib.tensor.erf_bw,
+        "name": "tt_lib.tensor.erf_bw",
+    },
+    {
+        "op": tt_lib.tensor.erfc_bw,
+        "name": "tt_lib.tensor.erfc_bw",
+    },
+    {
+        "op": tt_lib.tensor.digamma_bw,
+        "name": "tt_lib.tensor.digamma_bw",
+    },
+    {
+        "op": tt_lib.tensor.deg2rad_bw,
+        "name": "tt_lib.tensor.deg2rad_bw",
+    },
+    {
+        "op": tt_lib.tensor.rad2deg_bw,
+        "name": "tt_lib.tensor.rad2deg_bw",
+    },
+    {
+        "op": tt_lib.tensor.reciprocal_bw,
+        "name": "tt_lib.tensor.reciprocal_bw",
+    },
+    {
+        "op": tt_lib.tensor.relu6_bw,
+        "name": "tt_lib.tensor.relu6_bw",
+    },
+    {
+        "op": rpow_bw,
+        "name": "tt_lib.tensor.rpow_bw",
+    },
+    {
+        "op": tt_lib.tensor.silu_bw,
+        "name": "tt_lib.tensor.silu_bw",
+    },
+    {
+        "op": tt_lib.tensor.selu_bw,
+        "name": "tt_lib.tensor.selu_bw",
+    },
+    {
+        "op": tt_lib.tensor.binary_ge_bw,
+        "name": "tt_lib.tensor.binary_ge_bw",
+    },
+    {
+        "op": tt_lib.tensor.binary_eq_bw,
+        "name": "tt_lib.tensor.binary_eq_bw",
+    },
+    {
+        "op": tt_lib.tensor.binary_gt_bw,
+        "name": "tt_lib.tensor.binary_gt_bw",
+    },
+    {
+        "op": tt_lib.tensor.square_bw,
+        "name": "tt_lib.tensor.square_bw",
+    },
+    {
+        "op": tt_lib.tensor.lgamma_bw,
+        "name": "tt_lib.tensor.lgamma_bw",
+    },
+    {
+        "op": tt_lib.tensor.trunc_bw,
+        "name": "tt_lib.tensor.trunc_bw",
+    },
+    {
+        "op": tt_lib.tensor.frac_bw,
+        "name": "tt_lib.tensor.frac_bw",
+    },
+    {
+        "op": tt_lib.tensor.log_sigmoid_bw,
+        "name": "tt_lib.tensor.log_sigmoid_bw",
+    },
+    {
+        "op": tt_lib.tensor.tanhshrink_bw,
+        "name": "tt_lib.tensor.tanhshrink_bw",
+    },
+    {
+        "op": threshold_bw,
+        "name": "tt_lib.tensor.threshold_bw",
+    },
+    {
+        "op": unary_eq_bw,
+        "name": "tt_lib.tensor.unary_eq_bw",
+    },
+    {
+        "op": tt_lib.tensor.logit_bw,
+        "name": "tt_lib.tensor.logit_bw",
+    },
+    {
+        "op": logiteps_bw,
+        "name": "tt_lib.tensor.logiteps_bw",
+    },
+    {
+        "op": tt_lib.tensor.softsign_bw,
+        "name": "tt_lib.tensor.softsign_bw",
+    },
+    {
+        "op": tt_lib.tensor.sign_bw,
+        "name": "tt_lib.tensor.sign_bw",
+    },
+    {
+        "op": tt_lib.tensor.ceil_bw,
+        "name": "tt_lib.tensor.ceil_bw",
+    },
+    {
+        "op": tt_lib.tensor.log2_bw,
+        "name": "tt_lib.tensor.log2_bw",
+    },
+    {
+        "op": tt_lib.tensor.log2_bw,
+        "name": "tt_lib.tensor.log2_bw",
+    },
+    {
+        "op": unary_fmod_bw,
+        "name": "tt_lib.tensor.unary_fmod_bw",
+    },
+    {
+        "op": unary_fmod_bw,
+        "name": "tt_lib.tensor.unary_fmod_bw",
+    },
+    {
+        "op": unary_remainder_bw,
+        "name": "tt_lib.tensor.unary_remainder_bw",
+    },
+    {
+        "op": tt_lib.tensor.imag_bw,
+        "name": "tt_lib.tensor.imag_bw",
+    },
+    {
+        "op": tt_lib.tensor.real_bw,
+        "name": "tt_lib.tensor.real_bw",
+    },
+    {
+        "op": tt_lib.tensor.multigammaln_bw,
+        "name": "tt_lib.tensor.multigammaln_bw",
+    },
+    {
+        "op": tt_lib.tensor.multigammaln_bw,
+        "name": "tt_lib.tensor.multigammaln_bw",
+    },
+    {
+        "op": repeat_bw,
+        "name": "tt_lib.tensor.repeat_bw",
+        "shape_func": repeat_bw_shape_func,
+    },
+    {
+        "op": unary_div_no_nan_bw,
+        "name": "tt_lib.tensor.unary_div_no_nan_bw",
+    },
+    {
+        "op": mseloss,
+        "name": "tt_lib.tensor.mseloss",
+    },
+    {
+        "op": maeloss,
+        "name": "tt_lib.tensor.maeloss",
+    },
+    {
+        "op": primary_moreh_softmax_backward_0,
+        "name": "tt_lib.operations.primary.moreh_softmax_backward(dim=0)",
+    },
+    {
+        "op": primary_moreh_softmax_backward_1,
+        "name": "tt_lib.operations.primary.moreh_softmax_backward(dim=1)",
+    },
+    {
+        "op": primary_moreh_softmax_backward_2,
+        "name": "tt_lib.operations.primary.moreh_softmax_backward(dim=2)",
+    },
+    {
+        "op": primary_moreh_softmax_backward_3,
+        "name": "tt_lib.operations.primary.moreh_softmax_backward(dim=3)",
+    },
+    {
+        "op": primary_moreh_softmin_backward_0,
+        "name": "tt_lib.operations.primary.moreh_softmin_backward(dim=0)",
+    },
+    {
+        "op": primary_moreh_softmin_backward_1,
+        "name": "tt_lib.operations.primary.moreh_softmin_backward(dim=1)",
+    },
+    {
+        "op": primary_moreh_softmin_backward_2,
+        "name": "tt_lib.operations.primary.moreh_softmin_backward(dim=2)",
+    },
+    {
+        "op": primary_moreh_softmin_backward_3,
+        "name": "tt_lib.operations.primary.moreh_softmin_backward(dim=3)",
+    },
+    {
+        "op": primary_moreh_logsoftmax_backward_0,
+        "name": "tt_lib.operations.primary.moreh_logsoftmax_backward(dim=0)",
+    },
+    {
+        "op": primary_moreh_logsoftmax_backward_1,
+        "name": "tt_lib.operations.primary.moreh_logsoftmax_backward(dim=1)",
+    },
+    {
+        "op": primary_moreh_logsoftmax_backward_2,
+        "name": "tt_lib.operations.primary.moreh_logsoftmax_backward(dim=2)",
+    },
+    {
+        "op": primary_moreh_logsoftmax_backward_3,
+        "name": "tt_lib.operations.primary.moreh_logsoftmax_backward(dim=3)",
+    },
+    {
+        "op": primary_scale_mask_softmax_in_place,
+        "name": "tt_lib.operations.primary.transformers.scale_mask_softmax_in_place",
+        "shape_func": scale_mask_softmax_in_place_shape_func,
+    },
 ]
 
-# # {
-# #     "op": conv,
-# #     "name": "tt_lib.tensor.conv",
-# # },
+# To make
+# {
+#     "op": conv,
+#     "name": "tt_lib.tensor.conv",
+# },
+
+
+# Crashing
+# {
+#     "op": tt_lib.tensor.angle_bw,
+#     "name": "tt_lib.tensor.angle_bw",
+# },
 
 
 def add_unary(x):
@@ -914,6 +1395,54 @@ def argmin_4(x):
 
 def argmin_all(x):
     tt_lib.tensor.argmin(x, dim=-1, all=True)
+
+
+def primary_moreh_softmax_0(x):
+    tt_lib.operations.primary.moreh_softmax(x, dim=0)
+
+
+def primary_moreh_softmax_1(x):
+    tt_lib.operations.primary.moreh_softmax(x, dim=1)
+
+
+def primary_moreh_softmax_2(x):
+    tt_lib.operations.primary.moreh_softmax(x, dim=2)
+
+
+def primary_moreh_softmax_3(x):
+    tt_lib.operations.primary.moreh_softmax(x, dim=3)
+
+
+def primary_moreh_softmin_0(x):
+    tt_lib.operations.primary.moreh_softmin(x, dim=0)
+
+
+def primary_moreh_softmin_1(x):
+    tt_lib.operations.primary.moreh_softmin(x, dim=1)
+
+
+def primary_moreh_softmin_2(x):
+    tt_lib.operations.primary.moreh_softmin(x, dim=2)
+
+
+def primary_moreh_softmin_3(x):
+    tt_lib.operations.primary.moreh_softmin(x, dim=3)
+
+
+def primary_moreh_logsoftmax_0(x):
+    tt_lib.operations.primary.moreh_logsoftmax(x, dim=0)
+
+
+def primary_moreh_logsoftmax_1(x):
+    tt_lib.operations.primary.moreh_logsoftmax(x, dim=1)
+
+
+def primary_moreh_logsoftmax_2(x):
+    tt_lib.operations.primary.moreh_logsoftmax(x, dim=2)
+
+
+def primary_moreh_logsoftmax_3(x):
+    tt_lib.operations.primary.moreh_logsoftmax(x, dim=3)
 
 
 all_unary_ops = [
@@ -1591,10 +2120,6 @@ all_unary_ops = [
         "name": "tt_lib.tensor.argmax(dim=-3)",
     },
     {
-        "op": argmax_4,
-        "name": "tt_lib.tensor.argmax(dim=-4)",
-    },
-    {
         "op": argmax_all,
         "name": "tt_lib.tensor.argmax(all)",
     },
@@ -1609,10 +2134,6 @@ all_unary_ops = [
     {
         "op": argmin_3,
         "name": "tt_lib.tensor.argmin(dim=-3)",
-    },
-    {
-        "op": argmin_4,
-        "name": "tt_lib.tensor.argmin(dim=-4)",
     },
     {
         "op": argmin_all,
@@ -1638,12 +2159,91 @@ all_unary_ops = [
         "op": tt_lib.tensor.ne_bw,
         "name": "tt_lib.tensor.ne_bw",
     },
+    {
+        "op": tt_lib.tensor.ge_bw,
+        "name": "tt_lib.tensor.ge_bw",
+    },
+    {
+        "op": tt_lib.tensor.le_bw,
+        "name": "tt_lib.tensor.le_bw",
+    },
+    {
+        "op": tt_lib.tensor.floor_bw,
+        "name": "tt_lib.tensor.floor_bw",
+    },
+    {
+        "op": tt_lib.tensor.round_bw,
+        "name": "tt_lib.tensor.round_bw",
+    },
+    {
+        "op": tt_lib.operations.primary.softmax_in_place,
+        "name": "tt_lib.operations.primary.softmax_in_place",
+    },
+    {
+        "op": primary_moreh_softmax_0,
+        "name": "tt_lib.operations.primary.moreh_softmax(dim=0)",
+    },
+    {
+        "op": primary_moreh_softmax_1,
+        "name": "tt_lib.operations.primary.moreh_softmax(dim=1)",
+    },
+    {
+        "op": primary_moreh_softmax_2,
+        "name": "tt_lib.operations.primary.moreh_softmax(dim=2)",
+    },
+    {
+        "op": primary_moreh_softmax_3,
+        "name": "tt_lib.operations.primary.moreh_softmax(dim=3)",
+    },
+    {
+        "op": primary_moreh_softmin_0,
+        "name": "tt_lib.operations.primary.moreh_softmin(dim=0)",
+    },
+    {
+        "op": primary_moreh_softmin_1,
+        "name": "tt_lib.operations.primary.moreh_softmin(dim=1)",
+    },
+    {
+        "op": primary_moreh_softmin_2,
+        "name": "tt_lib.operations.primary.moreh_softmin(dim=2)",
+    },
+    {
+        "op": primary_moreh_softmin_3,
+        "name": "tt_lib.operations.primary_moreh_softmin(dim=3)",
+    },
+    {
+        "op": primary_moreh_logsoftmax_0,
+        "name": "tt_lib.operations.primary.moreh_logsoftmax_0(dim=0)",
+    },
+    {
+        "op": primary_moreh_logsoftmax_1,
+        "name": "tt_lib.operations.primary.moreh_logsoftmax_0(dim=1)",
+    },
+    {
+        "op": primary_moreh_logsoftmax_2,
+        "name": "tt_lib.operations.primary.moreh_logsoftmax_0(dim=2)",
+    },
+    {
+        "op": primary_moreh_logsoftmax_3,
+        "name": "tt_lib.operations.primary.moreh_logsoftmax_0(dim=3)",
+    },
 ]
 
+#  Unsupported storage type
 # {
-#     "op": convert_conv_weight_tensor_to_tiled_layout, #  Unsupported storage type
+#     "op": convert_conv_weight_tensor_to_tiled_layout,
 #     "name": "tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout",
 #     "layout": "ROW_MAJOR",
+# },
+
+# Very slow
+# {
+#     "op": argmin_4,
+#     "name": "tt_lib.tensor.argmin(dim=-4)",
+# },
+# {
+#     "op": argmax_4,
+#     "name": "tt_lib.tensor.argmax(dim=-4)",
 # },
 
 
@@ -1651,8 +2251,21 @@ def layernorm(x, y, z):
     tt_lib.tensor.layernorm(input=x, eps=0.0001, gamma=y, beta=z)
 
 
+def primary_layernorm(x, y, z):
+    tt_lib.operations.primary.layernorm(input=x, eps=0.0001, gamma=y, beta=z)
+
+
+def norm_shapes_func(input_shape):
+    input_shape_12 = [input_shape[0], input_shape[1], 32, input_shape[3]]
+    return input_shape, input_shape_12, input_shape_12
+
+
 def add_layernorm(x, y, z):
     tt_lib.tensor.add_layernorm(a=x, b=x, eps=0.0001, gamma=y, beta=z)
+
+
+def primary_add_layernorm(x, y, z):
+    tt_lib.operations.primary.add_layernorm(a=x, b=x, eps=0.0001, gamma=y, beta=z)
 
 
 def groupnorm(x, y, z):
@@ -1691,6 +2304,62 @@ def where_bw(x, y, z):
     tt_lib.tensor.where_bw(x, y, z, z)
 
 
+def bias_gelu_bw_none(x, y, z):
+    tt_lib.tensor.bias_gelu_bw(x, y, z, approximate="none")
+
+
+def bias_gelu_bw_tanh(x, y, z):
+    tt_lib.tensor.bias_gelu_bw(x, y, z, approximate="tanh")
+
+
+def lerp_bw_1(x, y, z):
+    tt_lib.tensor.lerp_bw(x, y, z, 0.7)
+
+
+def lerp_bw_2(x, y, z):
+    tt_lib.tensor.lerp_bw(x, x, y, z)
+
+
+def concat_bw_0(x, y, z):
+    tt_lib.tensor.concat_bw(x, y, z, 0)
+
+
+def concat_bw_0_shape_func(input_shape):
+    input_shape_0 = [2 * input_shape[0], input_shape[1], input_shape[2], input_shape[3]]
+    return input_shape_0, input_shape, input_shape
+
+
+def concat_bw_1(x, y, z):
+    tt_lib.tensor.concat_bw(x, y, z, 1)
+
+
+def concat_bw_1_shape_func(input_shape):
+    input_shape_0 = [input_shape[0], 2 * input_shape[1], input_shape[2], input_shape[3]]
+    return input_shape_0, input_shape, input_shape
+
+
+def concat_bw_2(x, y, z):
+    tt_lib.tensor.concat_bw(x, y, z, 2)
+
+
+def concat_bw_2_shape_func(input_shape):
+    input_shape_0 = [input_shape[0], input_shape[1], 2 * input_shape[2], input_shape[3]]
+    return input_shape_0, input_shape, input_shape
+
+
+def concat_bw_3(x, y, z):
+    tt_lib.tensor.concat_bw(x, y, z, 3)
+
+
+def concat_bw_3_shape_func(input_shape):
+    input_shape_0 = [input_shape[0], input_shape[1], input_shape[2], 2 * input_shape[3]]
+    return input_shape_0, input_shape, input_shape
+
+
+def subalpha_bw(x, y, z):
+    tt_lib.tensor.subalpha_bw(x, y, z, alpha=3)
+
+
 all_ternary_ops = [
     {
         "op": tt_lib.tensor.mac,
@@ -1707,7 +2376,12 @@ all_ternary_ops = [
     {
         "op": layernorm,
         "name": "tt_lib.tensor.layernorm",
-        "norm_shapes": True,
+        "shape_func": norm_shapes_func,
+    },
+    {
+        "op": primary_layernorm,
+        "name": "tt_lib.operations.primary.layernorm",
+        "shape_func": norm_shapes_func,
     },
     {
         "op": groupnorm,
@@ -1716,12 +2390,17 @@ all_ternary_ops = [
     {
         "op": rmsnorm,
         "name": "tt_lib.tensor.rmsnorm",
-        "norm_shapes": True,
+        "shape_func": norm_shapes_func,
     },
     {
         "op": add_layernorm,
         "name": "tt_lib.tensor.add_layernorm",
-        "norm_shapes": True,
+        "shape_func": norm_shapes_func,
+    },
+    {
+        "op": primary_add_layernorm,
+        "name": "tt_lib.operations.primary.add_layernorm",
+        "shape_func": norm_shapes_func,
     },
     {
         "op": addcmul,
@@ -1794,5 +2473,65 @@ all_ternary_ops = [
     {
         "op": tt_lib.tensor.hypot_bw,
         "name": "tt_lib.tensor.hypot_bw",
+    },
+    {
+        "op": bias_gelu_bw_none,
+        "name": "tt_lib.tensor.bias_gelu_bw('none')",
+    },
+    {
+        "op": bias_gelu_bw_tanh,
+        "name": "tt_lib.tensor.bias_gelu_bw('tanh')",
+    },
+    {
+        "op": tt_lib.tensor.squared_difference_bw,
+        "name": "tt_lib.tensor.squared_difference_bw",
+    },
+    {
+        "op": lerp_bw_1,
+        "name": "tt_lib.tensor.lerp_bw(float weight)",
+    },
+    {
+        "op": lerp_bw_2,
+        "name": "tt_lib.tensor.lerp_bw(tensor weight)",
+    },
+    {
+        "op": tt_lib.tensor.ldexp_bw,
+        "name": "tt_lib.tensor.ldexp_bw",
+    },
+    {
+        "op": tt_lib.tensor.xlogy_bw,
+        "name": "tt_lib.tensor.xlogy_bw",
+    },
+    {
+        "op": tt_lib.tensor.logaddexp_bw,
+        "name": "tt_lib.tensor.logaddexp_bw",
+    },
+    {
+        "op": tt_lib.tensor.logaddexp2_bw,
+        "name": "tt_lib.tensor.logaddexp2_bw",
+    },
+    {
+        "op": concat_bw_0,
+        "name": "tt_lib.tensor.concat_bw(dim=0)",
+        "shape_func": concat_bw_0_shape_func,
+    },
+    {
+        "op": concat_bw_1,
+        "name": "tt_lib.tensor.concat_bw(dim=1)",
+        "shape_func": concat_bw_1_shape_func,
+    },
+    {
+        "op": concat_bw_2,
+        "name": "tt_lib.tensor.concat_bw(dim=2)",
+        "shape_func": concat_bw_2_shape_func,
+    },
+    {
+        "op": concat_bw_3,
+        "name": "tt_lib.tensor.concat_bw(dim=3)",
+        "shape_func": concat_bw_3_shape_func,
+    },
+    {
+        "op": subalpha_bw,
+        "name": "tt_lib.tensor.subalpha_bw",
     },
 ]
