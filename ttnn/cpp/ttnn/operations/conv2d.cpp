@@ -599,7 +599,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             device);
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
-    bool use_matmul_for_1x1_conv = kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == stride[1] &&
+    bool use_matmul_for_1x1_conv = kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == stride[1] && stride[0] == 1 &&
                                    padding[0] == 0 && padding[1] == 0 && dilation[0] == 1 && dilation[1] == 1 &&
                                    groups == 1;
     Tensor input_tensor_post_tm_out;
