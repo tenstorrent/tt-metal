@@ -522,3 +522,42 @@ def test_device_shard_to_torch(device_mesh):
         device_tensor = ttnn.get_device_tensor(ttnn_output_tensor, device)
         torch_device_tensor = ttnn.to_torch(device_tensor)
         assert_with_pcc(torch_device_tensor, torch_output_golden[..., i * 32 : (i + 1) * 32], pcc=0.999)
+
+
+@pytest.mark.parametrize("height", [7])
+@pytest.mark.parametrize("width", [3])
+def test_validate_as_tensor(tmp_path, device_mesh, height, width):
+    torch_input_tensor = torch.rand((height, width), dtype=torch.float32)
+
+    memory_config = ttnn.L1_MEMORY_CONFIG
+    tensor = ttnn.as_tensor(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        memory_config=memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+        cache_file_name=tmp_path / "cache_file",
+    )
+    assert tensor.dtype == ttnn.float32
+    assert tensor.devices() == device_mesh.get_devices()
+    assert tensor.layout == ttnn.TILE_LAYOUT
+    assert ttnn.get_memory_config(tensor) == memory_config
+
+    tensor = ttnn.as_tensor(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        memory_config=memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+        cache_file_name=tmp_path / "cache_file",
+    )
+    assert tensor.dtype == ttnn.float32
+    assert tensor.devices() == device_mesh.get_devices()
+    assert tensor.layout == ttnn.TILE_LAYOUT
+    assert ttnn.get_memory_config(tensor) == memory_config
+
+    for device in device_mesh.get_devices():
+        device_tensor = ttnn.get_device_tensor(tensor, device)
+        assert torch.allclose(ttnn.to_torch(device_tensor), torch_input_tensor)
