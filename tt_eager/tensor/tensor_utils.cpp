@@ -220,6 +220,120 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
         conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
 }
 
+/*
+Helper function to aid in converting grouped weight tensor to ungrouped weight tensor with padded zero channels
+*/
+template <typename T>
+static Tensor conv_group_weight_zero_pad_helper(
+    Tensor& conv_weight_tensor,
+    Shape& original_weight_shape,
+    Shape& output_weight_shape,
+    uint32_t num_groups,
+    DataType output_dtype) {
+    owned_buffer::Buffer<T> output_buffer = owned_buffer::create<T>(compute_volume(output_weight_shape));
+    auto conv_weight_tensor_buffer = borrowed_buffer::get_as<T>(conv_weight_tensor);
+
+    for (int curr_batch_idx = 0; curr_batch_idx < original_weight_shape[0]; curr_batch_idx++) {
+        int new_batch_idx = curr_batch_idx;
+
+        // Find which group_id the filter belongs to - through this, we can compute the offset where the padding should
+        // be applied
+        auto group_size = original_weight_shape[0] / num_groups;
+        auto group_index = curr_batch_idx / group_size;
+        auto group_id = std::min(group_index, num_groups - 1);
+        int new_channel_start_idx = group_id * original_weight_shape[1];
+
+        for (int j = 0; j < original_weight_shape[1]; j++) {
+            for (int k = 0; k < original_weight_shape[2]; k++) {
+                for (int m = 0; m < original_weight_shape[3]; m++) {
+                    // Get value from original weight tensor
+                    auto value_flat_input_index =
+                        compute_flat_indices({curr_batch_idx, j, k, m}, compute_strides(original_weight_shape));
+                    auto value = conv_weight_tensor_buffer[value_flat_input_index];
+
+                    // Copy value to output tensor at the adjusted position
+                    auto new_channel_idx = new_channel_start_idx + j;
+                    auto output_flat_input_index = compute_flat_indices(
+                        {new_batch_idx, new_channel_idx, k, m}, compute_strides(output_weight_shape));
+                    output_buffer[output_flat_input_index] = value;
+                }
+            }
+        }
+    }
+
+    auto output_tensor =
+        Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_weight_shape, output_dtype, Layout::ROW_MAJOR);
+    return output_tensor;
+}
+
+/*
+Converts convolution weights to grouped layout with padded zeros
+This function will take in a weight tensor with shape [out_channels, in_channels // groups, H, W] and return a newly
+allocated output tensor with shape [out_channels, in_channels, H, W] The extra channels in shape[1] will be padded with
+0 - then the entire weight tensor is convolved with the input tensor - equivalent to convolution if the input tensor was
+divided into num_groups for each groupped filter
+*/
+Tensor convert_conv_weight_tensor_to_grouped_layout(
+    Tensor conv_weight_tensor, uint32_t num_groups, DataType output_dtype) {
+    TT_ASSERT(
+        conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
+        "Convolution weights should be in row major layout for adding the required padding");
+
+    // Define output tensor shape. This is going to be channel dimension of weight tensor * num_groups - this value
+    // should match number of input channels being convolved with the weight tensor
+    auto original_conv_weight_tensor_shape_test = conv_weight_tensor.get_shape();
+    Shape original_conv_weight_tensor_shape = {
+        original_conv_weight_tensor_shape_test[0],
+        original_conv_weight_tensor_shape_test[1],
+        original_conv_weight_tensor_shape_test[2],
+        original_conv_weight_tensor_shape_test[3]};
+    Shape output_conv_weight_tensor_shape = {
+        original_conv_weight_tensor_shape[0],
+        original_conv_weight_tensor_shape[1] * num_groups,
+        original_conv_weight_tensor_shape[2],
+        original_conv_weight_tensor_shape[3]};
+
+    // Create newly allocated buffer all initialized to 0 depending on the datatype of the weight tensor
+    if (output_dtype == DataType::INT32) {
+        return conv_group_weight_zero_pad_helper<int32_t>(
+            conv_weight_tensor,
+            original_conv_weight_tensor_shape,
+            output_conv_weight_tensor_shape,
+            num_groups,
+            output_dtype);
+    } else if (output_dtype == DataType::FLOAT32) {
+        return conv_group_weight_zero_pad_helper<float>(
+            conv_weight_tensor,
+            original_conv_weight_tensor_shape,
+            output_conv_weight_tensor_shape,
+            num_groups,
+            output_dtype);
+    } else if (output_dtype == DataType::BFLOAT16) {
+        return conv_group_weight_zero_pad_helper<bfloat16>(
+            conv_weight_tensor,
+            original_conv_weight_tensor_shape,
+            output_conv_weight_tensor_shape,
+            num_groups,
+            output_dtype);
+    } else if (output_dtype == DataType::UINT16) {
+        return conv_group_weight_zero_pad_helper<uint16_t>(
+            conv_weight_tensor,
+            original_conv_weight_tensor_shape,
+            output_conv_weight_tensor_shape,
+            num_groups,
+            output_dtype);
+    } else {
+        return conv_group_weight_zero_pad_helper<uint32_t>(
+            conv_weight_tensor,
+            original_conv_weight_tensor_shape,
+            output_conv_weight_tensor_shape,
+            num_groups,
+            output_dtype);
+    }
+
+    TT_THROW("Unsupported weight data type given when trying to add zero padding to weight tensor");
+}
+
 const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume) {
     vector<int> ns{N, C, H, W};
     int neg_idx = -1;
