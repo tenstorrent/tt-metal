@@ -30,13 +30,12 @@ class PytorchMambaSSM(torch.nn.Module):
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, pcc, cache_dir",
+    "model_version, batch, pcc",
     (
         (
             "state-spaces/mamba-2.8b",
             32,
             0.99,
-            None,
         ),
     ),
 )
@@ -46,7 +45,6 @@ def test_mamba_ssm_inference(
     model_version: MambaPretrainedModelName,
     batch: int,
     pcc: float,
-    cache_dir: Optional[str],
 ):
     torch.manual_seed(0)
 
@@ -63,14 +61,9 @@ def test_mamba_ssm_inference(
     residual_block = reference_model.layers[LAYER_NUM]
     assert not isinstance(residual_block, torch.Tensor), "Expected torch.Module"
 
-    if cache_dir:
-        cache_path = model_config.get_weights_cache_path(model_version, cache_dir)
-    else:
-        cache_path = None
-
     config = model_config.create_model_config(batch, reference_model.args.d_model)
 
-    loader = TtTensorLoader(reference_model.state_dict(), device, tt_cache_path=cache_path)
+    loader = TtTensorLoader(reference_model.state_dict(), device)
     transformer = MambaSsmBlockTransformer(
         device, batch, reference_model.args.d_inner, reference_model.args.d_state * 2
     )

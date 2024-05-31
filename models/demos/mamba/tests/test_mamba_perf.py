@@ -27,7 +27,14 @@ from tt_metal.tools.profiler.process_model_log import get_samples_per_s
     ((32, 10, 12.5, 0.40),),  # Issue 7816 Compile time
 )
 def test_mamba_e2e_perf(
-    device, batch, iterations, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds
+    device,
+    batch,
+    iterations,
+    expected_compile_time,
+    expected_inference_time,
+    use_program_cache,
+    reset_seeds,
+    get_tt_cache_path,
 ):
     model_version = "state-spaces/mamba-2.8b-slimpj"
     display_decoded_seq = False
@@ -46,7 +53,7 @@ def test_mamba_e2e_perf(
     profiler.end("pytorch_ref_model_setup")
 
     profiler.start("tt_model_setup")
-    tt_model = get_tt_metal_model(model_version, device, cache_dir=None, batch_size=batch)
+    tt_model = get_tt_metal_model(model_version, device, cache_dir=get_tt_cache_path(model_version), batch_size=batch)
     profiler.end("tt_model_setup")
 
     sequences: torch.Tensor = tokenizer(prompts, return_tensors="pt", padding=True).input_ids

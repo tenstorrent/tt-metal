@@ -28,13 +28,8 @@ def get_tt_metal_model(
     from models.demos.mamba.tt import model_config
 
     reference_model = get_cpu_reference_model(version, batch_size=batch_size)
-    if cache_dir:
-        cache_path = model_config.get_weights_cache_path(version, cache_dir)
-    else:
-        cache_path = None
-
     config = model_config.create_model_config(batch_size, reference_model.args.d_model)
-    model = MambaTT(reference_model, device, config, tt_cache_path=cache_path)
+    model = MambaTT(reference_model, device, config, tt_cache_path=cache_dir)
 
     return model
 
@@ -89,6 +84,7 @@ def run_mamba_demo(
     assert batch_size == len(prompts), "32 prompts are required"
 
     logger.info(f"Running Mamba demo (weights='{model_version}') with batch={batch_size}")
+    logger.info(f"Using tensor cache at '{cache_dir}'")
 
     model = get_tt_metal_model(model_version, device, cache_dir, batch_size)
 
@@ -129,8 +125,18 @@ def run_mamba_demo(
 
 
 @pytest.mark.parametrize(
-    "max_gen_len",
-    ([100]),
+    "model_version, max_gen_len",
+    (
+        (
+            "state-spaces/mamba-2.8b-slimpj",
+            100,
+        ),
+    ),
 )
-def test_demo(user_input, device, use_program_cache, max_gen_len):
-    return run_mamba_demo(prompts=user_input, device=device, generated_sequence_length=max_gen_len)
+def test_demo(user_input, device, use_program_cache, get_tt_cache_path, model_version, max_gen_len):
+    return run_mamba_demo(
+        prompts=user_input,
+        device=device,
+        cache_dir=get_tt_cache_path(model_version),
+        generated_sequence_length=max_gen_len,
+    )
