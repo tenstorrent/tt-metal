@@ -1258,4 +1258,8 @@ op_map = {
         "tt_op": tt_lib_ops.interleaved_to_sharded_partial,
         "pytorch_op": pytorch_ops.interleaved_to_sharded_partial,
     },
+    "interleaved_to_sharded_partial_coregrid": {
+        "tt_op": tt_lib_ops.interleaved_to_sharded_partial_coregrid,
+        "pytorch_op": pytorch_ops.interleaved_to_sharded_partial_coregrid,
+    },
 }

@@ -1941,3 +1941,8 @@ def multiply_and_apply_activation(x, y, *args, **kwargs):
 def interleaved_to_sharded_partial(x, num_slices, *args, **kwargs):
     res = torch.ones(x.shape).bfloat16().float()
     return res
+
+
+def interleaved_to_sharded_partial_coregrid(x, num_slices, x_core, ycore, *args, **kwargs):
+    res = torch.ones(x.shape).bfloat16().float()
+    return res
