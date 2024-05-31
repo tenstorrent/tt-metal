@@ -29,8 +29,10 @@ class TtResidualBlock(torch.nn.Module):
         assert len(x.shape) == 4, "Mamba residual block expects inputs to be rank 4"
 
         residual = x
+
         rms_norm_weights = ttnn.to_memory_config(self.rms_norm_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.experimental.tensor.interleaved_to_sharded(x, sharded_mem_config=self.configs["sharded_h"])
+
         mamba_x = ttnn.experimental.operations.primary.rmsnorm(
             x,
             self.args.eps,
