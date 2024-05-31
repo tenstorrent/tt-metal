@@ -315,7 +315,6 @@ from ttnn.operations.data_movement import (
     concat,
     pad,
     permute,
-    split,
     repeat_interleave,
     repeat,
     upsample,
