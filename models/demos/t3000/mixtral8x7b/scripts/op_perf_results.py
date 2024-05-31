@@ -22,7 +22,7 @@ def main():
     for block in blocks:
         print(block.long_str() if args.all else block.short_str())
 
-    total_time_ns = sum(block.time for block in blocks)
+    total_time_ns = sum(block.time() for block in blocks)
     total_time_s = total_time_ns / 1e9
     tokens_per_s = 1 / total_time_s
     print(f"Tokens/s/user: {tokens_per_s:.2f} ({total_time_s*1000:.1f} ms latency)")
@@ -45,16 +45,18 @@ class Block:
     def __init__(self, op_name, times):
         self.op_name = op_name
         self.times = times
-        self.time = min(times) if "AllGather" in op_name else max(times)
+
+    def time(self):
+        return min(self.times) if "AllGather" in self.op_name else max(self.times)
 
     def short_str(self):
         short_name = self.op_name.split("::")[-1].split(")")[0]
         time_range = max(self.times) - min(self.times)
-        return f"{short_name:20} {self.time/1000:-6.0f} ± {time_range/1000:-5.0f}"
+        return f"{short_name:20} {self.time()/1000:-6.0f} ± {time_range/1000:-5.0f}"
 
     def long_str(self):
         short_name = self.op_name.split("::")[-1].split(")")[0]
-        return f"{short_name:20} {self.time/1000:-6.0f} <-" + " | ".join(f"{t/1000:-5.0f}" for t in self.times)
+        return f"{short_name:20} {self.time()/1000:-6.0f} <-" + " | ".join(f"{t/1000:-5.0f}" for t in self.times)
 
     def __repr__(self):
         return f"Block({self.op_name}, {self.times})"
