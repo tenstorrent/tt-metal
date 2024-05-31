@@ -23,6 +23,7 @@
 #include "tt_dnn/op_library/pool/max_pool.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
+#include "tt_dnn/op_library/rotary_embedding/rotary_embedding_llama_op.hpp"
 #include "tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
 #include "tt_dnn/op_library/scan/scan_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
@@ -628,13 +629,14 @@ void TensorModule(py::module& m_tensor) {
         "Performs rotary embedding with a given input, cos, and sin tensors. Sequence length is inferred as the second last dim of the input tensor.
         If token_idx is passed, this assumes input is transposed to [seq_len, 1, B, head_dim], and seq_len is 1.
     )doc");
-    m_tensor.def(
-        "fill_cache",
-        &fill_cache,
-        py::arg("cache").noconvert(),
-        py::arg("input").noconvert(),
-        py::arg("batch_idx"),
-        R"doc(
+    m_tensor.def("rotary_embedding_llama", &rotary_embedding_llama,
+        py::arg("input").noconvert(), py::arg("cos").noconvert(), py::arg("sin").noconvert(), py::arg("trans_mat").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("compute_kernel_config").noconvert() = std::nullopt, R"doc(
+        "Performs prefill llama rotary embedding with a given input, cos, and sin, and transformation tensors. The input dimensions are as follows: [batch, num_heads, seq_len, head_dim].
+        The sequence length must be a power of 2. The transformation matrix should be the size of one tile. Only supported data type is bfloat16. The head dim must be at most 256 (8 tiles wide), and must be a multiple of 32.
+        The compute has a granularity of head_dim/tile_width, which means there can be a maximum of 8 tiles in the registers. If head_dim exceeds 128, then fp32_dest_acc_en must be set to false.
+    )doc");
+    m_tensor.def("fill_cache", &fill_cache,
+         py::arg("cache").noconvert(), py::arg("input").noconvert(), py::arg("batch_idx"), R"doc(
         "Fills the cache tensor in place with the values from input at the specified batch_idx.
     )doc");
     m_tensor.def(
