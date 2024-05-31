@@ -10,47 +10,6 @@
 
 template <uint32_t bank_base_address, uint32_t page_size, bool use_vc>
 FORCE_INLINE
-uint32_t noc_async_read_tile_dram_sharded_set_state(uint32_t bank_id = 0, const uint32_t vc = 0) {
-    uint32_t src_addr_;
-    uint32_t src_noc_xy;
-
-    src_addr_ = bank_base_address + bank_to_dram_offset[bank_id];
-    src_noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
-
-    DEBUG_STATUS("NRTW");
-    DEBUG_SANITIZE_NOC_READ_TRANSACTION(get_noc_addr_helper(src_noc_xy, src_addr_), dest_addr, page_size);
-    while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF));
-    DEBUG_STATUS("NRTD");
-
-    if constexpr(use_vc) {
-        uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc);
-        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
-    }
-
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, src_noc_xy);   // src_addr >> 32
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE, page_size);  // len_bytes
-
-    return src_addr_;
-}
-
-FORCE_INLINE
-void noc_async_read_tile_dram_sharded_with_state(uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr) {
-    uint32_t src_addr_;
-
-    src_addr_ = src_base_addr + src_addr;
-
-    DEBUG_STATUS("NRTW");
-    while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF));
-    DEBUG_STATUS("NRTD");
-
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dest_addr);
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, src_addr_);      // (uint32_t)src_addr
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    noc_reads_num_issued[noc_index] += 1;
-}
-
-template <uint32_t bank_base_address, uint32_t page_size, bool use_vc>
-FORCE_INLINE
 void noc_async_read_tile_dram_sharded(uint32_t src_addr, uint32_t dest_addr, uint32_t bank_id = 0, const uint32_t vc = 0) {
     uint32_t src_addr_;
     uint32_t src_noc_xy;
@@ -91,7 +50,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id = 0;
 
-    uint32_t src_base_addr = noc_async_read_tile_dram_sharded_set_state<input_addr, page_size, true>(bank_id, vc);
+    uint32_t src_base_addr = noc_async_read_tile_dram_sharded_set_state<page_size, true>(input_addr, bank_id, vc);
 
     cb_reserve_back(cb_id, block_num_tiles);
     uint32_t l1_read_addr = 0;
