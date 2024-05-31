@@ -148,12 +148,7 @@ def test_arange_tilized_simple(start_end_step, device):
     L = tt_cpu.shape[0]
 
     tt_dev = (
-        tt_npu.cpu()
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .unpad_from_tile((1, 1, 1, L))
-        .to_torch()
-        .reshape((L))
-        .to(torch.bfloat16)
+        tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((1, L)).to_torch().reshape((L)).to(torch.bfloat16)
     )
 
     rtol = atol = 0.1
@@ -188,7 +183,7 @@ def test_arange_tilized_major_optioanl_output(start_end_step, optional_output, d
         output_cpu = torch.empty_like(tt_cpu)
         output = (
             ttl.tensor.Tensor(output_cpu, ttl.tensor.DataType.BFLOAT16)
-            .reshape([1, 1, 1, L])
+            .reshape([1, L])
             .pad_to_tile(float("nan"))
             .to(ttl.tensor.Layout.TILE)
             .to(device)
@@ -200,12 +195,7 @@ def test_arange_tilized_major_optioanl_output(start_end_step, optional_output, d
     tt_dev = tt_npu.cpu().to_torch()
 
     tt_dev = (
-        tt_npu.cpu()
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .unpad_from_tile((1, 1, 1, L))
-        .to_torch()
-        .reshape((L))
-        .to(torch.bfloat16)
+        tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((1, L)).to_torch().reshape((L)).to(torch.bfloat16)
     )
 
     rtol = atol = 0.1
@@ -246,12 +236,7 @@ def test_arange_tilized_dtype(start_end_step, output_dtype, device):
     L = tt_cpu.shape[0]
 
     tt_dev = (
-        tt_npu.cpu()
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .unpad_from_tile((1, 1, 1, L))
-        .to_torch()
-        .reshape((L))
-        .to(output_dtype)
+        tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((1, L)).to_torch().reshape((L)).to(output_dtype)
     )
 
     rtol = atol = 0.1
