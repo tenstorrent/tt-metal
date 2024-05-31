@@ -680,9 +680,9 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
     }
 }
 
-void CompileProgram(Device *device, Program &program) {
+void CompileProgram(Device *device, Program &program, bool fd_bootloader_mode) {
     ZoneScoped;
-    program.compile(device);
+    program.compile(device, fd_bootloader_mode);
 }
 
 void AllocateBuffer(Buffer *buffer, bool bottom_up) {

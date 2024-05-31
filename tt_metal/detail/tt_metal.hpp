@@ -102,12 +102,13 @@ namespace tt::tt_metal{
          *
          *  Return value: void
          *
-         * | Argument       | Description                                                      | Type      | Valid Range                                        | Required |
-         * |----------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
-         * | device         | Which device the program is compiled for                         | Device *  | Must be initialized via tt_metal::InitializeDevice | Yes      |
-         * | program        | The program to compile                                           | Program & |                                                    | Yes      |
+         * | Argument                  | Description                                                      | Type      | Valid Range                                        | Required |
+         * |---------------------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
+         * | device                    | Which device the program is compiled for                         | Device *  | Must be initialized via tt_metal::InitializeDevice | Yes      |
+         * | program                   | The program to compile                                           | Program & |                                                    | Yes      |
+         * | fd_bootloader_mode        | Set when compiling program to initialize fast dispatch           | bool      |                                                    | No       |
          */
-        void CompileProgram(Device *device, Program &program);
+        void CompileProgram(Device *device, Program &program, bool fd_bootloader_mode = false);
 
 
         /**

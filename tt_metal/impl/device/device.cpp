@@ -1451,7 +1451,7 @@ void Device::compile_command_queue_programs() {
 
             tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_core, 0, dispatch_core_type); // dispatch_sem
         }
-        detail::CompileProgram(this, *command_queue_program_ptr);
+        detail::CompileProgram(this, *command_queue_program_ptr, /*fd_bootloader_mode=*/true);
         this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
         this->setup_tunnel_for_remote_devices();
     } else {
@@ -1706,10 +1706,10 @@ void Device::compile_command_queue_programs() {
             this->hw_command_queues_[0]->noc_index // Only one Mux - use NOC for CQ 0
         );
 
-        detail::CompileProgram(this, *command_queue_program_ptr);
+        detail::CompileProgram(this, *command_queue_program_ptr, /*fd_bootloader_mode=*/true);
         this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
         if (first_tunnel_stop) {
-            detail::CompileProgram(mmio_device, *mmio_command_queue_program_ptr);
+            detail::CompileProgram(mmio_device, *mmio_command_queue_program_ptr, /*fd_bootloader_mode=*/true);
             this->command_queue_programs.push_back(std::move(mmio_command_queue_program_ptr));
         }
     }
