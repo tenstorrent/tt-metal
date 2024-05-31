@@ -52,11 +52,13 @@ show_help() {
     echo "Usage: $0 [-h] [-e]"
     echo "  -h  Show this help message."
     echo "  -e  Enable CMAKE_EXPORT_COMPILE_COMMANDS."
+    echo "  -c  Enable ccache for the build."
 }
 
 # Parse CLI options
 export_compile_commands="OFF"
-while getopts "he" opt; do
+enable_ccache="OFF"
+while getopts "hec" opt; do
     case ${opt} in
         h )
             show_help
@@ -64,6 +66,9 @@ while getopts "he" opt; do
             ;;
         e )
             export_compile_commands="ON"
+            ;;
+        c )
+            enable_ccache="ON"
             ;;
         \? )
             show_help
@@ -89,7 +94,13 @@ else
 fi
 
 echo "Building tt-metal"
-cmake -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++-17 -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands
+cmake_args="-B build -G Ninja -DCMAKE_CXX_COMPILER=clang++-17 -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
+
+if [ "$enable_ccache" = "ON" ]; then
+    cmake_args="$cmake_args -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+fi
+
+cmake $cmake_args
 cmake --build build --target install    # <- this is a general cmake way, can also just run `ninja install -C build`
 
 echo "Building cpp tests"
