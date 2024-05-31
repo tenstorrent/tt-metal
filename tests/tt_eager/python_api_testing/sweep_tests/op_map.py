@@ -1145,4 +1145,8 @@ op_map = {
         "tt_op": tt_lib_ops.clamp_bw,
         "pytorch_op": pytorch_ops.clamp_bw,
     },
+    "interleaved_to_sharded_partial": {
+        "tt_op": tt_lib_ops.interleaved_to_sharded_partial,
+        "pytorch_op": pytorch_ops.interleaved_to_sharded_partial,
+    },
 }
