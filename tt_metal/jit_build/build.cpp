@@ -77,7 +77,8 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch) {
         "-fno-use-cxa-atexit -fno-exceptions "
         "-Wall -Werror -Wno-unknown-pragmas "
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
-        "-Wno-error=unused-but-set-variable -Wno-unused-variable ";
+        "-Wno-error=unused-but-set-variable -Wno-unused-variable "
+        "-Wno-unused-function ";
 
     // Defines
     switch (arch) {
