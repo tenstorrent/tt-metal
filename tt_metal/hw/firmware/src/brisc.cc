@@ -277,6 +277,20 @@ inline void deassert_ncrisc_trisc() {
     deassert_all_reset();
 }
 
+inline __attribute__((always_inline)) void wait_for_ncrisc_to_halt() {
+#ifdef NCRISC_HAS_IRAM
+    DEBUG_STATUS("INW");
+    while (mailboxes->slave_sync.ncrisc != RUN_SYNC_MSG_DONE);
+    DEBUG_STATUS("IND");
+#endif
+}
+
+inline __attribute__((always_inline)) void reset_ncrisc_with_iram() {
+#ifdef NCRISC_HAS_IRAM
+    assert_just_ncrisc_reset();
+#endif
+}
+
 inline void set_ncrisc_kernel_resume_deassert_address() {
 #ifdef NCRISC_HAS_IRAM
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
@@ -331,15 +345,13 @@ int main() {
     set_ncrisc_kernel_resume_deassert_address();
 
     // Wait for ncrisc to halt
-    DEBUG_STATUS("INW");
-    while (mailboxes->slave_sync.ncrisc != RUN_SYNC_MSG_DONE);
-    DEBUG_STATUS("IND");
+    wait_for_ncrisc_to_halt();
 
     mailboxes->launch.run = RUN_MSG_DONE;
 
     while (1) {
         init_sync_registers();
-        assert_just_ncrisc_reset();
+        reset_ncrisc_with_iram();
 
         DEBUG_STATUS("GW");
         while (mailboxes->launch.run != RUN_MSG_GO);
