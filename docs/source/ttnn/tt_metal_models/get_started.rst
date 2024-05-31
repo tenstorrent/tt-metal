@@ -17,6 +17,10 @@ which you'll be working.
 
     source python_env/bin/activate
 
+.. note::
+   You can use the ``PYTHON_ENV_DIR`` environment variable with the provided
+   ``create_venv.sh`` script to control where the environment is created.
+
 Set ``PYTHONPATH`` to the root for running models. This is a common practice.
 
 ::
