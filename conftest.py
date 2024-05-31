@@ -263,6 +263,7 @@ def device_params(request):
 @pytest.fixture(scope="function")
 def device(request, device_params):
     import tt_lib as ttl
+    import gc
 
     device_id = request.config.getoption("device_id")
 
@@ -275,6 +276,7 @@ def device(request, device_params):
 
     ttl.device.DumpDeviceProfiler(device, True)
     ttl.device.DeallocateBuffers(device)
+    gc.collect()
 
     ttl.device.Synchronize(device)
     ttl.device.CloseDevice(device)
@@ -283,6 +285,7 @@ def device(request, device_params):
 @pytest.fixture(scope="function")
 def pcie_devices(request, device_params):
     import tt_lib as ttl
+    import gc
 
     num_devices = ttl.device.GetNumPCIeDevices()
 
@@ -295,12 +298,14 @@ def pcie_devices(request, device_params):
         ttl.device.DumpDeviceProfiler(device, True)
         ttl.device.DeallocateBuffers(device)
 
+    gc.collect()
     ttl.device.CloseDevices(devices)
 
 
 @pytest.fixture(scope="function")
 def all_devices(request, device_params):
     import tt_lib as ttl
+    import gc
 
     num_devices = ttl.device.GetNumAvailableDevices()
 
@@ -313,12 +318,14 @@ def all_devices(request, device_params):
         ttl.device.DumpDeviceProfiler(device, True)
         ttl.device.DeallocateBuffers(device)
 
+    gc.collect()
     ttl.device.CloseDevices(devices)
 
 
 @pytest.fixture(scope="function")
 def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
     import ttnn
+    import gc
 
     device_ids = ttnn.get_device_ids()
     try:
@@ -340,6 +347,7 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
         ttl.device.DumpDeviceProfiler(device, True)
         ttl.device.DeallocateBuffers(device)
 
+    gc.collect()
     ttnn.close_device_mesh(device_mesh)
     del device_mesh
 
@@ -347,6 +355,7 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
 @pytest.fixture(scope="function")
 def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
     import ttnn
+    import gc
 
     device_ids = ttnn.get_pcie_device_ids()
     try:
@@ -370,6 +379,7 @@ def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
         ttl.device.DumpDeviceProfiler(device, True)
         ttl.device.DeallocateBuffers(device)
 
+    gc.collect()
     ttnn.close_device_mesh(device_mesh)
     del device_mesh
 
@@ -377,6 +387,7 @@ def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
 @pytest.fixture(scope="function")
 def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
     import ttnn
+    import gc
 
     if ttnn.get_num_devices() < 8:
         pytest.skip()
@@ -400,6 +411,7 @@ def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
         ttl.device.DumpDeviceProfiler(device, True)
         ttl.device.DeallocateBuffers(device)
 
+    gc.collect()
     ttnn.close_device_mesh(device_mesh)
     del device_mesh
 
