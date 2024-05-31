@@ -88,7 +88,7 @@ def test_upsample2d_256x256(device, scale_factor, batch_size, in_channels, input
     ],
 )
 @pytest.mark.parametrize("scale_factor", [2])
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_upsample2d_512x512(device, scale_factor, batch_size, in_channels, input_height, input_width, index):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)

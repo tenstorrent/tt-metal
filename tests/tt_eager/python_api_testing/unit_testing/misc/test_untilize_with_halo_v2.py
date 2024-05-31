@@ -45,7 +45,7 @@ def plot_diff(vals, fid, nsticks, stick_len):
 
 
 # conv params - output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups
-@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "conv_params, batch_size, input_chw_shape, num_cores_nhw, grid_size, test_max_pool",
     (

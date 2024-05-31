@@ -16,7 +16,7 @@ import ttnn
 
 
 @pytest.mark.skip("This is based on the new version of ttnn maxpool c++, which needs to be debugged first.")
-@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (

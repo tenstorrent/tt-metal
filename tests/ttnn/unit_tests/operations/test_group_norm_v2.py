@@ -35,7 +35,7 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
     return input_tensor
 
 
-@pytest.mark.parametrize("device_l1_small_size", [0], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups",
     [
@@ -131,7 +131,7 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
 
 
-@pytest.mark.parametrize("device_l1_small_size", [0], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups",
     [

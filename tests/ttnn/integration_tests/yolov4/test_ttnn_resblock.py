@@ -60,7 +60,7 @@ def create_custom_preprocessor(device):
 
 
 @pytest.mark.skip("Issue #8749")
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @skip_for_wormhole_b0()
 def test_resblock(device, reset_seeds, model_location_generator):
     model_path = model_location_generator("models", model_subdir="Yolo")

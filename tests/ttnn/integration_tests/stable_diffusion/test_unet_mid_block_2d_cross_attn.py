@@ -120,7 +120,7 @@ def test_unet_mid_block_2d_cross_attn_256x256(device, model_name, hidden_state_s
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "hidden_state_shapes,",
     [

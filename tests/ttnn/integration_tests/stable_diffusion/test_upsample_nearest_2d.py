@@ -39,7 +39,7 @@ def test_upsample_nearest2d_256x256(reset_seeds, device, input_shape, scale_fact
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("input_shape", [(2, 1280, 8, 8), (2, 1280, 16, 16), (2, 640, 32, 32)])
 @pytest.mark.parametrize("scale_factor", [2])
 def test_upsample_nearest2d_512x512(reset_seeds, device, input_shape, scale_factor):

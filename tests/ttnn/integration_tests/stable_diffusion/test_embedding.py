@@ -17,7 +17,7 @@ from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_embeddings impor
 import pytest
 
 
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_embeddings(
     device,
 ):

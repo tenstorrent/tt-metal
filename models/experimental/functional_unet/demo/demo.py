@@ -28,7 +28,7 @@ from models.experimental.functional_unet.unet_utils import create_unet_models, c
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("perf_mode", [True])
 @pytest.mark.parametrize("batch", [2])
 @pytest.mark.parametrize("groups", [1])

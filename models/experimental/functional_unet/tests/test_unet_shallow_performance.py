@@ -34,7 +34,7 @@ from models.perf.device_perf_utils import run_device_perf, check_device_perf, pr
 
 @skip_for_grayskull()
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("perf_mode", [True])
 @pytest.mark.parametrize("batch", [2])
 @pytest.mark.parametrize("groups", [1])
@@ -99,7 +99,7 @@ def test_unet_model_performance(device, perf_mode, batch, groups, loop):
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("perf_mode", [True])
 @pytest.mark.parametrize("batch", [2])
 @pytest.mark.parametrize("groups", [1])

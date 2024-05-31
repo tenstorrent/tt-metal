@@ -76,7 +76,7 @@ void DeviceModule(py::module &m_device) {
         )doc");
     m_device.def(
         "CreateDevice",
-        [](int device_id, size_t l1_small_size) { return CreateDevice(device_id, 1, l1_small_size); },
+        [](int device_id, uint8_t num_hw_cqs, size_t l1_small_size) { return CreateDevice(device_id, num_hw_cqs, l1_small_size); },
         R"doc(
         Creates an instance of TT device.
 
@@ -87,11 +87,12 @@ void DeviceModule(py::module &m_device) {
         +------------------+------------------------+---------------------+------------------------------+----------+
     )doc",
         py::arg("device_id"),
+        py::arg("num_hw_cqs") = 1,
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE);
     m_device.def(
         "CreateDevices",
-        [](std::vector<int> device_ids, size_t l1_small_size) {
-            return tt::tt_metal::detail::CreateDevices(device_ids, 1, l1_small_size);
+        [](std::vector<int> device_ids, uint8_t num_hw_cqs, size_t l1_small_size) {
+            return tt::tt_metal::detail::CreateDevices(device_ids, num_hw_cqs, l1_small_size);
         },
         R"doc(
         Creates an instance of TT device.
@@ -103,6 +104,7 @@ void DeviceModule(py::module &m_device) {
         +------------------+------------------------+---------------------+------------------------------+----------+
     )doc",
         py::arg("device_ids"),
+        py::arg("num_hw_cqs") = 1,
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE);
     m_device.def("CloseDevice", &CloseDevice, R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.

@@ -24,7 +24,7 @@ from models.perf.perf_utils import prep_perf_report
     [
         [
             20,
-            "batch_size=20-act_dtype=DataType.BFLOAT8_B-weight_dtype=DataType.BFLOAT8_B-math_fidelity=MathFidelity.LoFi-device_l1_small_size=24576",
+            "batch_size=20-act_dtype=DataType.BFLOAT8_B-weight_dtype=DataType.BFLOAT8_B-math_fidelity=MathFidelity.LoFi-device_params=l1_small_size_24576",
             7363,
         ],
     ],
@@ -52,7 +52,7 @@ def test_perf_device_bare_metal(batch_size, test, expected_perf):
 @skip_for_wormhole_b0("This will be enabled after WH testing")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "model_name,batch_size,act_dtype,weight_dtype,math_fidelity,expected_compile_time,expected_inference_time",
     [("ResNet50", 20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, 15, 0.015)],

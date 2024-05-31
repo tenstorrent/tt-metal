@@ -9,7 +9,7 @@ from models.demos.wormhole.stable_diffusion.demo.demo import test_demo_diffusion
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "input_path",
     (("models/demos/wormhole/stable_diffusion/demo/input_data.json"),),
@@ -32,7 +32,7 @@ def test_demo_sd(device, reset_seeds, input_path, num_prompts, num_inference_ste
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "num_prompts",
     ((1),),
