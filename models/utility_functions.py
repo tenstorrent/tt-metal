@@ -103,10 +103,20 @@ class Profiler:
 
         return sum(self.times[key]) / len(self.times[key])
 
-    def print(self):
+    def print(self, units="s"):
         for key in self.times:
             average = self.get(key)
-            print(f"{key}: {average:.3f}s")
+            if units == "s":
+                pass
+            if units == "ms":
+                average *= 1000
+            elif units == "us":
+                average *= 1000000
+            elif units == "ns":
+                average *= 1000000000
+            else:
+                raise ValueError(f"Invalid units: {units}")
+            print(f"{key}: {average:.3f}{units}")
 
 
 profiler = Profiler()

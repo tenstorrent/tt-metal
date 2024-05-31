@@ -9,6 +9,11 @@ from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
 from models.utility_functions import nearest_32
 
 
+class LightweightModule:
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+
 def precompute_freqs(dim: int, end: int, theta: float = 1000000.0):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.

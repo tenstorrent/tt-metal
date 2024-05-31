@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
 from models.demos.t3000.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
 from models.demos.t3000.mixtral8x7b.tt.mixtral_rms_norm import TtRMSNormSharded, TtRMSNorm
 from models.demos.t3000.mixtral8x7b.tt.mixtral_moe import TtMoeLayer
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule
 
 
-class TtTransformerBlock(torch.nn.Module):
+class TtTransformerBlock(LightweightModule):
     def __init__(
         self,
         device_mesh,
