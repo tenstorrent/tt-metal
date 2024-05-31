@@ -159,7 +159,16 @@ std::vector<Shape> MorehArange::compute_output_shapes(const std::vector<Tensor> 
 
         return {output_shape};
     }
-    Shape output_shape = {1, 1, TILE_HEIGHT, round_up(num_elems, TILE_WIDTH)};
+
+    std::vector<uint32_t> output_size_vec = {TILE_HEIGHT, round_up(num_elems, TILE_WIDTH)};
+
+    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 31});
+    dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = round_up(num_elems, TILE_WIDTH) - num_elems});
+
+    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
+    auto output_shape = Shape(output_size_vec, padding);
+
     return {output_shape};
 }
 
