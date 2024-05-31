@@ -14,6 +14,8 @@
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "debug/dprint.h"
 
+typedef uint16_t prefetch_q_entry_type;
+
 constexpr uint32_t downstream_cb_base = get_compile_time_arg_val(0);
 constexpr uint32_t downstream_cb_log_page_size = get_compile_time_arg_val(1);
 constexpr uint32_t downstream_cb_pages = get_compile_time_arg_val(2);
@@ -122,7 +124,7 @@ void barrier_and_stall(uint32_t& pending_read_size, uint32_t& fence) {
 
 template<uint32_t preamble_size>
 FORCE_INLINE
-void read_from_pcie(volatile tt_l1_ptr uint32_t *& prefetch_q_rd_ptr,
+void read_from_pcie(volatile tt_l1_ptr prefetch_q_entry_type *& prefetch_q_rd_ptr,
                     uint32_t& pending_read_size,
                     uint32_t& fence,
                     uint32_t& pcie_read_ptr,
@@ -159,7 +161,7 @@ void read_from_pcie(volatile tt_l1_ptr uint32_t *& prefetch_q_rd_ptr,
 
     // Wrap prefetch_q
     if ((uint32_t)prefetch_q_rd_ptr == prefetch_q_end) {
-        prefetch_q_rd_ptr = (volatile tt_l1_ptr uint32_t*)prefetch_q_base;
+        prefetch_q_rd_ptr = (volatile tt_l1_ptr prefetch_q_entry_type*)prefetch_q_base;
     }
 }
 
@@ -187,8 +189,8 @@ template<uint32_t preamble_size>
 void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_ptr) {
 
     static uint32_t pending_read_size = 0;
-    static volatile tt_l1_ptr uint32_t* prefetch_q_rd_ptr = (volatile tt_l1_ptr uint32_t*)prefetch_q_base;
-    constexpr uint32_t prefetch_q_msb_mask = 1u << 31; // dispatch_constants::prefetch_q_entry_type is 32 bit.
+    static volatile tt_l1_ptr prefetch_q_entry_type* prefetch_q_rd_ptr = (volatile tt_l1_ptr prefetch_q_entry_type*)prefetch_q_base;
+    constexpr uint32_t prefetch_q_msb_mask = 1u << (sizeof(prefetch_q_entry_type) * CHAR_BIT - 1);
 
     if (stall_state == STALLED) {
          ASSERT(pending_read_size == 0); // Before stalling, fetch must have been completed.
