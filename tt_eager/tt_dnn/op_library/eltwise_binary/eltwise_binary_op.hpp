@@ -130,13 +130,17 @@ struct make_eltwise_binary {
                     (in_a.get_legacy_shape() == in_b.get_legacy_shape()) or
                     (in_a.get_legacy_shape().without_padding() == in_b.get_legacy_shape().without_padding()),
                     "Input shapes must be the same!");
+                DataType dtype = output_dtype.value_or(in_a.get_dtype());
+                if(binary_op_type == BinaryOpType::EQ) {
+                    dtype = DataType::UINT16;
+                }
                 return operation::run_with_autoformat(
                         EltwiseBinary{
                             binary_op_type,
                             fused_activations,
                             output_mem_config,
-                            output_dtype.value_or(in_a.get_dtype()),
-                            false},
+                            dtype,
+                            false /*in place*/},
                         {in_a, in_b});
             },
         {input_tensor_a, input_tensor_b}, output_tensors);
