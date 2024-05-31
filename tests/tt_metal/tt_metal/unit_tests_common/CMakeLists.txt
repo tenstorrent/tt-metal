@@ -21,6 +21,7 @@ set(UNIT_TESTS_COMMON_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dram/test_dram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_assert.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_noc_sanitize.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_noc_sanitize_delays.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_pause.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_ringbuf.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_waypoint.cpp

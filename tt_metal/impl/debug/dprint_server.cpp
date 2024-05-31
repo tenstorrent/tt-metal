@@ -346,8 +346,8 @@ DebugPrintServerContext::DebugPrintServerContext() {
     inst = this;
 
     // Read hart mask + log file from rtoptions
-    uint32_t hart_mask = tt::llrt::OptionsG.get_dprint_riscv_mask();
-    string file_name = tt::llrt::OptionsG.get_dprint_file_name();
+    uint32_t hart_mask = tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
+    string file_name = tt::llrt::OptionsG.get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
 
     // Set the output stream according to RTOptions, either a file name or stdout if none specified.
     if (file_name != "") {
@@ -434,26 +434,14 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
 
     // If RTOptions doesn't enable DPRINT on this device, return here and don't actually attach it
     // to the server.
-    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_dprint_chip_ids();
-    if (!tt::llrt::OptionsG.get_dprint_all_chips())
+    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
+    if (!tt::llrt::OptionsG.get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint))
         if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
             return;
 
-    // Helper lambda to convert CoreType to string for printing purposes.
-    auto core_type_to_str = [](CoreType core_type){
-        switch(core_type) {
-            case CoreType::WORKER:
-                return "worker";
-            case CoreType::ETH:
-                return "ethernet";
-            default:
-                TT_THROW("DPRINT server unrecognized CoreType");
-        }
-    };
-
     // Handle specifically disabled cores
     std::unordered_set<CoreCoord> disabled_phys_cores;
-    for (auto &type_and_cores : tt::llrt::OptionsG.get_dprint_disabled_cores()) {
+    for (auto &type_and_cores : tt::llrt::OptionsG.get_feature_disabled_cores(tt::llrt::RunTimeDebugFeatureDprint)) {
         for (auto &core : type_and_cores.second) {
             CoreCoord physical_core = device->physical_core_from_logical_core(core, type_and_cores.first);
             disabled_phys_cores.insert(physical_core);
@@ -463,7 +451,7 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
     // Core range depends on whether dprint_all_cores flag is set.
     vector<CoreCoord> print_cores_sanitized;
     for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
-        if (tt::llrt::OptionsG.get_dprint_all_cores(core_type)) {
+        if (tt::llrt::OptionsG.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type)) {
             // Print from all cores of the given type, cores returned here are guaranteed to be valid.
             for (CoreCoord phys_core: all_physical_printable_cores[core_type]) {
                 // Don't print on specifically disabled cores.
@@ -475,11 +463,11 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
                 tt::LogMetal,
                 "DPRINT enabled on device {}, all {} cores.",
                 device->id(),
-                core_type_to_str(core_type)
+                tt::llrt::get_core_type_name(core_type)
             );
         } else {
             // Only print from the cores specified by the user
-            vector<CoreCoord> print_cores = tt::llrt::OptionsG.get_dprint_cores()[core_type];
+            vector<CoreCoord> print_cores = tt::llrt::OptionsG.get_feature_cores(tt::llrt::RunTimeDebugFeatureDprint)[core_type];
 
             // We should also validate that the cores the user specified are valid worker cores.
             for (auto logical_core : print_cores) {
@@ -501,7 +489,7 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
                         tt::LogMetal,
                         "DPRINT enabled on device {}, {} core {} (physical {}).",
                         device->id(),
-                        core_type_to_str(core_type),
+                        tt::llrt::get_core_type_name(core_type),
                         logical_core.str(),
                         phys_core.str()
                     );
@@ -509,7 +497,7 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
                     log_warning(
                         tt::LogMetal,
                         "TT_METAL_DPRINT_CORES included {} core with logical coordinates {} (physical coordinates {}), which is not a valid core on device {}. This coordinate will be ignored by the dprint server.",
-                        core_type_to_str(core_type),
+                        tt::llrt::get_core_type_name(core_type),
                         logical_core.str(),
                         valid_logical_core? phys_core.str() : "INVALID",
                         device->id()
@@ -520,7 +508,7 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
     }
 
     // Write print enable magic for the cores the user specified.
-    uint32_t hart_mask = tt::llrt::OptionsG.get_dprint_riscv_mask();
+    uint32_t hart_mask = tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
     for (auto &core : print_cores_sanitized) {
         int hart_count = GetNumRiscs(device_id, core);
         for (int hart_index = 0; hart_index < hart_count; hart_index++) {
@@ -540,14 +528,14 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
 
 void DebugPrintServerContext::DetachDevice(Device* device) {
     // Don't detach the device if it's disabled by env vars - in this case it wasn't attached.
-    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_dprint_chip_ids();
-    if (!tt::llrt::OptionsG.get_dprint_all_chips())
+    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
+    if (!tt::llrt::OptionsG.get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint))
         if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
             return;
 
     // When we detach a device, we should poll to make sure there's no outstanding prints.
     chip_id_t chip_id = device->id();
-    uint32_t risc_mask = tt::llrt::OptionsG.get_dprint_riscv_mask();
+    uint32_t risc_mask = tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
     bool outstanding_prints = true;
     while (outstanding_prints && !server_killed_due_to_hang_) {
         // Polling interval of 1ms
@@ -604,7 +592,7 @@ void DebugPrintServerContext::ClearLogFile() {
         outfile_->close();
         delete outfile_;
 
-        string file_name = tt::llrt::OptionsG.get_dprint_file_name();
+        string file_name = tt::llrt::OptionsG.get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
         outfile_ = new std::ofstream(file_name);
         stream_ = outfile_ ? outfile_ : &cout;
     }
@@ -953,7 +941,7 @@ namespace tt {
 
 void DprintServerAttach(Device* device) {
     // Skip if DPRINT not enabled, and make sure profiler is not running.
-    if (!tt::llrt::OptionsG.get_dprint_enabled())
+    if (!tt::llrt::OptionsG.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint))
         return;
     TT_FATAL(
        DebugPrintServerContext::ProfilerIsRunning == false,
