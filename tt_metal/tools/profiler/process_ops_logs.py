@@ -182,9 +182,9 @@ def append_device_data(ops, deviceLogFolder):
         for device in deviceOps:
             assert device in deviceData["devices"].keys()
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
-            #            assert len(deviceOps[device]) == len(
-            #                deviceOpsTime
-            #            ), f"Device data mismatch. Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
+            assert len(deviceOps[device]) == len(
+                deviceOpsTime
+            ), f"Device data mismatch. Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
             for deviceOp, deviceOpTime in zip(deviceOps[device], deviceOpsTime):
                 cores = set()
                 for timeID, ts, statData, risc, core in deviceOpTime["timeseries"]:
