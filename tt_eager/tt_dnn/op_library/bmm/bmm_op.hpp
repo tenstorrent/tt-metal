@@ -10,6 +10,7 @@
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_dnn/op_library/compute_kernel_config.hpp"
+#include "tt_eager/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
 
 namespace tt {
@@ -307,15 +308,6 @@ struct Matmul {
             std::cref(this->user_run_batched));
     }
 };
-
-template<class T>
-uint32_t get_batch_size(const T& shape) {
-    uint32_t result = 1;
-    for (auto i = 0; i < shape.rank() - 2; i++) {
-        result *= shape[i];
-    }
-    return result;
-}
 
 inline bool get_broadcast_batch(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const MatmulProgramConfig> matmul_program_config) {
     uint32_t batch_size_b = get_batch_size(input_tensor_b.get_legacy_shape());

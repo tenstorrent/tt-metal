@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "impl/buffers/buffer.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
@@ -93,7 +93,7 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
     auto width_b = input_shape_b[-1];
     if((input_tensor_a.is_sharded() && this->dim == BcastOpDim::H) == false){
 
-        uint32_t batch_size_b = tt::operations::primary::get_batch_size(input_shape_b);
+        uint32_t batch_size_b = get_batch_size(input_shape_b);
         if (batch_size_b != 1) {
             TT_FATAL(input_shape_a.rank() == input_shape_b.rank() && "Broadcast with batch is currently only supported when input tensor ranks are the same");
             for (auto i = 0; i < input_shape_a.rank() - 2; i++) {

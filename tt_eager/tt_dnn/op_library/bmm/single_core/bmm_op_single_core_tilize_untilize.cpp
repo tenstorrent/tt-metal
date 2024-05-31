@@ -178,7 +178,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
 
     // input matrix shape checks
     TT_FATAL(in0_shape.rank() == 2 || in0_shape[0] == 1, "Supports only batch = 1");
-    TT_FATAL(operations::primary::get_batch_size(in0_shape) == operations::primary::get_batch_size(in1_shape), "Batch dimension needs to match for two inputs");
+    TT_FATAL(get_batch_size(in0_shape) == get_batch_size(in1_shape), "Batch dimension needs to match for two inputs");
     TT_FATAL(in0_width == in1_height, "Input matrices should be compatible for multiplication");
     if (has_bias) {
         TT_FATAL(bias.get_legacy_shape()[-1] == in1.get_legacy_shape()[-1], "Bias shape mismatch");

@@ -92,7 +92,7 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
     // Calculate number of mul/add operations
     // TODO: add bias modeling
     int64_t num_mul_adds_per_elem = in_a_shape[-1] * 2;  // 1 multiply and 1 add per element
-    uint32_t batch_size = tt::operations::primary::get_batch_size(out_shape);
+    uint32_t batch_size = get_batch_size(out_shape);
     int64_t num_mul_adds = num_mul_adds_per_elem * out_shape[-2] * out_shape[-1] * batch_size;
 
     MathFidelity math_fidelity = MathFidelity::Invalid;
@@ -464,8 +464,8 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
         auto out_subblock_w = std::get<1>(subblock_hw);
 
         // TODO: Temporarily allow for single core; should support bcast_batch in general
-        uint32_t batch_size_a = tt::operations::primary::get_batch_size(input_tensor_a.get_legacy_shape());
-        uint32_t batch_size_b = tt::operations::primary::get_batch_size(input_tensor_b.get_legacy_shape());
+        uint32_t batch_size_a = get_batch_size(input_tensor_a.get_legacy_shape());
+        uint32_t batch_size_b = get_batch_size(input_tensor_b.get_legacy_shape());
         bool broadcast_batch = batch_size_a > 1 and batch_size_b == 1;
         TT_FATAL(!broadcast_batch);
 
@@ -1178,16 +1178,26 @@ void Matmul::validate(
 }
 
 std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const auto input_shape_a = input_tensors.at(0).get_legacy_shape();
-    const auto input_shape_b = input_tensors.at(1).get_legacy_shape();
-
-    auto output_shape = input_shape_a;
-    output_shape[-1] = input_shape_b[-1];
+    const Shape input_shape_a = input_tensors.at(0).get_legacy_shape();
+    const Shape input_shape_b = input_tensors.at(1).get_legacy_shape();
+    const uint32_t a_rank = input_shape_a.rank();
+    const uint32_t b_rank = input_shape_b.rank();
+    const uint32_t out_rank = std::max(a_rank, b_rank);
+    const uint32_t rank_difference = out_rank - a_rank;
+    Shape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
     auto dimensions_pads = std::vector<Padding::PadDimension>();
-    for (auto index = 0; index < input_shape_a.rank() - 1; index++) {
+
+    for (auto index = 0; index < rank_difference; index++) {
+        TT_FATAL(input_shape_b[index] == 1, "When in1 rank greater than in0 rank front dimensions need to be 1");
+        output_shape[index] = input_shape_b[index];
+        dimensions_pads.push_back(input_shape_b.padding()[index]);
+    }
+    for (auto index = 0; index < a_rank - 1; index++) {
+        output_shape[rank_difference + index] = input_shape_a[index];
         dimensions_pads.push_back(input_shape_a.padding()[index]);
     }
-    dimensions_pads.push_back(input_shape_b.padding()[input_shape_b.rank() - 1]);
+    output_shape[-1] = input_shape_b[-1];
+    dimensions_pads.push_back(input_shape_b.padding()[b_rank - 1]);
     const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
     return {Shape(output_shape, padding)};
 }

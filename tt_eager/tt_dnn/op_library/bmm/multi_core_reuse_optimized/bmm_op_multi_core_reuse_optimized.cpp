@@ -465,7 +465,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
     tt_metal::Buffer *in1_buffer = b.buffer();
     if (bcast_batch)
         TT_FATAL(
-            tt::operations::primary::get_batch_size(bshape) == 1 &&
+            get_batch_size(bshape) == 1 &&
             "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN or equivalent");
     else {
         // same condition as above, different message
@@ -511,7 +511,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Only supports matmuls where output is blocks of 16 x 16 tiles (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    uint32_t B = tt::operations::primary::get_batch_size(ashape);
+    uint32_t B = get_batch_size(ashape);
     uint32_t Mt = ashape[-2]/TILE_HEIGHT;
     uint32_t Kt = ashape[-1]/TILE_WIDTH;
     uint32_t Nt = bshape[-1]/TILE_WIDTH;
