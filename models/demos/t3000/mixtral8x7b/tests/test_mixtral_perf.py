@@ -60,7 +60,8 @@ def test_mixtral_model_perf(
 ):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=True)
+    # Can use dummy_weights=True correctness is not tested, but it is much slower
+    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=False)
     model_args.n_layers = 1
 
     # Clear global profiler state before starting measurements
@@ -107,7 +108,7 @@ def test_mixtral_model_perf(
     profiler.start(f"end_to_end_inference_with_compile")
     run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length, rot_mat)
     profiler.end(f"end_to_end_inference_with_compile")
-    profiler.print()
+    profiler.print(units="ms")
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
     for device_id in t3k_device_mesh.get_device_ids():
@@ -119,7 +120,7 @@ def test_mixtral_model_perf(
     profiler.start(f"end_to_end_inference")
     run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generation_length, rot_mat)
     profiler.end(f"end_to_end_inference")
-    profiler.print()
+    profiler.print(units="ms")
     iter_time = profiler.get("model_run_for_inference_0")
 
     comment = f"kv_cache_len={generation_start_pos}_num_layers={model_args.n_layers}"
@@ -161,7 +162,9 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
 
         # Run TT model
         profiler.start(f"model_run_for_inference_{i}")
+        profiler.start(f"python_dispatch_for_inference_{i}")
         tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask, rot_mat)
+        profiler.end(f"python_dispatch_for_inference_{i}")
 
         # Convert ttnn tensor to torch tensor
         profiler.start(f"result_wait_for_inference_{i}")

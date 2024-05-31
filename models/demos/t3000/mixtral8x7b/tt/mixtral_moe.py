@@ -4,10 +4,11 @@
 
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule
 
 
-class TtMoeLayer(torch.nn.Module):
+class TtMoeLayer(LightweightModule):
     def __init__(self, device_mesh, state_dict, experts, args, layer_num, dtype):
         super().__init__()
         self.device_mesh = device_mesh
@@ -87,14 +88,13 @@ class TtMoeLayer(torch.nn.Module):
         input_i_1SBH = inputs
         expert_i_HH = self.experts
         # get logits for the experts
-        gate_logits_1SB8 = ttnn.linear(
+        gate_logits_1SB8 = ttnn.experimental.operations.primary.matmul(
             input_i_1SBH,
             self.gates_H8,
-            memory_config=self.model_config["GATE_MM_OUTPUT_MEMCFG"],
+            program_config=self.model_config["GATE_MM_OUTPUT_PROGCFG"],
+            output_mem_config=self.model_config["GATE_MM_OUTPUT_MEMCFG"],
             compute_kernel_config=self.compute_kernel,
-            use_1d_systolic_array=True,
-            core_grid=ttnn.CoreGrid(y=1, x=8),
-            dtype=ttnn.bfloat16,
+            output_dtype=ttnn.bfloat16,
         )
         # get weights for top-2 experts
         gate_logits_1SB8 = ttnn.add(gate_logits_1SB8, self.top8_mask_11B_64)
