@@ -704,7 +704,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
                 ttnn::operations::core::deallocate(input_tensor_post_tm);
             }
         }
-        auto matmul_output = ttnn::operations::matmul::linear(
+        auto matmul_output = ttnn::operations::matmul::matmul(
             matmul_input,
             weight_tensor_on_device,
             bias_tensor_on_device,

@@ -161,6 +161,15 @@ inline bool any_tensor_on_multi_device(const std::vector<ttnn::Tensor>& tensors)
     return false;
 }
 
+template<class T>
+inline uint32_t get_batch_size(const T& shape) {
+    uint32_t result = 1;
+    for (auto i = 0; i < shape.rank() - 2; i++) {
+        result *= shape[i];
+    }
+    return result;
+}
+
 DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& tensor);
 
 }  // namespace tt_metal
