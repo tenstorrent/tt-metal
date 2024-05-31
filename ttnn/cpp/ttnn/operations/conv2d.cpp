@@ -446,11 +446,19 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t weight_block_h_ntiles,
     uint32_t weight_block_w_ntiles,
     const ParallelConfig& parallel_config,
-    Device& device) {
+    Device& device,
+    uint32_t groups) {
     validate_weight_and_bias_tensors(weight_tensor, bias_tensor);
     ttnn::Tensor weight_tensor_;  // tensor to return
     ttnn::Tensor bias_tensor_;
-    auto weights_shape = weight_tensor.get_shape();
+
+    // Convert weight tensor to 0 padded shape if groups > 1
+    weight_tensor_ = weight_tensor;
+    if (groups > 1) {
+        weight_tensor_ = convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, groups, weights_bias_dtype);
+    }
+
+    auto weights_shape = weight_tensor_.get_shape();
     uint32_t out_channels = weights_shape[0];
     uint32_t in_channels = weights_shape[1];
     uint32_t window_h = weights_shape[2];
@@ -459,19 +467,19 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         {round_up(out_channels, 32), round_up(in_channels, input_channels_alignment), window_h, window_w}));
 
     if (weights_bias_dtype == DataType::BFLOAT8_B) {
-        TT_ASSERT(weight_tensor.get_dtype() == DataType::FLOAT32);
+        TT_ASSERT(weight_tensor_.get_dtype() == DataType::FLOAT32);
         if (bias_tensor.has_value()) {
             TT_ASSERT(bias_tensor.value().get_dtype() == DataType::FLOAT32);
         }
     } else {
         // TODO: fix the need to check this. We should be able to accept any datatype and convert
-        TT_ASSERT(weight_tensor.get_dtype() == weights_bias_dtype);
+        TT_ASSERT(weight_tensor_.get_dtype() == weights_bias_dtype);
         if (bias_tensor.has_value()) {
             TT_ASSERT(bias_tensor.value().get_dtype() == weights_bias_dtype);
         }
     }
 
-    weight_tensor_ = tt::tt_metal::pad_on_host(weight_tensor, weights_channels_padded_shape, {0, 0, 0, 0}, 0);
+    weight_tensor_ = tt::tt_metal::pad_on_host(weight_tensor_, weights_channels_padded_shape, {0, 0, 0, 0}, 0);
 
     // for conv op, pad the weights to block shape
     if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -596,7 +604,8 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             opt_conv_op_block_config.act_block_w_ntiles,
             opt_conv_op_block_config.out_subblock_w_ntiles,
             parallel_config,
-            device);
+            device,
+            groups);
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
     bool use_matmul_for_1x1_conv = kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == stride[1] &&
