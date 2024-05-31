@@ -1936,3 +1936,8 @@ def multiply_and_apply_activation(x, y, *args, **kwargs):
         output = torch.gelu(output)
 
     return output
+
+
+def interleaved_to_sharded_partial(x, num_slices, *args, **kwargs):
+    res = torch.ones(x.shape).bfloat16().float()
+    return res

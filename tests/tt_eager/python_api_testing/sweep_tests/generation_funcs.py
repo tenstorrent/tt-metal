@@ -1885,3 +1885,19 @@ def gen_repeat_args(
 
         input_info.update({"shape": shapes})
         yield input_info
+
+
+def gen_sharded_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=0,
+    high=10,
+    dtype=torch.int,
+    do_sanitize_args=False,
+):
+    for input_info in gen_scalar_args(
+        input_shapes, dtypes, layouts, mem_configs, "num_slices", 2, 10, dtype, do_sanitize_args=do_sanitize_args
+    ):
+        yield input_info
