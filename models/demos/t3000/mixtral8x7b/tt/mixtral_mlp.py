@@ -77,9 +77,7 @@ class TtMixtralMLP(LightweightModule):
         w2_out = ttnn.experimental.operations.primary.matmul_1d(
             w2_in,
             self.w2,
-            program_config=self.model_config[
-                "FF3_OUTPUT_PROGCFG"
-            ],  # FF3 config avoids random hangs. TODO: Investigate why.
+            program_config=self.model_config["FF2_OUTPUT_PROGCFG"],
             output_mem_config=self.model_config["FF2_OUTPUT_MEMCFG"],
             compute_kernel_config=self.model_args.get_compute_kernel_config(),
             output_dtype=ttnn.bfloat8_b,
