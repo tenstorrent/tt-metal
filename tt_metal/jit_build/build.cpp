@@ -102,12 +102,16 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch) {
         this->defines_ += "-DWATCHER_DISABLE_" + feature + " ";
     }
 
-    if (tt::llrt::OptionsG.get_dprint_enabled()) {
+    if (tt::llrt::OptionsG.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         this->defines_ += "-DDEBUG_PRINT_ENABLED ";
     }
 
     if (tt::llrt::OptionsG.get_kernels_nullified()) {
         this->defines_ += "-DDEBUG_NULL_KERNELS ";
+    }
+
+    if (tt::llrt::OptionsG.get_watcher_debug_delay()) {
+        this->defines_ += "-DWATCHER_DEBUG_DELAY=" + to_string(tt::llrt::OptionsG.get_watcher_debug_delay()) + " ";
     }
 
     // Includes

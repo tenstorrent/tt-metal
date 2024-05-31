@@ -47,12 +47,16 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel> kernel, JitBuildOptions &
     // Also account for watcher/dprint enabled in hash because they enable additional code to
     // be compiled into the kernel.
     string compile_hash_str = fmt::format(
-        "{}_{}_{}_{}_{}",
+        "{}_{}_{}_{}",
         build_key,
         std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
         kernel->compute_hash(),
-        tt::llrt::OptionsG.get_watcher_enabled(),
-        tt::llrt::OptionsG.get_dprint_enabled());
+        tt::llrt::OptionsG.get_watcher_enabled());
+
+    for (int i = 0; i < llrt::RunTimeDebugFeatureCount; i++) {
+        compile_hash_str += "_";
+        compile_hash_str += tt::llrt::OptionsG.get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
+    }
     size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 
 #ifdef GENERATE_HASH_LOG

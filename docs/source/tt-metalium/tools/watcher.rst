@@ -201,3 +201,24 @@ watcher log:
          0x00000020,0x0000001f,0x0000001e,0x0000001d,0x0000001c,0x0000001b,0x0000001a,0x00000019,
          0x00000018,0x00000017,0x00000016,0x00000015,0x00000014,0x00000013,0x00000012,0x00000011,
          0x00000010,0x0000000f,0x0000000e,0x0000000d,0x0000000c,0x0000000b,0x0000000a]
+
+
+Debug Delays
+------------
+Watcher can insert NOC transaction delays for debugging purposes. These delays can be specified by
+transaction type and location. Environment variable `TT_METAL_WATCHER_DELAY` specifies the number
+of clock cycles to wait for. Similarly to DPRINT, the delay can be set for all cores, or a
+or a subset by setting environment variable `TT_METAL_*_DEBUG_DELAY_CORES`: x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all.
+The * can be one of: READ, WRITE or ATOMIC indicating whether the delays will be inserted before read, write or atomic NOC
+transactions. Finally, the delay can be set for a specific RISCs (BRISC, NCRISC, TRISC0, TRISC1, TRISC2) through the
+environment variable `TT_METAL_*_DEBUG_DELAY_RISCVS`: (one of: BR,NC,TR0,TR1,TR2); if not set, the delay
+is applied to all RISCs.
+Note that `TT_METAL_WATCHER` must be set and `TT_METAL_WATCHER_DISABLE_NOC_SANITIZE` must not be
+set for the delays to be applied.
+
+For example, the following command will run test_eltwise_binary with a delay of 10 iterations added to both READ and WRITE
+transactions on BRISC core at location 0,0:
+
+.. code-block::
+
+    TT_METAL_WATCHER=1 TT_METAL_WATCHER_DEBUG_DELAY=10 TT_METAL_READ_DEBUG_DELAY_CORES=0,0 TT_METAL_WRITE_DEBUG_DELAY_CORES=0,0 TT_METAL_READ_DEBUG_DELAY_RISCVS=BR TT_METAL_WRITE_DEBUG_DELAY_RISCVS=BR ./build/test/tt_metal/test_eltwise_binary
