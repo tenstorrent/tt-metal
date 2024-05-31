@@ -584,6 +584,10 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_identity,
         "pytorch_op": pytorch_ops.eltwise_identity,
     },
+    "eltwise-typecast": {
+        "tt_op": tt_lib_ops.eltwise_typecast,
+        "pytorch_op": pytorch_ops.eltwise_typecast,
+    },
     "eltwise-unary_gt": {
         "tt_op": tt_lib_ops.eltwise_unary_gt,
         "pytorch_op": pytorch_ops.unary_gt,

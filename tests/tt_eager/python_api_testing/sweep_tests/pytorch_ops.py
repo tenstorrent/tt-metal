@@ -1331,6 +1331,10 @@ def eltwise_identity(x, *args, **kwargs):
     return x
 
 
+def eltwise_typecast(x, *args, **kwargs):
+    return torch.relu(x.to(torch.int32))  # due to no uint32 support
+
+
 def eltwise_rdiv(x, *args, **kwargs):
     dim = kwargs["factor"]
     return dim / x
