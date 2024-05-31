@@ -30,11 +30,25 @@ with a simple example: `TT-NN simple module <../../ttnn/ttnn/tutorials/ttnn_tuto
 Dive deeper into multi-head attention operations in TT-NN, optimizing
 performance: `optimizing performance <../../ttnn/ttnn/tutorials/ttnn_tutorials/003.html#Write-optimized-version-of-Multi-Head-Attention>`_.
 
+4. Explore our model demos
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Get started with the Falcon 7B demo. Navigate to the `Falcon 7B demo folder
+<https://github.com/tenstorrent/tt-metal/tree/main/models/demos/falcon7b>`_
+for details.
+
+You can also check our demos for
+`ResNet <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/resnet>`_,
+`BERT <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/metal_BERT_large_11>`_,
+`Mistral 7B <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/mistral7b>`_,
+and
+`Llama2-70B (coming soon on our T3000 platforms) <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama2_70b>`_.
+
 Where to go from here
 ---------------------
 
 You should now take a look at :ref:`more code examples<Using ttnn>` for TT-NN
-or :ref:`tutorials<Tutorials>` on using TT-NN with Jupyter Notebooks.
+or :ref:`the other tutorials<Tutorials>` on using TT-NN with Jupyter Notebooks.
 
 If you're an internal TT-NN developer, please now read and review the
 `contribution standards
