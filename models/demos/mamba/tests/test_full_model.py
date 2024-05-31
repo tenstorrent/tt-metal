@@ -46,9 +46,9 @@ def run_inference(
     model_version: MambaPretrainedModelName,
     batch: int,
     pcc: float,
-    cache_dir: Optional[str],
     num_layers: int,
     iterations: int,
+    cache_dir: Optional[str],
 ):
     torch.manual_seed(10)
 
@@ -64,13 +64,8 @@ def run_inference(
         with torch.no_grad():
             reference_output = mamba_model_pytorch(input_ids)
 
-    if cache_dir:
-        cache_path = model_config.get_weights_cache_path(model_version, cache_dir)
-    else:
-        cache_path = None
-
     config = model_config.create_model_config(batch, reference_model.args.d_model)
-    mamba_model_tt = MambaTT(reference_model, device, config, tt_cache_path=cache_path, num_layers=num_layers)
+    mamba_model_tt = MambaTT(reference_model, device, config, tt_cache_path=cache_dir, num_layers=num_layers)
 
     for _ in range(iterations):
         tt_output = mamba_model_tt(input_ids)
@@ -87,13 +82,12 @@ def run_inference(
 
 @skip_for_grayskull("Not supported on Grayskull")
 @pytest.mark.parametrize(
-    "model_version, batch, pcc, cache_dir, num_layers, iterations",
+    "model_version, batch, pcc, num_layers, iterations",
     (
         (
             "state-spaces/mamba-2.8b",
             32,
             0.985,
-            None,
             64,
             1,
         ),
@@ -102,14 +96,23 @@ def run_inference(
 def test_inference(
     device: ttnn.Device,
     use_program_cache,
+    get_tt_cache_path,
     model_version: MambaPretrainedModelName,
     batch: int,
     pcc: float,
-    cache_dir: Optional[str],
     num_layers: int,
     iterations: int,
 ):
-    run_inference(device, use_program_cache, model_version, batch, pcc, cache_dir, num_layers, iterations)
+    run_inference(
+        device,
+        use_program_cache,
+        model_version,
+        batch,
+        pcc,
+        num_layers,
+        iterations,
+        cache_dir=get_tt_cache_path(model_version),
+    )
 
 
 @skip_for_grayskull("Not supported on Grayskull")
@@ -120,11 +123,20 @@ def test_inference(
 def test_device_perf(
     device: ttnn.Device,
     use_program_cache,
+    get_tt_cache_path,
     iterations,
     model_version="state-spaces/mamba-2.8b",
     batch=32,
     pcc=0.97,
-    cache_dir=None,
     num_layers=1,
 ):
-    run_inference(device, use_program_cache, model_version, batch, pcc, cache_dir, num_layers, iterations)
+    run_inference(
+        device,
+        use_program_cache,
+        model_version,
+        batch,
+        pcc,
+        num_layers,
+        iterations,
+        cache_dir=get_tt_cache_path(model_version),
+    )

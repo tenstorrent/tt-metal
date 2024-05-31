@@ -12,11 +12,12 @@ from models.utility_functions import skip_for_grayskull
 def test_inference_loop(
     device: ttnn.Device,
     use_program_cache,
+    get_tt_cache_path,
     model_version="state-spaces/mamba-2.8b",
     batch=32,
     pcc=0.88,
-    cache_dir=None,
     num_layers=64,
     iterations=10,
 ):
-    run_inference(device, use_program_cache, model_version, batch, pcc, cache_dir, num_layers, iterations)
+    cache_dir = get_tt_cache_path(model_version)
+    run_inference(device, use_program_cache, model_version, batch, pcc, num_layers, iterations, cache_dir)
