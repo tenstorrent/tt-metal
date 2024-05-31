@@ -10,8 +10,10 @@
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/repeat/repeat_op.hpp"
+#include "tt_dnn/op_library/copy/copy_op.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/common/logger.hpp"
 
 namespace tt {
 
@@ -130,18 +132,24 @@ struct make_eltwise_binary {
                     (in_a.get_legacy_shape() == in_b.get_legacy_shape()) or
                     (in_a.get_legacy_shape().without_padding() == in_b.get_legacy_shape().without_padding()),
                     "Input shapes must be the same!");
-                DataType dtype = output_dtype.value_or(in_a.get_dtype());
-                if(binary_op_type == BinaryOpType::EQ) {
-                    dtype = DataType::UINT16;
-                }
-                return operation::run_with_autoformat(
+
+                auto output_tensors = operation::run_with_autoformat(
                         EltwiseBinary{
                             binary_op_type,
                             fused_activations,
                             output_mem_config,
-                            dtype,
+                            output_dtype.value_or(in_a.get_dtype()),
                             false /*in place*/},
                         {in_a, in_b});
+
+                if(binary_op_type == BinaryOpType::EQ) {
+                    const auto new_output_tensor = operation::run(Copy{output_mem_config, DataType::UINT16}, {output_tensors});
+                    tt::log_warning("Output {}", new_output_tensor);
+                    return new_output_tensor;
+                }
+                else {
+                    return output_tensors;
+                }
             },
         {input_tensor_a, input_tensor_b}, output_tensors);
         return output_tensors.at(0);
