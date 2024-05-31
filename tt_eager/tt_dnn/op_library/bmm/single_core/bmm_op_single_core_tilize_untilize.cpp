@@ -169,22 +169,19 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
                                     Tensor &out,
                                     DeviceComputeKernelConfig compute_kernel_config) {
 
-    uint32_t in0_batch = in0.get_legacy_shape()[0];
-    uint32_t in0_channel = in0.get_legacy_shape()[1];
-    uint32_t in0_height = in0.get_legacy_shape()[2];
-    uint32_t in0_width = in0.get_legacy_shape()[3];
-    uint32_t in1_batch = in1.get_legacy_shape()[0];
-    uint32_t in1_channel = in1.get_legacy_shape()[1];
-    uint32_t in1_height = in1.get_legacy_shape()[2];
-    uint32_t in1_width = in1.get_legacy_shape()[3];
+    auto& in0_shape = in0.get_legacy_shape();
+    uint32_t in0_height = in0_shape[-2];
+    uint32_t in0_width = in0_shape[-1];
+    auto& in1_shape = in1.get_legacy_shape();
+    uint32_t in1_height = in1_shape[-2];
+    uint32_t in1_width = in1_shape[-1];
 
     // input matrix shape checks
-    TT_FATAL(in0_batch == 1, "Supports only batch = 1");
-    TT_FATAL(in1_batch == in0_batch, "Batch dimension needs to match for two inputs");
-    TT_FATAL(in0_channel == in1_channel, "Channel dimension needs to match for two inputs");
+    TT_FATAL(in0_shape.rank() == 2 || in0_shape[0] == 1, "Supports only batch = 1");
+    TT_FATAL(get_batch_size(in0_shape) == get_batch_size(in1_shape), "Batch dimension needs to match for two inputs");
     TT_FATAL(in0_width == in1_height, "Input matrices should be compatible for multiplication");
     if (has_bias) {
-        TT_FATAL(bias.get_legacy_shape()[3] == in1.get_legacy_shape()[3], "Bias shape mismatch");
+        TT_FATAL(bias.get_legacy_shape()[-1] == in1.get_legacy_shape()[-1], "Bias shape mismatch");
     }
 
     // tile size checks
@@ -193,8 +190,8 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     TT_FATAL(in0_width % constants::TILE_WIDTH == 0, "Input tensor in0 width needs to be divisible by TILE_WIDTH");
     TT_FATAL(in1_width % constants::TILE_WIDTH == 0, "Input tensor in1 width needs to be divisible by TILE_WIDTH");
     if (has_bias) {
-        TT_FATAL(bias.get_legacy_shape()[2] % constants::TILE_HEIGHT == 0);
-        TT_FATAL(bias.get_legacy_shape()[3] % constants::TILE_WIDTH == 0);
+        TT_FATAL(bias.get_legacy_shape()[-2] % constants::TILE_HEIGHT == 0);
+        TT_FATAL(bias.get_legacy_shape()[-1] % constants::TILE_WIDTH == 0);
     }
 
     // device compatibility checks
@@ -326,7 +323,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     DataFormat bias_df = in0_df;
     if (has_bias) {
         bias_addr = bias.buffer()->address();
-        bias_ntiles_w = bias.get_legacy_shape()[3] / constants::TILE_WIDTH;
+        bias_ntiles_w = bias.get_legacy_shape()[-1] / constants::TILE_WIDTH;
         bias_df = datatype_to_dataformat_converter(bias.get_dtype());
         bias_tile_nbytes = tile_size(bias_df);
         bias_log2_of_pagesize = (uint32_t) std::log2((float) bias_tile_nbytes);
@@ -601,14 +598,16 @@ std::vector<Shape> BMMTilizeUntilize::compute_output_shapes(const std::vector<Te
     const auto& in0 = inputs.at(0);
     const auto& in1 = inputs.at(1);
 
+    auto& in0_shape = in0.get_legacy_shape();
+    uint32_t in0_height = in0_shape[-2];
+    uint32_t in0_width = in0_shape[-1];
+    auto& in1_shape = in1.get_legacy_shape();
+    uint32_t in1_height = in1_shape[-2];
+    uint32_t in1_width = in1_shape[-1];
     auto in0_batch = in0.get_legacy_shape()[0];
     auto in0_channel = in0.get_legacy_shape()[1];
-    auto in0_height = in0.get_legacy_shape()[2];
-    auto in0_width = in0.get_legacy_shape()[3];
     auto in1_batch = in1.get_legacy_shape()[0];
     auto in1_channel = in1.get_legacy_shape()[1];
-    auto in1_height = in1.get_legacy_shape()[2];
-    auto in1_width = in1.get_legacy_shape()[3];
 
     const Shape out_shape { in0_batch, in0_channel, in0_height, in1_width };
     return {out_shape};

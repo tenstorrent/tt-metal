@@ -80,33 +80,33 @@ inline Tensor bcast(
             auto& input_tensor_a = input_tensors.at(0);
             auto& input_tensor_b = input_tensors.at(1);
             if (bcast_dim == BcastOpDim::W) {
-                TT_FATAL(input_tensor_a.get_legacy_shape()[2] == input_tensor_b.get_legacy_shape()[2]);
+                TT_FATAL(input_tensor_a.get_legacy_shape()[-2] == input_tensor_b.get_legacy_shape()[-2]);
                 if (input_tensor_b.get_layout() == Layout::TILE) {
-                    TT_FATAL(input_tensor_b.get_legacy_shape()[3] == TILE_WIDTH);
+                    TT_FATAL(input_tensor_b.get_legacy_shape()[-1] == TILE_WIDTH);
                 } else if (input_tensor_b.get_layout() == Layout::ROW_MAJOR) {
-                    TT_FATAL(input_tensor_b.get_legacy_shape()[3] == 1 || input_tensor_b.get_legacy_shape()[3] == TILE_WIDTH);
+                    TT_FATAL(input_tensor_b.get_legacy_shape()[-1] == 1 || input_tensor_b.get_legacy_shape()[-1] == TILE_WIDTH);
                 } else {
                     TT_FATAL(false, "Unsupported layout");
                 }
             } else if (bcast_dim == BcastOpDim::H) {
-                TT_FATAL(input_tensor_a.get_legacy_shape()[3] == input_tensor_b.get_legacy_shape()[3]);
+                TT_FATAL(input_tensor_a.get_legacy_shape()[-1] == input_tensor_b.get_legacy_shape()[-1]);
                 if (input_tensor_b.get_layout() == Layout::TILE) {
-                    TT_FATAL(input_tensor_b.get_legacy_shape()[2] == TILE_HEIGHT);
+                    TT_FATAL(input_tensor_b.get_legacy_shape()[-2] == TILE_HEIGHT);
                 } else if (input_tensor_b.get_layout() == Layout::ROW_MAJOR) {
-                    TT_FATAL(input_tensor_b.get_legacy_shape()[2] == 1 || input_tensor_b.get_legacy_shape()[2] == TILE_HEIGHT);
+                    TT_FATAL(input_tensor_b.get_legacy_shape()[-2] == 1 || input_tensor_b.get_legacy_shape()[-2] == TILE_HEIGHT);
                 } else {
                     TT_FATAL(false, "Unsupported layout");
                 }
             } else if (bcast_dim == BcastOpDim::HW) {
                 if (input_tensor_b.get_layout() == Layout::TILE) {
                     TT_FATAL(
-                        input_tensor_b.get_legacy_shape()[2] == TILE_HEIGHT &&
-                        input_tensor_b.get_legacy_shape()[3] == TILE_WIDTH);
+                        input_tensor_b.get_legacy_shape()[-2] == TILE_HEIGHT &&
+                        input_tensor_b.get_legacy_shape()[-1] == TILE_WIDTH);
                 } else if (input_tensor_b.get_layout() == Layout::ROW_MAJOR) {
                     TT_FATAL(
-                        (input_tensor_b.get_legacy_shape()[2] == 1 && input_tensor_b.get_legacy_shape()[3] == 1) ||
-                        (input_tensor_b.get_legacy_shape()[2] == TILE_HEIGHT &&
-                        input_tensor_b.get_legacy_shape()[3] == TILE_WIDTH));
+                        (input_tensor_b.get_legacy_shape()[-2] == 1 && input_tensor_b.get_legacy_shape()[-1] == 1) ||
+                        (input_tensor_b.get_legacy_shape()[-2] == TILE_HEIGHT &&
+                        input_tensor_b.get_legacy_shape()[-1] == TILE_WIDTH));
                 }
             }
             return operation::run_with_autoformat(

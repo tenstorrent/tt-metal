@@ -28,7 +28,7 @@ void py_module(py::module& module) {
            const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
            const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> ttnn::Tensor {
             return ttnn::operations::matmul::matmul(
-                input_tensor_a, input_tensor_b, program_config, memory_config, dtype, activation, compute_kernel_config, core_grid);
+                input_tensor_a, input_tensor_b, /*bias=*/std::nullopt, program_config, memory_config, dtype, activation, compute_kernel_config, core_grid, /*propagate_is_b_batched=*/true);
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),
@@ -51,7 +51,7 @@ void py_module(py::module& module) {
                 const std::optional<const std::string>& activation = std::nullopt,
                 const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
                 const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> ttnn::Tensor {
-            return ttnn::operations::matmul::linear(
+            return ttnn::operations::matmul::matmul(
                 input_tensor_a,
                 input_tensor_b,
                 bias,

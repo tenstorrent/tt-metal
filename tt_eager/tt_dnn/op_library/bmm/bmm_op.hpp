@@ -10,6 +10,8 @@
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_dnn/op_library/compute_kernel_config.hpp"
+#include "tt_eager/tensor/tensor_utils.hpp"
+#include "ttnn/types.hpp"
 
 namespace tt {
 
@@ -307,9 +309,9 @@ struct Matmul {
     }
 };
 
-
 inline bool get_broadcast_batch(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const MatmulProgramConfig> matmul_program_config) {
-    bool broadcast_batch = input_tensor_b.get_legacy_shape()[0] * input_tensor_b.get_legacy_shape()[1] == 1;
+    uint32_t batch_size_b = get_batch_size(input_tensor_b.get_legacy_shape());
+    bool broadcast_batch = batch_size_b == 1;
     if (!matmul_program_config.has_value()) {
         return broadcast_batch;
     }
@@ -325,7 +327,8 @@ inline bool get_broadcast_batch(const Tensor &input_tensor_a, const Tensor &inpu
         matmul_program_config.value()
     );
     if (is_multi_core_reuse) {
-        broadcast_batch &= input_tensor_a.get_legacy_shape()[0] * input_tensor_a.get_legacy_shape()[1] > 1;
+        uint32_t batch_size_a = get_batch_size(input_tensor_a.get_legacy_shape());
+        broadcast_batch &= batch_size_a > 1;
     }
     return broadcast_batch;
 }

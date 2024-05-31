@@ -450,7 +450,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
     const auto& ashape = a.get_legacy_shape();
     const auto& bshape = b.get_legacy_shape();
 
-    TT_FATAL((bcast_batch == false) or (ashape[0] == 1), "Bcast batch not supported for this parallelization");
+    TT_FATAL((bcast_batch == false) or (ashape[0] == 1) or (ashape.rank() == 2), "Bcast batch not supported for this parallelization");
 
     // CB dataformats
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype()); // in0
@@ -464,11 +464,17 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
     tt_metal::Buffer *in0_buffer = a.buffer();
     tt_metal::Buffer *in1_buffer = b.buffer();
     if (bcast_batch)
-        TT_FATAL(bshape[0]*bshape[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
+        TT_FATAL(
+            get_batch_size(bshape) == 1 &&
+            "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN or equivalent");
     else {
         // same condition as above, different message
-        TT_FATAL(ashape[1] == bshape[1] && ashape[0] == bshape[0]
-            && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
+        TT_FATAL(ashape.rank() == bshape.rank() && "bmm (non-bcast matmul) expects input tensors of the same rank");
+        for (auto i = 0; i < ashape.rank() - 2; i++) {
+            TT_FATAL(
+                ashape[i] == bshape[i] &&
+                "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN or equivalent");
+        }
     }
 
     MathFidelity math_fidelity;
@@ -505,10 +511,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Only supports matmuls where output is blocks of 16 x 16 tiles (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    uint32_t B = ashape[0]*ashape[1];
-    uint32_t Mt = ashape[2]/TILE_HEIGHT;
-    uint32_t Kt = ashape[3]/TILE_WIDTH;
-    uint32_t Nt = bshape[3]/TILE_WIDTH;
+    uint32_t B = get_batch_size(ashape);
+    uint32_t Mt = ashape[-2]/TILE_HEIGHT;
+    uint32_t Kt = ashape[-1]/TILE_WIDTH;
+    uint32_t Nt = bshape[-1]/TILE_WIDTH;
 
     // TODO: Generalize
     TT_FATAL(!fuse_batch, "Only fuse_batch=false is supported for optimized bmm!");

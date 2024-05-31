@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "impl/buffers/buffer.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
@@ -86,16 +87,21 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
             "Input and output mem layouts must be the same for bcast HW op!");
     }
 
-    auto batch_size_a = input_shape_a[0];
-    auto num_channels_a = input_shape_a[1];
-    auto height_a = input_shape_a[2];
-    auto width_a = input_shape_a[3];
-    auto batch_size_b = input_shape_b[0];
-    auto num_channels_b = input_shape_b[1];
-    auto height_b = input_shape_b[2];
-    auto width_b = input_shape_b[3];
+    auto height_a = input_shape_a[-2];
+    auto width_a = input_shape_a[-1];
+    auto height_b = input_shape_b[-2];
+    auto width_b = input_shape_b[-1];
     if((input_tensor_a.is_sharded() && this->dim == BcastOpDim::H) == false){
-        TT_FATAL((batch_size_b * num_channels_b == 1 || (batch_size_b == batch_size_a && num_channels_b == num_channels_a)) && "Broadcast is currently only supported when bN*bC=1 or N & C match"); //for H multi-batch weight is supported
+
+        uint32_t batch_size_b = get_batch_size(input_shape_b);
+        if (batch_size_b != 1) {
+            TT_FATAL(input_shape_a.rank() == input_shape_b.rank() && "Broadcast with batch is currently only supported when input tensor ranks are the same");
+            for (auto i = 0; i < input_shape_a.rank() - 2; i++) {
+                TT_FATAL(
+                        input_shape_a[i] == input_shape_b[i] &&
+                        "Broadcast with batch is currently only supported when bN*bC=1 or N & C match or equivalent"); // for H multi-batch weight is supported
+            }
+        }
     }
 
     // validate input dimensions
@@ -172,8 +178,8 @@ BcastOpParallelizationStrategy EltwiseBinaryBroadcast::get_parallelization_strat
     const auto& input_tensor_a = input_tensors.at(0);
 
     uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
-    uint32_t Ht = input_tensor_a.get_legacy_shape()[2] / TILE_HEIGHT;
-    uint32_t Wt = input_tensor_a.get_legacy_shape()[3] / TILE_WIDTH;
+    uint32_t Ht = input_tensor_a.get_legacy_shape()[-2] / TILE_HEIGHT;
+    uint32_t Wt = input_tensor_a.get_legacy_shape()[-1] / TILE_WIDTH;
 
     if(this->dim == BcastOpDim::H){
         if(input_tensor_a.is_sharded())

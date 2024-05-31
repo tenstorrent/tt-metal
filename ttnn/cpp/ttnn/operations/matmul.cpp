@@ -42,60 +42,6 @@ const std::array<ttnn::TensorSchema, 3> input_tensor_schemas() {
             2, 4, {ttnn::bfloat16, ttnn::bfloat8_b, ttnn::bfloat4_b}, {ttnn::TILE_LAYOUT}, true, false, true, true}};
 }
 
-ttnn::Tensor matmul(
-    const ttnn::Tensor& input_tensor_a,
-    const ttnn::Tensor& input_tensor_b,
-    const std::optional<const MatmulProgramConfig> program_config,
-    const ttnn::MemoryConfig& memory_config,
-    const std::optional<const DataType> dtype,
-    const std::optional<const std::string>& activation,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::CoreGrid> core_grid)
-    {
-    ttnn::validate_input_tensor("ttnn.matmul", input_tensor_a, input_tensor_schemas()[0]);
-    ttnn::validate_input_tensor("ttnn.matmul", input_tensor_b, input_tensor_schemas()[1]);
-
-    const auto input_tensor_a_shape = input_tensor_a.get_shape();
-    const auto input_tensor_b_shape = input_tensor_b.get_shape();
-
-    const auto width_a = input_tensor_a_shape[-1];
-    const auto height_b = input_tensor_b_shape[-2];
-
-    if (width_a != height_b) {
-        TT_THROW("ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor");
-    }
-
-    auto input_b_is_batched = detail::is_input_batched(input_tensor_b_shape);
-
-    const auto input_tensor_a_4d = ttnn::unsqueeze_to_4D(input_tensor_a);
-    const auto input_tensor_b_4d = ttnn::unsqueeze_to_4D(input_tensor_b);
-
-    std::optional<CoreCoord> user_core_coord;
-    const bool has_user_grid = core_grid.has_value();
-    if (has_user_grid) {
-	user_core_coord = CoreCoord(core_grid->x, core_grid->y);
-    }
-    auto output_tensor = tt::operations::primary::matmul(
-        input_tensor_a_4d, input_tensor_b_4d, /*bias=*/std::nullopt, program_config, memory_config, dtype, compute_kernel_config, /*untilize_out=*/false,  user_core_coord, get_fused_activation(activation), input_b_is_batched);
-
-    if (activation.has_value() && !has_user_grid) {
-        if (activation.value() == "relu") {
-            output_tensor = tt::tt_metal::relu(output_tensor, memory_config);
-        } else if (activation.value() == "gelu") {
-            output_tensor = tt::tt_metal::gelu(output_tensor, false, memory_config);
-        } else if (activation.value() == "silu") {
-            output_tensor = tt::tt_metal::silu(output_tensor, memory_config);
-        } else {
-            TT_THROW("ttnn.matmul: Unsupported activation function");
-        }
-    }
-
-    while (output_tensor.get_shape().rank() != input_tensor_a_shape.rank()) {
-        output_tensor = ttnn::squeeze_from_4D(output_tensor, input_tensor_a_shape.rank());
-    }
-    return output_tensor;
-}
-
 std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std::string>& activation) {
     if (!activation.has_value()) {
 	return std::nullopt;
@@ -103,7 +49,7 @@ std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std
     return string_to_unary_with_param(activation.value());
 }
 
-ttnn::Tensor linear(
+ttnn::Tensor matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
@@ -112,7 +58,8 @@ ttnn::Tensor linear(
     std::optional<const DataType> dtype,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::CoreGrid> core_grid) {
+    const std::optional<const ttnn::CoreGrid> core_grid,
+    const bool propagate_is_b_batched) {
     ttnn::validate_input_tensor("ttnn.linear", input_tensor_a, input_tensor_schemas()[0]);
     ttnn::validate_input_tensor("ttnn.linear", input_tensor_b, input_tensor_schemas()[1]);
     ttnn::validate_input_tensor("ttnn.linear", bias, input_tensor_schemas()[2]);
@@ -123,38 +70,34 @@ ttnn::Tensor linear(
     const auto width_a = input_tensor_a_shape[-1];
     const auto height_b = input_tensor_b_shape[-2];
 
+    if (width_a != height_b) {
+        TT_THROW("ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor");
+    }
+
     auto input_b_is_batched = detail::is_input_batched(input_tensor_b_shape);
-    TT_ASSERT(input_b_is_batched == false, "Batched input not supported");
+    bool batch_with_bias = input_b_is_batched && bias.has_value();
+    TT_FATAL(!batch_with_bias, "Batched input not supported when bias exists (linear operation).");
 
-    const auto input_tensor_a_4d = ttnn::unsqueeze_to_4D(input_tensor_a);
-    const auto input_tensor_b_4d = ttnn::unsqueeze_to_4D(input_tensor_b);
-
-    std::optional<Tensor> bias_4d = std::nullopt;
+    std::optional<CoreCoord> user_core_coord;
     const bool has_user_grid = core_grid.has_value();
-    const bool has_program_config = program_config.has_value();
+    if (has_user_grid) {
+	user_core_coord = CoreCoord(core_grid->x, core_grid->y);
+    }
 
+    const bool has_program_config = program_config.has_value();
     bool post_process_bias = false;
     if (bias.has_value()) {
-        bias_4d = ttnn::unsqueeze_to_4D(bias.value());
         if (!has_program_config && !has_user_grid) {
 	    post_process_bias = true;
 	}
     }
 
-    if (width_a != height_b) {
-        TT_THROW("ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor");
-    }
-    std::optional<CoreCoord> user_core_coord;
-    if (has_user_grid) {
-	user_core_coord = CoreCoord(core_grid->x, core_grid->y);
-    }
-
     auto output_tensor = tt::operations::primary::matmul(
-        input_tensor_a_4d, input_tensor_b_4d, post_process_bias ? std::nullopt : bias_4d, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/, user_core_coord, get_fused_activation(activation));
+        input_tensor_a, input_tensor_b, post_process_bias ? std::nullopt : bias, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/, user_core_coord, get_fused_activation(activation), propagate_is_b_batched && input_b_is_batched);
 
     if (post_process_bias) {
-        output_tensor = tt::tt_metal::bcast(
-            output_tensor, bias_4d.value(), tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, memory_config);
+        output_tensor = tt::operations::primary::bcast(
+            output_tensor, bias.value(), tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, memory_config);
     }
 
     if (activation.has_value() && !has_user_grid) {
@@ -169,9 +112,6 @@ ttnn::Tensor linear(
         }
     }
 
-    while (output_tensor.get_shape().rank() != input_tensor_a_shape.rank()) {
-        output_tensor = ttnn::squeeze_from_4D(output_tensor, input_tensor_a_shape.rank());
-    }
     return output_tensor;
 }
 

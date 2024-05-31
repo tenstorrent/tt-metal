@@ -30,19 +30,9 @@ inline bool is_input_batched(const ttnn::Shape& shape);
 
 extern const std::array<ttnn::TensorSchema, 3> input_tensor_schemas();
 
-ttnn::Tensor matmul(
-    const ttnn::Tensor& input_tensor_a,
-    const ttnn::Tensor& input_tensor_b,
-    const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
-    const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
-    const std::optional<const DataType> dtype = std::nullopt,
-    const std::optional<const std::string>& activation = std::nullopt,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
-
 std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std::string>& activation);
 
-ttnn::Tensor linear(
+ttnn::Tensor matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
@@ -51,7 +41,8 @@ ttnn::Tensor linear(
     std::optional<const DataType> dtype = std::nullopt,
     const std::optional<const std::string>& activation = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
+    const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,
+    const bool propagate_is_b_batched = false);
 
 }  // namespace matmul
 }  // namespace operations

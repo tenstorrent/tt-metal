@@ -278,10 +278,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_padding(const Tensor &a,
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Only supports matmuls where output is blocks of 16 x 16 tiles (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    uint32_t B = ashape[0]*ashape[1];
-    uint32_t Mt = ashape[2]/TILE_HEIGHT;
-    uint32_t Kt = ashape[3]/TILE_WIDTH;
-    uint32_t Nt = bshape[3]/TILE_WIDTH;
+    uint32_t B = get_batch_size(ashape);
+    uint32_t Mt = ashape[-2]/TILE_HEIGHT;
+    uint32_t Kt = ashape[-1]/TILE_WIDTH;
+    uint32_t Nt = bshape[-1]/TILE_WIDTH;
     uint32_t in0_block_w = 2;
     uint32_t out_subblock_h = 4;
     uint32_t out_subblock_w = 2;
