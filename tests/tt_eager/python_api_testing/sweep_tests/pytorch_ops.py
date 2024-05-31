@@ -521,6 +521,24 @@ def heaviside(x, *args, **kwargs):
     return result
 
 
+def left_shift(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.bitwise_left_shift(x, value)
+    return result
+
+
+def right_shift(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.bitwise_right_shift(x, value)
+    return result
+
+
+def mod(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.remainder(x, value)
+    return result
+
+
 def unary_ne(x, *args, **kwargs):
     value = kwargs.pop("scalar")
     result = torch.ne(x, value)
@@ -582,6 +600,14 @@ def tanhshrink(x, *args, **kwargs):
 
 def signbit(x, *args, **kwargs):
     return torch.signbit(x)
+
+
+def unary_floor(x, *args, **kwargs):
+    return torch.floor(x)
+
+
+def trunc(x, *args, **kwargs):
+    return torch.trunc(x)
 
 
 def sin(x, *args, **kwargs):

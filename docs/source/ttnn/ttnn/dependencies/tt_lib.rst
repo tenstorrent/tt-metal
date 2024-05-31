@@ -413,6 +413,12 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.heaviside
 
+.. autofunction:: tt_lib.tensor.left_shift
+
+.. autofunction:: tt_lib.tensor.right_shift
+
+.. autofunction:: tt_lib.tensor.mod
+
 .. autofunction:: tt_lib.tensor.logaddexp
 
 .. autofunction:: tt_lib.tensor.logaddexp2
@@ -478,6 +484,10 @@ Tensor elementwise operations
 .. autofunction:: tt_lib.tensor.logical_ori
 
 .. autofunction:: tt_lib.tensor.polygamma
+
+.. autofunction:: tt_lib.tensor.unary_floor
+
+.. autofunction:: tt_lib.tensor.trunc
 
 Tensor relational operations
 ============================

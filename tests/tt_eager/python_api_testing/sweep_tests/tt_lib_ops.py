@@ -1123,6 +1123,60 @@ def lamb_optimizer(
 
 
 @setup_host_and_device
+def eltwise_left_shift(
+    x,
+    *args,
+    value,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttl.tensor.left_shift(t0, value, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
+def eltwise_right_shift(
+    x,
+    *args,
+    value,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttl.tensor.right_shift(t0, value, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
+def eltwise_mod(
+    x,
+    *args,
+    value,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttl.tensor.mod(t0, value, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
 def eltwise_heaviside(
     x,
     *args,
@@ -2319,6 +2373,8 @@ transpose_cn = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=1))
 transpose_nh = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=-2))
 transpose_nw = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=-1))
 transpose_cw = make_unary_op(partial(ttl.tensor.transpose, dim0=1, dim1=-1))
+eltwise_floor = make_unary_op(ttl.tensor.unary_floor)
+eltwise_trunc = make_unary_op(ttl.tensor.trunc)
 
 
 def make_binary_op(ttl_tensor_binop):

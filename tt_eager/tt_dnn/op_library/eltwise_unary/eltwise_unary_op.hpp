@@ -77,7 +77,12 @@ enum class UnaryOpType {
     UNARY_NE,
     UNARY_GT,
     UNARY_LT,
-    TILED_PROD
+    TILED_PROD,
+    LEFT_SHIFT,
+    RIGHT_SHIFT,
+    MOD,
+    UNARY_FLOOR,
+    TRUNC
 };
 
 template <typename T>
@@ -103,7 +108,10 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::DIV_UNARY_SFPU:
         case UnaryOpType::UNARY_NE:
         case UnaryOpType::UNARY_GT:
-        case UnaryOpType::UNARY_LT: return true;
+        case UnaryOpType::UNARY_LT:
+        case UnaryOpType::LEFT_SHIFT:
+        case UnaryOpType::RIGHT_SHIFT:
+        case UnaryOpType::MOD: return true;
         default: return false;
     }
     return false;
@@ -339,6 +347,8 @@ constexpr auto isneginf = make_eltwise_unary<UnaryOpType::ISNEGINF>{};
 constexpr auto isnan = make_eltwise_unary<UnaryOpType::ISNAN>{};
 constexpr auto sign = make_eltwise_unary<UnaryOpType::SIGN>{};
 constexpr auto signbit = make_eltwise_unary<UnaryOpType::SIGNBIT>{};
+constexpr auto unary_floor = make_eltwise_unary<UnaryOpType::UNARY_FLOOR>{};
+constexpr auto trunc = make_eltwise_unary<UnaryOpType::TRUNC>{};
 constexpr auto square = make_eltwise_unary<UnaryOpType::SQUARE>{};
 constexpr auto atan = make_eltwise_unary<UnaryOpType::ATAN>{};
 constexpr auto eqz = make_eltwise_unary<UnaryOpType::EQZ>{};
@@ -359,6 +369,9 @@ constexpr auto leaky_relu = make_eltwise_unary_with_param<UnaryOpType::LEAKY_REL
 constexpr auto prelu = leaky_relu;
 constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
+constexpr auto left_shift = make_eltwise_unary_with_param<UnaryOpType::LEFT_SHIFT>{};
+constexpr auto right_shift = make_eltwise_unary_with_param<UnaryOpType::RIGHT_SHIFT>{};
+constexpr auto mod = make_eltwise_unary_with_param<UnaryOpType::MOD>{};
 constexpr auto unary_ne = make_eltwise_unary_with_param<UnaryOpType::UNARY_NE>{};
 constexpr auto rsub = make_eltwise_unary_with_param<UnaryOpType::RSUB>{};
 constexpr auto silu = make_eltwise_unary<UnaryOpType::SILU>{};
