@@ -19,7 +19,8 @@
 namespace ckernel {
 
 /**
- * Performs an elementwise typecast operation on the input
+ * Performs an elementwise typecast operation on the input.
+ * Supports typecast from fp32 to uint32.
  *
  * Return value: None
  *

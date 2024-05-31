@@ -85,7 +85,7 @@ namespace tt::tt_metal::detail {
         detail::bind_unary_op(m_tensor, "i0", i0, R"doc(Computes the zeroth order modified Bessel function of the first kind applied on the elements of the input tensor ``{0}``, for the input range -10 to 10.)doc");
         detail::bind_unary_op(m_tensor, "silu", silu, R"doc(Returns tensor with the silu all of elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "neg", neg, R"doc(Returns tensor with the negate all of elements of the input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "eltwise_typecast", eltwise_typecast, R"doc(Returns tensor with all of the elements of the input tensor ``{0}`` typecasted.)doc");
+        detail::bind_unary_op(m_tensor, "eltwise_typecast", eltwise_typecast, R"doc(Returns tensor with all of the elements of the input tensor ``{0}`` typecasted from fp32 to uint32.)doc");
 
         detail::bind_unary_op_with_param(
             m_tensor, "exp", py::overload_cast<const Tensor&, bool, const MemoryConfig&>(&exp),
