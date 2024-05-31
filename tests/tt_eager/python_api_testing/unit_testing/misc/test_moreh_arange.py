@@ -13,7 +13,7 @@ from loguru import logger
 
 def get_tt_dtype(torch_dtype):
     if torch_dtype == torch.int32:
-        return ttl.tensor.DataType.UINT32
+        return ttl.tensor.DataType.INT32
     if torch_dtype == torch.bfloat16:
         return ttl.tensor.DataType.BFLOAT16
     if torch_dtype == torch.float32:
@@ -24,7 +24,7 @@ def get_tt_dtype(torch_dtype):
 @pytest.mark.parametrize(
     "start_end_step",
     (
-        (0, 32, 1),  # simple
+        (-5, 27, 1),  # simple
         (2.3, 15.3, 0.5),  # floating point
         (10, 0, -0.3),  # minus step
         (10, 32 * 3, 1),  # multiple cores
@@ -92,7 +92,7 @@ def test_arange_row_major_optioanl_output(start_end_step, optional_output, devic
 
 @pytest.mark.parametrize(
     "start_end_step",
-    ((0, 32 * 5, 1),),  # simple
+    ((-10, 22, 1),),  # simple
 )
 @pytest.mark.parametrize(
     "output_dtype",
@@ -207,7 +207,7 @@ def test_arange_tilized_major_optioanl_output(start_end_step, optional_output, d
 
 @pytest.mark.parametrize(
     "start_end_step",
-    ((0, 32 * 5, 1),),  # simple
+    ((-10, 57, 1),),  # simple
 )
 @pytest.mark.parametrize(
     "output_dtype",
