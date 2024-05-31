@@ -27,6 +27,9 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
     uint32_t in1_block_w,
     std::optional<DataType> output_dtype = std::nullopt);
 
+// Converts convolution weights to grouped layout with padded zeros
+Tensor convert_conv_weight_tensor_to_grouped_layout(Tensor conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
+
 const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume);
 
 const Shape infer_dims_for_reshape_RM(int N, int C, int H, int W, uint32_t old_volume);
@@ -39,6 +42,24 @@ static std::size_t compute_volume(const T& shape) {
     }
     return volume;
 }
+
+static std::vector<std::size_t> compute_strides(Shape shape) {
+    auto num_elements = compute_volume(shape);
+    std::vector<std::size_t> strides;
+    for (std::int32_t index = 0; index < shape.rank(); index++) {
+        num_elements /= shape[index];
+        strides.push_back(num_elements);
+    }
+    return strides;
+}
+
+static int compute_flat_indices(vector<int> indices, vector<std::size_t> strides) {
+    int flat_index = 0;
+    for (auto i = 0; i < indices.size(); i++) {
+        flat_index += indices[i] * strides[i];
+    }
+    return flat_index;
+};
 
 template <typename T>
 static std::size_t compute_buffer_size(const T& shape, DataType data_type) {
