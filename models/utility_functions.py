@@ -108,7 +108,7 @@ class Profiler:
             average = self.get(key)
             if units == "s":
                 pass
-            if units == "ms":
+            elif units == "ms":
                 average *= 1000
             elif units == "us":
                 average *= 1000000
