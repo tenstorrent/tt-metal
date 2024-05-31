@@ -162,11 +162,11 @@ const operation::Hash Softmax::compute_program_hash(
     const std::vector<Tensor> &input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     return operation::hash_operation<Softmax>(
-        input_tensors.at(0).memory_config(),
-        input_tensors.at(0).get_dtype(),
-        optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().memory_config()}
+        std::get<DeviceStorage>(input_tensors.at(0).storage()).memory_config(),
+        input_tensors.at(0).dtype(),
+        optional_input_tensors.at(0).has_value() ? std::optional{std::get<DeviceStorage>(optional_input_tensors.at(0).value().storage()).memory_config()}
                                                  : std::nullopt,
-        optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().get_dtype()}
+        optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().dtype()}
                                                  : std::nullopt,
         this->output_mem_config);
 }

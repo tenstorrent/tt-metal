@@ -145,6 +145,7 @@ void MAIN {
                         reload_from_cb_to_dst(in0_cb_id, in1_cb_id, mm_partials_cb_id, out_subblock_num_tiles, out_subblock_w, out_subblock_h, in0_block_w);
                     }
 
+                    #ifndef SKIP_COMPUTE
                     // Compute output sub-block
                     uint32_t dst_index = 0; // start at 0, each call to matmul_block internally increments dst_index
                     uint32_t in0_index = in0_index_subblock_offset; // offset into in0 block
@@ -158,6 +159,7 @@ void MAIN {
                         in0_index ++;  // stride right by 1
                         in1_index += in1_per_core_w; // to stride down by 1 need to stride by in_per_core_w (should be called in1_block_w)
                     }
+                    #endif // SKIP_COMPUTE
 
                     if (last_out) {
                         // If we fuse bias, we will pack out and run bias + optional sfpu in a separate loop
@@ -166,6 +168,7 @@ void MAIN {
                             SFPU_OP_FUNC_ACTIVATION
                         }
                         #endif
+
                         tile_regs_commit();
                         // Pack out to output buffer
                         cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
@@ -192,6 +195,7 @@ void MAIN {
 
                         tile_regs_release();
                         cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
+
                     } else {
                         tile_regs_commit();
                         // Wait for tiles in output buffer to be written out since interm and output share memory
@@ -216,6 +220,7 @@ void MAIN {
 
                         tile_regs_release();
                         cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
+
                     }
 
                     in1_index_subblock_offset += out_subblock_w;

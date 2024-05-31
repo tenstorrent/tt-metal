@@ -392,7 +392,6 @@ inline Tensor to_host(const Tensor& tensor, bool blocking = true) {
             host_tensor.set_dtype(tensor.get_dtype());
             host_tensor.set_layout(tensor.get_layout());
             insert_buffer_and_shape_for_device(device, shard, host_tensor, device_index);
-            host_tensor.set_populated(device);
         }
         return host_tensor;
     } else {
@@ -534,8 +533,8 @@ inline Tensor to_layout(const Tensor& tensor, Layout target_layout) {
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 std::vector<OwnedBuffer> output_buffers;
                 std::vector<Shape> output_shapes;
-                for (int i = 0; i < storage.buffers.size(); i++) {
-                    const auto input_data = owned_buffer::get_as<T>(storage.buffers[i]);
+                for (int i = 0; i < storage.num_buffers(); i++) {
+                    const auto input_data = owned_buffer::get_as<T>(storage.get_buffer(i));
                     auto output_buffer = owned_buffer::create<T>(std::move(convert(input_data)));
                     output_buffers.push_back(output_buffer);
                     output_shapes.push_back(storage.shapes[i]);
@@ -942,7 +941,7 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
     }
 
     if (is_tensor_on_device(tensor)) {
-        return to_string<T>(to_host<T>(tensor));
+        return to_string<T>(tensor.cpu());
     }
 
     return std::visit(
@@ -985,7 +984,7 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
                 TT_THROW("Cannot print a device tensor!");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
                 auto devices = get_devices(tensor);
-                auto host_tensor = to_host<T>(tensor);
+                auto host_tensor = tensor.cpu();
                 auto device_index = 0;
                 std::stringstream ss;
                 apply(host_tensor, [&](const Tensor& device_tensor) {
@@ -1117,9 +1116,9 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout) {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 std::vector<OwnedBuffer> output_buffers;
-                for (int i = 0; i < storage.buffers.size(); i++) {
+                for (int i = 0; i < storage.num_buffers(); i++) {
                     // Convert to FLOAT32 tensor and change layout
-                    auto input_packed_data = owned_buffer::get_as<uint32_t>(storage.buffers[i]).get();
+                    auto input_packed_data = owned_buffer::get_as<uint32_t>(storage.get_buffer(i)).get();
                     auto input_float_data = unpack_bfloat_tiles_into_float_vec(
                         T{}, input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
                     auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));

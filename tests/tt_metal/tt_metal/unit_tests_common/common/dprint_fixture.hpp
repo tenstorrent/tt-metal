@@ -27,12 +27,12 @@ protected:
         // The core range (physical) needs to be set >= the set of all cores
         // used by all tests using this fixture, so set dprint enabled for
         // all cores and all devices
-        tt::llrt::OptionsG.set_dprint_enabled(true);
-        tt::llrt::OptionsG.set_dprint_all_cores(CoreType::WORKER, true);
-        tt::llrt::OptionsG.set_dprint_all_cores(CoreType::ETH, true);
-        tt::llrt::OptionsG.set_dprint_all_chips(true);
+        tt::llrt::OptionsG.set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, true);
+        tt::llrt::OptionsG.set_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER, true);
+        tt::llrt::OptionsG.set_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, true);
+        tt::llrt::OptionsG.set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, true);
         // Send output to a file so the test can check after program is run.
-        tt::llrt::OptionsG.set_dprint_file_name(dprint_file_name);
+        tt::llrt::OptionsG.set_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint, dprint_file_name);
         tt::llrt::OptionsG.set_test_mode_enabled(true);
         watcher_previous_enabled = tt::llrt::OptionsG.get_watcher_enabled();
         tt::llrt::OptionsG.set_watcher_enabled(false);
@@ -49,7 +49,7 @@ protected:
                 disabled[core_desc.dispatch_core_type].insert(core);
             }
         }
-        tt::llrt::OptionsG.set_dprint_disabled_cores(disabled);
+        tt::llrt::OptionsG.set_feature_disabled_cores(tt::llrt::RunTimeDebugFeatureDprint, disabled);
 
         ExtraSetUp();
 
@@ -65,12 +65,12 @@ protected:
         std::remove(dprint_file_name.c_str());
 
         // Reset DPrint settings
-        tt::llrt::OptionsG.set_dprint_cores({});
-        tt::llrt::OptionsG.set_dprint_enabled(false);
-        tt::llrt::OptionsG.set_dprint_all_cores(CoreType::WORKER, false);
-        tt::llrt::OptionsG.set_dprint_all_cores(CoreType::ETH, false);
-        tt::llrt::OptionsG.set_dprint_all_chips(false);
-        tt::llrt::OptionsG.set_dprint_file_name("");
+        tt::llrt::OptionsG.set_feature_cores(tt::llrt::RunTimeDebugFeatureDprint, {});
+        tt::llrt::OptionsG.set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, false);
+        tt::llrt::OptionsG.set_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER, false);
+        tt::llrt::OptionsG.set_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, false);
+        tt::llrt::OptionsG.set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, false);
+        tt::llrt::OptionsG.set_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint, "");
         tt::llrt::OptionsG.set_test_mode_enabled(false);
         tt::llrt::OptionsG.set_watcher_enabled(watcher_previous_enabled);
     }
@@ -97,7 +97,7 @@ class DPrintFixtureDisableDevices: public DPrintFixture {
 protected:
     void ExtraSetUp() override {
         // For this test, mute each devices using the environment variable
-        tt::llrt::OptionsG.set_dprint_all_chips(false);
-        tt::llrt::OptionsG.set_dprint_chip_ids({});
+        tt::llrt::OptionsG.set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, false);
+        tt::llrt::OptionsG.set_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint, {});
     }
 };

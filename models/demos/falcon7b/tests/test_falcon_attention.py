@@ -6,12 +6,9 @@ import torch
 import pytest
 from loguru import logger
 
-from models.demos.falcon7b.reference.hf_modeling_falcon import (
-    FalconForCausalLM,
-)
 from models.demos.falcon7b.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
 from models.demos.falcon7b.tt.model_config import get_model_config
-from models.demos.falcon7b.tests.test_utils import get_rand_falcon_inputs, concat_device_outputs
+from models.demos.falcon7b.tests.test_utils import get_rand_falcon_inputs, concat_device_outputs, load_hf_model
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
@@ -51,12 +48,10 @@ def run_test_FalconAttention_inference(
 ):
     num_devices = len(devices)
     global_batch = batch * num_devices
-    model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
-    hugging_face_reference_model.eval()
+    hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
     configuration = hugging_face_reference_model.config
-    state_dict = hugging_face_reference_model.state_dict()
+
     use_cache = True
     user_id = 0
 
