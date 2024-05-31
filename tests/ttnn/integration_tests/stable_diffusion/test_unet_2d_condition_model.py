@@ -70,7 +70,9 @@ def unsqueeze_all_params_to_4d(params):
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576}], ids=["device_params=l1_small_size_24576"], indirect=True
+)
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width",
     [
@@ -136,7 +138,9 @@ def test_unet_2d_condition_model_256x256(device, batch_size, in_channels, input_
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768}], ids=["device_params=l1_small_size_24576"], indirect=True
+)
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width",
     [
