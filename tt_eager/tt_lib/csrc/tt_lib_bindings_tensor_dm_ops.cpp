@@ -215,6 +215,8 @@ namespace tt::tt_metal::detail{
 
                 "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X] where Y%32=0 and X%32=0", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "use_multicore", "Whether to use multi-core parallelization", "bool", "Default is true", "No"
+                "use_pack_untilize", "Whether to use pack untilize", "bool", "Default is true", "No"
         )doc");
 
         m_tensor.def(
@@ -261,9 +263,9 @@ namespace tt::tt_metal::detail{
 
                 "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X] where Y%32=0 and X%32=0", "Yes"
                 "output_tensor_end", "End indices of input tensor in output tensor", "List[int[4]]", "Values along each dim must be < input_tensor_shape[i]", "Yes"
-                "pad_value", "Value to pad input tensor", "float", "", "Yes"
-                "use_multicore", "Whether to use multi-core parallelization", "bool", "Default is false", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "use_multicore", "Whether to use multi-core parallelization", "bool", "Default is false", "No"
+                "use_pack_untilize", "Whether to use pack untilize", "bool", "Default is true", "No"
         )doc");
 
         m_tensor.def("pad", &pad,

@@ -86,7 +86,8 @@ void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceComma
 
 void EnqueueReadShardedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
     uint32_t padded_page_size = align(this->buffer.page_size(), ADDRESS_ALIGNMENT);
-    const CoreCoord physical_core = this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
+    const CoreCoord physical_core =
+        this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
     command.add_prefetch_relay_linear(
         get_noc_unicast_encoding(physical_core), padded_page_size * this->pages_to_read, this->bank_base_address);
 }
@@ -206,8 +207,8 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
 
 void EnqueueWriteShardedBufferCommand::add_dispatch_write(HugepageDeviceCommand& command_sequence) {
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
-    const CoreCoord physical_core = this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
-
+    const CoreCoord physical_core =
+        this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_linear(
         flush_prefetch, 0, get_noc_unicast_encoding(physical_core), this->bank_base_address, data_size_bytes);
@@ -1324,7 +1325,8 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
             }
             uint32_t bank_base_address = buffer.address();
             if (buffer.buffer_type() == BufferType::DRAM) {
-                bank_base_address += buffer.device()->bank_offset(BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
+                bank_base_address += buffer.device()->bank_offset(
+                    BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
             }
             if (num_pages_to_read > 0) {
                 if (width_split) {
@@ -1348,7 +1350,8 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                     num_pages_to_read);
 
                 this->issued_completion_q_reads.push(detail::ReadBufferDescriptor(
-                    buffer,
+                    buffer.buffer_layout(),
+                    buffer.page_size(),
                     padded_page_size,
                     dst,
                     unpadded_dst_offset,
@@ -1381,7 +1384,13 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
             pages_to_read);
 
         this->issued_completion_q_reads.push(detail::ReadBufferDescriptor(
-            buffer, padded_page_size, dst, unpadded_dst_offset, pages_to_read, src_page_index));
+            buffer.buffer_layout(),
+            buffer.page_size(),
+            padded_page_size,
+            dst,
+            unpadded_dst_offset,
+            pages_to_read,
+            src_page_index));
         this->enqueue_command(command, blocking);
         this->increment_num_entries_in_completion_q();
         if (not blocking) {  // should this be unconditional?
@@ -1480,7 +1489,8 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
             uint32_t curr_page_idx_in_shard = 0;
             uint32_t bank_base_address = buffer.address();
             if (buffer.buffer_type() == BufferType::DRAM) {
-                bank_base_address += buffer.device()->bank_offset(BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
+                bank_base_address += buffer.device()->bank_offset(
+                    BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
             }
             while (num_pages != 0) {
                 // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED

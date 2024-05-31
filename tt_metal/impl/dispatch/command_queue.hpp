@@ -156,7 +156,8 @@ class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
             expected_num_workers_completed,
             src_page_index,
             pages_to_read),
-        core(core), bank_base_address(bank_base_address) {}
+        core(core),
+        bank_base_address(bank_base_address) {}
 };
 
 class EnqueueWriteShardedBufferCommand;
@@ -422,15 +423,16 @@ struct ReadBufferDescriptor {
     uint32_t cur_dev_page_id;
 
     ReadBufferDescriptor(
-        Buffer& buffer,
+        TensorMemoryLayout buffer_layout,
+        uint32_t page_size,
         uint32_t padded_page_size,
         void* dst,
         uint32_t dst_offset,
         uint32_t num_pages_read,
         uint32_t cur_dev_page_id,
         const std::vector<std::optional<uint32_t>>& dev_page_to_host_page_mapping = {}) :
-        buffer_layout(buffer.buffer_layout()),
-        page_size(this->page_size = buffer.page_size()),
+        buffer_layout(buffer_layout),
+        page_size(page_size),
         padded_page_size(padded_page_size),
         dst(dst),
         dst_offset(dst_offset),
