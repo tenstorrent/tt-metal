@@ -1111,13 +1111,14 @@ void nt_memcpy(uint8_t *__restrict dst, const uint8_t * __restrict src, size_t n
 void write_prefetcher_cmd(Device *device,
                           vector<uint32_t>& cmds,
                           uint32_t& cmd_offset,
-                          uint32_t& cmd_size16b,
+                          dispatch_constants::prefetch_q_entry_type cmd_size16b,
                           uint32_t*& host_mem_ptr,
                           uint32_t& prefetch_q_dev_ptr,
                           uint32_t& prefetch_q_dev_fence,
                           uint32_t prefetch_q_base,
                           uint32_t prefetch_q_rd_ptr_addr,
-                          CoreCoord phys_prefetch_core) {
+                          CoreCoord phys_prefetch_core,
+                          tt::Writer& prefetch_q_writer) {
 
     static vector<uint32_t> read_vec;  // static to avoid realloc
 
@@ -1146,7 +1147,7 @@ void write_prefetcher_cmd(Device *device,
     host_mem_ptr += cmd_size_words;
 
     // This updates FetchQ where each entry of type prefetch_q_entry_type is size in 16B.
-    tt::Cluster::instance().write_reg(&cmd_size16b, tt_cxy_pair(device->id(), phys_prefetch_core), prefetch_q_dev_ptr);
+    prefetch_q_writer.write(prefetch_q_dev_ptr, cmd_size16b);
 
     prefetch_q_dev_ptr += sizeof(dispatch_constants::prefetch_q_entry_type);
 }
@@ -1160,6 +1161,7 @@ void write_prefetcher_cmds(uint32_t iterations,
                            uint32_t prefetch_q_base,
                            uint32_t prefetch_q_rd_ptr_addr,
                            CoreCoord phys_prefetch_core,
+                           tt::Writer& prefetch_q_writer,
                            bool is_control_only) {
 
     static uint32_t *host_mem_ptr;
@@ -1200,7 +1202,7 @@ void write_prefetcher_cmds(uint32_t iterations,
             }
 
             write_prefetcher_cmd(device, prefetch_cmds, cmd_ptr, cmd_sizes[j],
-                                 host_mem_ptr, prefetch_q_dev_ptr, prefetch_q_dev_fence, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core);
+                                 host_mem_ptr, prefetch_q_dev_ptr, prefetch_q_dev_fence, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core, prefetch_q_writer);
         }
     }
 }
@@ -1236,13 +1238,14 @@ std::chrono::duration<double> run_test(uint32_t iterations,
                                        uint32_t dev_hugepage_base,
                                        uint32_t prefetch_q_base,
                                        uint32_t prefetch_q_rd_ptr_addr,
-                                       CoreCoord phys_prefetch_core) {
+                                       CoreCoord phys_prefetch_core,
+                                       tt::Writer& prefetch_q_writer) {
 
     auto start = std::chrono::system_clock::now();
 
     std::thread t1 ([&]() {
-        write_prefetcher_cmds(iterations, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core, false);
-        write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core, true);
+        write_prefetcher_cmds(iterations, device, cmds, cmd_sizes, host_hugepage_base, dev_hugepage_base, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core, prefetch_q_writer, false);
+        write_prefetcher_cmds(1, device, terminate_cmds, terminate_sizes, host_hugepage_base, dev_hugepage_base, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core, prefetch_q_writer, true);
     });
     tt_metal::detail::LaunchProgram(device, program, false);
     if (test_device_id_g != 0) {
@@ -2623,6 +2626,8 @@ int main(int argc, char **argv) {
         }
         log_info(LogTest, "Iterations: {}", iterations_g);
 
+        tt::Writer prefetch_q_writer =  tt::Cluster::instance().get_static_tlb_writer(tt_cxy_pair(device->id(), phys_prefetch_core_g));
+
         vector<uint32_t> cmds, terminate_cmds;
         vector<uint32_t> cmd_sizes, terminate_sizes;
         DeviceData device_data(device, all_workers_g, l1_buf_base_g, DRAM_DATA_BASE_ADDR, (uint32_t*)host_hugepage_completion_buffer_base_g, false, DRAM_DATA_SIZE_WORDS);
@@ -2644,7 +2649,7 @@ int main(int argc, char **argv) {
         gen_prefetcher_cmds(device_r, cmds, cmd_sizes, device_data, l1_buf_base_g);
         if (warmup_g) {
             log_info(tt::LogTest, "Warming up cache now...");
-            run_test(1, device, program, device_r, program_r, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g);
+            run_test(1, device, program, device_r, program_r, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g, prefetch_q_writer);
             initialize_device_g = true;
         }
 
@@ -2657,14 +2662,14 @@ int main(int argc, char **argv) {
                 cmd_sizes.resize(0);
                 device_data.reset();
                 gen_prefetcher_cmds(device_r, cmds, cmd_sizes, device_data, l1_buf_base_g);
-                run_test(1, device, program, device_r, program_r, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g);
+                run_test(1, device, program, device_r, program_r, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g, prefetch_q_writer);
                 pass &= device_data.validate(device_r);
                 if (!pass) {
                     break;
                 }
             }
         } else {
-            auto elapsed_seconds = run_test(iterations_g, device, program, device_r, program_r, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g);
+            auto elapsed_seconds = run_test(iterations_g, device, program, device_r, program_r, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g, prefetch_q_writer);
 
             log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
             log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / iterations_g);
