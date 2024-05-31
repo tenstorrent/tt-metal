@@ -17,7 +17,7 @@ Quick Start Guide
 Metalium provides developers to do more than running models, facilitating a
 transition from running models effortlessly out of the box, engaging in
 lightweight optimizations, and progressing into more sophisticated, heavyweight
-optimizations. This series of five steps serves as an illustrative example,
+optimizations. This series of steps serves as an illustrative example,
 showcasing the available tools for optimizing performance on Tenstorrent
 hardware.
 
@@ -43,19 +43,7 @@ You can also check our demos for
 and
 `Llama2-70B <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama2_70b>`_.
 
-3. ttnn Tutorial: Multi-Head Attention (Simple)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Learn the basics of multi-head attention operations in tt-metal's ttnn module
-with a simple example: `ttnn simple module <../../ttnn/ttnn/tutorials/ttnn_tutorials/003.html#Write-Multi-Head-Attention-using-ttnn>`_.
-
-4. ttnn Tutorial: Multi-Head Attention (Optimized)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Dive deeper into multi-head attention operations in ttnn, optimizing
-performance: `optimizing performance <../../ttnn/ttnn/tutorials/ttnn_tutorials/003.html#Write-optimized-version-of-Multi-Head-Attention>`_.
-
-5. Advanced Metalium Usage: Matrix Multiplication Kernels
+3. Advanced Metalium Usage: Matrix Multiplication Kernels
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Explore expert-level usage by working with Metalium to define your own matrix
@@ -70,6 +58,6 @@ Where to go from here
 If you're an ML developer and looking for further docs for using the Python
 library APIs to build models, please now go to `getting started for models <../../ttnn/tt_metal_models/get_started.html>`_.
 
-If you're an internal TT-Metalium developer, please now read please review the
+If you're an internal TT-Metalium developer, please now read and review the
 `contribution standards
 <https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md>`_.

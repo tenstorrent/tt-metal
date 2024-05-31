@@ -9,8 +9,9 @@ Welcome to TT-NN documentation!
 .. toctree::
    :caption: TTNN
 
-   ttnn/installing
    ttnn/about
+   ttnn/get_started
+   ttnn/installing
    ttnn/usage
    ttnn/tensor
    ttnn/api
