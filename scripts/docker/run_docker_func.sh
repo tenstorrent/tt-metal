@@ -44,7 +44,6 @@ function run_docker_common {
         -v /etc/shadow:/etc/shadow:ro \
         -w ${TT_METAL_HOME} \
         -e TT_METAL_HOME=${TT_METAL_HOME} \
-        -e TT_METAL_ENV=${TT_METAL_ENV} \
         -e LOGURU_LEVEL=${LOGURU_LEVEL} \
         -e LD_LIBRARY_PATH=${LD_LIBRARY_PATH} \
         -e CONFIG=${CONFIG} \

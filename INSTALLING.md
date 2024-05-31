@@ -83,7 +83,6 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
 export ARCH_NAME=grayskull
 export TT_METAL_HOME=$(pwd)
 export PYTHONPATH=$(pwd)
-export TT_METAL_ENV=dev
 ```
 
 For Wormhole boards, use:
@@ -92,7 +91,6 @@ For Wormhole boards, use:
 export ARCH_NAME=wormhole_b0
 export TT_METAL_HOME=$(pwd)
 export PYTHONPATH=$(pwd)
-export TT_METAL_ENV=dev
 ```
 
 4. Build & activate.
