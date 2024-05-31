@@ -337,3 +337,37 @@ def test_add_1D_tensor_and_scalar(pcie_device_mesh, scalar, size):
     for output_tensor in output_tensors:
         assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
         assert output_tensor.shape == (1, size)
+
+    for device in pcie_device_mesh.get_device_ids():
+        pcie_device_mesh.get_device(device).enable_async(False)
+
+
+@pytest.mark.parametrize("pcie_device_mesh", [2], indirect=True)
+@pytest.mark.parametrize("shape", [(32, 1, 512, 256), (64, 2, 256, 512)])
+def test_async_multi_device_reshape(pcie_device_mesh, shape):
+    from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+
+    for device in pcie_device_mesh.get_device_ids():
+        pcie_device_mesh.get_device(device).enable_async(True)
+
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    updated_shape_torch = [shape[0], shape[1], shape[3], shape[2]]
+    torch_tensor_reshaped = torch_tensor.reshape(updated_shape_torch)
+    ttnn_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ShardTensorToMesh(pcie_device_mesh, dim=0),
+    )
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, pcie_device_mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    updated_shape_ttnn = [shape[0] // len(pcie_device_mesh.get_device_ids()), shape[1], shape[3], shape[2]]
+    ttnn_tensor = ttnn_tensor.reshape(updated_shape_ttnn)
+    ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
+    torch_loop_back_tensor = ttnn.to_torch(
+        ttnn_loop_back_tensor, mesh_composer=ConcatMeshToTensor(pcie_device_mesh, dim=0)
+    )
+    assert_with_pcc(torch_loop_back_tensor, torch_tensor_reshaped)
+    assert list(torch_loop_back_tensor.shape) == updated_shape_torch
+
+    for device in pcie_device_mesh.get_device_ids():
+        pcie_device_mesh.get_device(device).enable_async(False)

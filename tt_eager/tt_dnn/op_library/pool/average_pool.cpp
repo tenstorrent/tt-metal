@@ -24,18 +24,24 @@ Tensor pool_2d(const Tensor& input, const MemoryConfig& output_mem_config, const
 }
 
 Tensor average_pool_2d(const Tensor& input, const MemoryConfig& output_mem_config, const std::optional<DataType>& output_dtype) {
-    TT_ASSERT(input.storage_type() == StorageType::DEVICE, "Input tensor needs to be on device");
-    auto output = input;
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
+    operation::launch_op(
+        [output_mem_config, output_dtype] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            const auto& input = input_tensors.at(0);
+            TT_ASSERT(input.storage_type() == StorageType::DEVICE, "Input tensor needs to be on device");
+            auto output = input;
 
-    Shape in_shape = input.get_legacy_shape();
-    auto input_padding = in_shape.padding();
-    TT_ASSERT(input_padding[1].front == 0 and input_padding[1].back == 0);
-    auto output_padding = Padding({input_padding[0], {0, 0}, {0, input_padding[2].back * in_shape[1]}, input_padding[3]}, input_padding.pad_value());
-    auto output_shape = Shape({in_shape[0], 1, in_shape[1] * in_shape[2], in_shape[3]}, output_padding);
-    output = output.reshape(output_shape);
+            Shape in_shape = input.get_legacy_shape();
+            auto input_padding = in_shape.padding();
+            TT_ASSERT(input_padding[1].front == 0 and input_padding[1].back == 0);
+            auto output_padding = Padding({input_padding[0], {0, 0}, {0, input_padding[2].back * in_shape[1]}, input_padding[3]}, input_padding.pad_value());
+            auto output_shape = Shape({in_shape[0], 1, in_shape[1] * in_shape[2], in_shape[3]}, output_padding);
+            output = output.reshape(output_shape);
 
-    output = pool_2d<PoolType::AVG>(output, output_mem_config, output_dtype);
-    return output;
+            output = pool_2d<PoolType::AVG>(output, output_mem_config, output_dtype);
+            return {output};
+        }, {input}, output_tensors);
+    return output_tensors.at(0);
 }
 
 }  // namespace tt_metal

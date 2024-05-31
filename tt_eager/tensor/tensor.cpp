@@ -675,49 +675,109 @@ const bool Tensor::is_sharded() const {
 
 uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(this->get_dtype()); }
 
-Tensor Tensor::reshape(int N, int C, int H, int W) const {
-    ZoneScoped;
-    auto new_shape = infer_dims_for_reshape(N, C, H, W, this->volume());
-    return this->reshape(new_shape);
-}
-
-Tensor Tensor::reshape(const Shape& new_shape) const {
-    ZoneScoped;
+inline Tensor reshape_(const Tensor& tensor, const Shape& new_shape) {
     TT_ASSERT(
-        this->volume() == tt::tt_metal::compute_volume(new_shape),
+        tensor.volume() == tt::tt_metal::compute_volume(new_shape),
         "{} != {}",
-        this->volume(),
+        tensor.volume(),
         tt::tt_metal::compute_volume(new_shape));
-    if (this->get_layout() == Layout::TILE) {
-        TT_ASSERT(
-            new_shape[-2] % TILE_HEIGHT == 0 && new_shape[-1] % TILE_WIDTH == 0 &&
-            "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
-    }
+    TT_ASSERT(
+        (tensor.get_layout() == Layout::TILE) ?
+        new_shape[-2] % TILE_HEIGHT == 0 && new_shape[-1] % TILE_WIDTH == 0 :
+        true, "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
     return std::visit(
-        [this, &new_shape](auto&& storage) -> Tensor {
+        [&tensor, &new_shape](auto&& storage) -> Tensor {
             using T = std::decay_t<decltype(storage)>;
-            const auto& tensor = *this;
             if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                auto updated_storage = std::get<T>(tensor.get_storage());
+                MultiDeviceHostStorage updated_storage = storage;
                 for (int i = 0; i < updated_storage.shapes.size(); i++) {
                     updated_storage.shapes[i] = new_shape;
                 }
                 return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout());
             }
-            if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
+            else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                MultiDeviceStorage updated_storage = storage;
                 std::unordered_map<int, Shape> new_shapes;
-
                 for (auto device_id : updated_storage.ordered_device_ids) {
                     new_shapes.insert({device_id, new_shape});
                 }
                 updated_storage.shapes = new_shapes;
                 return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout());
             } else {
-                return Tensor(tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout());
+                return Tensor(storage, new_shape, tensor.get_dtype(), tensor.get_layout());
             }
         },
-        this->get_storage());
+        tensor.get_storage());
+}
+
+Tensor Tensor::reshape(const Shape& new_shape) const {
+    ZoneScoped;
+    auto workers = this->get_workers();
+    if (workers.size() and workers.at(0)->in_main_thread()) {
+        Tensor reshaped_tensor = Tensor(workers);
+        for (int worker_index = 0; worker_index < workers.size(); worker_index++) {
+            auto& worker = workers[worker_index];
+            worker->push_work([*this, reshaped_tensor, new_shape, worker] () mutable {
+                std::visit(
+                    [this, &new_shape, &reshaped_tensor, worker] (auto&& storage) {
+                        using T = std::decay_t<decltype(storage)>;
+                        if constexpr(std::is_same_v<T, MultiDeviceStorage>) {
+                            auto local_tensor = reshape_(get_shard_for_device(*this, worker), new_shape);
+                            insert_buffer_and_shape_for_device(worker, local_tensor, reshaped_tensor);
+                            uint32_t num_workers_completed = (reshaped_tensor.tensor_attributes->num_workers_completed)++;
+                            if (not num_workers_completed) {
+                                reshaped_tensor.set_shape(ttnn::Shape(new_shape));
+                                reshaped_tensor.set_dtype(this->get_dtype());
+                                reshaped_tensor.set_layout(this->get_layout());
+                                reshaped_tensor.tensor_attributes->metadata_populated = true;
+                            };
+                        } else if constexpr (std::is_same_v<T, DeviceStorage>) {
+                            reshaped_tensor.populate_buffers_and_metadata(reshape_(*this, new_shape));
+                        } else {
+                            TT_FATAL("Async Reshape is only supported for tensors on device.");
+                        }
+                    }, this->get_storage());
+            });
+        }
+        return reshaped_tensor;
+    }
+    return reshape_(*this, new_shape);
+
+}
+
+Tensor Tensor::reshape(int N, int C, int H, int W) const {
+    ZoneScoped;
+    auto workers = this->get_workers();
+    if (workers.size() and workers.at(0)->in_main_thread()) {
+        Tensor reshaped_tensor = Tensor(workers);
+        for (int worker_index = 0; worker_index < workers.size(); worker_index++) {
+            auto& worker = workers.at(worker_index);
+            worker->push_work([N, C, H, W, *this, reshaped_tensor, worker] () mutable {
+                auto new_shape = infer_dims_for_reshape(N, C, H, W, this->volume());
+                std::visit(
+                    [this, &new_shape, &reshaped_tensor, worker] (auto&& storage) {
+                        using T = std::decay_t<decltype(storage)>;
+                        if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                            auto local_tensor = reshape_(get_shard_for_device(*this, worker), new_shape);
+                            insert_buffer_and_shape_for_device(worker, local_tensor, reshaped_tensor);
+                            uint32_t num_workers_completed = (reshaped_tensor.tensor_attributes->num_workers_completed)++;
+                            if (not num_workers_completed) {
+                                reshaped_tensor.set_shape(ttnn::Shape(new_shape));
+                                reshaped_tensor.set_dtype(this->get_dtype());
+                                reshaped_tensor.set_layout(this->get_layout());
+                                reshaped_tensor.tensor_attributes->metadata_populated = true;
+                            };
+
+                        } else if constexpr (std::is_same_v<T, DeviceStorage>) {
+                            reshaped_tensor.populate_buffers_and_metadata(this->reshape(new_shape));
+                        }
+                    }, this->get_storage());
+            });
+        }
+        return reshaped_tensor;
+    }
+    auto new_shape = infer_dims_for_reshape(N, C, H, W, this->volume());
+    return this->reshape(new_shape);
 }
 
 bool Tensor::is_allocated() const {

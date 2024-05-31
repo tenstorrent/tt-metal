@@ -94,15 +94,15 @@ Tensor tilize(
     const MemoryConfig& output_mem_config,
     std::optional<const DataType> output_dtype,
     bool use_multicore) {
-    // No-op (Will do a tensor copy)
-    if (input_tensor_a.get_layout() == Layout::TILE) {
-        log_warning("Perf warning: tilize called on already tilized tensor.");
-        return AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config);
-    }
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
     operation::launch_op(
         [output_mem_config, output_dtype, use_multicore] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor_a = input_tensors.at(0);
+            // No-op (Will do a tensor copy)
+            if (input_tensor_a.get_layout() == Layout::TILE) {
+                log_warning("Perf warning: tilize called on already tilized tensor.");
+                return {AutoFormat::move_tensor_to_mem_config(input_tensor_a, output_mem_config)};
+            }
             return operation::run_without_autoformat(
                 Tilize{output_mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), use_multicore},
                 {input_tensor_a});
