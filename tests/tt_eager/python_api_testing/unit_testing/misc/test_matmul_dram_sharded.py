@@ -47,43 +47,7 @@ def pad_to_dram_banks(num, lcm=32 * 12):
     return padded_number
 
 
-@pytest.mark.parametrize(
-    "fidelity",
-    [
-        ttl.tensor.MathFidelity.HiFi2,
-        ttl.tensor.MathFidelity.LoFi,
-    ],
-    ids=["HiFi2", "LoFi"],
-)
-@pytest.mark.parametrize(
-    "has_bias",
-    [
-        False,
-        True,
-    ],
-    ids=["no_bias", "bias"],
-)
-@pytest.mark.parametrize(
-    "in0_dtype, in1_dtype, out_dtype",
-    [
-        (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
-    ],
-)
-@pytest.mark.parametrize(
-    "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation, grid_size",
-    # "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation, grid_size, in0_dtype, in1_dtype, out_dtype",
-    [
-        (False, True, True, 32, 8192, 1280, None, (8, 1)),
-        (False, True, True, 32, 8192, 4096, None, (8, 2)),
-        (False, True, True, 32, 8192, 1024, None, (8, 1)),
-        (False, True, True, 32, 32768, 1024, None, (8, 2)),
-        # (False, True, True, 32, 4096, 6144, None, (8, 2), ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
-        # (False, True, True, 32, 4096, 14336, None, (8, 2), ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT4_B, ttl.tensor.DataType.BFLOAT8_B),
-        # (False, True, True, 32, 14336, 4096, None, (8, 2), ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT8_B),
-        # (False, True, True, 32, 4096, 14336, None, (8, 2), ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT4_B, ttl.tensor.DataType.BFLOAT8_B),
-    ],
-)
-def test_matmul_in1_dram_sharded(
+def run_test_matmul_in1_dram_sharded(
     device,
     in0_sharded,
     out_sharded,
@@ -99,6 +63,7 @@ def test_matmul_in1_dram_sharded(
     in1_dtype,
     out_dtype,
     function_level_defaults,
+    use_program_cache,
 ):
     if is_grayskull() and (N == 4096 or K == 32768):
         pytest.skip("Skipping too large tensor test on Grayskull")
@@ -228,3 +193,89 @@ def test_matmul_in1_dram_sharded(
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
     assert passing
+
+
+@pytest.mark.parametrize(
+    "fidelity",
+    [
+        ttl.tensor.MathFidelity.HiFi2,
+        ttl.tensor.MathFidelity.LoFi,
+    ],
+    ids=["HiFi2", "LoFi"],
+)
+@pytest.mark.parametrize(
+    "has_bias",
+    [
+        False,
+        True,
+    ],
+    ids=["no_bias", "bias"],
+)
+@pytest.mark.parametrize(
+    "in0_dtype, in1_dtype, out_dtype",
+    [
+        (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
+    ],
+)
+@pytest.mark.parametrize(
+    "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation, grid_size",
+    # "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation, grid_size, in0_dtype, in1_dtype, out_dtype",
+    [
+        (False, True, True, 32, 8192, 1280, None, (8, 1)),
+        (False, True, True, 32, 8192, 4096, None, (8, 2)),
+        (False, True, True, 32, 8192, 1024, None, (8, 1)),
+        (False, True, True, 32, 32768, 1024, None, (8, 2)),
+        # (False, True, True, 32, 4096, 6144, None, (8, 2), ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
+        # (False, True, True, 32, 4096, 14336, None, (8, 2), ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT4_B, ttl.tensor.DataType.BFLOAT8_B),
+        # (False, True, True, 32, 14336, 4096, None, (8, 2), ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT8_B),
+        # (False, True, True, 32, 4096, 14336, None, (8, 2), ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT4_B, ttl.tensor.DataType.BFLOAT8_B),
+    ],
+)
+def test_matmul_in1_dram_sharded_with_program_cache(
+    device,
+    in0_sharded,
+    out_sharded,
+    in1_in_dram,
+    M,
+    K,
+    N,
+    fidelity,
+    has_bias,
+    activation,
+    grid_size,
+    in0_dtype,
+    in1_dtype,
+    out_dtype,
+    function_level_defaults,
+    use_program_cache,
+):
+    for _ in range(2):
+        run_test_matmul_in1_dram_sharded(
+            device,
+            in0_sharded,
+            out_sharded,
+            in1_in_dram,
+            M,
+            K,
+            N,
+            fidelity,
+            has_bias,
+            activation,
+            grid_size,
+            in0_dtype,
+            in1_dtype,
+            out_dtype,
+            function_level_defaults,
+            use_program_cache,
+        )
+        # dummy tensor to change tensor alloc
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        mem_config = ttl.tensor.MemoryConfig(
+            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttl.tensor.BufferType.DRAM,
+        )
+        tt_dummy_tensor = (
+            ttl.tensor.Tensor(py_dummy_tensor, in0_dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
+        )
+    assert device.num_program_cache_entries() == 3
