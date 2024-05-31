@@ -1009,7 +1009,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     }
 
     auto override_runtime_arguments_callback =
-        [writer_kernel_ids, all_worker_cores_ordered, cb_src2, cb_output](
+        [writer_kernel_ids, all_worker_cores_ordered, cb_src2, cb_output_reshard](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -1025,7 +1025,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
             auto dst_buffer = output_tensors.at(0).buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_src2, *src_buffer_a);
-            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_output_reshard, *dst_buffer);
 
             for (uint32_t i = 0; i < all_worker_cores_ordered.size(); ++i) {
                 auto core = all_worker_cores_ordered[i];
