@@ -14,6 +14,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/math.hpp"
+#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h" // For CoreType
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 
@@ -155,7 +156,7 @@ class Buffer {
         uint64_t page_size,
         const BufferType buffer_type,
         const TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        std::optional<ShardSpecBuffer> shard_parameter = std::nullopt,
+        const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
         bool allocate = true);
 
     Buffer(const Buffer &other);
@@ -188,6 +189,17 @@ class Buffer {
     }
 
     BufferType buffer_type() const { return buffer_type_; }
+    CoreType core_type() const {
+        switch (this->buffer_type_) {
+            case BufferType::DRAM:
+                return CoreType::DRAM;
+            case BufferType::L1:
+            case BufferType::L1_SMALL:
+                return CoreType::WORKER;
+            default:
+                TT_THROW("Unknown CoreType for buffer");
+        }
+    }
 
     bool is_l1() const { return buffer_type() == BufferType::L1 or buffer_type() == BufferType::L1_SMALL; }
     bool is_dram() const { return buffer_type() == BufferType::DRAM; }

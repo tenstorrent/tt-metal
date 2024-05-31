@@ -68,8 +68,8 @@ bool ActiveDevices::is_device_active(chip_id_t id) {
 }
 
 Device::Device(
-    chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal) :
-    id_(device_id), num_hw_cqs_(num_hw_cqs), work_executor(device_id) {
+    chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal, uint32_t worker_core) :
+    id_(device_id), num_hw_cqs_(num_hw_cqs), worker_thread_core(worker_core), work_executor(worker_core, device_id) {
     ZoneScoped;
     TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");
     this->build_key_ = tt::Cluster::instance().get_harvesting_mask(device_id);
@@ -1470,6 +1470,10 @@ CoreCoord Device::compute_with_storage_grid_size() const {
     return tt::get_compute_grid_size(id_, num_hw_cqs_);
 }
 
+CoreCoord Device::dram_grid_size() const {
+    return tt::Cluster::instance().get_soc_desc(id_).get_dram_grid_size();
+}
+
 CoreCoord Device::physical_core_from_logical_core(const CoreCoord &logical_coord, const CoreType &core_type) const {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
     return soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
@@ -1494,6 +1498,19 @@ std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector
         worker_cores[idx] = worker_core_from_logical_core(logical_cores[idx]);
 
     return worker_cores;
+}
+
+CoreCoord Device::dram_core_from_logical_core(const CoreCoord &logical_core) const {
+    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
+    return soc_desc.get_physical_dram_core_from_logical(logical_core);
+}
+
+std::vector<CoreCoord> Device::dram_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
+    std::vector<CoreCoord> dram_cores(logical_cores.size());
+    for (std::size_t idx = 0; idx < logical_cores.size(); idx++)
+        dram_cores[idx] = dram_core_from_logical_core(logical_cores[idx]);
+
+    return dram_cores;
 }
 
 CoreCoord Device::ethernet_core_from_logical_core(const CoreCoord &logical_core) const {
@@ -1534,14 +1551,18 @@ uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id) const {
     return allocator::dram_channel_from_bank_id(*this->allocator_, bank_id);
 }
 
-CoreCoord Device::core_from_dram_channel(uint32_t dram_channel) const {
-    TT_FATAL(
-        dram_channel < this->num_dram_channels(),
-        "Bounds-Error -- dram_channel={} is outside of num_dram_channels={}",
-        dram_channel,
-        this->num_dram_channels()
-    );
+CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel) const {
     return tt::Cluster::instance().get_soc_desc(id_).get_preferred_worker_core_for_dram_channel(dram_channel);
+}
+
+CoreCoord Device::logical_core_from_dram_channel(uint32_t dram_channel) const {
+    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
+    return tt::Cluster::instance().get_soc_desc(id_).get_logical_core_for_dram_channel(dram_channel);
+}
+
+uint32_t Device::dram_channel_from_logical_core(const CoreCoord& logical_core) const {
+    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
+    return tt::Cluster::instance().get_soc_desc(id_).get_dram_channel_from_logical_core(logical_core);
 }
 
 int32_t Device::bank_offset(BufferType buffer_type, uint32_t bank_id) const {

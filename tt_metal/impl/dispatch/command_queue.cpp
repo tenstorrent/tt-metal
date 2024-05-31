@@ -86,9 +86,9 @@ void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceComma
 
 void EnqueueReadShardedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
     uint32_t padded_page_size = align(this->buffer.page_size(), ADDRESS_ALIGNMENT);
-    const CoreCoord worker_core = this->buffer.device()->worker_core_from_logical_core(this->core);
+    const CoreCoord physical_core = this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
     command.add_prefetch_relay_linear(
-        get_noc_unicast_encoding(worker_core), padded_page_size * this->pages_to_read, this->buffer.address());
+        get_noc_unicast_encoding(physical_core), padded_page_size * this->pages_to_read, this->bank_base_address);
 }
 
 void EnqueueReadBufferCommand::process() {
@@ -206,7 +206,7 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
 
 void EnqueueWriteShardedBufferCommand::add_dispatch_write(HugepageDeviceCommand& command_sequence) {
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
-    CoreCoord physical_core = this->buffer.device()->worker_core_from_logical_core(this->core);
+    const CoreCoord physical_core = this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
 
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_linear(
@@ -1229,7 +1229,7 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id) :
     std::thread completion_queue_thread = std::thread(&HWCommandQueue::read_completion_queue, this);
     this->completion_queue_thread = std::move(completion_queue_thread);
     // Set the affinity of the completion queue reader.
-    set_device_thread_affinity(this->completion_queue_thread, device->id());
+    set_device_thread_affinity(this->completion_queue_thread, device->worker_thread_core);
     this->expected_num_workers_completed = 0;
 }
 
@@ -1322,6 +1322,10 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                 num_pages_to_read = min(num_total_pages, max_pages_per_shard);
                 num_total_pages -= num_pages_to_read;
             }
+            uint32_t bank_base_address = buffer.address();
+            if (buffer.buffer_type() == BufferType::DRAM) {
+                bank_base_address += buffer.device()->bank_offset(BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
+            }
             if (num_pages_to_read > 0) {
                 if (width_split) {
                     uint32_t host_page = buffer_page_mapping.value().core_host_page_indices_[core_id][0];
@@ -1339,6 +1343,7 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                     this->manager,
                     this->expected_num_workers_completed,
                     cores[core_id],
+                    bank_base_address,
                     src_page_index,
                     num_pages_to_read);
 
@@ -1473,6 +1478,10 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
                 num_total_pages -= num_pages;
             }
             uint32_t curr_page_idx_in_shard = 0;
+            uint32_t bank_base_address = buffer.address();
+            if (buffer.buffer_type() == BufferType::DRAM) {
+                bank_base_address += buffer.device()->bank_offset(BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
+            }
             while (num_pages != 0) {
                 // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
                 uint32_t data_offset_bytes = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
@@ -1488,7 +1497,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
 
                 uint32_t pages_to_write = std::min(num_pages, (uint32_t)num_pages_available);
                 if (pages_to_write > 0) {
-                    uint32_t bank_base_address = buffer.address() + curr_page_idx_in_shard * padded_page_size;
+                    uint32_t address = bank_base_address + curr_page_idx_in_shard * padded_page_size;
 
                     tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for channel {}", this->id);
 
@@ -1500,7 +1509,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
                         this->manager,
                         issue_wait,
                         this->expected_num_workers_completed,
-                        bank_base_address,
+                        address,
                         buffer_page_mapping,
                         cores[core_id],
                         padded_page_size,
@@ -1901,24 +1910,29 @@ void HWCommandQueue::read_completion_queue() {
             });
         }
         if (this->num_entries_in_completion_q > this->num_completed_completion_q_reads) {
+            ZoneScopedN("CompletionQueueReader");
             uint32_t num_events_to_read = this->num_entries_in_completion_q - this->num_completed_completion_q_reads;
             for (uint32_t i = 0; i < num_events_to_read; i++) {
-                std::variant<detail::ReadBufferDescriptor, detail::ReadEventDescriptor> read_descriptor =
-                    *(this->issued_completion_q_reads.pop());
-
-                this->manager.completion_queue_wait_front(
-                    this->id, this->exit_condition);  // CQ DISPATCHER IS NOT HANDSHAKING WITH HOST RN
-
+                ZoneScopedN("CompletionQueuePopulated");
+                std::variant<detail::ReadBufferDescriptor, detail::ReadEventDescriptor> read_descriptor = *(this->issued_completion_q_reads.pop());
+                {
+                    ZoneScopedN("CompletionQueueWait");
+                    this->manager.completion_queue_wait_front(this->id, this->exit_condition); // CQ DISPATCHER IS NOT HANDSHAKING WITH HOST RN
+                }
                 if (this->exit_condition) {  // Early exit
                     return;
                 }
 
                 std::visit(
-                    [&](auto&& read_descriptor) {
+                    [&](auto&& read_descriptor)
+                    {
                         using T = std::decay_t<decltype(read_descriptor)>;
                         if constexpr (std::is_same_v<T, detail::ReadBufferDescriptor>) {
+                            ZoneScopedN("CompletionQueueReadData");
                             this->copy_into_user_space(read_descriptor, mmio_device_id, channel);
-                        } else if constexpr (std::is_same_v<T, detail::ReadEventDescriptor>) {
+                        }
+                        else if constexpr (std::is_same_v<T, detail::ReadEventDescriptor>) {
+                            ZoneScopedN("CompletionQueueReadEvent");
                             uint32_t read_ptr = this->manager.get_completion_queue_read_ptr(this->id);
                             thread_local static std::vector<uint32_t> dispatch_cmd_and_event(
                                 (sizeof(CQDispatchCmd) + dispatch_constants::EVENT_PADDED_SIZE) / sizeof(uint32_t));

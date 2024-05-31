@@ -18,7 +18,7 @@ from loguru import logger
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 
 model_config = {
-    "MATH_FIDELITY": tt_lib.tensor.MathFidelity.HiFi2,
+    "MATH_FIDELITY": tt_lib.tensor.MathFidelity.LoFi,
     "WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
     "ACTIVATIONS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
 }
@@ -127,8 +127,8 @@ def run_perf_resnet(
     (
         (1, 0.001, 1),
         (2, 0.001, 1),
-        (16, 0.0085, 1),  # Issue 7816 Inference time
-        (20, 0.0095, 1),  # Issue 7816 Inference time
+        (16, 0.007, 7),
+        (20, 0.007, 7),
     ),
 )
 def test_perf_bare_metal(

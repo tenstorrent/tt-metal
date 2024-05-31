@@ -362,13 +362,13 @@ UnaryOpParallelizationStrategy EltwiseUnary::get_parallelization_strategy(
 
 const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto& input_shape = input_tensor.get_legacy_shape();
+    const auto& input_shape = input_tensor.legacy_shape();
 
     operation::Hash hash = tt::stl::hash::hash_objects_with_default_seed(
         typeid(*this).hash_code(),
         compute_volume(input_shape),
-        input_tensor.get_dtype(),
-        input_tensor.memory_config(),
+        input_tensor.dtype(),
+        std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
         this->output_mem_config);
 
     for (const auto& unary_with_param_op : this->op_chain) {
@@ -383,7 +383,7 @@ const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tenso
 // unary op version tie
 template <BcastOpMath OP>
 Tensor tie_binop_to_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
-    Tensor t_value = mk_tiled_scalar(value);
+    Tensor t_value = mk_tiled_scalar(value, input_tensor.get_dtype());
     return bcast(input_tensor, t_value, OP, BcastOpDim::HW);
 }
 

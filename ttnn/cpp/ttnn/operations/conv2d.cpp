@@ -711,7 +711,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             matmul_program_config,
             conv_out_memory_config,
             conv_config.dtype,
-            conv_config.activation == "" ? std::nullopt : std::optional<std::string>{conv_config.activation},
+            std::nullopt, // activation fused into matmul. part of the matmul config.
             compute_kernel_config);
         if (conv_config.deallocate_activation) {
             // matmul_input.deallocate();

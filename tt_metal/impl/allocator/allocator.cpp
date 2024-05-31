@@ -185,8 +185,10 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
     }
     allocator.dram_manager = BankManager(BufferType::DRAM, bank_offsets, dram_bank_size, offset_bytes);
     for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
+        CoreCoord logical_core = CoreCoord{bank_id, 0};
         allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
         allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
+        allocator.logical_core_to_bank_ids[BufferType::DRAM].insert({logical_core, {bank_id}});
     }
 }
 
@@ -266,7 +268,7 @@ const std::vector<uint32_t> &bank_ids_from_logical_core(
     const Allocator &allocator, BufferType buffer_type, const CoreCoord &logical_core) {
     if (allocator.logical_core_to_bank_ids.at(buffer_type).find(logical_core) ==
         allocator.logical_core_to_bank_ids.at(buffer_type).end()) {
-        TT_THROW("No L1 bank exists for core {}", logical_core.str());
+        TT_THROW("No {} bank exists for core {}", magic_enum::enum_name(buffer_type), logical_core.str());
     }
     return allocator.logical_core_to_bank_ids.at(buffer_type).at(logical_core);
 }
@@ -318,7 +320,7 @@ uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size
     uint64_t address = 0;
     TT_FATAL(!allocator.disabled_allocs, "Allocation of new buffers has been disabled");
     switch (buffer_type) {
-        case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, size, page_size, bottom_up, std::nullopt);
+        case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, size, page_size, bottom_up, num_shards);
         case BufferType::L1: return allocator.descriptor.l1.alloc(allocator.config, allocator.l1_manager, size, page_size, bottom_up, num_shards);
         case BufferType::L1_SMALL: {
             TT_FATAL(num_shards.has_value(), "L1_SMALL only supports sharded allocations, see validate_num_banks");

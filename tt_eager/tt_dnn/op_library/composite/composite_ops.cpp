@@ -27,7 +27,7 @@ namespace tt_metal {
 
 Tensor mk_zero_tensor_like(const Tensor& reference_tensor, const MemoryConfig& output_mem_config) {
     // Tensor zero_like = bcast(reference_tensor, , BcastOpMath::MUL, BcastOpDim::HW);
-    static const Tensor zero = mk_tiled_scalar(0.0f);
+    Tensor zero = mk_tiled_scalar(0.0f, reference_tensor.get_dtype());
     Tensor zero_like = bcast(reference_tensor, zero, BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
     return zero_like;
 }
@@ -35,7 +35,7 @@ Tensor mk_zero_tensor_like(const Tensor& reference_tensor, const MemoryConfig& o
 // TODO: enable zeroes(), ones() and eye() type functions on-device using this type of logic
 template <typename T>
 Tensor mk_filled_tensor_like(const Tensor& reference_tensor, T val, const MemoryConfig& output_mem_config) {
-    Tensor k = mk_tiled_scalar(val);
+    Tensor k = mk_tiled_scalar(val, reference_tensor.get_dtype());
     Tensor zero_like = mk_zero_tensor_like(reference_tensor, output_mem_config);
     Tensor result = bcast(zero_like, k, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
     return result;
@@ -118,7 +118,9 @@ Tensor _softplus(const Tensor& x, float beta, float threshold, const MemoryConfi
     Tensor x_beta = mul_unary(x, beta, output_mem_config);
     Tensor exp_x = exp(x_beta, output_mem_config);
     Tensor result_log1p = log1p(exp_x, output_mem_config);
+    exp_x.deallocate();
     Tensor sp_result = mul_unary(result_log1p,  oned_beta, output_mem_config);
+    result_log1p.deallocate();
     sp_result = where(gt(x_beta, full_like(x, threshold, output_mem_config), std::nullopt, output_mem_config), x,
                 where(eqz(full_like(x, beta, output_mem_config), output_mem_config), std::numeric_limits<float>::infinity(), sp_result), output_mem_config);
     return sp_result;
@@ -1166,10 +1168,10 @@ Tensor scatter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig&
 
 // threshold(a,t,v) = (a <= t)*v + (a > t)*a
 Tensor _threshold(const Tensor& input_a, float threshold, float value, const MemoryConfig& output_mem_config) {
-    Tensor t_threshold = mk_tiled_scalar(threshold);
+    Tensor t_threshold = mk_tiled_scalar(threshold, input_a.get_dtype());
     Tensor t0 = bcast(input_a, t_threshold, BcastOpMath::SUB, BcastOpDim::HW, output_mem_config);
     t_threshold.deallocate();
-    Tensor t_value = mk_tiled_scalar(value);
+    Tensor t_value = mk_tiled_scalar(value, input_a.get_dtype());
     Tensor t1 = bcast(lez(t0), t_value, BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
     t_value.deallocate();
     Tensor t2 = mul(gtz(t0, output_mem_config), input_a, std::nullopt, output_mem_config);
@@ -1608,6 +1610,7 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig
                         tindex = tt::numpy::index_height<bfloat16>(input_shape, DataType::BFLOAT16);
                         max_tensor = bcast(max_tensor, max_val, BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
                     }
+                    tindex = tindex.to(input_a.device());
                     max_val.deallocate();
                     Tensor cmp_results = eq(input_a, max_tensor, std::nullopt, output_mem_config);
                     max_tensor.deallocate();
@@ -1650,6 +1653,7 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig
                     {
                         tindex = tt::numpy::index_batch<bfloat16>(input_shape, DataType::BFLOAT16);
                     }
+                    tindex = tindex.to(input_a.device());
                     Tensor max_indices =  mul(cmp_results, tindex, std::nullopt, output_mem_config);
                     cmp_results.deallocate();
                     Tensor midx = full_like(max_indices, size);
@@ -1673,6 +1677,7 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig
             }
             //TODO: Fix the index generation code. With the fix the code will work for argmax that return entire maximum value index
             Tensor tindex = tt::numpy::index_all<bfloat16>(input_shape, DataType::BFLOAT16);
+            tindex = tindex.to(input_a.device());
             Tensor max_val = global_max(input_a, output_mem_config);
             Tensor max_tensor = zeros_like(input_a, output_mem_config);
             max_tensor = bcast(max_tensor, max_val, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);

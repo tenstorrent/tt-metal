@@ -66,9 +66,8 @@ operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::CoreGridDesc core_grid(device);
-    const auto num_cores_y = core_grid.y_;
-    CoreCoord core_grid_coord(core_grid.x_, num_cores_y);
+    auto grid = device->compute_with_storage_grid_size();
+    const auto num_cores_y = grid.y;
 
     const auto
         [num_cores_to_be_used,
@@ -76,7 +75,7 @@ operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float
          core_group_1,
          core_group_2,
          num_output_tiles_per_core_group_1,
-         num_output_tiles_per_core_group_2] = tt_metal::split_work_to_cores(core_grid_coord, num_output_tiles);
+         num_output_tiles_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_output_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup

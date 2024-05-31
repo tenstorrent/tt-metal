@@ -57,17 +57,10 @@ def test_mixtral_model_inference(
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
     model_args.n_layers = n_layers
 
-    state_dict = torch.load(model_args.state_dict_path)
-    keys_dict = list(state_dict.keys())[:]
-    remv = [f"layers.{i}" for i in range(n_layers, 32)]
-    for k in keys_dict:
-        if any([r in k for r in remv]):
-            state_dict.pop(k)
+    state_dict = model_args.load_state_dict()
 
     tokenizer = Tokenizer(model_args.tokenizer_path)
-
     prompts = ["Once"] * 32
-
     encoded_prompts = [tokenizer.encode(prompt) for prompt in prompts]
 
     if validation_type == "pcc":
@@ -125,7 +118,8 @@ def test_mixtral_model_inference(
 
         # Run TT model
         tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask, rot_mat)
-
+        # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
+        del decode_input, attn_mask
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]

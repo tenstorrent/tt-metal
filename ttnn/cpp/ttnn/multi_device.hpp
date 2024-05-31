@@ -32,9 +32,9 @@ std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
     if (std::holds_alternative<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage())) {
         std::vector<ttnn::Tensor> tensors;
         auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
-        for (int i = 0; i < host_storage.buffers.size(); ++i)
+        for (int i = 0; i < host_storage.num_buffers(); ++i)
         {
-            tensors.push_back(Tensor{OwnedStorage{host_storage.buffers[i]},  host_storage.shapes[i], tensor.get_dtype(), tensor.get_layout()});
+            tensors.push_back(Tensor{OwnedStorage{host_storage.get_buffer(i)},  host_storage.shapes[i], tensor.get_dtype(), tensor.get_layout()});
         }
         return tensors;
     } else if (std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage())) {

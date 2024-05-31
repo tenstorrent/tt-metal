@@ -4,6 +4,7 @@
 
 #include "tt_metal/detail/tt_metal.hpp"
 
+#include <numa.h>
 #include <algorithm>
 #include <filesystem>
 #include <mutex>
@@ -171,6 +172,78 @@ std::vector<Device *> devices;
 
 }  // namespace device_pool
 
+namespace device_cpu_allocator {
+std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(std::unordered_set<uint32_t> &free_cores) {
+    std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = {};
+    if (numa_available() != -1) {
+        // Host has NUMA enabled. Group CPU IDs by the NUMA nodes they belong to.
+        for (int cpu = 0; cpu < numa_num_configured_cpus(); ++cpu) {
+            int node = numa_node_of_cpu(cpu);
+            if (cpu_cores_per_numa_node.find(node) == cpu_cores_per_numa_node.end()) {
+                cpu_cores_per_numa_node.insert({node, {}});
+            }
+            free_cores.insert(cpu);
+            cpu_cores_per_numa_node.at(node).push_back(cpu);
+        }
+    } else {
+        // Host does not have NUMA. Place all CPU Ids under a single node (0).
+        log_warning(tt::LogMetal, "Host does not use NUMA. May see reduced performance.");
+        for (int cpu = 0; cpu < sysconf(_SC_NPROCESSORS_ONLN); ++cpu) {
+            free_cores.insert(cpu);
+        }
+    }
+    return cpu_cores_per_numa_node;
+}
+
+int get_cpu_core_for_device_worker_thread(
+    int mmio_controlled_device_id,
+    const std::unordered_map<int, std::vector<uint32_t>> &cpu_cores_per_numa_node,
+    std::unordered_set<uint32_t> &free_cores) {
+    int core_assigned_to_device = 0;
+    if (numa_available() != -1) {
+        // Get NUMA node that the current device is mapped to through UMD
+        int numa_node_for_device = tt::Cluster::instance().get_numa_node_for_device(mmio_controlled_device_id);
+        if (cpu_cores_per_numa_node.find(numa_node_for_device) != cpu_cores_per_numa_node.end()) {
+            // NUMA node reported by UMD exists on host. Choose a core on this numa-node using round robin policy
+            int num_cores_in_numa_node = cpu_cores_per_numa_node.at(numa_node_for_device).size();
+            core_assigned_to_device =
+                cpu_cores_per_numa_node.at(numa_node_for_device).at(mmio_controlled_device_id % num_cores_in_numa_node);
+        } else {
+            // NUMA node reported by UMD does not exist on host. Use round-robin binding policy for this worker thread.
+            log_warning(
+                tt::LogMetal,
+                "NUMA node {} for device {} does not exist on host.",
+                numa_node_for_device,
+                mmio_controlled_device_id);
+            core_assigned_to_device = mmio_controlled_device_id % sysconf(_SC_NPROCESSORS_ONLN);
+        }
+    } else {
+        // System does not use NUMA. Use-round robin binding strategy.
+        core_assigned_to_device = mmio_controlled_device_id % sysconf(_SC_NPROCESSORS_ONLN);
+    }
+    free_cores.erase(core_assigned_to_device);
+    return core_assigned_to_device;
+}
+
+void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t> &free_cores) {
+    cpu_set_t cpuset;
+    pthread_t current_thread = pthread_self();
+    CPU_ZERO(&cpuset);
+
+    for (const auto &free_core : free_cores) {
+        CPU_SET(free_core, &cpuset);
+    }
+    int rc = pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
+    if (rc) {
+        log_warning(
+            tt::LogMetal,
+            "Unable to bind main thread to free CPU cores. May see performance degradation. Error Code: {}",
+            rc);
+    }
+}
+
+}  // namespace device_cpu_allocator
+
 namespace detail {
 
 std::map<chip_id_t, Device *> CreateDevices(
@@ -180,20 +253,32 @@ std::map<chip_id_t, Device *> CreateDevices(
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
     std::map<chip_id_t, Device *> active_devices;  // TODO: pass this to CloseDevices
+    // Construct NUMA Node to CPU core map
+    std::unordered_set<uint32_t> free_cores = {};
+    auto cpu_cores_per_numa_node = device_cpu_allocator::get_cpu_cores_per_numa_node(free_cores);
+
     for (const auto &device_id : device_ids) {
         const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         if (active_devices.find(mmio_device_id) == active_devices.end()) {
             for (const auto &mmio_controlled_device_id :
                  tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
-                // if (mmio_controlled_device_id != mmio_device_id) {
-                //     continue;
-                // }
-                Device *dev = new Device(mmio_controlled_device_id, num_hw_cqs, l1_small_size, l1_bank_remap);
+                int core_assigned_to_device = device_cpu_allocator::get_cpu_core_for_device_worker_thread(
+                    mmio_controlled_device_id, cpu_cores_per_numa_node, free_cores);
+                Device *dev = new Device(
+                    mmio_controlled_device_id,
+                    num_hw_cqs,
+                    l1_small_size,
+                    l1_bank_remap,
+                    false,
+                    core_assigned_to_device);
                 active_devices.insert({mmio_controlled_device_id, dev});
                 detail::InitDeviceProfiler(dev);
             }
         }
     }
+    // Bind main thread to cores not being used by workers.
+    device_cpu_allocator::bind_current_thread_to_free_cores(free_cores);
+
     // TODO: need to only enable routing for used mmio chips
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return active_devices;
@@ -244,8 +329,6 @@ void WriteToDeviceSharded(const Buffer &buffer, const std::vector<uint32_t> &hos
 
     auto device = buffer.device();
 
-    TT_ASSERT(buffer.is_l1(), "Only L1 Buffers support sharding");
-
     auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
     auto total_pages = buffer.num_pages();
     for (int host_page_id = 0; host_page_id < total_pages; host_page_id++) {
@@ -289,12 +372,8 @@ void WriteToDeviceInterleavedContiguous(const Buffer &buffer, const std::vector<
         page.insert(
             page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_page);
         switch (buffer.buffer_type()) {
-            case BufferType::DRAM: {
-                auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
-                tt::Cluster::instance().write_dram_vec(
-                    page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
-            } break;
-            case BufferType::L1:  // fallthrough
+            case BufferType::DRAM:
+            case BufferType::L1:
             case BufferType::L1_SMALL: {
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
                 llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
@@ -351,12 +430,8 @@ void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, std::vector<uint3
         auto absolute_address = buffer.page_address(bank_index, page_index);
         std::vector<uint32_t> page;
         switch (buffer.buffer_type()) {
-            case BufferType::DRAM: {
-                auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
-                tt::Cluster::instance().read_dram_vec(
-                    page, page_size, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
-            } break;
-            case BufferType::L1:  // fallthrough
+            case BufferType::DRAM:
+            case BufferType::L1:
             case BufferType::L1_SMALL: {
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
                 page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
@@ -383,16 +458,9 @@ void read_pages_to_host_helper(
     const uint32_t &bank_id) {
     auto absolute_address = dev_buffer.sharded_page_address(bank_id, dev_page_id);
     auto noc_coordinates = dev_buffer.noc_coordinates(bank_id);
-
     uint32_t num_entries_per_page = page_size / sizeof(uint32_t);
-    auto page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
     uint32_t host_buffer_start = host_page_id * num_entries_per_page;
-    uint32_t dev_page_index = 0;
-    for (uint32_t host_buffer_index = host_buffer_start; host_buffer_index < host_buffer_start + num_entries_per_page;
-         host_buffer_index++) {
-        host_buffer[host_buffer_index] = page[dev_page_index];
-        dev_page_index++;
-    }
+    tt::Cluster::instance().read_core(host_buffer.data() + host_buffer_start, page_size, tt_cxy_pair(device->id(), noc_coordinates), absolute_address);
 }
 
 void ReadFromDeviceSharded(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
@@ -434,7 +502,6 @@ void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bo
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
         ReadFromDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
-        TT_ASSERT(buffer.is_l1(), "Only L1 Buffers support sharding");
         ReadFromDeviceSharded(buffer, host_buffer, shard_order);
     } else {
         TT_ASSERT(false && "Unsupported buffer layout");
@@ -684,12 +751,10 @@ void CompileProgram(Device *device, Program &program) {
 }
 
 void AllocateBuffer(Buffer *buffer, bool bottom_up) {
-    detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
     EnqueueAllocateBuffer(buffer->device()->command_queue(), buffer, bottom_up, false);
 }
 
 void DeallocateBuffer(Buffer *buffer) {
-    detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
     EnqueueDeallocateBuffer(
         buffer->device()->command_queue(),
         *(buffer->device()->allocator_),
@@ -699,7 +764,6 @@ void DeallocateBuffer(Buffer *buffer) {
 }
 
 void GetBufferAddress(const Buffer *buffer, uint32_t *address_on_host) {
-    detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
     EnqueueGetBufferAddr(buffer->device()->command_queue(), address_on_host, buffer, false);
 }
 
@@ -738,7 +802,14 @@ Device *CreateDevice(
     const size_t l1_small_size,
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
-    Device *dev = new Device(device_id, num_hw_cqs, l1_small_size, l1_bank_remap);
+    // Construct NUMA Node to CPU core map
+    std::unordered_set<uint32_t> free_cores = {};
+    auto cpu_cores_per_numa_node = device_cpu_allocator::get_cpu_cores_per_numa_node(free_cores);
+    int core_assigned_to_device =
+        device_cpu_allocator::get_cpu_core_for_device_worker_thread(device_id, cpu_cores_per_numa_node, free_cores);
+    Device *dev = new Device(device_id, num_hw_cqs, l1_small_size, l1_bank_remap, false, core_assigned_to_device);
+    // Bind main thread to cores not being used by workers.
+    device_cpu_allocator::bind_current_thread_to_free_cores(free_cores);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     detail::InitDeviceProfiler(dev);
     return dev;

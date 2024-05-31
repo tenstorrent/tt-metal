@@ -76,7 +76,8 @@ class Device {
         const uint8_t num_hw_cqs,
         std::size_t l1_small_size,
         const std::vector<uint32_t> &l1_bank_remap = {},
-        bool minimal = false);
+        bool minimal = false,
+        uint32_t worker_core = 0);
 
     ~Device();
 
@@ -106,11 +107,16 @@ class Device {
 
     CoreCoord compute_with_storage_grid_size() const;
 
+    CoreCoord dram_grid_size() const;
+
     CoreCoord physical_core_from_logical_core(const CoreCoord &logical_core, const CoreType &core_type) const;
     CoreType core_type_from_physical_core(const CoreCoord &physical_core) const;
-    CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const;
 
+    CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const;
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
+
+    CoreCoord dram_core_from_logical_core(const CoreCoord &logical_core) const;
+    std::vector<CoreCoord> dram_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
 
     // Ethernet API
     CoreCoord ethernet_core_from_logical_core(const CoreCoord &logical_core) const;
@@ -157,7 +163,9 @@ class Device {
 
     uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
 
-    CoreCoord core_from_dram_channel(uint32_t dram_channel) const;
+    CoreCoord dram_core_from_dram_channel(uint32_t dram_channel) const;
+    CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const;
+    uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const;
 
     int32_t bank_offset(BufferType buffer_type, uint32_t bank_id) const;
 
@@ -266,6 +274,7 @@ class Device {
     // Work Executor for this device - can asynchronously process host side work for
     // all tasks scheduled on this device
     WorkExecutor work_executor;
+    uint32_t worker_thread_core;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_;
 

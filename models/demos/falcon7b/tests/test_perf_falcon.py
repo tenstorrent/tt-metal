@@ -22,7 +22,11 @@ from models.demos.falcon7b.tt.falcon_common import (
 from models.demos.falcon7b.tt.model_config import (
     get_model_config,
 )
-from models.demos.falcon7b.tests.test_utils import get_rand_falcon_inputs, concat_device_out_layer_present
+from models.demos.falcon7b.tests.test_utils import (
+    get_rand_falcon_inputs,
+    concat_device_out_layer_present,
+    load_hf_model,
+)
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     get_atol_rtol_pcc,
 )
@@ -81,13 +85,10 @@ def run_test_FalconCausalLM_end_to_end(
 
     num_devices = len(devices)
     global_batch = batch * num_devices
-    model_name = model_location_generator(model_version, model_subdir="Falcon")
 
     profiler.start("hugging_face_model_setup")
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
-    hugging_face_reference_model.eval()
+    hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
     configuration = hugging_face_reference_model.config
-    state_dict = hugging_face_reference_model.state_dict()
     pytorch_FalconCausalLM = PytorchFalconCausalLM(hugging_face_reference_model, num_layers)
     profiler.end("hugging_face_model_setup")
 
@@ -509,9 +510,9 @@ class TestParametrized:
     @pytest.mark.parametrize(
         "llm_mode, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc, expected_inference_time",
         (
-            ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.97, 0.99, 0.96, 0.1),
-            ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96, 1),
-            ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.97, 2),
+            ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.97, 0.99, 0.97, 0.1),
+            ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.98, 0.5),
+            ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.98, 1.1),
             ("decode", 32, 32, 1, 128, "BFLOAT16-DRAM", 0.91, 0.92, 0.93, 0.15),
             ("decode", 32, 32, 1, 128, "BFLOAT16-L1", 0.91, 0.92, 0.93, 0.15),
             ("decode", 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.92, 0.95, 0.95, 0.1),
@@ -584,20 +585,24 @@ class TestParametrized:
     @pytest.mark.parametrize(
         "llm_mode, num_devices, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc, expected_inference_time, async_mode",
         (
-            ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96, 0.18, False),  # Issue 7816 Inference time
-            ("prefill", 4, 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96, 1, False),
-            ("prefill", 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.97, 2, False),
+            ("prefill", 4, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.97, 0.1, False),
+            ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.97, 0.18, False),  # Issue 7816 Inference time
+            ("prefill", 4, 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.98, 0.5, False),
+            ("prefill", 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.98, 1.1, False),
             ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.87, 0.91, 0.91, 0.21, False),
-            ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96, 0.18, True),
-            ("prefill", 4, 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.96, 1, True),
-            ("prefill", 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.97, 2, True),
+            ("prefill", 4, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.97, 0.1, True),
+            ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.97, 0.18, True),
+            ("prefill", 4, 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.98, 0.5, True),
+            ("prefill", 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.98, 1.1, True),
             ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.87, 0.91, 0.91, 0.09, True),
         ),
         ids=[
+            "prefill_seq128",
             "prefill_seq256",
             "prefill_seq1024",
             "prefill_seq2048",
             "decode_batch32_1024",
+            "prefill_seq128_async",
             "prefill_seq256_async",
             "prefill_seq1024_async",
             "prefill_seq2048_async",

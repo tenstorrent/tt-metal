@@ -32,10 +32,12 @@ struct Tensor {
         DataType dtype;
         Layout layout;
         std::mutex populated_mutex;
-        std::vector<bool> tensor_populated = {};
+        uint32_t num_shards_to_be_populated = 0;
         uint32_t main_thread_ref_count = 0;
         std::atomic<uint32_t> num_sibling_workers_sharing_tensor = 0;
         std::atomic<bool> main_thread_tensor = true;
+        std::atomic<bool> metadata_populated = false;
+        std::atomic<int> num_workers_completed = 0;
         bool deallocated = false;      // Set to true if device side storage was deallocated
         bool dynamic_storage = false;  // Storage type can change, depending on op behaviour
         bool track_ref_count = false;
@@ -155,7 +157,7 @@ struct Tensor {
                         std::get<MultiDeviceStorage>(this->tensor_attributes->storage).ordered_device_ids),
                     [](const Device *worker) { return worker->id(); });
             }
-            this->tensor_attributes->tensor_populated = std::vector<bool>(workers.size(), false);
+            this->tensor_attributes->num_shards_to_be_populated = workers.size();
         } else if (num_buffers) {
             if (num_buffers == 1) {
                 this->tensor_attributes->storage = OwnedStorage();
@@ -167,7 +169,7 @@ struct Tensor {
                 std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).shapes =
                     std::vector<Shape>(num_buffers, this->tensor_attributes->shape.value());
             }
-            this->tensor_attributes->tensor_populated = std::vector<bool>(num_buffers, false);
+            this->tensor_attributes->num_shards_to_be_populated = num_buffers;
         }
     }
 
@@ -286,19 +288,26 @@ struct Tensor {
     const ttnn::Shape &get_shape() const;
     const DataType &get_dtype() const;
     const Layout &get_layout() const;
+
+    // ======================================================================================
+    // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
+    // ======================================================================================
+    inline const Storage &storage() const { return this->tensor_attributes->storage; };
+    inline const Shape &legacy_shape() const { return this->tensor_attributes->shape.value(); };
+    inline const ttnn::Shape &shape() const { return this->tensor_attributes->shape; };
+    inline const DataType &dtype() const { return this->tensor_attributes->dtype; };
+    inline const Layout &layout() const { return this->tensor_attributes->layout; };
+
     // ======================================================================================
     //                                      Setters
     // ======================================================================================
-    void set_storage(const Storage &storage) { this->tensor_attributes->storage = storage; }
-    void set_shape(const ttnn::Shape &shape) { this->tensor_attributes->shape = shape; }
-    void set_dtype(const DataType &dtype) { this->tensor_attributes->dtype = dtype; }
-    void set_layout(const Layout &layout) { this->tensor_attributes->layout = layout; }
-    void set_populated(Device *worker = nullptr);
+    inline void set_storage(const Storage &storage) { this->tensor_attributes->storage = storage; }
+    inline void set_shape(const ttnn::Shape &shape) { this->tensor_attributes->shape = shape; }
+    inline void set_dtype(const DataType &dtype) { this->tensor_attributes->dtype = dtype; }
+    inline void set_layout(const Layout &layout) { this->tensor_attributes->layout = layout; }
     // ======================================================================================
     //                                      Extra Helper Functions
     // ======================================================================================
-    void wait_for_tensor_data_populated() const;
-    void wait_for_tensor_metadata_populated() const;
     StorageType storage_type() const;
     const Shape strides() const;
     uint32_t volume() const;
@@ -325,7 +334,7 @@ struct Tensor {
             return buffer->device();
         } else if (this->storage_type() == tt::tt_metal::StorageType::MULTI_DEVICE) {
             auto &storage = std::get<MultiDeviceStorage>(this->get_storage());
-            return storage.buffers.at(0)->device();
+            return storage.get_buffer_for_device_id(0)->device();
         } else {
             TT_THROW("Cannot get the device from a tensor with host storage");
         }
@@ -355,13 +364,31 @@ struct Tensor {
     static constexpr auto attribute_names = std::make_tuple("storage", "shape", "dtype", "layout");
     const auto attribute_values() const {
         return std::make_tuple(
-            std::cref(this->get_storage()),
-            std::cref(this->get_shape()),
-            std::cref(this->get_dtype()),
-            std::cref(this->get_layout()));
+            std::cref(this->tensor_attributes->storage),
+            std::cref(this->tensor_attributes->shape),
+            std::cref(this->tensor_attributes->dtype),
+            std::cref(this->tensor_attributes->layout));
     }
 
     std::vector<uint32_t> host_page_ordering();
+
+    // Main Thread - Wait for all workers in this tensor to populate the entire tensor
+    inline void wait_for_tensor_data_populated() const {
+        ZoneScoped;
+        // Stall until all the workers for this tensor
+        // have populated the full tensor
+        while (this->tensor_attributes->num_workers_completed < this->tensor_attributes->num_shards_to_be_populated) {
+        }
+    }
+
+    // Main Thread - Wait for the first worker in this tensor to populate the global metadata fields
+    inline void wait_for_tensor_metadata_populated() const {
+        ZoneScoped;
+        // First worker is responsible for updating all metadata fields
+        // Stall until this worker is done
+        while (not this->tensor_attributes->metadata_populated) {
+        }
+    }
 };
 
 Tensor create_device_tensor(
