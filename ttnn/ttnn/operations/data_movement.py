@@ -242,43 +242,6 @@ concat = ttnn.register_operation(
 )(ttnn._ttnn.operations.data_movement.concat)
 
 
-def _golden_function(input_tensor, split_size, dim):
-    import torch
-
-    return torch.split(input_tensor, split_size, dim=dim)
-
-
-def _split_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.int32, ttnn.uint32),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-
-
-@ttnn.register_operation(
-    name="ttnn.split",
-    validate_input_tensors=_split_validate_input_tensors,
-    golden_function=_golden_function,
-)
-def split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> ttnn.Tensor:
-    r"""
-    split(input_tensor: ttnn.Tensor, split_size: int, dim: int) -> Tuple[ttnn.Tensor, ...]
-
-    Split tensor into chunks of :attr:`split_size` along :attr:`dim`.
-
-    Args:
-        * :attr:`input_tensor`: input tensor.
-        * :attr:`split_size`: size of a single chunk.
-        * :attr:`dim`:  dimension along which to split the tensor.
-    """
-    raise NotImplementedError
-
-
 def _golden_function(tensor, repeats, dim=0, **_):
     import torch
 
