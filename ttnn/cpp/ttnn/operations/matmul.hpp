@@ -41,7 +41,8 @@ ttnn::Tensor matmul(
     std::optional<const DataType> dtype = std::nullopt,
     const std::optional<const std::string>& activation = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
+    const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,
+    const bool propagate_is_b_batched = false);
 
 }  // namespace matmul
 }  // namespace operations

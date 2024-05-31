@@ -58,7 +58,8 @@ ttnn::Tensor matmul(
     std::optional<const DataType> dtype,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::CoreGrid> core_grid) {
+    const std::optional<const ttnn::CoreGrid> core_grid,
+    const bool propagate_is_b_batched) {
     ttnn::validate_input_tensor("ttnn.linear", input_tensor_a, input_tensor_schemas()[0]);
     ttnn::validate_input_tensor("ttnn.linear", input_tensor_b, input_tensor_schemas()[1]);
     ttnn::validate_input_tensor("ttnn.linear", bias, input_tensor_schemas()[2]);
@@ -92,7 +93,7 @@ ttnn::Tensor matmul(
     }
 
     auto output_tensor = tt::operations::primary::matmul(
-        input_tensor_a, input_tensor_b, post_process_bias ? std::nullopt : bias, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/, user_core_coord, get_fused_activation(activation));
+        input_tensor_a, input_tensor_b, post_process_bias ? std::nullopt : bias, program_config, memory_config, dtype, compute_kernel_config, false /*untilize_out*/, user_core_coord, get_fused_activation(activation), propagate_is_b_batched && input_b_is_batched);
 
     if (post_process_bias) {
         output_tensor = tt::operations::primary::bcast(
