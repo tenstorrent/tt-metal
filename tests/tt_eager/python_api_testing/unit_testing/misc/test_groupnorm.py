@@ -17,6 +17,8 @@ from tt_lib.utils import (
     untilize,
 )
 
+from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
+
 
 def ref_groupnorm(x, group_size, eps, **kwargs):
     n_channels = x.shape[1]
@@ -30,7 +32,7 @@ def run_groupnorm_tests(test_id, group_size, dtype, in0_mem_config, out_mem_conf
     tensor = ttl.tensor
     dev = device
 
-    epsf = 1e-2
+    epsf = 1e-5
 
     test_dims = ((1, 32, 32, 64),)  # 384, 1024),)
     for N, C, H, W in test_dims:
@@ -42,25 +44,27 @@ def run_groupnorm_tests(test_id, group_size, dtype, in0_mem_config, out_mem_conf
         """
         for nrepeat in range(0, 1):
             if test_id >= 0:
-                gamma = torch.ones(1, 1, 1, W)
-                beta = torch.zeros(1, 1, 1, W)
+                gamma = torch.ones(1, C, 1, 1)
+                beta = torch.zeros(1, C, 1, 1)
             if test_id >= 1:
-                gamma = torch.rand(1, 1, 1, W) * 2 - 1
-                gammah32 = tilize_to_list(pad_weight(gamma))
+                gamma = torch.rand(1, C, 1, 1) * 2 - 1
+                gamma_expand = gamma.expand((N, C, H, W))
+                gammah32 = tilize_to_list(pad_weight(gamma_expand))
                 ttgamma = tensor.Tensor(
                     gammah32,
-                    [1, 1, 32, W],
+                    [N, C, H, W],
                     dtype,
                     tensor.Layout.TILE,
                     dev,
                     in0_mem_config,
                 )
             if test_id >= 2:
-                beta = torch.rand(1, 1, 1, W) * 2.0 - 1.1
-                betah32 = tilize_to_list(pad_weight(beta))
+                beta = torch.rand(1, C, 1, 1) * 2.0 - 1.1
+                beta_expand = beta.expand((N, C, H, W))
+                betah32 = tilize_to_list(pad_weight(beta_expand))
                 ttbeta = tensor.Tensor(
                     betah32,
-                    [1, 1, 32, W],
+                    [N, C, H, W],
                     dtype,
                     tensor.Layout.TILE,
                     dev,
@@ -97,11 +101,11 @@ def run_groupnorm_tests(test_id, group_size, dtype, in0_mem_config, out_mem_conf
             elif test_id == 1:
                 logger.info("Running LN_G")
                 ttz = tensor.groupnorm(ttx, group_size, epsf, ttgamma, output_mem_config=out_mem_config)
-                golden = ref_groupnorm(x, group_size, epsf, gamma=ttgamma)
+                golden = pytorch_ops.groupnorm(x, gamma, beta)
             elif test_id == 2:
                 logger.info("Running LN_GB")
                 ttz = tensor.groupnorm(ttx, group_size, epsf, ttgamma, ttbeta, out_mem_config)
-                golden = ref_groupnorm(x, group_size, epsf, gamma=ttgamma, beta=ttbeta)
+                golden = pytorch_ops.groupnorm(x, gamma, beta)
             else:
                 assert False
             logger.info("Done")
@@ -135,10 +139,12 @@ def run_groupnorm_tests(test_id, group_size, dtype, in0_mem_config, out_mem_conf
 )
 @pytest.mark.parametrize(
     "test_id",
-    (0,),
-    ids=[
-        "GN",
-    ],
+    (
+        0,
+        1,
+        2,
+    ),
+    ids=["GN", "GN_G", "GN_GB"],
 )
 def test_groupnorm_test(test_id, dtype, in0_mem_config, out_mem_config, device):
     group_size = 1
