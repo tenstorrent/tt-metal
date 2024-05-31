@@ -695,7 +695,7 @@ def conv2d(
             input_tensor = ttnn.to_device(input_tensor, device=device, memory_config=input_tensor_sharded_memory_config)
         # since we resharded/moved the input tensor, we can deallocate it after halo op within composite conv
         conv_config.deallocate_activation = True
-    is_1x1_conv = kernel_size == (1, 1) and stride[0] == stride[1] and stride[0] == 1 and padding == (0, 0)
+    is_1x1_conv = kernel_size == (1, 1) and stride[0] == stride[1] and padding == (0, 0)
     if is_1x1_conv and input_tensor.layout != ttnn.TILE_LAYOUT:
         input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, dtype=conv_config.dtype)
     input_is_on_device = ttnn.is_tensor_storage_on_device(input_tensor)

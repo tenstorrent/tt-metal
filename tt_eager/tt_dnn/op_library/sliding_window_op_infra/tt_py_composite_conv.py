@@ -477,7 +477,6 @@ class TTPyCompositeConv(TTPyOp):
             filter_height == filter_width
             and filter_height == 1
             and stride_h == stride_w
-            and stride_h == 1
             and pad_h == pad_w
             and pad_h == 0
         ):
