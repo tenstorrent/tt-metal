@@ -107,7 +107,7 @@ constexpr auto decorate_host_operation(const Function& function) {
 template <typename Function>
 constexpr auto decorate_device_operation(const Function& function) {
     return [function]<typename Operation, typename... Tensors>(
-               std::optional<std::reference_wrapper<CommandQueue>> queue,
+               std::reference_wrapper<CommandQueue> queue,
                const Operation& operation,
                Tensors&&... tensors) {
         log_operation(operation, tensors...);
@@ -137,7 +137,7 @@ inline const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE")
 
 template <typename OutputTensors>
 OutputTensors run_device_operation(
-    std::optional<std::reference_wrapper<CommandQueue>> queue,
+    std::reference_wrapper<CommandQueue> queue,
     const DeviceOperation<OutputTensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
@@ -248,9 +248,7 @@ OutputTensors run_device_operation(
                             AssignGlobalBufferToProgram(optional_input_tensor.value().device_buffer(), program);
                         }
                     }
-                    TT_ASSERT(queue.has_value(), "CommandQueue is required for fast dispatch mode");
-                    CommandQueue& cq = queue.value().get();
-                    EnqueueProgram(cq, program, false);
+                    EnqueueProgram(queue, program, false);
                 } else {
                     ::detail::LaunchProgram(device, program);
                 }
@@ -273,104 +271,15 @@ OutputTensors run_device_operation(
 }
 
 template Tensors run_device_operation(
-    std::optional<std::reference_wrapper<CommandQueue>> queue,
+    std::reference_wrapper<CommandQueue> queue,
     const DeviceOperation<Tensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors);
 
 template OptionalTensors run_device_operation(
-    std::optional<std::reference_wrapper<CommandQueue>> queue,
+    std::reference_wrapper<CommandQueue> queue,
     const DeviceOperation<OptionalTensors>& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors);
-
-template <typename OutputTensors>
-OutputTensors run_multi_device_operation(
-    std::optional<std::reference_wrapper<CommandQueue>> queue,
-    const DeviceOperation<OutputTensors>& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors) {
-    // TODO: Assumes each input/output tensor is mapped to the same set of devices; relax this later
-    std::vector<Device*> devices = get_devices(input_tensors[0]);
-    detail::validate_op_launch(devices.at(0));
-
-    std::map<Device*, OutputTensors> per_device_output_tensors;
-    std::optional<std::size_t> num_output_tensors_per_device;
-    for (Device* device : devices) {
-        auto device_output_tensors = run_device_operation<OutputTensors>(
-            device->command_queue(),
-            operation,
-            get_device_tensors(device, input_tensors),
-            get_device_tensors(device, optional_input_tensors),
-            get_device_tensors(device, optional_output_tensors));
-
-        per_device_output_tensors[device] = device_output_tensors;
-
-        if (not num_output_tensors_per_device.has_value()) {
-            num_output_tensors_per_device = device_output_tensors.size();
-        } else {
-            TT_ASSERT(
-                num_output_tensors_per_device == device_output_tensors.size(),
-                "Output tensors per device should be same for all devices");
-        }
-    }
-
-    OutputTensors multi_device_output_tensors;
-    for (int i = 0; i < num_output_tensors_per_device; ++i) {
-        std::vector<int> ordered_device_ids;
-        std::unordered_map<int, DeviceBuffer> buffers;
-        std::unordered_map<int, Shape> shapes;
-        for (Device* device : devices) {
-            const auto device_id = device->id();
-            if constexpr (std::is_same_v<Tensors, std::remove_const_t<OutputTensors>>) {
-                ordered_device_ids.push_back(device_id);
-                buffers.emplace(device_id, per_device_output_tensors[device][i].device_buffer());
-                shapes.emplace(device_id, per_device_output_tensors[device][i].get_legacy_shape());
-            } else if constexpr (std::is_same_v<OptionalTensors, std::remove_const_t<OutputTensors>>) {
-                if (per_device_output_tensors[device][i].has_value()) {
-                    ordered_device_ids.push_back(device_id);
-                    buffers.emplace(device_id, per_device_output_tensors[device][i].value().device_buffer());
-                    shapes.emplace(device_id, per_device_output_tensors[device][i].value().get_legacy_shape());
-                }
-            } else {
-                static_assert(false_type_t<OutputTensors>, "OutputTensors must be either Tensors or OptionalTensors.");
-            }
-        }
-
-        if constexpr (std::is_same_v<Tensors, std::remove_const_t<OutputTensors>>) {
-            multi_device_output_tensors.push_back(Tensor{
-                MultiDeviceStorage{
-                    get_distributed_tensor_config_from_tensor(input_tensors[0]), ordered_device_ids, buffers, shapes},
-                per_device_output_tensors[devices[0]][i].get_legacy_shape(),
-                per_device_output_tensors[devices[0]][i].get_dtype(),
-                per_device_output_tensors[devices[0]][i].get_layout()});
-        } else if constexpr (std::is_same_v<OptionalTensors, std::remove_const_t<OutputTensors>>) {
-            multi_device_output_tensors.push_back(Tensor{
-                MultiDeviceStorage{
-                    get_distributed_tensor_config_from_tensor(input_tensors[0]), ordered_device_ids, buffers, shapes},
-                per_device_output_tensors[devices[0]][i].value().get_legacy_shape(),
-                per_device_output_tensors[devices[0]][i].value().get_dtype(),
-                per_device_output_tensors[devices[0]][i].value().get_layout()});
-        } else {
-            static_assert(false_type_t<OutputTensors>, "OutputTensors must be either Tensors or OptionalTensors.");
-        }
-    }
-    return multi_device_output_tensors;
-}
-
-template OptionalTensors run_multi_device_operation(
-    std::optional<std::reference_wrapper<CommandQueue>> queue,
-    const DeviceOperation<OptionalTensors>& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors);
-
-template Tensors run_multi_device_operation(
-    std::optional<std::reference_wrapper<CommandQueue>> queue,
-    const DeviceOperation<Tensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors);
@@ -386,47 +295,18 @@ template OptionalTensors run(const HostOperation<OptionalTensors>& operation, co
 
 template <class OutputTensors>
 OutputTensors run(
-    CommandQueue& queue,
     const DeviceOperation<OutputTensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors) {
+    const OptionalTensors& optional_output_tensors,
+    uint8_t cq_id) {
     auto device = detail::get_device(input_tensors, optional_input_tensors);
 #ifdef DEBUG
     operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
     detail::validate_op_launch(device);
 #endif
     return detail::decorate_device_operation(detail::run_device_operation<OutputTensors>)(
-        queue, operation, input_tensors, optional_input_tensors, optional_output_tensors);
-}
-
-template Tensors run(
-    CommandQueue& queue,
-    const DeviceOperation<Tensors>& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors);
-
-template OptionalTensors run(
-    CommandQueue& queue,
-    const DeviceOperation<OptionalTensors>& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors);
-
-template <class OutputTensors>
-OutputTensors run(
-    const DeviceOperation<OutputTensors>& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors) {
-    auto device = detail::get_device(input_tensors, optional_input_tensors);
-#ifdef DEBUG
-    operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
-    detail::validate_op_launch(device);
-#endif
-    return detail::decorate_device_operation(detail::run_device_operation<OutputTensors>)(
-        detail::USE_FAST_DISPATCH ? std::make_optional(std::ref(device->command_queue())) : std::nullopt,
+        std::ref(device->command_queue(cq_id)),
         operation,
         input_tensors,
         optional_input_tensors,
@@ -437,19 +317,22 @@ template Tensors run(
     const DeviceOperation<Tensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors);
+    const OptionalTensors& optional_output_tensors,
+    uint8_t cq_id);
 
 template OptionalTensors run(
     const DeviceOperation<OptionalTensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors);
+    const OptionalTensors& optional_output_tensors,
+    uint8_t cq_id);
 
 template <class OutputTensors>
 OutputTensors run_without_autoformat(
     const DeviceOperation<OutputTensors>& operation,
     const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors) {
+    const OptionalConstTensors& optional_input_tensors,
+    uint8_t cq_id) {
     ZoneScoped;
     Device* device = detail::get_device(input_tensors, optional_input_tensors);
     detail::validate_op_launch(device);
@@ -472,25 +355,28 @@ OutputTensors run_without_autoformat(
             optional_input_tensors_on_dev.push_back(optional_input_tensor);
         }
     }
-    return run<OutputTensors>(operation, input_tensors_on_dev, optional_input_tensors_on_dev, {});
+    return run<OutputTensors>(operation, input_tensors_on_dev, optional_input_tensors_on_dev, {}, cq_id);
 }
 
 template Tensors run_without_autoformat<Tensors>(
     const DeviceOperation<Tensors>& operation,
     const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors);
+    const OptionalConstTensors& optional_input_tensors,
+    uint8_t cq_id);
 
 template OptionalTensors run_without_autoformat<OptionalTensors>(
     const DeviceOperation<OptionalTensors>& operation,
     const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors);
+    const OptionalConstTensors& optional_input_tensors,
+    uint8_t cq_id);
 
 template <class OutputTensors>
 OutputTensors run_without_autoformat(
     const DeviceOperation<OutputTensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors) {
+    const OptionalTensors& optional_output_tensors,
+    uint8_t cq_id) {
     ZoneScoped;
     Device* device = detail::get_device(input_tensors, optional_input_tensors);
     detail::validate_op_launch(device);
@@ -513,20 +399,22 @@ OutputTensors run_without_autoformat(
             optional_input_tensors_on_dev.push_back(optional_input_tensor);
         }
     }
-    return run<OutputTensors>(operation, input_tensors_on_dev, optional_input_tensors_on_dev, optional_output_tensors);
+    return run<OutputTensors>(operation, input_tensors_on_dev, optional_input_tensors_on_dev, optional_output_tensors, cq_id);
 }
 
 template Tensors run_without_autoformat<Tensors>(
     const DeviceOperation<Tensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors);
+    const OptionalTensors& optional_output_tensors,
+    uint8_t cq_id);
 
 template OptionalTensors run_without_autoformat<OptionalTensors>(
     const DeviceOperation<OptionalTensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors);
+    const OptionalTensors& optional_output_tensors,
+    uint8_t cq_id);
 
 // To be deprecated/removed in favor of new implementation where ops specifically request how to format inputs/outputss
 Tensors run_with_autoformat(
@@ -534,7 +422,8 @@ Tensors run_with_autoformat(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const float pad_value,
-    const bool pad_c) {
+    const bool pad_c,
+    uint8_t cq_id) {
     ZoneScoped;
     Device* device = detail::get_device(input_tensors, optional_input_tensors);
     detail::validate_op_launch(device);
@@ -571,7 +460,7 @@ Tensors run_with_autoformat(
         }
     }
 
-    auto output_tensors = run<Tensors>(operation, formatted_input_tensors, formatted_optional_input_tensors);
+    auto output_tensors = run<Tensors>(operation, formatted_input_tensors, formatted_optional_input_tensors, {}, cq_id);
 
     TT_ASSERT(output_tensors.size() == output_shapes.size());
 
@@ -590,7 +479,8 @@ Tensors run_with_autoformat(
     const std::vector<FormatParams>& input_formatting,
     const std::vector<Layout>& output_layouts,
     const OptionalConstTensors& optional_input_tensors,
-    const std::vector<std::optional<FormatParams>>& optional_input_formatting) {
+    const std::vector<std::optional<FormatParams>>& optional_input_formatting,
+    uint8_t cq_id) {
     ZoneScoped;
     Device* device = detail::get_device(input_tensors, optional_input_tensors);
     detail::validate_op_launch(device);
@@ -628,7 +518,7 @@ Tensors run_with_autoformat(
         }
     }
 
-    auto output_tensors = run<Tensors>(operation, formatted_input_tensors, formatted_optional_input_tensors);
+    auto output_tensors = run<Tensors>(operation, formatted_input_tensors, formatted_optional_input_tensors, {}, cq_id);
 
     TT_ASSERT(output_tensors.size() == output_shapes.size());
     TT_ASSERT(output_tensors.size() == output_layouts.size());
