@@ -306,7 +306,7 @@ def test_run_resnet50_trace_inference(
         # Compile
         tt_resnet50(tt_image_res)
         # Trace
-        tid = tt_lib.device.BeginTraceCapture(device, 0, 1327328)
+        tid = tt_lib.device.BeginTraceCapture(device, 0, 1334880)
         tt_output_res = tt_resnet50(tt_image_res)
         tt_lib.device.EndTraceCapture(device, 0, tid)
 
