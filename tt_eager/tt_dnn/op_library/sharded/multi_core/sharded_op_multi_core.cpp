@@ -450,6 +450,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     uint32_t curr_idx_w = 0;
 
     const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
+    uint32_t padded_shard_width = align(output_unit_size, ADDRESS_ALIGNMENT);
     for (const auto& core : cores) {
         if (input.get_layout() == Layout::TILE) {
             uint32_t shard_height = num_units_per_shard_height;
@@ -525,7 +526,6 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
                     }
                 }
             }
-            uint32_t padded_shard_width = align(shard_width, ADDRESS_ALIGNMENT);
             tt_metal::SetRuntimeArgs(
                 program,
                 unary_writer_kernel_id,
