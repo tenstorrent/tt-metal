@@ -232,7 +232,7 @@ inline Tensor run_eltwise_unary(
 }
 
 inline Tensor run_eltwise_unary(
-    CommandQueue& queue,
+    uint8_t cq_id,
     const Tensor& input_tensor,
     const std::vector<UnaryWithParam>& ops_chain,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
@@ -242,9 +242,8 @@ inline Tensor run_eltwise_unary(
         input_tensor.get_dtype() ==
             DataType::INT32;  // MT: Currently only uint32/int32 is moved to DST directly, fp32 is converted to fp16b
     return operation::run(
-               queue,
-               tt::tt_metal::operation::DeviceOperation(EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en}),
-               {input_tensor})
+               EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en},
+               {input_tensor}, {}, {}, cq_id)
         .at(0);
 }
 
@@ -310,10 +309,10 @@ inline Tensor sqrt(
 }
 
 inline Tensor sqrt(
-    CommandQueue& queue,
+    uint8_t cq_id,
     const Tensor& input_tensor,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    return run_eltwise_unary(queue, input_tensor, {UnaryWithParam(UnaryOpType::SQRT)}, output_mem_config);
+    return run_eltwise_unary(cq_id, input_tensor, {UnaryWithParam(UnaryOpType::SQRT)}, output_mem_config);
 }
 
 constexpr auto recip = make_eltwise_unary<UnaryOpType::RECIP>{};
