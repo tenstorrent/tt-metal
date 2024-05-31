@@ -45,7 +45,7 @@ and
 `Llama2-70B (coming soon on our T3000 platforms) <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama2_70b>`_.
 
 Where to go from here
----------------------
+^^^^^^^^^^^^^^^^^^^^^
 
 You should now take a look at :ref:`more code examples<Using ttnn>` for TT-NN
 or :ref:`the other tutorials<Tutorials>` on using TT-NN with Jupyter Notebooks.

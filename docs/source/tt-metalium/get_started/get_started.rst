@@ -42,7 +42,7 @@ Explore expert-level usage by building on the previous example to create a
 :ref:`multi-core<MatMul_Multi_Core example>` implementation.
 
 Where to go from here
----------------------
+^^^^^^^^^^^^^^^^^^^^^
 
 If you're an ML developer and looking for a simpler Python API to build models,
 take a look at our higher-level API `TT-NN <../../ttnn>`_.
