@@ -50,12 +50,12 @@ void kernel_main() {
             ptr[w] = uint16_t(val.u >> 16);
         }
         #endif
-        #ifdef OUTPUT_DTYPE_UINT32
+        #ifdef OUTPUT_DTYPE_INT32
         auto ptr = reinterpret_cast<uint32_t *>(w_addr);
 
         for (uint32_t w = 0; w < TILE_WIDTH; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
-            uint32_t val;
+            int32_t val;
             val = start_u.f + step_u.f * idx;
             ptr[w] = val;
         }
