@@ -64,6 +64,10 @@
 #include "compute_kernel_api/eltwise_unary/identity.h"
 #endif
 
+#if SFPU_OP_TYPECAST_INCLUDE
+#include "compute_kernel_api/eltwise_unary/typecast.h"
+#endif
+
 #if SFPU_OP_BINOP_WITH_SCALAR_INCLUDE
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #endif

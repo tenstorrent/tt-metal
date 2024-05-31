@@ -68,6 +68,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::TAN: defines["SFPU_OP_TRIG_FAMILY_INCLUDE"] = "1"; break;
         case UnaryOpType::NEG: defines["SFPU_OP_NEG_INCLUDE"] = "1"; break;
         case UnaryOpType::SOFTPLUS: defines["SFPU_OP_SOFTPLUS_INCLUDE"] = "1"; break;
+        case UnaryOpType::TYPECAST: defines["SFPU_OP_TYPECAST_INCLUDE"] = "1"; break;
         default: defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1"; break;
     };
 }
@@ -257,6 +258,9 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, stri
         case UnaryOpType::NEG:
             op_init_and_name = {"negative_tile_init();", fmt::format("negative_tile({});", idst)};
             break;
+        case UnaryOpType::TYPECAST:
+            op_init_and_name = {"typecast_tile_init();", fmt::format("typecast_tile({});", idst)};
+            break;
         default: TT_ASSERT(false && "Undefined non-parametrized op type");
     }
     return op_init_and_name;
@@ -341,13 +345,13 @@ std::vector<Tensor> EltwiseUnary::create_output_tensors(const std::vector<Tensor
         Shape output_shape = compute_output_shapes(input_tensors).at(0);
         return {create_device_tensor(
             output_shape,
-            input_tensor.get_dtype(),
+            this->output_dtype,
             input_tensor.get_layout(),
             input_tensor.device(),
             this->output_mem_config)};
     }
     return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
+        *this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks EltwiseUnary::create_program(
