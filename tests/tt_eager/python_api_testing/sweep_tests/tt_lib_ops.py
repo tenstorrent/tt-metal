@@ -3625,3 +3625,58 @@ def interleaved_to_sharded_partial(
 
     returned_res = tt2torch_tensor(t2)
     return returned_res
+
+
+@setup_host_and_device
+def interleaved_to_sharded_partial_coregrid(
+    x,
+    *args,
+    num_slices,
+    x_core,
+    y_core,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    print(x_core)
+    print(y_core)
+    grid_size = (x_core, y_core)
+    W = x.shape[-1]
+    H = x.shape[-2]
+    height_shard_spec = [H // 2, W]
+
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    out_initial = torch.randn(x.shape).bfloat16().float()
+
+    t2 = torch2tt_tensor(out_initial, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype[0])
+
+    for slice_index in range(num_slices):
+        t1 = ttl.tensor.interleaved_to_sharded_partial(
+            t0,
+            grid_size,
+            height_shard_spec,
+            num_slices,
+            slice_index,
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+
+        ttl.tensor.sharded_to_interleaved_partial(
+            t1,
+            t2,
+            num_slices,
+            slice_index,
+            interleaved_mem_config,
+        )
+
+    returned_res = tt2torch_tensor(t2)
+    return returned_res

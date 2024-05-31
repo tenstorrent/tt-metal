@@ -1901,3 +1901,66 @@ def gen_sharded_args(
         input_shapes, dtypes, layouts, mem_configs, "num_slices", 2, 10, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
+
+
+def gen_three_scalar_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    arg0_name="scalar0",
+    arg1_name="scalar1",
+    arg2_name="scalar2",
+    low0=-100,
+    high0=100,
+    low1=-100,
+    high1=100,
+    low2=-100,
+    high2=100,
+    dtype=torch.bfloat16,
+    do_sanitize_args=True,
+):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
+        if input_info is not None:
+            if dtype.is_floating_point:
+                scalar0 = torch.tensor(1, dtype=dtype).uniform_(low0, high0).item()
+                scalar1 = torch.tensor(1, dtype=dtype).uniform_(low1, high1).item()
+                scalar2 = torch.tensor(1, dtype=dtype).uniform_(low2, high2).item()
+            else:
+                scalar0 = torch.tensor(1, dtype=dtype).random_(low0, high0).item()
+                scalar1 = torch.tensor(1, dtype=dtype).random_(low1, high1).item()
+                scalar2 = torch.tensor(1, dtype=dtype).random_(low2, high2).item()
+            input_info.update({arg0_name: scalar0, arg1_name: scalar1, arg2_name: scalar2})
+            yield input_info
+
+
+def gen_sharded_args_coregrid(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=-100,
+    high=100,
+    dtype=torch.int,
+    do_sanitize_args=True,
+):
+    for input_info in gen_three_scalar_args(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        "num_slices",
+        "x_core",
+        "y_core",
+        2,
+        10,
+        1,
+        6,
+        1,
+        6,
+        dtype,
+        do_sanitize_args=do_sanitize_args,
+    ):
+        yield input_info
