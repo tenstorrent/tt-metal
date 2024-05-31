@@ -848,29 +848,6 @@ def reshape(
     return ttnn_tensor_to_torch(t1)
 
 
-def split(
-    x,
-    *args,
-    split_size,
-    dim,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.split(t0, split_size=split_size, dim=dim)  # memory_config=memory_config_to_ttnn(output_mem_config))
-
-    result = []
-
-    for xres in t1:
-        result.append(ttnn_tensor_to_torch(xres))
-
-    return result
-
-
 def gelu(
     x,
     *args,
