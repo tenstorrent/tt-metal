@@ -67,9 +67,6 @@ ttnn::Tensor matmul(
 
     auto input_b_is_batched = detail::is_input_batched(input_tensor_b_shape);
 
-    //const auto input_tensor_a_4d = ttnn::unsqueeze_to_4D(input_tensor_a);
-    //const auto input_tensor_b_4d = ttnn::unsqueeze_to_4D(input_tensor_b);
-
     std::optional<CoreCoord> user_core_coord;
     const bool has_user_grid = core_grid.has_value();
     if (has_user_grid) {
@@ -90,9 +87,6 @@ ttnn::Tensor matmul(
         }
     }
 
-    /*while (output_tensor.get_shape().rank() != input_tensor_a_shape.rank()) {
-        output_tensor = ttnn::squeeze_from_4D(output_tensor, input_tensor_a_shape.rank());
-    }*/
     return output_tensor;
 }
 
@@ -126,16 +120,11 @@ ttnn::Tensor linear(
     auto input_b_is_batched = detail::is_input_batched(input_tensor_b_shape);
     TT_ASSERT(input_b_is_batched == false, "Batched input not supported");
 
-    //const auto input_tensor_a_4d = ttnn::unsqueeze_to_4D(input_tensor_a);
-    //const auto input_tensor_b_4d = ttnn::unsqueeze_to_4D(input_tensor_b);
-
-    //std::optional<Tensor> bias_4d = std::nullopt;
     const bool has_user_grid = core_grid.has_value();
     const bool has_program_config = program_config.has_value();
 
     bool post_process_bias = false;
     if (bias.has_value()) {
-        //bias_4d = ttnn::unsqueeze_to_4D(bias.value());
         if (!has_program_config && !has_user_grid) {
 	    post_process_bias = true;
 	}
@@ -169,9 +158,6 @@ ttnn::Tensor linear(
         }
     }
 
-    /*while (output_tensor.get_shape().rank() != input_tensor_a_shape.rank()) {
-        output_tensor = ttnn::squeeze_from_4D(output_tensor, input_tensor_a_shape.rank());
-    }*/
     return output_tensor;
 }
 
