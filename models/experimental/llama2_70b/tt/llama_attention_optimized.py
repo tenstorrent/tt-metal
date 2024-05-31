@@ -596,28 +596,20 @@ class TtLlamaAttention_optimized:
         # Q Rotary Embeddings
         # query_layer: ttnn.Shape([1, 8, seq_len, 128]) -> [bsz, n_local_heads, seq_len, head_dim]
 
-        query_layer_ret = self.apply_rotary_prefill(query_layer, rot_mats[0], rot_mats[1], self.transformation_mats)
+        query_layer_ret = ttnn.experimental.tensor.rotary_embedding_llama(
+            query_layer, rot_mats[0], rot_mats[1], self.transformation_mats
+        )
         query_layer.deallocate(True)
 
         # K Rotary Embeddings
 
         # key_layer: ttnn.Shape([1, 1, seq_len, 128])
-        key_layer_ret = self.apply_rotary_prefill(key_layer, rot_mats[0], rot_mats[1], self.transformation_mats)
+        key_layer_ret = ttnn.experimental.tensor.rotary_embedding_llama(
+            key_layer, rot_mats[0], rot_mats[1], self.transformation_mats
+        )
         key_layer.deallocate(True)
 
         return query_layer_ret, key_layer_ret, value_layer
-
-    def apply_rotary_prefill(self, x, cos, sin, transform_mat):
-        batch, n_heads, _, _ = x.shape
-
-        cos = ttnn.repeat(cos, ttnn.Shape([batch, n_heads, 1, 1]))
-        sin = ttnn.repeat(sin, ttnn.Shape([batch, n_heads, 1, 1]))
-
-        x_transformed = ttnn.matmul(x, transform_mat)
-
-        x_cos = ttnn.mul(cos, x)
-        x_sin = ttnn.mul(sin, x_transformed)
-        return ttnn.add(x_cos, x_sin)
 
     def prefill_attn_mqa(
         self,
