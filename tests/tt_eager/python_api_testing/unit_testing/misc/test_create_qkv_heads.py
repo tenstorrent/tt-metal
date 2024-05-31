@@ -126,7 +126,7 @@ def run_create_qkv_heads_test(
     assert passing_pcc_v
 
 
-@pytest.mark.parametrize("device_l1_small_size", [8192], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "dtype",
     (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),

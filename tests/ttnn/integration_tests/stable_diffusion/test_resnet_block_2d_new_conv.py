@@ -110,7 +110,7 @@ def test_resnet_block_2d_256x256(
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width, index1,index2,block_name,out_channels",
     [

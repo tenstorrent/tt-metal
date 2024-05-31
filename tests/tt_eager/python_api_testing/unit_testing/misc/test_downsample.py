@@ -25,7 +25,7 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
 import torch
 
 
-@pytest.mark.parametrize("device_l1_small_size", [8192], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, stride_h, stride_w, num_cores, grid_size, height_sharded",
     (
