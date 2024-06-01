@@ -5,7 +5,7 @@
 #pragma once
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
-#include "llk_math_eltwise_unary_sfpu_3_param.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #include "ckernel_sfpu_hardtanh.h"
 
 namespace ckernel {
@@ -19,10 +19,13 @@ inline void llk_math_eltwise_unary_sfpu_hardtanh_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_hardtanh(uint dst_index, uint param0, uint param1, uint param2, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_3_param<APPROXIMATE>
-                                (ckernel::sfpu::calculate_hardtanh<APPROXIMATE>,
-                                ckernel::sfpu::calculate_hardtanh<APPROXIMATE>,
-                                dst_index, vector_mode, param0, param1, param2);
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::calculate_hardtanh<APPROXIMATE>,
+        dst_index,
+        vector_mode,
+        param0,
+        param1,
+        param2);
 }
 
 }
