@@ -7,6 +7,7 @@
 #include <functional>
 #include <optional>
 #include <utility>
+#include <variant>
 #include <vector>
 #include <tuple>
 
@@ -40,6 +41,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const Shape& shape
 
 struct MorehSum {
     int64_t dim;
+    bool keepdim;
     MemoryConfig output_mem_config;
     const DeviceComputeKernelConfig compute_kernel_config;
     void validate_with_output_tensors(
@@ -50,9 +52,9 @@ struct MorehSum {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &inputs, std::vector<Tensor> &outputs) const;
     stl::reflection::Attributes attributes() const;
-    static constexpr auto attribute_names = std::make_tuple("dim", "output_mem_config", "compute_kernel_config");
+    static constexpr auto attribute_names = std::make_tuple("dim", "keepdim", "output_mem_config", "compute_kernel_config");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->dim), std::cref(this->output_mem_config), std::cref(this->compute_kernel_config));
+        return std::make_tuple(std::cref(this->dim), std::cref(this->keepdim), std::cref(this->output_mem_config), std::cref(this->compute_kernel_config));
     }
 };
 
@@ -63,7 +65,8 @@ operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &
 
 Tensor moreh_sum(
     const Tensor &input,
-    std::vector<int64_t> &dims,
+    std::optional<std::variant<int64_t, std::vector<int64_t>>> dim = std::nullopt,
+    const bool keepdim = false,
     const std::optional<const Tensor> output = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
