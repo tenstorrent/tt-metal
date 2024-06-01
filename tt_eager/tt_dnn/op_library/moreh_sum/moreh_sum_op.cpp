@@ -45,6 +45,32 @@ inline void check_tensor(
     check_tensor(tensor.value(), op_name, data_type, layout);
 }
 
+inline void initialize_dims_with_range(std::vector<int64_t>& dims, uint32_t input_rank) {
+    dims.resize(input_rank);
+    std::iota(dims.begin(), dims.end(), 0);
+}
+
+inline std::vector<int64_t> get_dim(
+    const std::optional<std::variant<int64_t, std::vector<int64_t>>>& dim,
+    uint32_t input_rank
+) {
+    std::vector<int64_t> dims;
+    if (!dim.has_value()) {
+        initialize_dims_with_range(dims, input_rank);
+    }
+    else if (std::holds_alternative<int64_t>(dim.value())) {
+        auto d = std::get<int64_t>(dim.value());
+        dims.push_back(d);
+    }
+    else {
+        dims = std::get<std::vector<int64_t>>(dim.value());
+        if (dims.empty()) {
+            initialize_dims_with_range(dims, input_rank);
+        }
+    }
+    return dims;
+}
+
 Tensor _moreh_sum(
     const Tensor& input,
     const int64_t& dim,
@@ -177,28 +203,23 @@ operation::ProgramWithCallbacks MorehSum::create_program(
 
 Tensor moreh_sum(
     const Tensor& input,
-    std::vector<int64_t>& dims,
+    std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
+    const bool keepdim,
     const std::optional<const Tensor> output,
     const MemoryConfig& output_mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    // reduce for all dims
-    if (dims.empty()) {
-        const auto input_rank = input.get_legacy_shape().rank();
-        dims.resize(input_rank);
-        std::iota(dims.begin(), dims.end(), 0);
-    }
 
-    std::vector<int64_t> sorted_dims = dims;
-    std::sort(sorted_dims.begin(), sorted_dims.end());
+    std::vector<int64_t> dims = get_dim(dim, input.get_legacy_shape().rank());
+    std::sort(dims.begin(), dims.end());
 
     auto temp_input = input;
     for (uint32_t i = dims.size() - 1; i > 0; i--) {
-        log_debug(LogOp, "{}:{} dim {}", __func__, __LINE__, sorted_dims[i]);
-        auto temp_output = _moreh_sum(temp_input, sorted_dims[i], std::nullopt, output_mem_config, compute_kernel_config);
+        log_debug(LogOp, "{}:{} dim {}", __func__, __LINE__, dims[i]);
+        auto temp_output = _moreh_sum(temp_input, dims[i], std::nullopt, output_mem_config, compute_kernel_config);
         temp_input = temp_output;
     }
-    log_debug(LogOp, "{}:{} dim {}", __func__, __LINE__, sorted_dims.front());
-    return _moreh_sum(temp_input, sorted_dims.front(), output, output_mem_config, compute_kernel_config);
+    log_debug(LogOp, "{}:{} dim {}", __func__, __LINE__, dims.front());
+    return _moreh_sum(temp_input, dims.front(), output, output_mem_config, compute_kernel_config);
 }
 
 }  // namespace primary

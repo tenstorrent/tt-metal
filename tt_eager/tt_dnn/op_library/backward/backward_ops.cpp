@@ -2846,6 +2846,7 @@ std::vector<Tensor> _repeat_bw(
         Tensor result = tt::operations::primary::moreh_sum(
             grad,
             dim,
+            true,
             zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_mem_config),
             output_mem_config);
         grad_tensor.emplace_back(result);
@@ -2857,6 +2858,7 @@ std::vector<Tensor> _repeat_bw(
         Tensor result = tt::operations::primary::moreh_sum(
             grad,
             dim,
+            true,
             zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_mem_config),
             output_mem_config);
         grad_tensor.emplace_back(result);
