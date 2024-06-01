@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.hpp"
+#include "tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 
 namespace tt {
 
@@ -85,19 +86,24 @@ operation::ProgramWithCallbacks MorehSumBackward::create_program(
 Tensor moreh_sum_backward(
     const Tensor &output_grad,
     const Tensor &input,
-    std::vector<int64_t> &dims,
+    std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
+    const bool keepdim,
     const std::optional<const Tensor> input_grad,
     const MemoryConfig &input_grad_mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+
+    std::vector<int64_t> dims = get_dim(dim, input.get_legacy_shape().rank());
+    std::sort(dims.begin(), dims.end());
+
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({output_grad, input}))};
     auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
     operation::launch_op(
-        [dims, input_grad_mem_config, kernel_config_val](
+        [dims, keepdim, input_grad_mem_config, kernel_config_val](
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &optional_input_tensors,
             const std::vector<std::optional<Tensor>> &optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(
-                MorehSumBackward{.dims = dims, .input_grad_mem_config = input_grad_mem_config, .compute_kernel_config = kernel_config_val},
+                MorehSumBackward{.dims = dims, .keepdim=keepdim, .input_grad_mem_config = input_grad_mem_config, .compute_kernel_config = kernel_config_val},
                 input_tensors,
                 optional_input_tensors,
                 optional_output_tensors);
