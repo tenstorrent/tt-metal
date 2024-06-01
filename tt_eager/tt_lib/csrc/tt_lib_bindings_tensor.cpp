@@ -922,6 +922,9 @@ void TensorModule(py::module& m_tensor) {
     m_tensor.def(
         "dump_tensor",
         &dump_tensor,
+        py::arg("filename"),
+        py::arg("tensor"),
+        py::arg("strategy") = std::unordered_map<std::string, std::string>{},
         R"doc(
             Dump tensor to file
         )doc");
