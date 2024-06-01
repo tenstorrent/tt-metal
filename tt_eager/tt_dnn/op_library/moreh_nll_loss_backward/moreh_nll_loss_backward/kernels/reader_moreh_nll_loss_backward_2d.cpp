@@ -119,14 +119,14 @@ void kernel_main() {
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {
                 uint32_t n = nt * TILE_HEIGHT + h;
-                int32_t c = ct * TILE_WIDTH + w;
+                uint32_t c = ct * TILE_WIDTH + w;
 
                 uint32_t target_tilized_idx = get_tilized_idx(0, h); // 0, n
                 int32_t target_val = target_l1_ptr[target_tilized_idx];
 
                 uint32_t tmp_weight_tilized_idx = get_tilized_idx(h, w); // n, c
 
-                if (target_val != ignore_index && target_val == c) {
+                if (target_val != ignore_index && target_val == static_cast<int32_t>(c)) {
 #if defined(WEIGHT)
                     tmp_weight_l1_ptr[tmp_weight_tilized_idx] = fp32_dest_acc_cast(weight_l1_ptr[target_val]);
 #else
