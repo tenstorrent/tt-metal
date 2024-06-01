@@ -251,21 +251,22 @@ def test_moreh_sum_fp32_dest_acc(input_shape, dim, compute_kernel_options, devic
 @pytest.mark.parametrize(
     "dim",
     (
-        [0],
+        None,
+        0,
+        1,
+        2,
+        3,
         [0, 1],
         [0, 1, 2],
         [0, 1, 2, 3],
         [0, 1, 3],
         [0, 2, 3],
-        [1],
         [1, 2],
         [1, 2, 3],
         [1, 3],
-        [2],
         [2, 3],
-        [3],
     ),
-    ids=["0", "0,1", "0,1,2", "0,1,2,3", "0,1,3", "0,2,3", "1", "1,2", "1,2,3", "1,3", "2", "2,3", "3"],
+    ids=["None", "0", "1", "2", "3", "0,1", "0,1,2", "0,1,2,3", "0,1,3", "0,2,3", "1,2", "1,2,3", "1,3", "2,3"],
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 @pytest.mark.parametrize("use_provide_input_grad", (True, False), ids=["True", "False"])
@@ -286,7 +287,12 @@ def test_moreh_sum_backward(input_shape, dim, compute_kernel_options, use_provid
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
     tt_input_grad_cpu = (
         ttl.operations.primary.moreh_sum_backward(
-            tt_output_grad, tt_input, dims=dim, input_grad=tt_input_grad, compute_kernel_config=compute_kernel_config
+            tt_output_grad,
+            tt_input,
+            dim=dim,
+            keepdim=True,
+            input_grad=tt_input_grad,
+            compute_kernel_config=compute_kernel_config,
         )
         .cpu()
         .to(cpu_layout)
@@ -313,7 +319,7 @@ def test_moreh_sum_backward(input_shape, dim, compute_kernel_options, use_provid
 )
 @pytest.mark.parametrize(
     "dim",
-    ([0], [4], [5], [4, 5], [1, 4, 5]),
+    (0, 4, 5, [4, 5], [1, 4, 5]),
     ids=["dim-n", "dim-h", "dim-w", "dim-hw", "dim-nhw"],
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
@@ -336,7 +342,12 @@ def test_moreh_sum_backward_fp32_dest_acc(input_shape, dim, compute_kernel_optio
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
     tt_input_grad_cpu = (
         ttl.operations.primary.moreh_sum_backward(
-            tt_output_grad, tt_input, dims=dim, input_grad=tt_input_grad, compute_kernel_config=compute_kernel_config
+            tt_output_grad,
+            tt_input,
+            dim=dim,
+            keepdim=True,
+            input_grad=tt_input_grad,
+            compute_kernel_config=compute_kernel_config,
         )
         .cpu()
         .to(cpu_layout)
