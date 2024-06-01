@@ -124,15 +124,25 @@ struct ExecuteBinary {
             input_tensor_b = tt::tt_metal::repeat(input_tensor_b, repeats.value(), output_memory_config);
         }
 
-        return operation::run(
+        auto output_tensors = operation::run(
                    Binary{BinaryProgramConfig{
                        binary_op_type,
                        in_place,
                        activations,
                        output_memory_config,
                        dtype.value_or(input_tensor_a.get_dtype())}},
-                   {input_tensor_a, input_tensor_b})
-            .at(0);
+                   {input_tensor_a, input_tensor_b});
+
+        if(binary_op_type == BinaryOpType::EQ) {
+            const auto new_output_tensors = operation::run(Copy{output_memory_config, DataType::UINT16}, {output_tensors});
+            tt::log_warning("Input A {}", input_tensor_a.write_to_string());
+            tt::log_warning("Input B {}", input_tensor_b.write_to_string());
+            tt::log_warning("Output BLOAT16 {}", output_tensors.at(0).write_to_string());
+            tt::log_warning("Output UINT16 {}", new_output_tensors.at(0).write_to_string());
+            return new_output_tensors.at(0);
+        } else {
+            return output_tensors.at(0);
+        }
     }
 
     template <typename... Args>
