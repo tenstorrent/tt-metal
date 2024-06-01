@@ -127,10 +127,10 @@ void kernel_main() {
                 uint32_t target_tilized_idx = get_tilized_idx(n % TILE_HEIGHT, w);
                 int32_t target_val = target_l1_ptr[target_tilized_idx];
 
-                int32_t c = ct * TILE_HEIGHT + h;
+                uint32_t c = ct * TILE_HEIGHT + h;
                 uint32_t tmp_weight_tilized_idx = get_tilized_idx(h, w);
 
-                if (target_val != ignore_index && target_val == c) {
+                if (target_val != ignore_index && target_val == static_cast<int32_t>(c)) {
 #if defined(WEIGHT)
                     tmp_weight_l1_ptr[tmp_weight_tilized_idx] = fp32_dest_acc_cast(weight_l1_ptr[target_val]);
 #else

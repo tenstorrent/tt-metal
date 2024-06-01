@@ -96,7 +96,7 @@ void kernel_main() {
         uint32_t inner = i % num_inner_tile;
         uint32_t nc = i / num_inner_tile;
         uint32_t n = nc / C;
-        int32_t c = static_cast<int32_t>(nc % C);
+        uint32_t c = nc % C;
 
         cb_reserve_back(cb_target, onetile);
         uint32_t l1_write_addr_target = get_write_ptr(cb_target);
@@ -120,7 +120,7 @@ void kernel_main() {
                 int32_t target_val = target_l1_ptr[idx];
                 FP32_DEST_ACC_FTYPE val;
 
-                if (target_val != ignore_index && target_val == c) {
+                if (target_val != ignore_index && target_val == static_cast<int32_t>(c)) {
 #if defined(WEIGHT)
                     val = fp32_dest_acc_cast(weight_l1_ptr[target_val]);
 #else
