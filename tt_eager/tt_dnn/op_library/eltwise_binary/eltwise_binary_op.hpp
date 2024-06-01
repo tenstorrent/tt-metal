@@ -149,7 +149,10 @@ struct make_eltwise_binary {
 
                 if(binary_op_type == BinaryOpType::EQ) {
                     const auto new_output_tensor = operation::run(Copy{output_mem_config, DataType::UINT32}, {output_tensors});
-                    tt::log_warning("Output {}", new_output_tensor);
+                    tt::log_warning("Input A {}", in_a.write_to_string());
+                    tt::log_warning("Input B {}", in_b.write_to_string());
+                    tt::log_warning("Output BLOAT16 {}", output_tensors.at(0).write_to_string());
+                    tt::log_warning("Output UINT16 {}", new_output_tensor.at(0).write_to_string());
                     return new_output_tensor;
                 }
                 else {

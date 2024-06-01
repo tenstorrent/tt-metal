@@ -11,6 +11,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 
+from loguru import logger
+
 
 def run_math_unary_test(device, h, w, ttnn_function, torch_function, pcc=0.9999):
     torch.manual_seed(0)
@@ -67,6 +69,34 @@ def test_isposinf(device, h, w):
 @pytest.mark.parametrize("w", [5])
 def test_lgamma(device, h, w):
     run_math_unary_test(device, h, w, ttnn.lgamma, torch.lgamma, pcc=0.999)
+
+
+@pytest.mark.parametrize("h", [5])
+@pytest.mark.parametrize("w", [5])
+def test_eq(device, h, w):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_input_tensor_a[0, 0] = 1
+    torch_input_tensor_a[0, 1] = 1
+    torch_input_tensor_a[0, 2] = 1
+
+    torch_input_tensor_b = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_input_tensor_b[0, 0] = 1
+    torch_input_tensor_b[0, 1] = 1
+    torch_input_tensor_b[0, 2] = 1
+
+    torch_output_tensor = torch.eq(torch_input_tensor_a, torch_input_tensor_b)
+    logger.warning(f"{torch_output_tensor}")
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.eq(input_tensor_a, input_tensor_b)
+    logger.warning(f"{output_tensor}")
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
 @pytest.mark.parametrize("h", [64])
