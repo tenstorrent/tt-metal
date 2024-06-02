@@ -156,12 +156,12 @@ void EltwiseBinary::validate_with_output_tensors(const std::vector<Tensor>& inpu
         const auto& out_tensor = output_tensors.at(0).value();
         TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required.at(0), fmt::format("The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape()));
     }
-    if (this->in_place) {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout);
-        TT_FATAL(input_tensor_a.memory_config().buffer_type == this->output_mem_config.buffer_type);
+    if (this->in_place && this->output_mem_config.has_value()) {
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.value().memory_layout);
+        TT_FATAL(input_tensor_a.memory_config().buffer_type == this->output_mem_config.value().buffer_type);
         TT_FATAL(input_tensor_a.get_dtype() == this->output_dtype);
     }
-    auto out_mem_config = (!output_tensors.empty() && output_tensors.at(0).has_value()) ? output_tensors.at(0).value().memory_config() : this->output_mem_config;
+    auto out_mem_config = (!output_tensors.empty() && output_tensors.at(0).has_value()) ? output_tensors.at(0).value().memory_config() : this->output_mem_config.value();
     if (input_tensor_a.memory_config().is_sharded()) {
         if (input_tensor_a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
             // If we aren't height sharded, we require all sharding schemes to match until we add blocked reader/writers
@@ -216,7 +216,7 @@ std::vector<Tensor> EltwiseBinary::create_output_tensors(const std::vector<Tenso
     if (this->in_place) {
         return {};
     }
-    if (this->output_mem_config.is_sharded()) {
+    if (this->output_mem_config.value().is_sharded()) {
         ShardSpec shard_spec{CoreRangeSet({}), {0, 0}};
         if (input_tensor_a.memory_config().is_sharded()) {
             shard_spec = input_tensor_a.shard_spec().value();
@@ -231,7 +231,7 @@ std::vector<Tensor> EltwiseBinary::create_output_tensors(const std::vector<Tenso
             shard_spec.shape = {num_blocks / target_num_cores * TILE_HEIGHT, input_tensor_a.get_legacy_shape()[-1]};
             shard_spec.orientation = ShardOrientation::ROW_MAJOR;
         }
-        auto mem_config = this->output_mem_config;
+        auto mem_config = this->output_mem_config.value();
         mem_config.shard_spec = shard_spec;
         return {create_device_tensor(
             this->compute_output_shapes(input_tensors).at(0),
@@ -241,7 +241,7 @@ std::vector<Tensor> EltwiseBinary::create_output_tensors(const std::vector<Tenso
             mem_config)};
     }
     return operation::generic_create_output_tensors(
-        *this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
+        *this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config.value());
 }
 
 operation::ProgramWithCallbacks EltwiseBinary::create_program(
@@ -278,7 +278,7 @@ const operation::Hash EltwiseBinary::compute_program_hash(const std::vector<Tens
         input_tensor_b.dtype(),
         std::get<DeviceStorage>(input_tensor_b.storage()).memory_config(),
         this->output_dtype,
-        this->output_mem_config,
+        this->output_mem_config.value(),
         this->in_place);
 
     if (this->fused_activations.has_value()) {

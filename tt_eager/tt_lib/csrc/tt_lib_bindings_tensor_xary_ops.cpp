@@ -23,14 +23,14 @@ namespace tt::tt_metal::detail {
         detail::bind_binary_op(m_tensor, "lt", lt, R"doc(Perform an eltwise-binary less-than (``{0} < {1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "lte", lte, R"doc(Perform an eltwise-binary less-than-or-equal (``{0} <= {1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "gte", gte, R"doc(Perform an eltwise-binary greater-than-or-equal (``{0} >= {1}``) on two tensors.)doc");
-        detail::bind_binary_op(m_tensor, "eq", py::overload_cast<const Tensor&, const Tensor&, std::optional<std::vector<UnaryWithParam>>, const MemoryConfig&, std::optional<const DataType>, std::optional<Tensor> >(&eq), R"doc(Perform an eltwise-binary equal (``{0} == {1}``) on two tensors.)doc");
+        detail::bind_binary_op(m_tensor, "eq", py::overload_cast<const Tensor&, const Tensor&, std::optional<std::vector<UnaryWithParam>>, std::optional<MemoryConfig>, std::optional<const DataType>, std::optional<Tensor> >(&eq), R"doc(Perform an eltwise-binary equal (``{0} == {1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "ne", ne, R"doc(Perform an eltwise-binary not-equal (``{0} != {1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "ldexp", ldexp, R"doc(Performs eltwise-binary ldexp (``{0} * 2**{1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "logaddexp", logaddexp, R"doc(Perform an eltwise-binary logaddexp (``log(exp({0}) + exp({1}))``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "logaddexp2", logaddexp2, R"doc(Perform an eltwise-binary logaddexp2 (``log2(2^({0}) + 2^({1}))``) on two tensors for input range [-64,64].)doc");
         detail::bind_binary_op(m_tensor, "logical_or", logical_or, R"doc(Perform an eltwise-binary logical OR (``{0} || {1}``) on two tensors.)doc");
 
-        m_tensor.def("eq", py::overload_cast<uint8_t, const Tensor&, const Tensor&, std::optional<std::vector<UnaryWithParam>>, const MemoryConfig&, std::optional<const DataType>, std::optional<Tensor> >(&eq),
+        m_tensor.def("eq", py::overload_cast<uint8_t, const Tensor&, const Tensor&, std::optional<std::vector<UnaryWithParam>>, std::optional<MemoryConfig>, std::optional<const DataType>, std::optional<Tensor> >(&eq),
             py::arg("queue_id").noconvert() = 0, py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("fused_activations").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert()= std::nullopt, py::arg("output_tensor").noconvert()= std::nullopt, R"doc(
             Perform an eltwise-binary equal (``input_a`` == ``input_b``) on two tensors.
 
