@@ -236,13 +236,26 @@ void get_dram_reader_core_coords_wormhole_b0(
             if (std::find(harvested_rows.begin(), harvested_rows.end(), y) != harvested_rows.end() ||
                 std::count(group_y.begin(), group_y.end(), y) >= 2) {
                 auto adjust_coord = [&](int start, int end, int step) {
+                    bool found_new_row = false;
                     for (int j = start; step > 0 ? j <= end : j >= end; j += step) {
                         if (std::find(harvested_rows.begin(), harvested_rows.end(), j) == harvested_rows.end() &&
                             std::count(group_y.begin(), group_y.end(), j) == 0) {
                             coord.y = j;
                             coord.x += x_step;
                             x_step--;
+                            found_new_row = true;
                             break;
+                        }
+                    }
+                    if (not found_new_row) {
+                        for (int j = start; step > 0 ? j <= end : j >= end; j += step) {
+                            if (std::find(harvested_rows.begin(), harvested_rows.end(), j) == harvested_rows.end()) {
+                                coord.y = j;
+                                coord.x += x_step;
+                                x_step--;
+                                found_new_row = true;
+                                break;
+                            }
                         }
                     }
                 };
