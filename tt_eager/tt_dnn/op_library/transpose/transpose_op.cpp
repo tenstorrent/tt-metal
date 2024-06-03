@@ -156,9 +156,9 @@ tt::stl::reflection::Attributes Transpose::attributes() const {
 const operation::Hash Transpose::compute_program_hash(
     const std::vector<Tensor> &input_tensors) const {
     auto input_tensor = input_tensors.at(0);
-    auto input_mem_config = std::get<DeviceStorage>(input_tensor.storage()).memory_config();
+    auto input_mem_config = input_tensor.memory_config();
     auto output_mem_config = this->output_mem_config;
-    auto dtype = input_tensor.dtype();
+    auto dtype = input_tensor.get_dtype();
     return operation::hash_operation<Transpose>(
         input_mem_config, output_mem_config, dtype, this->dim, get_parallelization_strategy(input_tensors));
 }
