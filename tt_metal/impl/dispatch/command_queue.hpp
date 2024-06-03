@@ -55,9 +55,6 @@ string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 #define NOC_X(x) x
 #define NOC_Y(y) y
 
-uint32_t get_noc_unicast_encoding(const CoreCoord& coord);
-uint32_t get_noc_multicast_encoding(const CoreCoord& start, const CoreCoord& end);
-
 class CommandQueue;
 class CommandInterface;
 
@@ -74,13 +71,14 @@ class EnqueueReadBufferCommand : public Command {
    private:
     SystemMemoryManager& manager;
     void* dst;
-    uint32_t command_queue_id;
     CoreType dispatch_core_type;
 
     virtual void add_prefetch_relay(HugepageDeviceCommand& command) = 0;
 
    protected:
     Device* device;
+    uint32_t command_queue_id;
+    NOC noc_index;
     uint32_t expected_num_workers_completed;
     uint32_t src_page_index;
     uint32_t pages_to_read;
@@ -90,6 +88,7 @@ class EnqueueReadBufferCommand : public Command {
     EnqueueReadBufferCommand(
         uint32_t command_queue_id,
         Device* device,
+        NOC noc_index,
         Buffer& buffer,
         void* dst,
         SystemMemoryManager& manager,
@@ -112,6 +111,7 @@ class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
     EnqueueReadInterleavedBufferCommand(
         uint32_t command_queue_id,
         Device* device,
+        NOC noc_index,
         Buffer& buffer,
         void* dst,
         SystemMemoryManager& manager,
@@ -121,6 +121,7 @@ class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
         EnqueueReadBufferCommand(
             command_queue_id,
             device,
+            noc_index,
             buffer,
             dst,
             manager,
@@ -139,6 +140,7 @@ class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
     EnqueueReadShardedBufferCommand(
         uint32_t command_queue_id,
         Device* device,
+        NOC noc_index,
         Buffer& buffer,
         void* dst,
         SystemMemoryManager& manager,
@@ -150,6 +152,7 @@ class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
         EnqueueReadBufferCommand(
             command_queue_id,
             device,
+            noc_index,
             buffer,
             dst,
             manager,
@@ -165,7 +168,6 @@ class EnqueueWriteInterleavedBufferCommand;
 class EnqueueWriteBufferCommand : public Command {
    private:
     SystemMemoryManager& manager;
-    uint32_t command_queue_id;
     CoreType dispatch_core_type;
 
     virtual void add_dispatch_write(HugepageDeviceCommand& command) = 0;
@@ -173,6 +175,8 @@ class EnqueueWriteBufferCommand : public Command {
 
    protected:
     Device* device;
+    uint32_t command_queue_id;
+    NOC noc_index;
     const void* src;
     const Buffer& buffer;
     uint32_t expected_num_workers_completed;
@@ -186,6 +190,7 @@ class EnqueueWriteBufferCommand : public Command {
     EnqueueWriteBufferCommand(
         uint32_t command_queue_id,
         Device* device,
+        NOC noc_index,
         const Buffer& buffer,
         const void* src,
         SystemMemoryManager& manager,
@@ -212,6 +217,7 @@ class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
     EnqueueWriteInterleavedBufferCommand(
         uint32_t command_queue_id,
         Device* device,
+        NOC noc_index,
         const Buffer& buffer,
         const void* src,
         SystemMemoryManager& manager,
@@ -224,6 +230,7 @@ class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
         EnqueueWriteBufferCommand(
             command_queue_id,
             device,
+            noc_index,
             buffer,
             src,
             manager,
@@ -249,6 +256,7 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
     EnqueueWriteShardedBufferCommand(
         uint32_t command_queue_id,
         Device* device,
+        NOC noc_index,
         const Buffer& buffer,
         const void* src,
         SystemMemoryManager& manager,
@@ -263,6 +271,7 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
         EnqueueWriteBufferCommand(
             command_queue_id,
             device,
+            noc_index,
             buffer,
             src,
             manager,
@@ -282,6 +291,7 @@ class EnqueueProgramCommand : public Command {
    private:
     uint32_t command_queue_id;
     Device* device;
+    NOC noc_index;
     Program& program;
     SystemMemoryManager& manager;
     CoreType dispatch_core_type;
@@ -302,6 +312,7 @@ class EnqueueProgramCommand : public Command {
     EnqueueProgramCommand(
         uint32_t command_queue_id,
         Device* device,
+        NOC noc_index,
         Program& program,
         SystemMemoryManager& manager,
         uint32_t expected_num_workers_completed);
@@ -321,6 +332,7 @@ class EnqueueRecordEventCommand : public Command {
    private:
     uint32_t command_queue_id;
     Device* device;
+    NOC noc_index;
     SystemMemoryManager& manager;
     uint32_t event_id;
     uint32_t expected_num_workers_completed;
@@ -330,6 +342,7 @@ class EnqueueRecordEventCommand : public Command {
     EnqueueRecordEventCommand(
         uint32_t command_queue_id,
         Device* device,
+        NOC noc_index,
         SystemMemoryManager& manager,
         uint32_t event_id,
         uint32_t expected_num_workers_completed,
@@ -474,11 +487,12 @@ struct RuntimeArgsMetadata {
 
 class HWCommandQueue {
    public:
-    HWCommandQueue(Device* device, uint32_t id);
+    HWCommandQueue(Device* device, uint32_t id, NOC noc_index);
 
     ~HWCommandQueue();
 
     CoreCoord completion_queue_writer_core;
+    NOC noc_index;
     volatile bool is_dprint_server_hung();
     volatile bool is_noc_hung();
 
