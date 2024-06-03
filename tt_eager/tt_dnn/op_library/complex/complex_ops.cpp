@@ -47,6 +47,28 @@ namespace utility {
         const Shape& shape = input.get_legacy_shape();
         return shape[-1]%(2*TILE_WIDTH) == 0; //last dim should be partitionable
     }
+
+    Tensor pad1_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
+    auto formatted_input_tensor = temp;
+    if(formatted_input_tensor.get_layout()==Layout::ROW_MAJOR){
+        auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_legacy_shape(), false, false, true, true);
+        if (!AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
+            formatted_input_tensor = AutoFormat::format_input_tensor(temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
+        }
+    }
+    return formatted_input_tensor;
+    }
+
+    Tensor pad0_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
+    auto formatted_input_tensor = temp;
+    if(formatted_input_tensor.get_layout()==Layout::ROW_MAJOR){
+        auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_legacy_shape(), false, false, true, true);
+        if (!AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
+            formatted_input_tensor = AutoFormat::format_input_tensor(temp, temp.device(), a_pad_shape, 0.0, Layout::TILE);
+        }
+    }
+    return formatted_input_tensor;
+    }
 }
 
 
@@ -95,6 +117,9 @@ Tensor complex_recip(const Tensor& input, const MemoryConfig& output_mem_config)
     Tensor real = get_real(input, output_mem_config);
     Tensor imag = get_imag(input, output_mem_config);
 
+    real = real.get_layout() == Layout::ROW_MAJOR ? utility::pad0_layout_to_tile(real, output_mem_config) : real;
+    imag = imag.get_layout() == Layout::ROW_MAJOR ? utility::pad0_layout_to_tile(imag, output_mem_config) : imag;
+
     Tensor a_plus_b = add(real,imag,{},output_mem_config);
     Tensor a_minus_b = sub(real, imag,{},output_mem_config);
     Tensor asqr_plus_bsqr = add(square(real,output_mem_config),square(imag,output_mem_config),
@@ -106,10 +131,16 @@ Tensor complex_recip(const Tensor& input, const MemoryConfig& output_mem_config)
 }
 
 Tensor complex_add(const Tensor& input_a, const Tensor& input_b,  const MemoryConfig& output_mem_config) {
+    CHECK_FOR_COMPLEX(input_a);
+    CHECK_FOR_COMPLEX(input_b);
+
     return add(input_a,input_b,{},output_mem_config);
 }
 
 Tensor complex_sub(const Tensor& input_a, const Tensor& input_b,  const MemoryConfig& output_mem_config) {
+    CHECK_FOR_COMPLEX(input_a);
+    CHECK_FOR_COMPLEX(input_b);
+
     return sub(input_a,input_b,{},output_mem_config);
 }
 
@@ -122,6 +153,11 @@ Tensor complex_mul(const Tensor& input_a, const Tensor& input_b,  const MemoryCo
 
     Tensor r_b = get_real(input_b, output_mem_config);
     Tensor i_b = get_imag(input_b, output_mem_config);
+
+    r_a = r_a.get_layout() == Layout::ROW_MAJOR ? utility::pad1_layout_to_tile(r_a, output_mem_config) : r_a;
+    r_b = r_b.get_layout() == Layout::ROW_MAJOR ? utility::pad1_layout_to_tile(r_b, output_mem_config) : r_b;
+    i_a = i_a.get_layout() == Layout::ROW_MAJOR ? utility::pad1_layout_to_tile(i_a, output_mem_config) : i_a;
+    i_b = i_b.get_layout() == Layout::ROW_MAJOR ? utility::pad1_layout_to_tile(i_b, output_mem_config) : i_b;
 
     Tensor re_part = sub( mul(r_a,r_b,{},output_mem_config), mul(i_a,i_b,{},output_mem_config), {}, output_mem_config );
     Tensor im_part = add( mul(r_a,i_b,{},output_mem_config), mul(i_a,r_b,{},output_mem_config), {}, output_mem_config );
@@ -175,10 +211,22 @@ Tensor complex_abs(const ComplexTensor& input, const MemoryConfig& output_mem_co
     return hypot(input[0],input[1],output_mem_config);
 }
 
-ComplexTensor complex_mul(const ComplexTensor& ab, const ComplexTensor& cd,  const MemoryConfig& output_mem_config) {
+ComplexTensor complex_mul(const ComplexTensor& ab, const ComplexTensor& cd, const MemoryConfig& output_mem_config) {
     // (a + ib)*(c + id) = (ac - bd) + i(bc + ad)
-    Tensor re_part = sub( mul(ab[0],cd[0],{},output_mem_config), mul(ab[1],cd[1],{},output_mem_config), {}, output_mem_config );
-    Tensor im_part = add( mul(ab[0],cd[1],{},output_mem_config), mul(ab[1],cd[0],{},output_mem_config), {}, output_mem_config );
+
+    Tensor r_a = ab.real();
+    Tensor i_a = ab.imag();
+
+    Tensor r_b = cd.real();
+    Tensor i_b = cd.imag();
+
+    r_a = r_a.get_layout() == Layout::ROW_MAJOR ? utility::pad1_layout_to_tile(r_a, output_mem_config) : r_a;
+    r_b = r_b.get_layout() == Layout::ROW_MAJOR ? utility::pad1_layout_to_tile(r_b, output_mem_config) : r_b;
+    i_a = i_a.get_layout() == Layout::ROW_MAJOR ? utility::pad1_layout_to_tile(i_a, output_mem_config) : i_a;
+    i_b = i_b.get_layout() == Layout::ROW_MAJOR ? utility::pad1_layout_to_tile(i_b, output_mem_config) : i_b;
+
+    Tensor re_part = sub( mul(r_a,r_b,{},output_mem_config), mul(i_a,i_b,{},output_mem_config), {}, output_mem_config );
+    Tensor im_part = add( mul(r_a,i_b,{},output_mem_config), mul(i_a,r_b,{},output_mem_config), {}, output_mem_config );
     return ComplexTensor({ re_part, im_part });
 }
 
@@ -187,41 +235,69 @@ ComplexTensor complex_div(const ComplexTensor& input_a, const ComplexTensor& inp
 }
 
 ComplexTensor complex_recip(const ComplexTensor& ab, const MemoryConfig& output_mem_config) {
-    Tensor a_plus_b = add(ab[0],ab[1],{},output_mem_config);
-    Tensor a_minus_b = sub(ab[0],ab[1],{},output_mem_config);
-    Tensor asqr_plus_bsqr = add(square(ab[0],output_mem_config),square(ab[1],output_mem_config),
+
+    Tensor real = ab.real();
+    Tensor imag = ab.imag();
+
+    real = real.get_layout() == Layout::ROW_MAJOR ? utility::pad0_layout_to_tile(real, output_mem_config) : real;
+    imag = imag.get_layout() == Layout::ROW_MAJOR ? utility::pad0_layout_to_tile(imag, output_mem_config) : imag;
+
+    Tensor a_plus_b = add(real,imag,{},output_mem_config);
+    Tensor a_minus_b = sub(real,imag,{},output_mem_config);
+    Tensor asqr_plus_bsqr = add(square(real,output_mem_config),square(imag,output_mem_config),
                                 {},output_mem_config);
     Tensor inv_dr = recip( asqr_plus_bsqr, output_mem_config );
-    Tensor conj_im = mul( neg(ab[1],output_mem_config), inv_dr, {}, output_mem_config);
-    Tensor conj_re = mul( ab[0], inv_dr, {}, output_mem_config);
+    Tensor conj_im = mul( neg(imag,output_mem_config), inv_dr, {}, output_mem_config);
+    Tensor conj_re = mul( real, inv_dr, {}, output_mem_config);
     return ComplexTensor({ conj_re, conj_im});
 }
 
 ComplexTensor complex_add(const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config) {
-    return ComplexTensor({ add(input_a[0],input_b[0],{},output_mem_config),
-             add(input_a[1],input_b[1],{},output_mem_config) });
+
+    Tensor in_a_real = input_a[0].get_layout() == Layout::ROW_MAJOR ? utility::pad0_layout_to_tile(input_a[0], output_mem_config) : input_a[0];
+    Tensor in_a_imag = input_a[1].get_layout() == Layout::ROW_MAJOR ? utility::pad0_layout_to_tile(input_a[1], output_mem_config) : input_a[1];
+    Tensor in_b_real = input_b[0].get_layout() == Layout::ROW_MAJOR ? utility::pad0_layout_to_tile(input_b[0], output_mem_config) : input_b[0];
+    Tensor in_b_imag = input_b[1].get_layout() == Layout::ROW_MAJOR ? utility::pad0_layout_to_tile(input_b[1], output_mem_config) : input_b[1];
+
+    return ComplexTensor({ add(in_a_real,in_b_real,{},output_mem_config),
+             add(in_a_imag,in_b_imag,{},output_mem_config) });
 }
 
 ComplexTensor complex_sub(const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config) {
-    return ComplexTensor({ sub(input_a[0],input_b[0],{},output_mem_config),
-             sub(input_a[1],input_b[1],{},output_mem_config) });
+
+    Tensor in_a_real = input_a[0].get_layout() == Layout::ROW_MAJOR ? utility::pad0_layout_to_tile(input_a[0], output_mem_config) : input_a[0];
+    Tensor in_a_imag = input_a[1].get_layout() == Layout::ROW_MAJOR ? utility::pad0_layout_to_tile(input_a[1], output_mem_config) : input_a[1];
+    Tensor in_b_real = input_b[0].get_layout() == Layout::ROW_MAJOR ? utility::pad0_layout_to_tile(input_b[0], output_mem_config) : input_b[0];
+    Tensor in_b_imag = input_b[1].get_layout() == Layout::ROW_MAJOR ? utility::pad0_layout_to_tile(input_b[1], output_mem_config) : input_b[1];
+
+    return ComplexTensor({ sub(in_a_real,in_b_real,{},output_mem_config),
+             sub(in_a_imag,in_b_imag,{},output_mem_config) });
 }
 
 // level-1 type polar
 Tensor polar(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    Tensor c = cos(input_b,output_mem_config);
-    Tensor r = mul(input_a,c,{},output_mem_config);
+
+    Tensor in_a = input_a.get_layout() == Layout::ROW_MAJOR ? utility::pad0_layout_to_tile(input_a, output_mem_config) : input_a;
+    Tensor in_b = input_b.get_layout() == Layout::ROW_MAJOR ? utility::pad0_layout_to_tile(input_b, output_mem_config) : input_b;
+
+    Tensor c = cos(in_b,output_mem_config);
+    Tensor r = mul(in_a,c,{},output_mem_config);
     c.deallocate();
 
-    Tensor s = sin(input_b,output_mem_config);
-    Tensor i = mul(input_a,s,{},output_mem_config);
+    Tensor s = sin(in_b,output_mem_config);
+    Tensor i = mul(in_a,s,{},output_mem_config);
     s.deallocate();
     return mk_complex( r, i, output_mem_config);
 }
 
 ComplexTensor polar(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    const Tensor& input_a = input.real();
-    const Tensor& input_b = input.imag();
+
+    Tensor input_a = input.real();
+    Tensor input_b = input.imag();
+
+    input_a = input_a.get_layout() == Layout::ROW_MAJOR ? utility::pad0_layout_to_tile(input_a, output_mem_config) : input_a;
+    input_b = input_b.get_layout() == Layout::ROW_MAJOR ? utility::pad0_layout_to_tile(input_b, output_mem_config) : input_b;
+
     Tensor c = cos(input_b,output_mem_config);
     Tensor r = mul(input_a,c,{},output_mem_config);
     c.deallocate();

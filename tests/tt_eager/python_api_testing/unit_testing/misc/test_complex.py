@@ -98,7 +98,7 @@ def test_level1_is_real(memcfg, dtype, device, function_level_defaults):
     # check real
     x = Complex(input_shape)
     x = x.add(x.conj())
-    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg)
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
     tt_dev = ttl.tensor.is_real(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_cpu = x.is_real()
@@ -121,7 +121,7 @@ def test_level1_is_imag(memcfg, dtype, device, function_level_defaults):
     # check imag
     x = Complex(input_shape)
     x = x.sub(x.conj())
-    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg)
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
     tt_dev = ttl.tensor.is_imag(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_cpu = x.is_imag()
@@ -183,7 +183,7 @@ def test_level1_real(memcfg, dtype, device, function_level_defaults):
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize("dtype", ((ttl.tensor.DataType.BFLOAT16,)))
-@pytest.mark.parametrize("layout", ((ttl.tensor.Layout.TILE,)))
+@pytest.mark.parametrize("layout", ((ttl.tensor.Layout.ROW_MAJOR,)))
 @pytest.mark.parametrize("bs", ((1, 1), (1, 2)))
 def test_level1_imag(bs, memcfg, dtype, device, function_level_defaults, layout):
     input_shape = torch.Size([bs[0], bs[1], 32, 64])
@@ -207,7 +207,7 @@ def test_level1_imag(bs, memcfg, dtype, device, function_level_defaults, layout)
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize("dtype", ((ttl.tensor.DataType.BFLOAT16,)))
-@pytest.mark.parametrize("layout", ((ttl.tensor.Layout.TILE,)))
+@pytest.mark.parametrize("layout", ((ttl.tensor.Layout.ROW_MAJOR,)))
 @pytest.mark.parametrize("bs", ((1, 1), (1, 2)))
 def test_level1_abs(bs, memcfg, dtype, device, function_level_defaults, layout):
     input_shape = torch.Size([bs[0], bs[1], 32, 64])
@@ -236,7 +236,7 @@ def test_level1_conj(bs, memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([bs[0], bs[1], 32, 64])
     # check conj
     x = Complex(input_shape)
-    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg)
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
     tt_dev = ttl.tensor.conj(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_cpu = x.conj().metal
@@ -322,8 +322,8 @@ def test_level1_mul_bs(bs, memcfg, dtype, device, function_level_defaults):
     x = Complex(input_shape)
     y = Complex(input_shape) * 0.75
 
-    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg)
-    ytt = ttl.tensor.Tensor(y.metal, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg)
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
+    ytt = ttl.tensor.Tensor(y.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
 
     tt_dev = ttl.tensor.complex_mul(xtt, ytt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -351,8 +351,8 @@ def test_level1_mul(bs, memcfg, dtype, device, function_level_defaults):
     x = Complex(input_shape)
     y = Complex(input_shape) * 0.75
 
-    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg)
-    ytt = ttl.tensor.Tensor(y.metal, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg)
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
+    ytt = ttl.tensor.Tensor(y.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
 
     tt_dev = ttl.tensor.complex_mul(xtt, ytt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -379,8 +379,8 @@ def test_level1_div(memcfg, dtype, device, function_level_defaults):
     x = Complex(input_shape)
     y = Complex(input_shape) * 0.75
 
-    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg)
-    ytt = ttl.tensor.Tensor(y.metal, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg)
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
+    ytt = ttl.tensor.Tensor(y.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
 
     tt_dev = ttl.tensor.complex_div(ytt, xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -406,7 +406,7 @@ def test_level1_recip(memcfg, dtype, device, function_level_defaults):
     # check abs
     x = Complex(input_shape)
     x = x.div(x * 0.5)
-    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg)
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
 
     tt_dev = ttl.tensor.complex_recip(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -433,8 +433,8 @@ def test_level2_real(bs, memcfg, dtype, device, function_level_defaults):
     # check real
     x = Complex(input_shape)
     xtt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
     tt_dev = ttl.tensor.real(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -459,8 +459,8 @@ def test_level2_imag(bs, memcfg, dtype, device, function_level_defaults):
     # check imag
     x = Complex(input_shape)
     xtt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
     tt_dev = ttl.tensor.imag(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -485,8 +485,8 @@ def test_level2_abs(bs, memcfg, dtype, device, function_level_defaults):
     # check abs
     x = Complex(input_shape)
     xtt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
     tt_dev = ttl.tensor.complex_abs(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -514,8 +514,8 @@ def test_level2_abs(bs, memcfg, dtype, device, function_level_defaults):
     # check abs
     x = Complex(input_shape)
     xtt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
     tt_dev = ttl.tensor.complex_abs(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -543,8 +543,8 @@ def test_level2_conj(bs, memcfg, dtype, device, function_level_defaults):
     # check abs
     x = Complex(input_shape)
     xtt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
     tt_dev = ttl.tensor.conj(xtt, memcfg)
     tt_dev_r = tt_dev.real.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -575,8 +575,8 @@ def test_level2_recip(bs, memcfg, dtype, device, function_level_defaults):
     x = Complex(input_shape)
     x = x.div(x * 0.5)
     xtt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
     tt_dev = ttl.tensor.complex_recip(xtt, memcfg)
     tt_dev_r = tt_dev.real.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -609,12 +609,12 @@ def test_level2_add(bs, memcfg, dtype, device, function_level_defaults):
     y = Complex(input_shape) * -0.5
 
     xtt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
     ytt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(y.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(y.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(y.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(y.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
 
     tt_dev = ttl.tensor.complex_add(xtt, ytt, memcfg)
@@ -645,12 +645,12 @@ def test_level2_sub(bs, memcfg, dtype, device, function_level_defaults):
     y = Complex(input_shape) * -0.5
 
     xtt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
     ytt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(y.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(y.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(y.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(y.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
 
     tt_dev = ttl.tensor.complex_sub(xtt, ytt, memcfg)
@@ -682,12 +682,12 @@ def test_level2_mul(bs, memcfg, dtype, device, function_level_defaults):
     y = Complex(input_shape) * -0.5
 
     xtt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
     ytt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(y.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(y.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(y.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(y.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
 
     tt_dev = ttl.tensor.complex_mul(xtt, ytt, memcfg)
@@ -719,12 +719,12 @@ def test_level2_div(bs, memcfg, dtype, device, function_level_defaults):
     y = Complex(input_shape) * 1
 
     xtt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
     ytt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(y.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(y.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(y.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(y.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
 
     tt_dev = ttl.tensor.complex_div(xtt, xtt, memcfg)
@@ -754,8 +754,8 @@ def test_level2_is_real(bs, memcfg, dtype, device, function_level_defaults):
     # check abs
     x = Complex(input_shape)
     xtt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(0 * x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(0 * x.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
     tt_dev = ttl.tensor.is_real(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -784,8 +784,8 @@ def test_level2_is_imag(bs, memcfg, dtype, device, function_level_defaults):
     # check abs
     x = Complex(input_shape)
     xtt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(0 * x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(0 * x.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
     tt_dev = ttl.tensor.is_imag(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -817,8 +817,8 @@ def test_level1_polar(bs, memcfg, dtype, device, function_level_defaults):
     x = Complex(None, re=torch.ones(input_shape), im=torch.rand(input_shape))
 
     xtt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
     tt_dev = ttl.tensor.polar(xtt.real, xtt.imag, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -849,8 +849,8 @@ def test_level2_polar(bs, memcfg, dtype, device, function_level_defaults):
     x = Complex(None, re=torch.ones(input_shape), im=torch.rand(input_shape))
 
     xtt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
+        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg),
     )
     tt_dev = ttl.tensor.polar(xtt, memcfg)
     tt_dev_real = tt_dev.real.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
