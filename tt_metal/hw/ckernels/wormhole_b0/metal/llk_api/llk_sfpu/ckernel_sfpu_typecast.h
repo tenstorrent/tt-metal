@@ -36,7 +36,6 @@ inline void calculate_typecast_fp16b_to_uint32()
             } v_elseif (exp > 31) {
                 // set to uint32 max value in case of overflow
                 vInt tmp = 2147483647;
-                dst_reg[0] = tmp;
                 dst_reg[0] = setsgn(reinterpret<vFloat>(tmp), 1);
             } v_else {
                 // extract mantissa
