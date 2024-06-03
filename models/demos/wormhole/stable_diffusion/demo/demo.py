@@ -610,7 +610,7 @@ def test_demo_diffusiondb(device, reset_seeds, input_path, num_prompts, num_infe
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "num_inference_steps",
     ((30),),
