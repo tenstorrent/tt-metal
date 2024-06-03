@@ -1228,48 +1228,84 @@ Tensor _where(
     const Tensor& predicate,
     const Tensor& value_true,
     const Tensor& value_false,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+
     Tensor t2 = mul(gtz(predicate, output_mem_config), value_true, std::nullopt, output_mem_config);
-    Tensor t1 = mul(lez(predicate, output_mem_config), value_false, std::nullopt, output_mem_config);
-    return add(t2, t1, std::nullopt, output_mem_config);
+    if(output_tensor.has_value())
+    {
+        mul(lez(predicate, output_mem_config), value_false, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, output_tensor.value());
+        add(t2, output_tensor.value(), std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, output_tensor.value());
+    }
+    else
+    {
+        Tensor t1 = mul(lez(predicate, output_mem_config), value_false, std::nullopt, output_mem_config);
+        output_tensor = add(t2, t1, std::nullopt, output_mem_config);
+    }
+    return output_tensor.value();
 }
 Tensor _where_v1(
-    const Tensor& predicate, const float value_true, const Tensor& value_false, const MemoryConfig& output_mem_config) {
+    const Tensor& predicate, const float value_true, const Tensor& value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+
     Tensor t2 = mul_unary(gtz(predicate, output_mem_config), value_true, output_mem_config);
-    Tensor t1 = mul(lez(predicate, output_mem_config), value_false, std::nullopt, output_mem_config);
-    return add(t2, t1, std::nullopt, output_mem_config);
+
+    if(output_tensor.has_value()){
+        mul(lez(predicate, output_mem_config), value_false, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, output_tensor.value());
+        add(t2, output_tensor.value(), std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, output_tensor.value());
+    }
+    else
+    {
+        Tensor t1 = mul(lez(predicate, output_mem_config), value_false, std::nullopt, output_mem_config);
+        output_tensor = add(t2, t1, std::nullopt, output_mem_config);
+    }
+    return output_tensor.value();
 }
 Tensor _where_v2(
-    const Tensor& predicate, const Tensor& value_true, float value_false, const MemoryConfig& output_mem_config) {
-    Tensor t2 = mul(gtz(predicate, output_mem_config), value_true, std::nullopt, output_mem_config);
+    const Tensor& predicate, const Tensor& value_true, float value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+
     Tensor t1 = mul_unary(lez(predicate, output_mem_config), value_false, output_mem_config);
-    return add(t2, t1, std::nullopt, output_mem_config);
+
+    if(output_tensor.has_value()){
+        mul(gtz(predicate, output_mem_config), value_true, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, output_tensor.value());
+        add(output_tensor.value(), t1, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, output_tensor.value());
+    }
+    else
+    {
+        Tensor t2 = mul(gtz(predicate, output_mem_config), value_true, std::nullopt, output_mem_config);
+        output_tensor = add(t2, t1, std::nullopt, output_mem_config);
+    }
+    return output_tensor.value();
 }
 Tensor _where_v3(
-    const Tensor& predicate, const float value_true, const float value_false, const MemoryConfig& output_mem_config) {
+    const Tensor& predicate, const float value_true, const float value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
     Tensor t2 = mul_unary(gtz(predicate, output_mem_config), value_true, output_mem_config);
     Tensor t1 = mul_unary(lez(predicate, output_mem_config), value_false, output_mem_config);
-    return add(t2, t1, std::nullopt, output_mem_config);
+    if(output_tensor.has_value()){
+        add(t2, t1, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, output_tensor.value());
+    } else {
+        output_tensor = add(t2, t1, std::nullopt, output_mem_config);
+    }
+    return output_tensor.value();
 }
-
 Tensor where(
     const Tensor& predicate,
     const Tensor& value_true,
     const Tensor& value_false,
-    const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _where)(predicate, value_true, value_false, output_mem_config);
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    return operation::decorate_as_composite(__func__, _where)(predicate, value_true, value_false, output_mem_config, output_tensor);
 }
 Tensor where(
-    const Tensor& predicate, const float value_true, const Tensor& value_false, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _where_v1)(predicate, value_true, value_false, output_mem_config);
+    const Tensor& predicate, const float value_true, const Tensor& value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return operation::decorate_as_composite(__func__, _where_v1)(predicate, value_true, value_false, output_mem_config, output_tensor);
 }
 Tensor where(
-    const Tensor& predicate, const Tensor& value_true, const float value_false, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _where_v2)(predicate, value_true, value_false, output_mem_config);
+    const Tensor& predicate, const Tensor& value_true, const float value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return operation::decorate_as_composite(__func__, _where_v2)(predicate, value_true, value_false, output_mem_config, output_tensor);
 }
 Tensor where(
-    const Tensor& predicate, const float value_true, const float value_false, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _where_v3)(predicate, value_true, value_false, output_mem_config);
+    const Tensor& predicate, const float value_true, const float value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return operation::decorate_as_composite(__func__, _where_v3)(predicate, value_true, value_false, output_mem_config, output_tensor);
 }
 
 // on-device tensor creation 0s like @reference_tensor

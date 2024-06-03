@@ -72,8 +72,8 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("where", py::overload_cast<const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&>(&where),
-            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("where", py::overload_cast<const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, std::optional<Tensor> >(&where),
+            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_tensor").noconvert() = std::nullopt, R"doc(
             Perform an ternary where operation on two tensors based on third @predicate.
 
             where(predicate, true_value, false_value) implements (predicate) ? true_value : false_value.
@@ -89,9 +89,10 @@ namespace tt::tt_metal::detail{
                 "true_value", "True Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "false_value", "False Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
         )doc");
-        m_tensor.def("where", py::overload_cast<const Tensor&, float, const Tensor&, const MemoryConfig&>(&where),
-            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("where", py::overload_cast<const Tensor&, float, const Tensor&, const MemoryConfig&, std::optional<Tensor> >(&where),
+            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_tensor").noconvert() = std::nullopt, R"doc(
             Perform an ternary where operation on two tensors based on third @predicate.
 
             where(predicate, true_value, false_value) implements (predicate) ? true_value : false_value.
@@ -107,9 +108,10 @@ namespace tt::tt_metal::detail{
                 "true_value", "float", "float", "float scalar", "Yes"
                 "false_value", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
         )doc");
-        m_tensor.def("where", py::overload_cast<const Tensor&, const Tensor&, const float, const MemoryConfig&>(&where),
-            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("where", py::overload_cast<const Tensor&, const Tensor&, const float, const MemoryConfig&, std::optional<Tensor> >(&where),
+            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_tensor").noconvert() = std::nullopt, R"doc(
             Perform an ternary where operation on two tensors based on third @predicate.
 
             where(predicate, true_value, false_value) implements (predicate) ? true_value : false_value.
@@ -125,9 +127,10 @@ namespace tt::tt_metal::detail{
                 "true_value", "True Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "false_value", "float", "float", "float scalar", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
         )doc");
-        m_tensor.def("where", py::overload_cast<const Tensor&, const float, const float, const MemoryConfig&>(&where),
-            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("where", py::overload_cast<const Tensor&, const float, const float, const MemoryConfig&, std::optional<Tensor> >(&where),
+            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_tensor").noconvert() = std::nullopt, R"doc(
             Perform an ternary where operation on two tensors based on third @predicate.
 
             where(predicate, true_value, false_value) implements (predicate) ? true_value : false_value.
@@ -143,6 +146,7 @@ namespace tt::tt_metal::detail{
                 "true_value", "float", "float", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "false_value", "float", "float", "float scalar", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
         )doc");
         // *** composite unary ops ***
         detail::bind_unary_op(m_tensor, "normalize_hw", tt::tt_metal::normalize_hw, R"doc(Returns a new tensor with the Gaussian normalize of the elements of the input tensor ``{0}`` on H,W axes.)doc");
