@@ -96,6 +96,12 @@ def where(x, y, z, *args, **kwargs):
     return torch.where(x > 0, y, z)
 
 
+def where_scalar(x, *args, **kwargs):
+    y = kwargs.pop("scalar_true")
+    z = kwargs.pop("scalar_false")
+    return torch.where(x > 0, y, z)
+
+
 def where_bw(x, y, z, w, *args, **kwargs):
     grad_data = x
     in_data = y
