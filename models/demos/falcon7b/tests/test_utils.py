@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import ttnn
 from models.demos.falcon7b.reference.hf_modeling_falcon import FalconForCausalLM
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
@@ -106,7 +107,10 @@ def get_rand_falcon_inputs(
                             configuration.num_attention_heads,
                             q_len,
                         )
-                        tt_attn_masks = [torch2tt_tensor(attn_mask, device) for attn_mask in attn_masks]
+                        tt_attn_masks = [
+                            torch2tt_tensor(attn_mask, device, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT4_B)
+                            for attn_mask in attn_masks
+                        ]
                         tt_attention_mask.append(tt_attn_masks)
                     else:
                         tt_attention_mask.append(

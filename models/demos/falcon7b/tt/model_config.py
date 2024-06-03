@@ -11,6 +11,7 @@ OP_KEYS = (
     # Inputs
     "INPUT",
     "ATTN_MASK",
+    "ATTN_MASK_OPTIMIZED_PREFILL",
     # Embeddings
     "WORD_EMBEDDING_WEIGHTS",
     "WORD_EMBEDDING_OUTPUT",
@@ -101,6 +102,7 @@ def get_model_config(model_config_str, prefill_seq_len=0):
         ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
     )
     BFP8_DTYPE = ttnn.experimental.tensor.DataType.BFLOAT8_B
+    BFP4_DTYPE = ttnn.experimental.tensor.DataType.BFLOAT4_B
 
     # Set default dtype and mem_config based on model_config_str
     if model_config_str in ("BFLOAT16-DRAM", "BFLOAT16-L1", "BFLOAT16-L1_SHARDED"):
@@ -129,6 +131,9 @@ def get_model_config(model_config_str, prefill_seq_len=0):
 
     # Input ids are UINT32
     model_config["INPUT_DTYPE"] = ttnn.experimental.tensor.DataType.UINT32
+
+    # Use BFP4_B for attention mask in optimized prefill
+    model_config["ATTN_MASK_OPTIMIZED_PREFILL_DTYPE"] = BFP4_DTYPE
 
     # Matmul Weights must always be BFP8_B
     # Override defaults for certain configs

@@ -139,7 +139,7 @@ class TtFalconModelShared(torch.nn.Module):
                         tt_attention_mask_slice[i] = ttnn.experimental.tensor.tilize(
                             tt_attention_mask_slice[i],
                             output_mem_config=self.model_config["ATTN_MASK_MEMCFG"],
-                            output_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                            output_dtype=self.model_config["ATTN_MASK_OPTIMIZED_PREFILL_DTYPE"],
                         )
                 # Expected output attention_masks
                 # [dev0: [slice0, slice1, ...], dev1: [slice0, slice1, ...], ...]

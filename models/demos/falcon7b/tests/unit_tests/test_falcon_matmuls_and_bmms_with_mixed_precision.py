@@ -560,17 +560,12 @@ def test_falcon7b_attention_softmax_sequence(
         tt_memory_config=dram_interleaved_memory_config,
         tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
     )
-    attention_mask = torch2tt_tensor(
-        torch_attention_mask,
-        device,
-        tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
-    )
+
     attention_mask_proper_dim = torch2tt_tensor(
         torch_attention_mask_proper_dim,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT4_B,
     )
 
     compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
@@ -600,7 +595,7 @@ def test_falcon7b_attention_softmax_sequence(
             torch_attention_mask_per_slice,
             device,
             tt_memory_config=dram_interleaved_memory_config,
-            tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+            tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT4_B,
         )
         attention_masks_per_slice.append(tt_attention_slice)
         attention_mask_starting_index_per_slice = (
