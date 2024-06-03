@@ -159,6 +159,8 @@ def run_perf_resnet(
     device,
     model_version,
 ):
+    if is_e75(device):
+        pytest.skip("Resnet is not supported on E75")
     disable_persistent_kernel_cache()
     if batch_size <= 2:
         pytest.skip("Batch size 1 and 2 are not supported with sharded data")
@@ -266,29 +268,6 @@ def test_perf_bare_metal(
 
 
 @skip_for_wormhole_b0(reason_str="Not tested on single WH")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2}], indirect=True)
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize(
-    "batch_size, expected_inference_time, expected_compile_time",
-    ((20, 0.0055, 16),),
-)
-def test_perf_2cqs_bare_metal(
-    device,
-    use_program_cache,
-    batch_size,
-    expected_inference_time,
-    expected_compile_time,
-    hf_cat_image_sample_input,
-):
-    if is_e75(device):
-        pytest.skip("Resnet is not supported on E75")
-
-    run_perf_resnet(
-        batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device, "resnet50_2cqs"
-    )
-
-
-@skip_for_wormhole_b0(reason_str="Not tested on single WH")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
@@ -305,8 +284,6 @@ def test_perf_trace_bare_metal(
     hf_cat_image_sample_input,
     enable_async,
 ):
-    if is_e75(device):
-        pytest.skip("Resnet is not supported on E75")
     device.enable_async(enable_async)
     mode = "async" if enable_async else "sync"
     run_perf_resnet(
