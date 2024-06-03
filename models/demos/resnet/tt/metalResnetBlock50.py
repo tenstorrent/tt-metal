@@ -2101,7 +2101,7 @@ class ResNet(nn.Module):
 
         return x
 
-    def forward(self, x: tt_lib.tensor) -> tt_lib.tensor:
+    def forward(self, x: tt_lib.tensor, write_event=None, op_event=None) -> tt_lib.tensor:
         if not self.sharded:
             original_A_cl_host_shape = x.get_legacy_shape()
             x = x.reshape(
@@ -2116,7 +2116,7 @@ class ResNet(nn.Module):
                 original_A_cl_host_shape[2],
                 original_A_cl_host_shape[3],
             )
-        elif x.storage_type() != tt_lib.tensor.StorageType.DEVICE:
+        else:
             x_shape = x.get_legacy_shape()
             shard_spec = tt_lib.tensor.ShardSpec(
                 self.shard_grid,
@@ -2130,21 +2130,16 @@ class ResNet(nn.Module):
             mem_config = tt_lib.tensor.MemoryConfig(
                 tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, shard_spec
             )
-            x = x.to(self.device, mem_config)
-        else:
-            shard_spec = tt_lib.tensor.ShardSpec(
-                self.shard_grid,
-                [
-                    x.get_legacy_shape()[2] // self.first_conv_num_cores_nhw,
-                    x.get_legacy_shape()[3],
-                ],
-                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            )
-            mem_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, shard_spec
-            )
-            x = tt_lib.tensor.interleaved_to_sharded(x, mem_config)
+            if write_event is not None:
+                tt_lib.device.WaitForEvent(self.device, 0, write_event)
+            if x.storage_type() != tt_lib.tensor.StorageType.DEVICE:
+                x = x.to(self.device, mem_config)
+            elif x.memory_config().is_sharded():
+                x = tt_lib.tensor.reshard(x, mem_config)
+            else:
+                x = tt_lib.tensor.interleaved_to_sharded(x, mem_config)
+            if op_event is not None:
+                tt_lib.device.RecordEvent(self.device, 0, op_event)
 
         x = self.conv1(x)
         # Relu is fused with conv1
