@@ -44,11 +44,12 @@ enum class WorkerState {
     IDLE = 2,
 };
 
-inline void set_device_thread_affinity(std::thread& thread_, int cpu_core_for_worker) {
+inline void set_device_thread_affinity(std::thread& thread_, int managed_device_id) {
     // Bind a device worker/reader thread to a CPU core, determined using round-robin.
+    static int num_online_cores = sysconf(_SC_NPROCESSORS_ONLN);
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
-    CPU_SET(cpu_core_for_worker, &cpuset);
+    CPU_SET(managed_device_id % num_online_cores, &cpuset);
     int rc = pthread_setaffinity_np(thread_.native_handle(), sizeof(cpu_set_t), &cpuset);
     if (rc) {
         log_warning(
@@ -79,7 +80,7 @@ class WorkExecutor {
    public:
     LockFreeQueue<std::function<void()>> worker_queue;
 
-    WorkExecutor(int cpu_core, int device_id) : cpu_core_for_worker(cpu_core), managed_device_id(device_id) {
+    WorkExecutor(int device_id) : managed_device_id(device_id) {
         set_process_priority(0);
         if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS) {
             this->set_worker_queue_mode(this->worker_queue_mode);
@@ -88,16 +89,14 @@ class WorkExecutor {
     }
 
     WorkExecutor(WorkExecutor&& other) {
-        worker_state = std::move(other.worker_state);
-        cpu_core_for_worker = std::move(other.managed_device_id);
-        managed_device_id = std::move(other.managed_device_id);
+        worker_state = other.worker_state;
+        managed_device_id = other.managed_device_id;
     }
 
     WorkExecutor& operator=(WorkExecutor &&other) {
         if (this != &other) {
             worker_state = std::move(other.worker_state);
             managed_device_id = std::move(other.managed_device_id);
-            cpu_core_for_worker = std::move(other.cpu_core_for_worker);
         }
         return *this;
     }
@@ -219,7 +218,6 @@ class WorkExecutor {
    private:
     std::thread worker_thread;
     WorkerState worker_state = WorkerState::IDLE;
-    int cpu_core_for_worker = 0;
     int managed_device_id = 0;
     std::condition_variable cv;
     std::mutex cv_mutex;
@@ -230,7 +228,7 @@ class WorkExecutor {
         this->worker_thread = std::thread(&WorkExecutor::run_worker, this);
         this->worker_queue.worker_thread_id = std::hash<std::thread::id>{}(this->worker_thread.get_id());
         // Bind a worker tied to a device to a specific CPU core in round robin fashion. Thread affinity == Better Perf.
-        set_device_thread_affinity(this->worker_thread, this->cpu_core_for_worker);
+        set_device_thread_affinity(this->worker_thread, this->managed_device_id);
     }
 
     inline void stop_worker() {
