@@ -138,7 +138,8 @@ struct make_eltwise_binary {
                 // if(binary_op_type == BinaryOpType::EQ) {
                 //     dtype = DataType::UINT32;
                 // }
-                return operation::run_with_autoformat(
+
+                auto output_tensors = operation::run_with_autoformat(
                         EltwiseBinary{
                             binary_op_type,
                             fused_activations,
