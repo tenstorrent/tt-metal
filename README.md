@@ -40,17 +40,23 @@
 
 > [!NOTE]
 >
-> We currently test our demo models for Wormhole on N300 boards only.
+> All model demos in this table function on both N150 and N300 Wormhole cards, unless otherwise stated.
 
 | Model                                                       | Gen. Token [3]     |  Batch               | End-to-end throughput [1]    | Device throughput [2]       | Target         |
 |-------------------------------------------------------------|--------------------|----------------------|------------------------------|-----------------------------|----------------|
 | [Falcon7B-decode](./models/demos/wormhole/falcon7b)         | 129th              | 32                   | 11.6 t/s/u - 371 t/s         | 15.4 t/s/u - 493 t/s        | 21 t/s/u       |
 | [Mistral-7B-decode](./models/demos/wormhole/mistral7b)      |  33rd              | 32                   | 10.9 t/s/u - 349 t/s         | 13.3 t/s/u - 426 t/s        | 21 t/s/u       |
 | [Mamba-2.8B-decode](./models/demos/mamba)                   |  any               | 32                   | 9.2 t/s/u -  295 t/s         | 13.1 t/s/u - 419 t/s        | 22 t/s/u       |
-| [BERT-Large](./models/demos/metal_BERT_large_11/) (sen/s)   | any                |  8                   | 270                          | 340                         | 400            |
+| [BERT-Large](./models/demos/metal_BERT_large_11/) (sen/s) [4] | any                |  8                   | 270                          | 340                         | 400            |
 | [Stable Diffusion 1.4](./models/demos/wormhole/stable_diffusion) 512x512  (sec/img)                              |          | 1                    |      8s                        |    5s                         |                |
 
+[1] - Observed from the host. Includes dispatch overhead and kernel execution time.
+
+[2] - Ignoring host overhead. Kernel execution time only.
+
 [3] - Generating the `i`'th token in a sequence while the kv_cache is filled with `i-1` rows.
+
+[4] - This model demo does not work on N150. It does work on N300.
 
 ## T3000 (2x4 mesh of WHs) Models
 
