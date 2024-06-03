@@ -17,7 +17,10 @@ run_perf_models_other() {
 
     env pytest models/demos/ttnn_falcon7b/tests -m $test_marker
 
-    env pytest models/demos/resnet/tests -m $test_marker
+    # Separate calls since we can't mix switching between number of cqs
+    env pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_bare_metal -m $test_marker
+    env pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_2cqs_bare_metal -m $test_marker
+    env pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_trace_bare_metal -m $test_marker
 
     env pytest tests/ttnn/integration_tests/whisper/test_performance.py -m $test_marker
 
