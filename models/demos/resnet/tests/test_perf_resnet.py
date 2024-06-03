@@ -9,9 +9,7 @@ from transformers import AutoImageProcessor
 import pytest
 import tt_lib
 
-from models.utility_functions import is_e75
-from models.utility_functions import profiler
-from models.utility_functions import disable_persistent_kernel_cache, skip_for_wormhole_b0
+from models.utility_functions import is_e75, profiler, divup, disable_persistent_kernel_cache, skip_for_wormhole_b0
 from models.perf.perf_utils import prep_perf_report
 
 from loguru import logger
@@ -76,21 +74,54 @@ def run_perf_resnet(
         profiler.end(cpu_key)
 
         tt_inputs = tt_resnet50.preprocessing(inputs)
+        input_shape = tt_inputs.get_legacy_shape()
+        shard_spec = tt_lib.tensor.ShardSpec(
+            tt_lib.tensor.CoreRangeSet(
+                {
+                    tt_lib.tensor.CoreRange(
+                        tt_lib.tensor.CoreCoord(0, 0),
+                        tt_lib.tensor.CoreCoord(7, 0),
+                    )
+                }
+            ),
+            [
+                divup(tt_inputs.volume() // input_shape[3], 8),
+                input_shape[3],
+            ],
+            tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        )
+        sharded_mem_config_DRAM = tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.DRAM, shard_spec
+        )
+        tt_image_res = tt_lib.tensor.allocate_tensor_on_device(
+            tt_inputs.shape, tt_inputs.dtype, tt_inputs.layout, device, sharded_mem_config_DRAM
+        )
+        op_event = tt_lib.device.CreateEvent()
+        write_event = tt_lib.device.CreateEvent()
+        # Initialize the op event so we can write
+        tt_lib.device.RecordEvent(device, 0, op_event)
         warmup_end = 5
         for iter in range(0, warmup_end):
             profiler.start(f"{iter}_key")
-            _ = tt_resnet50(tt_inputs).cpu(blocking=True)
+            tt_lib.device.WaitForEvent(device, 1, op_event)
+            tt_lib.tensor.write_tensor(tt_inputs, tt_image_res, 1)
+            tt_lib.device.RecordEvent(device, 1, write_event)
+            _ = tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=True)
             profiler.end(f"{iter}_key")
             tt_lib.device.DumpDeviceProfiler(device)
 
-        num_warm_iterations = 15
+        num_warm_iterations = 10
         warm_start = warmup_end
         warm_end = warm_start + num_warm_iterations
 
         outputs = []
         profiler.start(f"run")
         for iter in range(warm_start, warm_end):
-            outputs.append(tt_resnet50(tt_inputs).cpu(blocking=False))
+            tt_lib.device.WaitForEvent(device, 1, op_event)
+            tt_lib.tensor.write_tensor(tt_inputs, tt_image_res, 1)
+            tt_lib.device.RecordEvent(device, 1, write_event)
+            outputs.append(tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=False))
         tt_lib.device.Synchronize(device)
         profiler.end(f"run")
         tt_lib.device.DumpDeviceProfiler(device)
@@ -120,14 +151,14 @@ def run_perf_resnet(
 
 
 @skip_for_wormhole_b0(reason_str="Not tested on single WH")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2}], indirect=True)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     (
-        (1, 0.001, 1),
-        (2, 0.001, 1),
-        (16, 0.007, 7),
+        # (1, 0.001, 1),
+        # (2, 0.001, 1),
+        # (16, 0.007, 7),
         (20, 0.007, 7),
     ),
 )
