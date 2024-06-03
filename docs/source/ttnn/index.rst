@@ -10,6 +10,8 @@ Welcome to TT-NN documentation!
    :caption: TTNN
 
    ttnn/about
+   ttnn/get_started
+   ttnn/installing
    ttnn/usage
    ttnn/tensor
    ttnn/api

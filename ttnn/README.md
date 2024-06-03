@@ -10,7 +10,7 @@ We trust that this library will be a valuable guide to helping you on your journ
 * There is a collection of tutorials written with Jupyter Notebooks to help you ramp up your skillset for using `tt-metal`. These
 notebooks can be found under https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials.
 * These tutorials assume you already have a machine set up with either a grayskull or wormhole device available and that you have successfully
-followed the instructions for [installing and building the software](https://github.com/tenstorrent/tt-metal/blob/main/README.md).
+followed the instructions for [installing and building the software with the development Python environment](https://github.com/tenstorrent/tt-metal/blob/main/README.md).
 * From within the `ttnn/tutorials` directory, launch the notebooks with: `jupyter lab --no-browser --port=8888`
 
 

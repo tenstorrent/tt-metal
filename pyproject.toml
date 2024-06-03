@@ -35,11 +35,6 @@ dependencies = [
   "pandas==2.0.3",
   "plotly==5.18.0",
   "seaborn==0.13.2",
-
-  # gdb
-  "rich==13.3.3",
-  "pyelftools==0.30",
-  "curtsies==0.4.2",
 ]
 requires-python = ">=3.8"
 description = "General compute framework for Tenstorrent devices"
