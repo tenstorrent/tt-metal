@@ -24,6 +24,7 @@ class TtFalconAttention:
         max_position_embeddings: int = 2048,
         model_config=None,
         parameters=None,
+        core_grid=None,
     ):
         super().__init__()
         self.hidden_size = hidden_size
@@ -49,11 +50,7 @@ class TtFalconAttention:
         )
 
         self.scalar = 1 / math.sqrt(self.head_dim)
-
-        if is_wormhole_b0():
-            self.core_grid = ttnn.CoreGrid(y=7, x=8)
-        else:
-            self.core_grid = ttnn.CoreGrid(y=9, x=12)
+        self.core_grid = core_grid
 
     def __call__(
         self,
@@ -165,7 +162,9 @@ class TtFalconAttention:
                 attn_weights = ttnn.experimental.operations.primary.transformers.attn_matmul(
                     query_layer,
                     key_layer_transposed,
-                    compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(8, 7),
+                    compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(
+                        self.core_grid.x, self.core_grid.y
+                    ),
                     output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
@@ -228,7 +227,9 @@ class TtFalconAttention:
                 attn_output = ttnn.experimental.operations.primary.transformers.attn_matmul(
                     attn_weights,
                     value_layer,
-                    compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(8, 7),
+                    compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(
+                        self.core_grid.x, self.core_grid.y
+                    ),
                     output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
