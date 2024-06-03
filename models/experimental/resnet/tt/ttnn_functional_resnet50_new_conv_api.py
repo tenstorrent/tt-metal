@@ -172,9 +172,9 @@ class resnet50Bottleneck:
                     math_fidelity=self.model_config["MATH_FIDELITY"],
                     height_sharding=height_sharding,
                     deallocate_activation=True,
+                    reshard_if_not_optimal=reshard_if_not_optimal,
                 ),
                 conv_op_cache=conv_op_cache,
-                reshard_if_not_optimal=reshard_if_not_optimal,
             )
         else:
             ds_out = x
@@ -214,12 +214,12 @@ class resnet50Bottleneck:
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 activation="relu",
                 height_sharding=height_sharding,
+                reshard_if_not_optimal=reshard_if_not_optimal,
             ),
             conv_op_cache=conv_op_cache,
-            reshard_if_not_optimal=reshard_if_not_optimal,
         )
 
-        act_block_h_override = None
+        act_block_h_override = 0
         if is_grayskull():
             if self.conv2_output_channels == 64 and input_height == 56 and batch_size == 20:
                 act_block_h_override = 320
@@ -269,11 +269,11 @@ class resnet50Bottleneck:
                 activation="relu",
                 deallocate_activation=True,
                 reallocate_halo_output=reallocate_halo_output,
-                act_block_h=act_block_h_override,
+                act_block_h_override=act_block_h_override,
                 height_sharding=height_sharding,
+                reshard_if_not_optimal=reshard_if_not_optimal,
             ),
             conv_op_cache=conv_op_cache,
-            reshard_if_not_optimal=reshard_if_not_optimal,
         )
 
         # conv3 is 1x1 conv
@@ -296,9 +296,9 @@ class resnet50Bottleneck:
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 height_sharding=height_sharding,
+                reshard_if_not_optimal=reshard_if_not_optimal,
             ),
             conv_op_cache=conv_op_cache,
-            reshard_if_not_optimal=reshard_if_not_optimal,
         )
 
         if not self.run_downsample_before_conv2:
@@ -499,11 +499,11 @@ class resnet50:
         conv_op_cache = {}
         if is_wormhole_b0():
             if batch_size == 16:
-                act_block_h = 1568
+                act_block_h_override = 1568
             elif batch_size == 20:
-                act_block_h = 640
+                act_block_h_override = 640
         else:
-            act_block_h = None
+            act_block_h_override = 0
         x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.conv1_weight_tensor,
@@ -524,7 +524,7 @@ class resnet50:
                 activation="relu",
                 deallocate_activation=True,
                 input_channels_alignment=16 if not is_wormhole_b0() else 32,
-                act_block_h=act_block_h,
+                act_block_h_override=act_block_h_override,
             ),
             conv_op_cache=conv_op_cache,
         )
@@ -777,11 +777,11 @@ class resnet50:
         # x = ttnn.to_device(input_tensor, device=self.device, memory_config=self.conv1.conv.input_sharded_memory_config)
         if is_wormhole_b0():
             if batch_size == 16:
-                act_block_h = 1568
+                act_block_h_override = 1568
             elif batch_size == 20:
-                act_block_h = 640
+                act_block_h_override = 640
         else:
-            act_block_h = None
+            act_block_h_override = 0
         x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.conv1_weight_tensor,
@@ -802,7 +802,7 @@ class resnet50:
                 activation="relu",
                 deallocate_activation=True,
                 input_channels_alignment=16 if not is_wormhole_b0() else 32,
-                act_block_h=act_block_h,
+                act_block_h_override=act_block_h_override,
             ),
             conv_op_cache=conv_op_cache,
         )

@@ -26,6 +26,9 @@ def _nearest_32(x):
     return math.ceil(x / 32) * 32
 
 
+Conv2dConfig = ttnn._ttnn.operations.conv2d.Conv2dConfig
+
+
 class Conv2d:
     def __init__(
         self,
@@ -210,42 +213,6 @@ class Conv2d:
 
     def get_parallel_config(self):
         return self.conv.get_parallel_config()
-
-
-# user facing
-class Conv2dConfig:
-    def __init__(
-        self,
-        *,
-        # default config values if user does not set them
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.bfloat16,
-        math_approx_mode=True,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-        activation=None,
-        input_channels_alignment=32,
-        deallocate_activation=False,
-        reallocate_halo_output=False,
-        # following config values are set by conv op later if user does not set them
-        act_block_h=None,
-        height_sharding=None,
-        core_grid=None,
-    ):
-        self.math_fidelity = math_fidelity
-        self.dtype = dtype
-        self.weights_dtype = weights_dtype
-        self.math_approx_mode = math_approx_mode
-        self.fp32_dest_acc_en = fp32_dest_acc_en
-        self.packer_l1_acc = packer_l1_acc
-        self.activation = activation
-        self.act_block_h = act_block_h
-        self.height_sharding = height_sharding
-        self.core_grid = core_grid
-        self.input_channels_alignment = input_channels_alignment
-        self.deallocate_activation = deallocate_activation
-        self.reallocate_halo_output = reallocate_halo_output
 
 
 # internal. not user facing
@@ -475,33 +442,15 @@ def conv2d(
     dilation: Union[int, Tuple[int, int]] = (1, 1),
     groups: int = 1,
     bias_tensor: ttnn.Tensor = None,
-    conv_config: Conv2dConfig = None,  # manual override by user
-    reshard_if_not_optimal=False,  # default
+    conv_config: Conv2dConfig = None,  # config overrides by user
     conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
     debug=False,
-    run_new_conv=False,
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
     run_new_conv = True
+    if debug:
+        deallocate_act_debug_mode = conv_config.deallocate_activation
+        conv_config.deallocate_activation = False
     if run_new_conv:
-        conv_config_ = ttnn._ttnn.operations.conv2d.Conv2dConfig(
-            math_fidelity=conv_config.math_fidelity,
-            dtype=conv_config.dtype,
-            weights_dtype=conv_config.weights_dtype,
-            math_approx_mode_enabled=conv_config.math_approx_mode,
-            fp32_dest_acc_enabled=conv_config.fp32_dest_acc_en,
-            activation=conv_config.activation if conv_config.activation is not None else "",
-            input_channels_alignment=conv_config.input_channels_alignment,
-            deallocate_activation=conv_config.deallocate_activation,
-            reallocate_halo_output=conv_config.reallocate_halo_output,
-            act_block_h_override=conv_config.act_block_h if conv_config.act_block_h is not None else 0,
-            reshard_if_not_optimal=reshard_if_not_optimal,
-            override_sharding_config=False,  # TODO: pass in config
-            height_sharding=conv_config.height_sharding if conv_config.height_sharding is not None else True,
-            transpose_shards=True,  # TODO: pass in config
-            output_layout=ttnn.TILE_LAYOUT,  # TODO: pass in config
-        )
-        if conv_config.core_grid:
-            conv_config_.core_grid = conv_config.core_grid
         (
             output_tensor_new,
             output_height_new,
@@ -523,7 +472,7 @@ def conv2d(
             dilation=dilation,
             groups=groups,
             bias_tensor=bias_tensor,
-            conv_config=conv_config_,
+            conv_config=conv_config,
         )
         if not debug:
             return (
@@ -540,7 +489,7 @@ def conv2d(
         )  # cannot run old path if activation was deallocated in the new path above
     output_height = ((int)((input_height - kernel_size[0] + 2 * padding[0]) / stride[0])) + 1
     output_width = ((int)((input_width - kernel_size[1] + 2 * padding[1]) / stride[1])) + 1
-
+    conv_config.deallocate_activation = deallocate_act_debug_mode
     if "reader_patterns_cache" not in conv_op_cache:
         conv_op_cache["reader_patterns_cache"] = {}
     weight_is_on_device = ttnn.is_tensor_storage_on_device(weight_tensor)
@@ -554,6 +503,7 @@ def conv2d(
     if conv_config is None:
         conv_config = Conv2dConfig()
     config_shard_grid = None
+    # breakpoint()
     if conv_config.core_grid is not None:
         config_shard_grid = get_shard_grid_from_core_grid(conv_config.core_grid)
 
@@ -588,7 +538,7 @@ def conv2d(
     else:
         needs_reshard = True
     parallel_config = None
-    if reshard_if_not_optimal or needs_reshard:
+    if conv_config.reshard_if_not_optimal or needs_reshard:
         optimal_parallel_config = determine_parallel_config(
             True if conv_config.height_sharding is None else conv_config.height_sharding,
             batch_size,
@@ -632,7 +582,7 @@ def conv2d(
             input_memory_config.shard_spec.orientation,
         )
 
-    if reshard_if_not_optimal:
+    if conv_config.reshard_if_not_optimal:
         if parallel_config != optimal_parallel_config:
             parallel_config = optimal_parallel_config
             needs_reshard = True
@@ -709,22 +659,22 @@ def conv2d(
     else:
         # Following code will be removed after op refactoring
         block_and_parallel_config_override = {}
-        if conv_config.act_block_h is not None:
-            block_and_parallel_config_override["act_block_h"] = conv_config.act_block_h
+        if conv_config.act_block_h_override > 0:
+            block_and_parallel_config_override["act_block_h"] = conv_config.act_block_h_override
         assert parallel_config is not None
         block_and_parallel_config_override["grid_size"] = [parallel_config.grid_size.x, parallel_config.grid_size.y]
         block_and_parallel_config_override["num_cores_nhw"] = parallel_config.num_cores_nhw
         if is_grayskull(device=device):
             compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
                 math_fidelity=conv_config.math_fidelity,
-                math_approx_mode=conv_config.math_approx_mode,
+                math_approx_mode=conv_config.math_approx_mode_enabled,
             )
         elif is_wormhole_b0(device=device):
             compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=conv_config.math_fidelity,
-                math_approx_mode=conv_config.math_approx_mode,
-                fp32_dest_acc_en=conv_config.fp32_dest_acc_en,
-                packer_l1_acc=conv_config.packer_l1_acc,
+                math_approx_mode=conv_config.math_approx_mode_enabled,
+                fp32_dest_acc_en=conv_config.fp32_dest_acc_en_enabled,
+                packer_l1_acc=conv_config.packer_l1_acc_enabled,
             )
         else:
             assert False, f"Unsupported device: {device}"
@@ -749,7 +699,7 @@ def conv2d(
             weights_dtype=conv_config.weights_dtype,
             conv_blocking_and_parallelization_config_override=block_and_parallel_config_override,
             compute_kernel_config=compute_kernel_config,
-            activation=conv_config.activation,
+            activation=conv_config.activation if conv_config.activation is not "" else None,
             using_parameters_cache=weight_is_on_device,
             reader_patterns_cache=conv_op_cache["reader_patterns_cache"],
             deallocate_activation=conv_config.deallocate_activation,

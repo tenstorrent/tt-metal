@@ -39,7 +39,7 @@ struct Conv2dConfig {
     bool reshard_if_not_optimal = false; // if true, override_sharding_config should not be set to true
     bool override_sharding_config = false; // if true, reshard_if_not_optimal should not be set to true
     bool height_sharding = true; // used only if override_sharding_config is true
-    CoreRangeSet core_grid = {{}}; // used only if override_sharding_config is true
+    std::optional<CoreRangeSet> core_grid = std::nullopt; // used only if override_sharding_config is true
     bool transpose_shards = true; // used only if override_sharding_config is true and if height sharding is false
     Layout output_layout = Layout::TILE;
     static constexpr auto attribute_names = std::make_tuple(
@@ -140,10 +140,3 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
 }  // namespace conv2d
 }  // namespace operations
 }  // namespace ttnn
-
-
-
-template <> struct fmt::formatter<ttnn::operations::conv2d::Conv2dConfig> : formatter<string_view> {
-    // constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
-    auto format(const ttnn::operations::conv2d::Conv2dConfig& t, fmt::format_context& ctx);
-};
