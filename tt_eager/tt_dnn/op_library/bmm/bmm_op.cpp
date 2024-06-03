@@ -486,7 +486,7 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
             .per_core_N = per_core_N,
         };
     }
-    TT_FATAL(false, "Matmul program config could not be determined for given input shapes!");
+    return tt::operations::primary::create_matmul_program_config(input_tensor_a, input_tensor_b, grid_size, fused_activation, compute_kernel_config);
 }
 
 tuple<uint32_t, uint32_t> get_subblock_sizes(
