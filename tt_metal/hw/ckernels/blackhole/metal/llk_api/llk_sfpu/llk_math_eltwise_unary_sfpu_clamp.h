@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "ckernel_sfpu_clamp.h"
-#include "llk_math_eltwise_unary_sfpu_3_param.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
+#include "ckernel_sfpu_clamp.h"
 
 namespace ckernel {
 
@@ -18,10 +18,8 @@ inline void llk_math_eltwise_unary_sfpu_clamp_init() {
 }
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_clamp(
-    uint dst_index, uint param0, uint param1, uint param2, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_3_param<APPROXIMATE>(
-        ckernel::sfpu::calculate_clamp<APPROXIMATE>,
+inline void llk_math_eltwise_unary_sfpu_clamp(uint dst_index, uint param0, uint param1, uint param2, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
         ckernel::sfpu::calculate_clamp<APPROXIMATE>,
         dst_index,
         vector_mode,
@@ -30,4 +28,4 @@ inline void llk_math_eltwise_unary_sfpu_clamp(
         param2);
 }
 
-}  // namespace ckernel
+}

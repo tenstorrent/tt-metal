@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_sfpu_types.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel {
 
@@ -29,4 +29,4 @@ inline void llk_math_eltwise_unary_sfpu_init_1_param(void (*func)(uint), uint pa
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-}  // namespace ckernel
+}

@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "ckernel_sfpu_abs.h"
-#include "llk_math_eltwise_unary_sfpu_0_param.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
+#include "ckernel_sfpu_abs.h"
 
 namespace ckernel {
 
@@ -19,8 +19,10 @@ inline void llk_math_eltwise_unary_sfpu_abs_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_abs(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE>(
-        ckernel::sfpu::calculate_abs<APPROXIMATE>, ckernel::sfpu::calculate_abs<APPROXIMATE>, dst_index, vector_mode);
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::calculate_abs<APPROXIMATE>,
+        dst_index,
+        vector_mode);
 }
 
-}  // namespace ckernel
+}

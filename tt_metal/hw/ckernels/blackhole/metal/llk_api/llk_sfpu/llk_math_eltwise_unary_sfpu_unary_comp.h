@@ -4,15 +4,15 @@
 
 #pragma once
 
-#include "ckernel_sfpu_unary_comp.h"
-#include "llk_math_eltwise_unary_sfpu_1_param.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
+#include "ckernel_sfpu_unary_comp.h"
 
 namespace ckernel {
 
 // New LLK SFPU APIs
 
-// Unary Not equal
+//Unary Not equal
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_ne_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unary_ne, APPROXIMATE>();
@@ -20,15 +20,14 @@ inline void llk_math_eltwise_unary_sfpu_unary_ne_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_ne(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE>(
-        ckernel::sfpu::calculate_unary_ne<APPROXIMATE>,
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
         ckernel::sfpu::calculate_unary_ne<APPROXIMATE>,
         dst_index,
         vector_mode,
         param0);
 }
 
-// Unary greater than
+//Unary greater than
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_gt_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unary_gt, APPROXIMATE>();
@@ -36,15 +35,15 @@ inline void llk_math_eltwise_unary_sfpu_unary_gt_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_gt(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE>(
-        ckernel::sfpu::calculate_unary_gt<APPROXIMATE>,
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
         ckernel::sfpu::calculate_unary_gt<APPROXIMATE>,
         dst_index,
         vector_mode,
         param0);
 }
 
-// Unary lesser than
+
+//Unary lesser than
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_lt_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unary_lt, APPROXIMATE>();
@@ -52,11 +51,10 @@ inline void llk_math_eltwise_unary_sfpu_unary_lt_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_lt(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE>(
-        ckernel::sfpu::calculate_unary_lt<APPROXIMATE>,
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
         ckernel::sfpu::calculate_unary_lt<APPROXIMATE>,
         dst_index,
         vector_mode,
         param0);
 }
-}  // namespace ckernel
+}

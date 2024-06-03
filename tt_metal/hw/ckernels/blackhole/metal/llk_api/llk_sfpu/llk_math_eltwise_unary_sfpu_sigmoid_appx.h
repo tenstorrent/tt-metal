@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "ckernel_sfpu_sigmoid_appx.h"
-#include "llk_math_eltwise_unary_sfpu_0_param.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
+#include "ckernel_sfpu_sigmoid_appx.h"
 
 namespace ckernel {
 
@@ -19,11 +19,10 @@ inline void llk_math_eltwise_unary_sfpu_sigmoid_appx_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_sigmoid_appx(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE>(
-        ckernel::sfpu::calculate_sigmoid_appx<APPROXIMATE>,
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
         ckernel::sfpu::calculate_sigmoid_appx<APPROXIMATE>,
         dst_index,
         vector_mode);
 }
 
-}  // namespace ckernel
+}
