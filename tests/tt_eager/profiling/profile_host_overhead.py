@@ -2,14 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
+import os
 import pytest
 import torch
 import tt_lib
 import time
 import statistics
+from loguru import logger
 from models.utility_functions import torch2tt_tensor
 from tests.tt_eager.profiling import ops_for_profiling
+
 
 test_sweep_args = [
     (
@@ -222,20 +224,22 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
     text_file.write(f"{op['name']}, {min_val}, {mean_val}\n")
 
 
-def test_host_overhead(device):
+def test_host_overhead(device, user_input):
     """
     Run witout tracy:
-    pytest tests/tt_eager/profiling/profile_host_overhead.py
+    pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile
 
     Run with tracy:
-    python -m tracy -v -r -p -o host_overgead_profile -m "pytest tests/tt_eager/profiling/profile_host_overhead.py"
+    python -m tracy -v -r -p -o host_overhead_profile -m "pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile"
     """
-    output_folder_path = "host_overhead_profiler_output.csv"
 
-    # if user_input is not None and len(user_input) > 0:
-    #     output_folder_path = user_input[0]
+    out_directory = user_input[0]
+    out_file_path = os.path.join(out_directory, "host_overhead_profiler_output.csv")
 
-    with open(output_folder_path, "w") as text_file:
+    if not os.path.exists(out_directory):
+        os.makedirs(out_directory)
+
+    with open(out_file_path, "w") as text_file:
         text_file.write(f"op, overhead min(ms), overhead mean(ms)\n")
 
         for op in ops_for_profiling.all_binary_ops:
