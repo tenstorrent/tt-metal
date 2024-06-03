@@ -40,7 +40,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
     auto Ht = H / TILE_HEIGHT;
     auto Wt = W / TILE_WIDTH;
 
-    bool has_momentum_buffer = momentum_buffer_in.has_value() && momentum_buffer_out.has_value();
+    bool has_momentum_buffer_out = momentum_buffer_out.has_value();
 
     uint32_t units_to_divide = num * Ht * Wt;
     uint32_t core_w = core_range.end.x - core_range.start.x + 1;
@@ -188,7 +188,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
                                            writer_kernel_ids = writer_kernel_ids,
                                            num_cores,
                                            core_h,
-                                           has_momentum_buffer = has_momentum_buffer](
+                                           has_momentum_buffer_out = has_momentum_buffer_out](
         const void* operation,
         Program& program,
         const std::vector<Tensor>& input_tensors,
@@ -197,35 +197,31 @@ operation::ProgramWithCallbacks moreh_sgd_(
         ) {
         TT_ASSERT(input_tensors.size() == 2);
         TT_ASSERT(optional_input_tensors.size() == 0 || optional_input_tensors.size() == 1);
+        TT_ASSERT(has_momentum_buffer_out == false || output_tensors.size() == 2);
 
-        auto param_in_address = input_tensors.at(0).buffer()->address();
-        auto grad_address = input_tensors.at(1).buffer()->address();
-        auto param_out_address = output_tensors.at(0).buffer()->address();
+        auto param_in = input_tensors.at(0);
+        auto grad = input_tensors.at(1);
+        auto momentum_buffer_in = optional_input_tensors.at(0);
+        auto param_out = output_tensors.at(0);
 
         for (uint32_t core_i = 0; core_i < num_cores; core_i++) {
             CoreCoord core = {core_i / core_h, core_i % core_h};
 
             {
                 auto& runtime_args = GetRuntimeArgs(program, reader_kernel_ids, core);
-                runtime_args[0] = param_in_address;
-                runtime_args[1] = grad_address;
-                runtime_args[2] = param_out_address;
-
-                if (has_momentum_buffer) {
-                    auto momentum_buffer_in = optional_input_tensors.at(0).value().buffer();
-                    TT_ASSERT(momentum_buffer_in != nullptr);
-                    runtime_args[3] = momentum_buffer_in->address();
+                runtime_args[0] = param_in.buffer()->address();
+                runtime_args[1] = grad.buffer()->address();
+                if (momentum_buffer_in.has_value()) {
+                    runtime_args[2] = momentum_buffer_in.value().buffer()->address();;
                 }
             }
 
             {
                 auto &runtime_args = GetRuntimeArgs(program, writer_kernel_ids, core);
-                runtime_args[0] = param_out_address;
-
-                if (has_momentum_buffer) {
-                    auto momentum_buffer_out = output_tensors.at(1).buffer();
-                    TT_ASSERT(momentum_buffer_out != nullptr);
-                    runtime_args[1] = momentum_buffer_out->address();
+                runtime_args[0] = param_out.buffer()->address();
+                if (has_momentum_buffer_out) {
+                    auto momentum_buffer_out = output_tensors.at(1);
+                    runtime_args[1] = momentum_buffer_out.buffer()->address();
                 }
             }
         }
