@@ -803,6 +803,14 @@ op_map = {
         "tt_op": tt_lib_ops.where,
         "pytorch_op": pytorch_ops.where,
     },
+    "eltwise-where-optional": {
+        "tt_op": tt_lib_ops.where_optional,
+        "pytorch_op": pytorch_ops.where,
+    },
+    "eltwise-where-scalar-optional": {
+        "tt_op": tt_lib_ops.where_scalar_optional,
+        "pytorch_op": pytorch_ops.where_scalar,
+    },
     "where-bw": {
         "tt_op": tt_lib_ops.where_bw,
         "pytorch_op": pytorch_ops.where_bw,
