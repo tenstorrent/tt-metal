@@ -35,6 +35,7 @@ setup_hugepages.py @tt-rkim
 scripts/build_scripts/ @tt-rkim @vtangTT @TT-billteng
 scripts/build_scripts/build_with_profiler_opt.sh @mo-tenstorrent @tt-rkim
 cmake/ @tt-rkim @vtangTT @TT-billteng
+build_metal.sh @tt-rkim @vtangTT @TT-billteng
 
 Makefile @tt-rkim
 /module.mk @tt-rkim
