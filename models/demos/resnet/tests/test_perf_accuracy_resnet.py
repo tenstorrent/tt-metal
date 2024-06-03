@@ -84,6 +84,7 @@ def run_perf_resnet(
         tt_output = tt_output.cpu().to_torch().to(torch.float)
         profiler.end(first_key)
         del tt_output
+        return
 
         enable_persistent_kernel_cache()
 
