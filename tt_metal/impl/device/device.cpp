@@ -16,6 +16,7 @@
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
 #include "dev_msgs.h"
+#include "noc/noc_parameters.h"
 
 namespace tt {
 
@@ -344,16 +345,19 @@ void Device::configure_kernel_variant(
     CoreCoord upstream_physical_core,
     CoreCoord downstream_physical_core,
     std::map<string, string> defines_in,
+    NOC noc_index,
     bool is_active_eth_core) {
+
+    const auto& grid_size = tt::Cluster::instance().get_soc_desc(this->id()).grid_size;
 
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},
-        {"MY_NOC_X", std::to_string(kernel_physical_core.x)},
-        {"MY_NOC_Y", std::to_string(kernel_physical_core.y)},
-        {"UPSTREAM_NOC_X", std::to_string(upstream_physical_core.x)},
-        {"UPSTREAM_NOC_Y", std::to_string(upstream_physical_core.y)},
-        {"DOWNSTREAM_NOC_X", std::to_string(downstream_physical_core.x)},
-        {"DOWNSTREAM_NOC_Y", std::to_string(downstream_physical_core.y)},
+        {"MY_NOC_X", std::to_string(NOC_0_X(noc_index, grid_size.x, kernel_physical_core.x))},
+        {"MY_NOC_Y", std::to_string(NOC_0_Y(noc_index, grid_size.y, kernel_physical_core.y))},
+        {"UPSTREAM_NOC_X", std::to_string(NOC_0_X(noc_index, grid_size.x, upstream_physical_core.x))},
+        {"UPSTREAM_NOC_Y", std::to_string(NOC_0_Y(noc_index, grid_size.y, upstream_physical_core.y))},
+        {"DOWNSTREAM_NOC_X", std::to_string(NOC_0_X(noc_index, grid_size.x, downstream_physical_core.x))},
+        {"DOWNSTREAM_NOC_Y", std::to_string(NOC_0_Y(noc_index, grid_size.y, downstream_physical_core.y))},
     };
     defines.insert(defines_in.begin(), defines_in.end());
 
@@ -364,7 +368,7 @@ void Device::configure_kernel_variant(
             kernel_core,
             tt::tt_metal::DataMovementConfig {
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = NOC::NOC_0,
+                .noc = noc_index,
                 .compile_args = compile_args,
                 .defines = defines
             }
@@ -376,7 +380,7 @@ void Device::configure_kernel_variant(
             kernel_core,
             tt::tt_metal::EthernetConfig{
                 .eth_mode = is_active_eth_core ? Eth::SENDER : Eth::IDLE,
-                .noc = NOC::NOC_0,
+                .noc = noc_index,
                 .compile_args = compile_args,
                 .defines = defines
             }
@@ -419,6 +423,8 @@ void Device::compile_command_queue_programs() {
 
             CoreCoord prefetch_physical_core = get_physical_core_coordinate(prefetch_core, dispatch_core_type);
             CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_core, dispatch_core_type);
+
+            NOC noc_index = this->hw_command_queues_[cq_id]->noc_index;
 
             log_debug(LogDevice, "Dispatching out of {} cores",  magic_enum::enum_name(dispatch_core_type));
             log_debug(LogDevice, "Prefetch HD logical location: {} physical core: {}", prefetch_core.str(), prefetch_physical_core.str());
@@ -465,7 +471,8 @@ void Device::compile_command_queue_programs() {
                 dispatch_core_type,
                 CoreCoord{0, 0},
                 dispatch_physical_core,
-                std::map<string, string> {}
+                std::map<string, string> {},
+                noc_index
             );
 
             tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, 0, dispatch_core_type); // prefetch_sync_sem
@@ -501,7 +508,8 @@ void Device::compile_command_queue_programs() {
                 dispatch_core_type,
                 prefetch_physical_core,
                 CoreCoord{0, 0},
-                std::map<string, string> {}
+                std::map<string, string> {},
+                noc_index
             );
 
             tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_core, 0, dispatch_core_type); // dispatch_sem
@@ -517,7 +525,7 @@ void Device::compile_command_queue_programs() {
         Device *mmio_device = tt::tt_metal::detail::GetDeviceHandle(mmio_device_id);
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
         uint32_t cq_size = mmio_device->sysmem_manager().get_cq_size();
-
+        NOC noc_index = this->hw_command_queues_[cq_id]->noc_index;
 
         CoreType dispatch_core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(mmio_device_id);
         tt_cxy_pair prefetch_core = dispatch_core_manager::get(num_hw_cqs).prefetcher_core(device_id, channel, cq_id);
@@ -610,7 +618,8 @@ void Device::compile_command_queue_programs() {
             dispatch_core_type,
             CoreCoord{0, 0},
             mux_physical_core,
-            std::map<string, string> {}
+            std::map<string, string> {},
+            noc_index
         );
 
         log_debug(LogDevice, "run prefetch_h {}", prefetch_core.str());
@@ -671,7 +680,8 @@ void Device::compile_command_queue_programs() {
             dispatch_core_type,
             CoreCoord{0, 0},
             CoreCoord{0, 0},
-            std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}}
+            std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
+            noc_index
         );
 
         std::vector<uint32_t> tunneler_l_compile_args =
@@ -715,6 +725,7 @@ void Device::compile_command_queue_programs() {
             CoreCoord{0, 0},
             CoreCoord{0, 0},
             std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
+            noc_index,
             true
         );
 
@@ -782,7 +793,8 @@ void Device::compile_command_queue_programs() {
             dispatch_core_type,
             CoreCoord{0, 0},
             CoreCoord{0, 0},
-            std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}}
+            std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
+            noc_index
         );
 
         log_debug(LogDevice, "run dispatch demux at {}", demux_core.str());
@@ -816,7 +828,8 @@ void Device::compile_command_queue_programs() {
             dispatch_core_type,
             demux_physical_core,
             CoreCoord{0xffffffff, 0xffffffff},
-            std::map<string, string> {}
+            std::map<string, string> {},
+            noc_index
         );
 
         log_debug(LogDevice, "run dispatch_h at {}", dispatch_core.str());
@@ -895,6 +908,7 @@ void Device::compile_command_queue_programs() {
             CoreCoord{0, 0},
             CoreCoord{0, 0},
             std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
+            noc_index,
             true
         );
 
@@ -959,7 +973,8 @@ void Device::compile_command_queue_programs() {
             dispatch_core_type,
             CoreCoord{0, 0},
             CoreCoord{0, 0},
-            std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}}
+            std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
+            noc_index
         );
 
         log_debug(LogDevice, "run demux at {}", demux_d_core.str());
@@ -1007,7 +1022,8 @@ void Device::compile_command_queue_programs() {
             dispatch_core_type,
             demux_d_physical_core,
             dispatch_physical_core,
-            std::map<string, string> {}
+            std::map<string, string> {},
+            noc_index
         );
 
         log_debug(LogDevice, "run prefertch_d at {}", prefetch_d_core.str());
@@ -1041,7 +1057,8 @@ void Device::compile_command_queue_programs() {
             dispatch_core_type,
             prefetch_d_physical_core,
             mux_d_physical_core,
-            std::map<string, string> {}
+            std::map<string, string> {},
+            noc_index
         );
 
         log_debug(LogDevice, "run dispatch at {}", dispatch_core.str());
@@ -1100,7 +1117,8 @@ void Device::compile_command_queue_programs() {
             dispatch_core_type,
             CoreCoord{0, 0},
             CoreCoord{0, 0},
-            std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}}
+            std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
+            noc_index
         );
 
         log_debug(LogDevice, "run mux at {}", mux_d_core.str());
@@ -1194,7 +1212,7 @@ void Device::initialize_command_queue() {
     this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
     hw_command_queues_.resize(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id);
+        hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id, static_cast<NOC>(cq_id));
         // Need to do this since CommandQueue constructor is private
         sw_command_queues_.push_back(std::unique_ptr<CommandQueue>(new CommandQueue(this, cq_id)));
     }
@@ -1528,6 +1546,24 @@ std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vect
     for (std::size_t idx = 0; idx < logical_cores.size(); idx++)
         ethernet_cores[idx] = ethernet_core_from_logical_core(logical_cores[idx]);
     return ethernet_cores;
+}
+
+uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& physical_core) const {
+    const auto& grid_size = tt::Cluster::instance().get_soc_desc(this->id()).grid_size;
+    return NOC_XY_ENCODING(
+        NOC_0_X(noc_index, grid_size.x, physical_core.x),
+        NOC_0_Y(noc_index, grid_size.y, physical_core.y)
+    );
+}
+
+uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& physical_cores) const {
+    const auto& grid_size = tt::Cluster::instance().get_soc_desc(this->id()).grid_size;
+    return NOC_MULTICAST_ENCODING(
+        NOC_0_X(noc_index, grid_size.x, physical_cores.start.x),
+        NOC_0_Y(noc_index, grid_size.y, physical_cores.start.y),
+        NOC_0_X(noc_index, grid_size.x, physical_cores.end.x),
+        NOC_0_Y(noc_index, grid_size.y, physical_cores.end.y)
+    );
 }
 
 void Device::check_allocator_is_initialized() const {

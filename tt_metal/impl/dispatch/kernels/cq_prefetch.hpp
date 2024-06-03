@@ -64,7 +64,7 @@ void read_from_pcie(volatile tt_l1_ptr uint16_t *& prefetch_q_rd_ptr,
         pcie_read_ptr = pcie_base;
     }
 
-    uint64_t host_src_addr = get_noc_addr_helper(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y), pcie_read_ptr);
+    uint64_t host_src_addr = get_noc_addr_helper(NOC_XY_ENCODING(NOC_X(PCIE_NOC_X), NOC_Y(PCIE_NOC_Y)), pcie_read_ptr);
     noc_async_read(host_src_addr, fence + preamble_size, size);
     pending_read_size = size + preamble_size;
     pcie_read_ptr += size;
