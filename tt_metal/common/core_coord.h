@@ -73,10 +73,64 @@ struct CoreRange {
     CoreRange(CoreRange &&other) = default;
     CoreRange &operator=(CoreRange &&other) = default;
 
-    void validate() {
-        TT_FATAL(
-            end.x >= start.x and end.y >= start.y, "Invalid core range for start: {}, end: {}", start.str(), end.str());
-    }
+    class iterator {
+       public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = CoreCoord;
+        using difference_type = std::ptrdiff_t;
+        using pointer = CoreCoord const *;
+        using reference = CoreCoord const &;
+
+        iterator(const CoreRange &range, bool row_major, bool is_end) :
+            range_(std::cref(range)), row_major_(row_major), core_(is_end ? range.past_end(row_major) : range.start) {}
+
+        reference operator*() const { return core_; }
+        pointer operator->() const { return &core_; }
+
+        iterator &operator++() {
+            if (row_major_) {
+                if (core_.x == range_.get().end.x) {
+                    core_.x = range_.get().start.x;
+                    ++core_.y;
+                } else {
+                    ++core_.x;
+                }
+            } else {
+                if (core_.y == range_.get().end.y) {
+                    core_.y = range_.get().start.y;
+                    ++core_.x;
+                } else {
+                    ++core_.y;
+                }
+            }
+            return *this;
+        }
+
+        iterator operator++(int) {
+            iterator tmp = *this;
+            ++(*this);
+            return tmp;
+        }
+
+        bool operator==(const iterator &other) const { return core_ == other.core_; }
+        bool operator!=(const iterator &other) const { return !(*this == other); }
+
+       private:
+        std::reference_wrapper<const CoreRange> range_;
+        bool row_major_;
+        CoreCoord core_;
+    };
+
+    struct iterator_view {
+        iterator_view(const CoreRange &range, bool row_major) : range_(range), row_major_(row_major) {}
+
+        iterator begin() const { return iterator(range_, row_major_, false); }
+        iterator end() const { return iterator(range_, row_major_, true); }
+
+       private:
+        const CoreRange &range_;
+        bool row_major_;
+    };
 
     inline std::optional<CoreRange> intersects(const CoreRange &other) const {
         std::size_t x1 = std::max(this->start.x, other.start.x);
@@ -157,8 +211,14 @@ struct CoreRange {
 
     size_t size() const { return (this->end.x - this->start.x + 1) * (this->end.y - this->start.y + 1); }
 
+    CoreCoord past_end(bool row_major) const {
+        return row_major ? CoreCoord{this->start.x, this->end.y + 1} : CoreCoord{this->end.x + 1, this->start.y};
+    }
+
     CoreCoord grid_size() const { return {this->end.x - this->start.x + 1, this->end.y - this->start.y + 1}; }
 };
+
+inline CoreRange::iterator_view iterate(const CoreRange &range, bool row_major) { return {range, row_major}; }
 
 constexpr inline bool operator==(const CoreRange &a, const CoreRange &b) {
     return a.start == b.start && a.end == b.end;
@@ -253,6 +313,68 @@ class CoreRangeSet {
 
     CoreRangeSet(CoreRangeSet &&other) = default;
     CoreRangeSet &operator=(CoreRangeSet &&other) = default;
+
+    class iterator {
+       public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = CoreCoord;
+        using difference_type = std::ptrdiff_t;
+        using pointer = CoreCoord const *;
+        using reference = CoreCoord const &;
+
+        iterator(const std::set<CoreRange> &ranges, bool row_major, bool is_end) :
+            ranges_(ranges),
+            row_major_(row_major),
+            range_iter_(is_end ? ranges.end() : ranges.begin()),
+            core_iter_(*range_iter_, row_major, is_end) {}
+
+        reference operator*() const { return *core_iter_; }
+        pointer operator->() const { return &*core_iter_; }
+
+        iterator &operator++() {
+            ++core_iter_;
+            if (*core_iter_ == range_iter_->past_end(row_major_)) {
+                ++range_iter_;
+                if (range_iter_ != ranges_.end()) {
+                    core_iter_ = CoreRange::iterator(*range_iter_, row_major_, false);
+                }
+            }
+            return *this;
+        }
+
+        iterator operator++(int) {
+            iterator tmp = *this;
+            ++(*this);
+            return tmp;
+        }
+
+        bool operator==(const iterator &other) const {
+            bool self_at_end = range_iter_ == ranges_.end();
+            bool other_at_end = other.range_iter_ == other.ranges_.end();
+
+            return (self_at_end && other_at_end) || (!self_at_end && !other_at_end && core_iter_ == other.core_iter_);
+        }
+
+        bool operator!=(const iterator &other) const { return !(*this == other); }
+
+       private:
+        const std::set<CoreRange> &ranges_;
+        bool row_major_;
+        std::set<CoreRange>::const_iterator range_iter_;
+        CoreRange::iterator core_iter_;
+    };
+
+    struct iterator_view {
+        iterator_view(const std::set<CoreRange> &ranges, bool row_major) : ranges_(ranges), row_major_(row_major) {}
+
+        iterator begin() const { return iterator(ranges_, row_major_, false); }
+        iterator end() const { return iterator(ranges_, row_major_, true); }
+
+       private:
+        const std::set<CoreRange> &ranges_;
+        bool row_major_;
+    };
+
 
     auto size() const { return ranges_.size(); }
 
@@ -377,6 +499,10 @@ class CoreRangeSet {
    private:
     std::set<CoreRange> ranges_;
 };
+
+inline CoreRangeSet::iterator_view iterate(const CoreRangeSet &core_range_set, bool row_major) {
+    return {core_range_set.ranges(), row_major};
+}
 
 const inline bool operator==(const CoreRangeSet &a, const CoreRangeSet &b) {
     if (a.ranges().size() == b.ranges().size()) {

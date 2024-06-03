@@ -11,8 +11,11 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/tt_stl/enumerate.hpp"
 
 using namespace tt::constants;
+
+using namespace tt::stl::utils;
 
 namespace tt {
 namespace tt_metal {
@@ -62,7 +65,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
              num_output_rows_unpadded = 0;
     CoreCoord end_core;
-    std::vector<CoreCoord> cores_with_rtargs;
 
     if (src_sharded) {
         auto shard_spec = a.shard_spec().value();
@@ -209,21 +211,10 @@ operation::ProgramWithCallbacks untilize_multi_core(
     }
 
     // 1D distribution of blocks across all cores
-    uint32_t ncores_full = ncores;
-    auto full_cores = all_cores;
-    if (nblocks_per_core_cliff > 0 && nblocks_per_core_cliff < nblocks_per_core) {
-        // unequal case with cliff
-        ncores_full -= 1;
-        full_cores = core_range;
-    }
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
-    auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
-    for (uint32_t i = 0; i < cores.size(); i++) {
-        CoreCoord core = cores[i];
-        if (!full_cores.core_coord_in_core_ranges(core)) {
-            continue;
-        }
+
+    for (const auto& core : iterate(core_range, true)) {
         // reader runtime args
         vector<uint32_t> reader_rt_args;
 
@@ -304,14 +295,11 @@ operation::ProgramWithCallbacks untilize_multi_core(
         tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
 
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
-        cores_with_rtargs.push_back(core);
         tile_start_id += ntiles_per_block * nblocks_per_core;
         row_start_id += TILE_HEIGHT * nblocks_per_core;
     }
-    if (ncores_full < ncores) {
-        // last core is the cliff core with nblocks_per_core_cliff blocks
-        CoreCoord core = row_major ? CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x}
-                                   : CoreCoord{ncores_full / ncores_y, ncores_full % ncores_y};
+
+    for (const auto& core : iterate(core_range_cliff, true)) {
         // reader runtime args
         vector<uint32_t> reader_rt_args;
 
@@ -390,13 +378,12 @@ operation::ProgramWithCallbacks untilize_multi_core(
         tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
 
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
-        cores_with_rtargs.push_back(core);
     }
     auto override_runtime_arguments_callback = [reader_kernel_id = unary_reader_kernel_id,
                                                 writer_kernel_id = unary_writer_kernel_id,
-                                                cb_src0 = cb_src0,
-                                                cb_output = cb_output,
-                                                cores_with_rtargs](
+                                                cb_src0,
+                                                cb_output,
+                                                all_cores](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
@@ -412,7 +399,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
         } else {
             auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            for (const CoreCoord& core : cores_with_rtargs) {
+            for (const CoreCoord& core : iterate(all_cores, true)) {
                 auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = src_buffer->address();
             }
@@ -422,7 +409,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
         } else {
             auto& runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-            for (const CoreCoord& core : cores_with_rtargs) {
+            for (const CoreCoord& core : iterate(all_cores, true)) {
                 auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = dst_buffer->address();
             }
@@ -534,11 +521,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
 
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
-    uint32_t ncores_x = grid_size.x;
 
-    const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
-    for (uint32_t i = 0; i < ncores; ++i) {
-        const auto& core = cores[i];
+    for (const auto& [i, core] : enumerate(iterate(all_cores, true))) {
         const std::vector<BlockRep>& assignment = core_assignments.at(i);
 
         // writer runtime args
@@ -573,7 +557,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     }
 
     auto override_runtime_args_callback =
-        [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
+        [all_cores, reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id](
             const Program& program,
             const std::vector<Buffer*>& input_buffers,
             const std::vector<Buffer*>& output_buffers) {
@@ -583,7 +567,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
             auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
             auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
 
-            for (const auto& core : cores) {
+            for (const auto& core : iterate(all_cores, true)) {
                 {
                     auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
                     runtime_args[0] = src_buffer->address();
