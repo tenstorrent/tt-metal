@@ -480,6 +480,7 @@ void gen_wait_and_stall_cmd(Device *device,
     wait.base.cmd_id = CQ_DISPATCH_CMD_WAIT;
     wait.wait.barrier = true;
     wait.wait.notify_prefetch = true;
+    wait.wait.wait = true;
     wait.wait.addr = dispatch_wait_addr_g;
     wait.wait.count = 0;
     add_bare_dispatcher_cmd(dispatch_cmds, wait);

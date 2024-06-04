@@ -875,11 +875,9 @@ void EnqueueProgramCommand::assemble_device_commands() {
             }
         }
 
-        // Wait Noc Write Barrier, wait for binaries to be written to worker cores
+        // Wait Noc Write Barrier, wait for binaries/configs to be written to worker cores
         if (program.program_transfer_info.num_active_cores > 0) {
-            // Wait Noc Write Barrier, wait for binaries to be written to worker cores
-            // TODO: any way to not have dispatcher poll the addr here?
-            program_command_sequence.add_dispatch_wait(true, DISPATCH_MESSAGE_ADDR, 0);
+            program_command_sequence.add_dispatch_wait(true, DISPATCH_MESSAGE_ADDR, 0, 0, false, false);
         }
 
         // Go Signals
