@@ -16,7 +16,7 @@
 using namespace tt::tt_metal;
 
 // todo consider moving these to dispatch_addr_map
-static constexpr uint32_t PCIE_ALIGNMENT = 32;
+static constexpr uint32_t PCIE_ALIGNMENT = std::max(NOC_PCIE_READ_ALIGNMENT_BYTES, NOC_PCIE_WRITE_ALIGNMENT_BYTES);
 static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30;  // 1GB;
 
 static constexpr uint32_t MEMCPY_ALIGNMENT = sizeof(__m128i);

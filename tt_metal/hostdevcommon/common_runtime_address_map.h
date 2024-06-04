@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "common_values.hpp"
 #include "dev_mem_map.h"
+// #include "noc/noc_parameters.h" todo look into compile errors with doing this
 
 /*
 * This file contains addresses that are visible to both host and device compiled code.
@@ -47,7 +48,7 @@ constexpr static std::uint32_t NCRISC_L1_RESULT_BASE = 101 * 1024;
 constexpr static std::uint32_t TRISC_L1_ARG_BASE = 102 * 1024;
 constexpr static std::uint32_t IDLE_ERISC_L1_ARG_BASE = 32 * 1024;
 constexpr static std::uint32_t IDLE_ERISC_L1_RESULT_BASE = 33 * 1024;
-constexpr static std::uint32_t L1_ALIGNMENT = 16;
+constexpr static std::uint32_t L1_ALIGNMENT = 16; //std::max(NOC_L1_READ_ALIGNMENT_BYTES, NOC_L1_WRITE_ALIGNMENT_BYTES);
 
 // config for 32 L1 buffers is at addr BUFFER_CONFIG_BASE
 // 12 bytes for each buffer: (addr, size, size_in_tiles)
@@ -124,7 +125,7 @@ constexpr static std::uint32_t ERISC_L1_UNRESERVED_BASE = L1_UNRESERVED_BASE; //
 // Reserved DRAM addresses
 // Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been committed
 constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
-constexpr static std::uint32_t DRAM_ALIGNMENT = 32;
+constexpr static std::uint32_t DRAM_ALIGNMENT = 64; //std::max(NOC_DRAM_READ_ALIGNMENT_BYTES, NOC_DRAM_WRITE_ALIGNMENT_BYTES);
 constexpr static std::uint32_t DRAM_BARRIER_SIZE = ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 constexpr static std::uint32_t DRAM_UNRESERVED_BASE = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE; // Start of unreserved space
 
