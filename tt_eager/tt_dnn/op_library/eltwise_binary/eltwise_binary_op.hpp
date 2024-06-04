@@ -43,7 +43,6 @@ namespace eltwise_binary_op_utils {
 
 std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<DataType> out_dtype = std::nullopt,
                                     const std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt);
-bool is_logical(BinaryOpType op_type);
 
 }  // namespace eltwise_binary_op_utils
 
@@ -143,16 +142,12 @@ struct make_eltwise_binary {
                     (in_a.get_legacy_shape().without_padding() == in_b.get_legacy_shape().without_padding()),
                     "Input shapes must be the same!");
 
-                DataType dtype = output_dtype.value_or(in_a.get_dtype());
-                if(eltwise_binary_op_utils::is_logical(binary_op_type)) {
-                    dtype = DataType::UINT32;
-                }
                 auto output_tensors = operation::run_with_autoformat(
                         EltwiseBinary{
                             binary_op_type,
                             fused_activations,
                             output_mem_config,
-                            dtype,
+                            output_dtype.value_or(in_a.get_dtype()),
                             false /*in place*/},
                         {in_a, in_b});
                 return output_tensors;

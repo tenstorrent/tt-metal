@@ -35,6 +35,7 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
         Keyword args:
             * :attr:`memory_config` (ttnn.MemoryConfig): memory config for the output tensor
             * :attr:`dtype` (ttnn.DataType): data type for the output tensor
+            * :attr:`output_tensor` (ttnn.Tensor): preallocated output tensor
             * :attr:`activations` (List[str]): list of activation functions to apply to the output tensor
 
         Example::
@@ -57,13 +58,15 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
                const float scalar,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType>& dtype,
+               const std::optional<ttnn::Tensor>& output_tensor,
                const std::optional<std::vector<std::string>>& activations) -> ttnn::Tensor {
-                return self(input_tensor_a, scalar, memory_config, dtype, activations);
+                return self(input_tensor_a, scalar, memory_config, dtype, output_tensor, activations);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
             py::arg("activations") = std::nullopt},
         ttnn::pybind_overload_t{
             [](const binary_operation_t& self,
@@ -71,13 +74,15 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
                const ttnn::Tensor& input_tensor_b,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType>& dtype,
+               const std::optional<ttnn::Tensor>& output_tensor,
                const std::optional<std::vector<std::string>>& activations) -> ttnn::Tensor {
-                return self(input_tensor_a, input_tensor_b, memory_config, dtype, activations);
+                return self(input_tensor_a, input_tensor_b, memory_config, dtype, output_tensor, activations);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
             py::arg("activations") = std::nullopt});
 }
 

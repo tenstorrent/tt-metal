@@ -73,38 +73,7 @@ def test_lgamma(device, h, w):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
-def test_eq_int(device, h, w):
-    torch.manual_seed(0)
-
-    same = 50
-    torch_input_tensor_a = torch.randint(0, 30, (h, w), dtype=torch.int32)
-    torch_input_tensor_a[0, 0] = same
-    torch_input_tensor_a[0, 1] = same
-    torch_input_tensor_a[0, 2] = same
-
-    torch_input_tensor_b = torch.randint(0, 30, (h, w), dtype=torch.int32)
-    torch_input_tensor_b[0, 0] = same
-    torch_input_tensor_b[0, 1] = same
-    torch_input_tensor_b[0, 2] = same
-
-    torch_output_tensor = torch.eq(torch_input_tensor_a, torch_input_tensor_b)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn.eq(input_tensor_a, input_tensor_b)
-    output_tensor = ttnn.to_torch(output_tensor)
-    logger.warning(f"{torch_input_tensor_a}")
-    logger.warning(f"{torch_input_tensor_b}")
-    logger.warning(f"{torch_output_tensor}")
-    logger.warning(f"{output_tensor}")
-
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
-
-
-@pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [32])
-def test_eq_float(device, h, w):
+def test_eq(device, h, w):
     torch.manual_seed(0)
 
     same = 50
@@ -123,12 +92,17 @@ def test_eq_float(device, h, w):
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
     output_tensor = ttnn.eq(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
     logger.warning(f"{output_tensor}")
 
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor_uint = ttnn.eq(input_tensor_a, input_tensor_b, dtype=ttnn.DataType.UINT32)
+    output_tensor_uint = ttnn.to_torch(output_tensor_uint)
+    logger.warning(f"{output_tensor_uint}")
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_with_pcc(torch_output_tensor, output_tensor_uint, 0.999)
 
 
 @pytest.mark.parametrize("h", [64])
