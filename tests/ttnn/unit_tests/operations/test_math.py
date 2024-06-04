@@ -11,8 +11,6 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 
-from loguru import logger
-
 
 def run_math_unary_test(device, h, w, ttnn_function, torch_function, pcc=0.9999):
     torch.manual_seed(0)
