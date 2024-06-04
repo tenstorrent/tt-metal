@@ -14,13 +14,12 @@ SLOW_MATMULS=1 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml env pytest tes
 
 env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon7b/tests/ci/test_falcon_end_to_end_prefill.py
 
+env pytest models/demos/mamba/tests/test_benchmarks.py
+env pytest models/demos/mamba/tests/test_reference_model.py
 env pytest models/demos/mamba/tests/test_mamba_ssm.py
 env pytest models/demos/mamba/tests/test_mamba_block.py
 env pytest models/demos/mamba/tests/test_residual_block.py
-env pytest models/demos/mamba/tests/test_full_model_loop.py
-env pytest models/demos/mamba/tests/test_benchmarks.py
-env pytest models/demos/mamba/tests/test_reference_model.py
-env pytest models/demos/mamba/tests/test_transforms.py
+env pytest models/demos/mamba/tests/test_full_model.py
 env pytest models/demos/mamba/tests/test_mamba_demo.py
 
 env pytest models/demos/wormhole/mistral7b/tests/test_mistral_embedding.py
