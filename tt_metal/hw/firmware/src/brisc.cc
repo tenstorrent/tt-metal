@@ -35,6 +35,7 @@
 uint8_t noc_index;
 
 constexpr uint32_t RISCV_IC_BRISC_MASK = 0x1;
+constexpr uint32_t RISCV_IC_NCRISC_MASK = 0x10;
 constexpr uint32_t RISCV_IC_TRISC0_MASK = 0x2;
 constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x4;
 constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x8;
@@ -223,7 +224,7 @@ void device_setup() {
     wzeromem(MEM_ZEROS_BASE, MEM_ZEROS_SIZE);
 
     // Invalidate tensix icache for all 4 risc cores
-    cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK;
+    cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
     // Clear destination registers
     core.ex_zeroacc(instrn_buf[0]);
@@ -365,7 +366,7 @@ int main() {
 
             // Invalidate the i$ now the kernels have loaded and before running
             volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-            cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK;
+            cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
             run_triscs();
 
