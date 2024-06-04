@@ -1238,7 +1238,7 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
     std::thread completion_queue_thread = std::thread(&HWCommandQueue::read_completion_queue, this);
     this->completion_queue_thread = std::move(completion_queue_thread);
     // Set the affinity of the completion queue reader.
-    set_device_thread_affinity(this->completion_queue_thread, device->id());
+    set_device_thread_affinity(this->completion_queue_thread, device->worker_thread_core);
     this->expected_num_workers_completed = 0;
 }
 
@@ -1932,24 +1932,29 @@ void HWCommandQueue::read_completion_queue() {
             });
         }
         if (this->num_entries_in_completion_q > this->num_completed_completion_q_reads) {
+            ZoneScopedN("CompletionQueueReader");
             uint32_t num_events_to_read = this->num_entries_in_completion_q - this->num_completed_completion_q_reads;
             for (uint32_t i = 0; i < num_events_to_read; i++) {
-                std::variant<detail::ReadBufferDescriptor, detail::ReadEventDescriptor> read_descriptor =
-                    *(this->issued_completion_q_reads.pop());
-
-                this->manager.completion_queue_wait_front(
-                    this->id, this->exit_condition);  // CQ DISPATCHER IS NOT HANDSHAKING WITH HOST RN
-
+                ZoneScopedN("CompletionQueuePopulated");
+                std::variant<detail::ReadBufferDescriptor, detail::ReadEventDescriptor> read_descriptor = *(this->issued_completion_q_reads.pop());
+                {
+                    ZoneScopedN("CompletionQueueWait");
+                    this->manager.completion_queue_wait_front(this->id, this->exit_condition); // CQ DISPATCHER IS NOT HANDSHAKING WITH HOST RN
+                }
                 if (this->exit_condition) {  // Early exit
                     return;
                 }
 
                 std::visit(
-                    [&](auto&& read_descriptor) {
+                    [&](auto&& read_descriptor)
+                    {
                         using T = std::decay_t<decltype(read_descriptor)>;
                         if constexpr (std::is_same_v<T, detail::ReadBufferDescriptor>) {
+                            ZoneScopedN("CompletionQueueReadData");
                             this->copy_into_user_space(read_descriptor, mmio_device_id, channel);
-                        } else if constexpr (std::is_same_v<T, detail::ReadEventDescriptor>) {
+                        }
+                        else if constexpr (std::is_same_v<T, detail::ReadEventDescriptor>) {
+                            ZoneScopedN("CompletionQueueReadEvent");
                             uint32_t read_ptr = this->manager.get_completion_queue_read_ptr(this->id);
                             thread_local static std::vector<uint32_t> dispatch_cmd_and_event(
                                 (sizeof(CQDispatchCmd) + dispatch_constants::EVENT_PADDED_SIZE) / sizeof(uint32_t));
