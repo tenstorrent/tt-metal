@@ -199,9 +199,8 @@ generate_pack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_
 static void emit_pack_data_formats(std::string pack_data_format_descs, std::vector<DataFormat> src_formats_all_cbs, std::vector<DataFormat> dst_formats_all_cbs) {
     ofstream file_stream;
     file_stream.open(pack_data_format_descs);
-    // TODO: we should be emitting "unsigned char", no reason to use 4B per data format
-    file_stream << create_formats_array_string("constexpr std::int32_t", "pack_src_format", NUM_CIRCULAR_BUFFERS, data_format_vec_to_string(src_formats_all_cbs));
-    file_stream << create_formats_array_string("constexpr std::int32_t", "pack_dst_format", NUM_CIRCULAR_BUFFERS, data_format_vec_to_string(dst_formats_all_cbs));
+    file_stream << create_formats_array_string("constexpr unsigned char", "pack_src_format", NUM_CIRCULAR_BUFFERS, data_format_vec_to_string(src_formats_all_cbs));
+    file_stream << create_formats_array_string("constexpr unsigned char", "pack_dst_format", NUM_CIRCULAR_BUFFERS, data_format_vec_to_string(dst_formats_all_cbs));
 
     // budabackend-style format array
     // file_stream << create_formats_array_string("const std::int32_t", "pack_src_format", 16, data_format_vec_to_string(src_formats));
