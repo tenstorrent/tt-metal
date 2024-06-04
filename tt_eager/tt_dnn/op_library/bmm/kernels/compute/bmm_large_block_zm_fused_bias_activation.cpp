@@ -68,6 +68,14 @@ inline void reblock_and_untilize(
 }
 
 void MAIN {
+    // RUNTIME ARGS
+    #ifdef MATMUL_DRAM_SHARDED
+    const bool is_worker_core                                   = get_arg_val<uint32_t>(0) == 1;
+    // if not worker core, skip
+    if (not is_worker_core) {
+        return;
+    }
+    #endif
 
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0); // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1); // outer row block size (in inner row blocks)

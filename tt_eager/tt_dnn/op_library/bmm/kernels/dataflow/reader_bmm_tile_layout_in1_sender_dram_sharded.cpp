@@ -9,17 +9,23 @@
 
 void kernel_main() {
     // RUNTIME ARGS
-    const uint32_t in1_tensor_addr                              = get_arg_val<uint32_t>(0);
+    const bool is_worker_core                                   = get_arg_val<uint32_t>(0) == 1;
+    // if not worker core, skip
+    if (not is_worker_core) {
+        return;
+    }
+
+    const uint32_t in1_tensor_addr                              = get_arg_val<uint32_t>(1);
     #ifdef FUSE_BIAS
-    const uint32_t in3_tensor_addr                              = get_arg_val<uint32_t>(1);
+    const uint32_t in3_tensor_addr                              = get_arg_val<uint32_t>(2);
     #endif
-    const uint32_t dram_bank_id                                 = get_arg_val<uint32_t>(2);
-    const uint32_t vc                                           = get_arg_val<uint32_t>(3);
-    const uint32_t num_shard_to_write_back                        = get_arg_val<uint32_t>(4);
-    const uint32_t reshard_tensor_start_offset                      = get_arg_val<uint32_t>(5);
-    volatile tt_l1_ptr uint32_t * per_core_N_reshard_bytes          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(6));
-    volatile tt_l1_ptr uint32_t * in0_mcast_sender_noc_x          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(7));
-    volatile tt_l1_ptr uint32_t * in0_mcast_sender_noc_y          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(8));
+    const uint32_t dram_bank_id                                 = get_arg_val<uint32_t>(3);
+    const uint32_t vc                                           = get_arg_val<uint32_t>(4);
+    const uint32_t num_shard_to_write_back                        = get_arg_val<uint32_t>(5);
+    const uint32_t reshard_tensor_start_offset                      = get_arg_val<uint32_t>(6);
+    volatile tt_l1_ptr uint32_t * per_core_N_reshard_bytes          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(7));
+    volatile tt_l1_ptr uint32_t * in0_mcast_sender_noc_x          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(8));
+    volatile tt_l1_ptr uint32_t * in0_mcast_sender_noc_y          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(9));
 
 
     // COMPILE TIME ARGS
