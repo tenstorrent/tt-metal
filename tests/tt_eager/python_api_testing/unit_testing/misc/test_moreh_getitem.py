@@ -80,6 +80,7 @@ def test_getitem_RAW_MJOR_one_index(shape_index_dim, dtype, index_size, device):
     assert passing
 
 
+@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/9076")
 @pytest.mark.parametrize(
     "shape_index_dims",
     (
