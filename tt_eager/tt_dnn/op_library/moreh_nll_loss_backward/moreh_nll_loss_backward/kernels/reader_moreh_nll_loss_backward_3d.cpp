@@ -7,9 +7,9 @@
 void kernel_main() {
     uint32_t i = 0;
     auto target_addr = get_arg_val<uint32_t>(i++);
+    auto output_grad_addr = get_arg_val<uint32_t>(i++);
     auto weight_addr = get_arg_val<uint32_t>(i++);
     auto divisor_addr = get_arg_val<uint32_t>(i++);
-    auto output_grad_addr = get_arg_val<uint32_t>(i++);
     auto ignore_index = static_cast<int32_t>(get_arg_val<uint32_t>(i++));
     auto num_tiles_per_core = get_arg_val<uint32_t>(i++);
     auto start_id = get_arg_val<uint32_t>(i++);
