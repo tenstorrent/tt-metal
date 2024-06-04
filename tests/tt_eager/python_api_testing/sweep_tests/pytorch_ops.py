@@ -1331,8 +1331,13 @@ def eltwise_identity(x, *args, **kwargs):
     return x
 
 
-def eltwise_typecast(x, *args, **kwargs):
-    return torch.relu(x.to(torch.int32))  # due to no uint32 support
+def eltwise_typecast(x, *args, tt_output_dtype, **kwargs):
+    if tt_output_dtype[0] == ttl.tensor.DataType.UINT16:
+        return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
+    elif tt_output_dtype[0] == ttl.tensor.DataType.UINT32:
+        return torch.relu(x.to(torch.int32))  # due to no uint32 support
+    else:
+        return x
 
 
 def eltwise_rdiv(x, *args, **kwargs):
