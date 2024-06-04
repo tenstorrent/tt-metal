@@ -144,7 +144,8 @@ void py_module(py::module& m_primary) {
             return fmt::format("{}", config);
         });
 
-    py::class_<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(m_primary, "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig")
+    py::class_<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
+        m_primary, "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig")
         .def(
             py::init<
                 std::size_t,
@@ -545,10 +546,10 @@ void py_module(py::module& m_primary) {
     m_primary.def(
         "moreh_adam",
         &moreh_adam,
-        py::arg("param").noconvert(),
+        py::arg("param_in").noconvert(),
         py::arg("grad").noconvert(),
-        py::arg("exp_avg").noconvert(),
-        py::arg("exp_avg_sq").noconvert(),
+        py::arg("exp_avg_in").noconvert(),
+        py::arg("exp_avg_sq_in").noconvert(),
         py::arg("lr").noconvert(),
         py::arg("beta1").noconvert(),
         py::arg("beta2").noconvert(),
@@ -556,7 +557,11 @@ void py_module(py::module& m_primary) {
         py::arg("weight_decay").noconvert(),
         py::arg("step").noconvert(),
         py::arg("amsgrad").noconvert(),
-        py::arg("max_exp_avg_sq").noconvert() = std::nullopt,
+        py::arg("max_exp_avg_sq_in").noconvert() = std::nullopt,
+        py::arg("param_out").noconvert() = std::nullopt,
+        py::arg("exp_avg_out").noconvert() = std::nullopt,
+        py::arg("exp_avg_sq_out").noconvert() = std::nullopt,
+        py::arg("max_exp_avg_sq_out").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
