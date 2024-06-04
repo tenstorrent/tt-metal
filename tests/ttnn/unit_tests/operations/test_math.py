@@ -7,6 +7,7 @@ import pytest
 import torch
 
 import ttnn
+from models.utility_functions import is_grayskull
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
@@ -73,7 +74,11 @@ def test_lgamma(device, h, w):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
-def test_eq(device, h, w):
+@pytest.mark.parametrize("output_dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.UINT32])
+def test_eq(device, h, w, output_dtype):
+    if is_grayskull() and output_dtype == ttnn.DataType.UINT32:
+        pytest.skip("GS does not support fp32/uint32")
+
     torch.manual_seed(0)
 
     same = 50
@@ -92,17 +97,10 @@ def test_eq(device, h, w):
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # bfloat16
-    output_tensor = ttnn.eq(input_tensor_a, input_tensor_b)
-    assert output_tensor.get_dtype() == ttnn.DataType.BFLOAT16
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    # uint32
-    output_tensor_uint = ttnn.eq(input_tensor_a, input_tensor_b, dtype=ttnn.DataType.UINT32)
-    assert output_tensor_uint.get_dtype() == ttnn.DataType.UINT32
+    output_tensor_uint = ttnn.eq(input_tensor_a, input_tensor_b, dtype=output_dtype)
+    assert output_tensor_uint.get_dtype() == output_dtype
     output_tensor_uint = ttnn.to_torch(output_tensor_uint)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
     assert_with_pcc(torch_output_tensor, output_tensor_uint, 0.999)
 
 
