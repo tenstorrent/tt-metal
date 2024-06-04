@@ -46,15 +46,49 @@ void MorehSumBackward::validate_with_output_tensors(
     check_tensor(input, "moreh_sum_backward input");
     check_tensor(input_grad, "moreh_sum_backward input_grad");
 
-    // validate shape
-    // keepdim=true
     const auto &input_shape = input.get_legacy_shape();
     auto input_shape_wo_padding = input_shape.without_padding();
+    auto input_rank = input_shape.rank();
     auto output_grad_shape_wo_padding = output_grad.get_legacy_shape().without_padding();
-    for (int i = 0; i < input_shape.rank(); ++i) {
-        TT_FATAL(input_shape_wo_padding[i] >= output_grad_shape_wo_padding[i]);
+
+    // validate output_grad shape
+    if (this->keepdim) {
+        for (int i = 0; i < input_rank; ++i) {
+            TT_FATAL(input_shape_wo_padding[i] >= output_grad_shape_wo_padding[i]);
+        }
+    } else {
+        std::vector<uint32_t> expected_output_grad_shape;
+        std::vector<uint32_t> reduced_dims(input_rank, 0);
+        for (auto dim : this->dims) {
+            TT_FATAL(dim < input_rank, "dim {} < input_rank {}", dim, input_rank);
+            reduced_dims[dim] = 1;
+        }
+
+        TT_FATAL(input_rank >= 2, "at least input_rank {} >= 2", input_rank);
+        for (int i = 0; i < input_rank; ++i) {
+            log_debug(LogOp, "reduced_dims[{}] = {}", i, reduced_dims[i]);
+            bool is_tile_dim = (i == input_rank - 1 || i == input_rank -2);
+            // batch dims
+            if (reduced_dims[i] && !is_tile_dim)
+                continue;
+            uint32_t s = input_shape_wo_padding[i];
+            // tile dims are not reduced
+            if (reduced_dims[i] && is_tile_dim) {
+                s = 1;
+            }
+            expected_output_grad_shape.push_back(s);
+        }
+
+        uint32_t expected_rank = expected_output_grad_shape.size();
+        uint32_t rank = output_grad_shape_wo_padding.rank();
+        TT_FATAL(expected_rank == rank, "expected_rank {} == rank {}", expected_rank, rank);
+        for (int i = 0; i < rank; ++i) {
+            TT_FATAL(expected_output_grad_shape[i] >= output_grad_shape_wo_padding[i]);
+            log_debug(LogOp, "rank {} expected_output_grad_shape {}, output_grad_shape_wo_padding {}", i, expected_output_grad_shape[i], output_grad_shape_wo_padding[i]);
+        }
     }
 
+    // validate input_grad shape
     if (input_grad.has_value()) {
         const auto &input_grad_shape = input_grad.value().get_legacy_shape();
         TT_FATAL(input_shape == input_grad_shape, "both shape between input and input_grad should be the same");
@@ -80,7 +114,7 @@ operation::ProgramWithCallbacks MorehSumBackward::create_program(
     auto &output_grad = inputs.at(0);
     auto &input_grad = outputs.at(0);
 
-    return moreh_sum_backward_impl(output_grad, input_grad, this->compute_kernel_config);
+    return moreh_sum_backward_impl(output_grad, input_grad, this->dims, this->keepdim, this->compute_kernel_config);
 }
 
 Tensor moreh_sum_backward(
