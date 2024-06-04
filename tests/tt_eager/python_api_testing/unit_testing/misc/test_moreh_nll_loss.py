@@ -207,7 +207,6 @@ def test_moreh_nll_loss_callback(shape, reduction, none_weight, device, use_prog
     assert passing
 
 
-@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/9076")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -291,7 +290,6 @@ def test_moreh_nll_loss_backward(
     assert passing
 
 
-@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/9076")
 @pytest.mark.parametrize(
     "shape",
     [
