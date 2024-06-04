@@ -13,11 +13,30 @@
 
 using namespace tt::constants;
 
+namespace tt {
+namespace tt_metal {
 namespace eltwise_binary_op_utils {
 using namespace tt::tt_metal;
 
+bool is_logical(BinaryOpType op_type)
+{
+    switch (op_type) {
+        case BinaryOpType::GT:
+        case BinaryOpType::LT:
+        case BinaryOpType::GTE:
+        case BinaryOpType::LTE:
+        case BinaryOpType::EQ:
+        case BinaryOpType::NE:
+        case BinaryOpType::LOGICAL_AND:
+        case BinaryOpType::LOGICAL_OR:
+            return true;
+        default:
+            return false;
+    }
+}
+
 std::map<string, string> get_defines(
-    BinaryOpType op_type, const std::optional<std::vector<UnaryWithParam>> fused_activations) {
+    BinaryOpType op_type, const std::optional<DataType> output_dtype, const std::optional<std::vector<UnaryWithParam>> fused_activations) {
     std::map<string, string> defines;
     string op_name = "sub_tiles";
     string op_binary_type = "EltwiseBinaryType::ELWSUB";
@@ -50,9 +69,6 @@ std::map<string, string> get_defines(
             break;
         case BinaryOpType::EQ:
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst));
-            defines.insert({"SFPU_OP_CHAIN_0", "typecast_tile_init(); typecast_tile(i);"});
-            defines.insert({"SFPU_OP_TYPECAST_INCLUDE", "1"});
-
             break;
         case BinaryOpType::NE:
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst));
@@ -107,6 +123,15 @@ std::map<string, string> get_defines(
         default: TT_ASSERT(false && "Undefined op type");
     }
 
+    if(is_logical(op_type) && output_dtype.has_value()){
+        if(output_dtype.value() == DataType::UINT16 || output_dtype.value()  == DataType::UINT32){
+            TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0 && "SFPU_OP_CHAIN_0 already defined");
+
+            defines.insert({"SFPU_OP_CHAIN_0", "typecast_tile_init(); typecast_tile(i);"});
+            defines.insert({"SFPU_OP_TYPECAST_INCLUDE", "1"});
+        }
+    }
+
     defines["ELTWISE_OP"] = op_name.c_str();
     defines["ELTWISE_OP_TYPE"] = op_binary_type.c_str();
     if (fused_activations.has_value()) {
@@ -122,11 +147,6 @@ std::map<string, string> get_defines(
 }
 
 }  // namespace eltwise_binary_op_utils
-
-namespace tt {
-
-namespace tt_metal {
-
 
 void EltwiseBinary::validate_with_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);

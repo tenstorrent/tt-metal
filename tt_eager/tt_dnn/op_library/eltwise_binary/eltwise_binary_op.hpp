@@ -39,6 +39,15 @@ enum class BinaryOpType {
     DIV_FAST
 };
 
+namespace eltwise_binary_op_utils {
+
+std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<DataType> out_dtype = std::nullopt,
+                                    const std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt);
+bool is_logical(BinaryOpType op_type);
+
+}  // namespace eltwise_binary_op_utils
+
+
 enum class BinaryOpParallelizationStrategy { MULTI_CORE };
 
 operation::ProgramWithCallbacks eltwise_binary_multi_core(
@@ -135,7 +144,7 @@ struct make_eltwise_binary {
                     "Input shapes must be the same!");
 
                 DataType dtype = output_dtype.value_or(in_a.get_dtype());
-                if(binary_op_type == BinaryOpType::EQ) {
+                if(eltwise_binary_op_utils::is_logical(binary_op_type)) {
                     dtype = DataType::UINT32;
                 }
                 auto output_tensors = operation::run_with_autoformat(
@@ -238,11 +247,3 @@ inline Tensor add(
 }  // namespace operations
 
 }  // namespace tt
-
-namespace eltwise_binary_op_utils {
-using namespace tt::tt_metal;
-
-std::map<string, string> get_defines(
-    BinaryOpType op_typee, const std::optional<std::vector<UnaryWithParam>> fused_activations);
-
-}  // namespace eltwise_binary_op_utils
