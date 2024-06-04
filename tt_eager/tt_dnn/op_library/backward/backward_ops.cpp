@@ -16,6 +16,7 @@
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_numpy/functions.hpp"
+#include "tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_dnn/op_library/copy/copy_op.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -2875,48 +2876,87 @@ std::vector<Tensor> multigammaln_bw(const Tensor& grad, const Tensor& input, con
     return operation::decorate_as_composite(__func__, _multigammaln_bw)(grad, input, output_mem_config);
 }
 
-// Repeat Backward
-std::vector<Tensor> _repeat_bw(
-    const Tensor& grad, const Tensor& input, const Shape& shape, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
+
+
+// Repeat Backward with queue_id
+std::vector<std::optional<Tensor>> _repeat_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const Shape& shape, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
     auto shape_wh = input.get_legacy_shape();
-    TT_FATAL(shape_wh[0] == 1 && "input shape[0] should be 1");
+    TT_FATAL( shape_wh[0] == 1 && "input shape[0] should be 1");
+    std::vector<std::optional<Tensor>> result;
     // input.get_legacy_shape()[0]
     // If repeat shape has 0's, it returns zeros of given input
-    if (shape[0] == 0 || shape[1] == 0 || shape[2] == 0 || shape[3] == 0) {
-        Tensor zero_tensor = zeros_like(input, output_mem_config);
-        grad_tensor.emplace_back(zero_tensor);
-        return grad_tensor;
-    } else if (shape[0] > 1) {
-        std::vector<int64_t> dim = {0};
-        TT_FATAL(shape[1] == 1 && shape[2] == 1 && shape[3] == 1 && "repeat[1], [2], [3] should be 1");
-        Shape required = {1, shape_wh[1], shape_wh[2], shape_wh[3]};
-        Tensor result = tt::operations::primary::moreh_sum(
-            grad,
-            dim,
-            true,
-            zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_mem_config),
-            output_mem_config);
-        grad_tensor.emplace_back(result);
-        return grad_tensor;
-    } else if (shape[1] > 1) {
-        std::vector<int64_t> dim = {1};
-        TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1 && "repeat[0], [2], [3] should be 1");
-        Shape required = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
-        Tensor result = tt::operations::primary::moreh_sum(
-            grad,
-            dim,
-            true,
-            zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_mem_config),
-            output_mem_config);
-        grad_tensor.emplace_back(result);
-        return grad_tensor;
+    if(are_required_outputs.at(0))
+    {
+        if (shape[0] == 0 || shape[1] == 0 || shape[2] == 0 || shape[3] == 0) {
+            if(input_grad.has_value())
+            {
+                assign(queue_id, zeros_like(queue_id, input, output_mem_config), input_grad.value());
+            }
+            else
+            {
+                input_grad = zeros_like(queue_id, input, output_mem_config);
+            }
+            result.emplace_back(input_grad.value());
+        }
+        else if (shape[0] > 1){
+            std::vector<int64_t> dim = {0};
+            TT_FATAL( shape[1] == 1 && shape[2] == 1 && shape[3] == 1 &&  "repeat[1], [2], [3] should be 1");
+            Shape required = {1, shape_wh[1], shape_wh[2], shape_wh[3]};
+            if(input_grad.has_value())
+            {
+                assign(queue_id, tt::operations::primary::moreh_sum(grad, dim, true, zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_mem_config), output_mem_config), input_grad.value());
+            }
+            else
+            {
+                input_grad = tt::operations::primary::moreh_sum(grad, dim, true, zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_mem_config), output_mem_config);
+            }
+            result.emplace_back(input_grad.value());
+        }
+        else if (shape[1] > 1)
+        {
+            std::vector<int64_t> dim = {1};
+            TT_FATAL( shape[0] == 1 && shape[2] == 1 && shape[3] == 1 &&  "repeat[0], [2], [3] should be 1");
+            Shape required = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
+            if(input_grad.has_value())
+            {
+                assign(queue_id, tt::operations::primary::moreh_sum(grad, dim, true, zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_mem_config), output_mem_config), input_grad.value());
+            }
+            else
+            {
+                input_grad = tt::operations::primary::moreh_sum(grad, dim, true, zeros(required, input.get_dtype(), input.get_layout(), input.device(), output_mem_config), output_mem_config);
+            }
+            result.emplace_back(input_grad.value());
+        }
     }
-    return grad_tensor;
+    else
+    {
+        result.emplace_back(std::nullopt);
+    }
+    return std::move(result);
 }
-std::vector<Tensor> repeat_bw(
-    const Tensor& grad, const Tensor& input, const Shape& shape, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _repeat_bw)(grad, input, shape, output_mem_config);
+
+std::vector<std::optional<Tensor>> repeat_bw(
+    const Tensor& grad,
+    const Tensor& input,
+    const Shape& shape,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad)
+{
+    uint8_t default_queue_id = 0;
+    return operation::decorate_as_composite(__func__, _repeat_bw)(default_queue_id, grad, input, shape, output_mem_config, are_required_outputs, input_grad);
+}
+
+std::vector<std::optional<Tensor>> repeat_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    const Shape& shape,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad)
+{
+    return operation::decorate_as_composite(__func__, _repeat_bw)(queue_id, grad, input, shape, output_mem_config, are_required_outputs, input_grad);
 }
 
 std::vector<Tensor> _floor_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {

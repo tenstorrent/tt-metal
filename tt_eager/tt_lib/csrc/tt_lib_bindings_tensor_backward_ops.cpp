@@ -611,21 +611,39 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-    m_tensor.def("repeat_bw", &tt::tt_metal::repeat_bw,
-            py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("shape"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-                    Returns a new tensor filled with repetition of input ``input`` tensor according to number of times specified in ``shape``. The rank of ``shape`` should be same as rank of tensor ``input_a``.
-                    The limitation in our implementation is N and C should be 1 and the repeat is of any number for such dim, other should be 1.
+    m_tensor.def("repeat_bw",
+            [](const Tensor& grad,
+                const Tensor& input,
+                const Shape& shape,
+                const MemoryConfig& output_mem_config,
+                const std::vector<bool>& are_required_outputs,
+                std::optional<Tensor> input_grad,
+                uint8_t queue_id) {
+                    return repeat_bw(queue_id, grad, input, shape, output_mem_config, are_required_outputs, input_grad);
+                },
+            py::arg("grad").noconvert(),
+            py::arg("input").noconvert(),
+            py::arg("shape"),
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("are_required_outputs").noconvert() = std::vector<bool>{true},
+            py::arg("input_grad").noconvert() = std::nullopt,
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
+            Returns a new tensor filled with repetition of input ``input`` tensor according to number of times specified in ``shape``. The rank of ``shape`` should be same as rank of tensor ``input_a``.
 
-                    Output tensor will have BFLOAT16 data type.
+            Output tensors will have BFLOAT16 data type.
 
-                    .. csv-table::
-                        :header: "Argument", "Description", "Data type", "Valid range", "Required"
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-                        "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                        "input", "Input tensor for which repetition is computed", "Tensor", "Tensor of shape [1, Z, Y, X]", "Yes"
-                        "shape", "Shape value", "Shape", "The number of times to repeat this tensor along each dimension", "Yes"
-                        "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                )doc");
+                "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input", "Input tensor for which repetition is computed", "Tensor", "Tensor of shape [1, Z, Y, X]", "Yes"
+                "shape", "Shape value", "Shape", "The number of times to repeat this tensor along each dimension", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "are_required_outputs", "Are Required Outputs", " Bool", "Default value is True", "No"
+                "input_grad", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+                "queue_id", "queue_id", "uint8_t", "Default is 0", "No"
+        )doc");
 
     m_tensor.def("unary_sub_bw", &tt::tt_metal::unary_sub_bw,
             py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
