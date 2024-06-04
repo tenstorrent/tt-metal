@@ -663,9 +663,10 @@ static void process_wait() {
 
     uint32_t barrier = cmd->wait.barrier;
     uint32_t notify_prefetch = cmd->wait.notify_prefetch;
+    uint32_t clear_count = cmd->wait.clear_count;
+    uint32_t wait = cmd->wait.wait;
     uint32_t addr = cmd->wait.addr;
     uint32_t count = cmd->wait.count;
-    uint32_t clear_count = cmd->wait.clear_count;
 
     if (barrier) {
         noc_async_write_barrier();
@@ -677,10 +678,12 @@ static void process_wait() {
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
 #endif
-    while (!wrap_ge(*sem_addr, count)) {
+    if (wait) {
+        while (!wrap_ge(*sem_addr, count)) {
 #if defined(COMPILE_FOR_IDLE_ERISC)
-        RISC_POST_HEARTBEAT(heartbeat);
+            RISC_POST_HEARTBEAT(heartbeat);
 #endif
+        }
     }
     DEBUG_STATUS("PWD");
 
