@@ -159,6 +159,8 @@ def test_multi_device_replicate(device_mesh, shape, layout, memory_config):
 
 def test_ttnn_multi_device_all_gather(pcie_device_mesh):
     """Multidevice API test for ttnn.all_gather CCL operation"""
+    if pcie_device_mesh.get_num_devices() <= 1:
+        pytest.skip("Requires multiple devices to run")
     full_tensor = torch.rand((1, 1, 32, 32 * pcie_device_mesh.get_num_devices()), dtype=torch.bfloat16)
 
     ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(pcie_device_mesh, dim=3))

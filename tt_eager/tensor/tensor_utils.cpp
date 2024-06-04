@@ -363,16 +363,20 @@ const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volu
   bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
 Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id) {
-    const auto& tensor_storage = std::get<MultiDeviceStorage>(multi_device_tensor.get_storage());
-    if (tensor_storage.has_buffer_for_device_id(device_id)) {
-        return Tensor{
-            DeviceStorage{tensor_storage.get_buffer_for_device_id(device_id)},
-            multi_device_tensor.get_legacy_shape(),
-            multi_device_tensor.get_dtype(),
-            multi_device_tensor.get_layout()
-        };
+    if (std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(multi_device_tensor.get_storage())) {
+        const auto& tensor_storage = std::get<MultiDeviceStorage>(multi_device_tensor.get_storage());
+        if (tensor_storage.has_buffer_for_device_id(device_id)) {
+            return Tensor{
+                DeviceStorage{tensor_storage.get_buffer_for_device_id(device_id)},
+                multi_device_tensor.get_legacy_shape(),
+                multi_device_tensor.get_dtype(),
+                multi_device_tensor.get_layout()};
+        }
+    } else if (std::holds_alternative<tt::tt_metal::DeviceStorage>(multi_device_tensor.get_storage())) {
+        return multi_device_tensor;
     }
-    TT_THROW("Device not found in multi-device tensor");
+
+    TT_THROW("User is trying to access a device tensor that is not on device.");
 }
 
 Tensor get_device_tensor(const Tensor& multi_device_tensor, const Device* device) {
