@@ -121,7 +121,6 @@ std::vector<Tensor> MorehAdam::create_output_tensors(
 
 tt::stl::reflection::Attributes MorehAdam::attributes() const {
     return {
-        {"inplace", this->inplace},
         {"output_mem_config", this->output_mem_config},
     };
 }
@@ -218,7 +217,6 @@ std::vector<std::optional<Tensor>> moreh_adam(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(
                 MorehAdam{
-                    .inplace = true,
                     .lr = lr,
                     .beta1 = beta1,
                     .beta2 = beta2,

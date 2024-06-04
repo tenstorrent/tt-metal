@@ -18,7 +18,6 @@ namespace primary {
 using namespace tt_metal;
 
 struct MorehAdam {
-    bool inplace;
     float lr;
     float beta1;
     float beta2;
@@ -46,7 +45,6 @@ struct MorehAdam {
     tt::stl::reflection::Attributes attributes() const;
 
     static constexpr auto attribute_names = std::make_tuple(
-        "inplace",
         "lr",
         "beta1",
         "beta2",
@@ -58,7 +56,6 @@ struct MorehAdam {
         "compute_kernel_config");
     const auto attribute_values() const {
         return std::make_tuple(
-            std::ref(this->inplace),
             std::ref(this->lr),
             std::ref(this->beta1),
             std::ref(this->beta2),
