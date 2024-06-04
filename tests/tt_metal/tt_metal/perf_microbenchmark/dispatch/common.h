@@ -610,8 +610,8 @@ inline void generate_random_packed_payload(vector<uint32_t>& cmds,
             }
         }
 
-        cmds.resize(padded_size(cmds.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
-        data.pad(core, bank_id, 16); // L1_ALIGNMENT16
+        cmds.resize(padded_size(cmds.size(), L1_ALIGNMENT/sizeof(uint32_t))); // XXXXX L1_ALIGNMENT16/sizeof(uint)
+        data.pad(core, bank_id, L1_ALIGNMENT); // L1_ALIGNMENT16
         first_core = false;
     }
 }
@@ -729,7 +729,7 @@ inline void add_dispatcher_packed_cmd(Device *device,
         CoreCoord phys_worker_core = device->worker_core_from_logical_core(core);
         cmds.push_back(NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y));
     }
-    cmds.resize(padded_size(cmds.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
+    cmds.resize(padded_size(cmds.size(), L1_ALIGNMENT/sizeof(uint32_t))); // XXXXX L1_ALIGNMENT16/sizeof(uint)
 
     generate_random_packed_payload(cmds, worker_cores, device_data, size_words, repeat);
 
@@ -907,7 +907,7 @@ inline void gen_rnd_dispatcher_packed_write_cmd(Device *device,
     bool repeat = std::rand() % 2;
     if (repeat) {
         // TODO fix this if/when we add mcast
-        uint32_t sub_cmds_size = padded_size(gets_data.size() * sizeof(uint32_t), 16); // L1_ALIGNMENT16
+        uint32_t sub_cmds_size = padded_size(gets_data.size() * sizeof(uint32_t), L1_ALIGNMENT); // L1_ALIGNMENT16
         if (xfer_size_bytes + sizeof (CQDispatchCmd) + sub_cmds_size > dispatch_buffer_page_size_g) {
             static bool warned = false;
             if (!warned) {

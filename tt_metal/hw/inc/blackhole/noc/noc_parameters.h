@@ -26,9 +26,11 @@
 #define NOC_XY_COORD(x, y) ((((uint32_t)(y)) << NOC_ADDR_NODE_ID_BITS) | ((uint32_t)(x)))
 
 // Alignment restrictions
-// Should these be split for reads vs writes
-#define NOC_L1_ALIGNMENT_BYTES 16
-#define NOC_PCIE_ALIGNMENT_BYTES 32
-#define NOC_DRAM_ALIGNMENT_BYTES 64
+#define NOC_L1_READ_ALIGNMENT_BYTES       16
+#define NOC_L1_WRITE_ALIGNMENT_BYTES      16
+#define NOC_PCIE_READ_ALIGNMENT_BYTES     32
+#define NOC_PCIE_WRITE_ALIGNMENT_BYTES    32
+#define NOC_DRAM_READ_ALIGNMENT_BYTES     64
+#define NOC_DRAM_WRITE_ALIGNMENT_BYTES    16
 
 #endif

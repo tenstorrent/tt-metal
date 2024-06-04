@@ -129,19 +129,17 @@ uint32_t debug_sanitize_noc_addr(
 
     // Check noc addr, we save the alignment requirement from the noc src/dst because the L1 address
     // needs to match alignment.
-    uint32_t alignment_mask = NOC_L1_ALIGNMENT_BYTES - 1;  // Default alignment, only override in ceratin cases.
+    uint32_t alignment_mask = (dir == DEBUG_SANITIZE_NOC_READ ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES) - 1;  // Default alignment, only override in ceratin cases.
     uint32_t invalid = multicast ? DebugSanitizeNocInvalidMulticast : DebugSanitizeNocInvalidUnicast;
     if (NOC_PCIE_XY_P(x, y)) {
         // Additional alignment restriction only applies to reads
-        if (dir == DEBUG_SANITIZE_NOC_READ)
-            alignment_mask = NOC_PCIE_ALIGNMENT_BYTES - 1;
+        alignment_mask = (dir == DEBUG_SANITIZE_NOC_READ ? NOC_PCIE_READ_ALIGNMENT_BYTES : NOC_PCIE_WRITE_ALIGNMENT_BYTES) - 1;
         if (!DEBUG_VALID_PCIE_ADDR(noc_local_addr, noc_len)) {
             debug_sanitize_post_noc_addr_and_hang(noc_addr, l1_addr, noc_len, multicast, invalid);
         }
     } else if (NOC_DRAM_XY_P(x, y)) {
         // Additional alignment restriction only applies to reads
-        if (dir == DEBUG_SANITIZE_NOC_READ)
-            alignment_mask = NOC_DRAM_ALIGNMENT_BYTES - 1;
+        alignment_mask = (dir == DEBUG_SANITIZE_NOC_READ ? NOC_DRAM_READ_ALIGNMENT_BYTES : NOC_DRAM_WRITE_ALIGNMENT_BYTES) - 1;
         if (!DEBUG_VALID_DRAM_ADDR(noc_local_addr, noc_len)) {
             debug_sanitize_post_noc_addr_and_hang(noc_addr, l1_addr, noc_len, multicast, invalid);
         }

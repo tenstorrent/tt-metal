@@ -855,13 +855,13 @@ void EnqueueProgramCommand::assemble_device_commands() {
                         dst_noc_info.second,  // num_mcast_dests
                         noc_encoding,         // noc_xy_addr
                         kg_transfer_info.dst_base_addrs[kernel_idx],
-                        align(kg_transfer_info.lengths[kernel_idx], NOC_DRAM_ALIGNMENT_BYTES));
+                        align(kg_transfer_info.lengths[kernel_idx], DRAM_ALIGNMENT));
                     // Difference between prefetch total relayed pages and dispatch write linear
                     uint32_t relayed_bytes =
                         align(kg_transfer_info.lengths[kernel_idx], HostMemDeviceCommand::PROGRAM_PAGE_SIZE);
-                    // length_adjust needs to be aligned to NOC_DRAM_ALIGNMENT
+                    // length_adjust needs to be aligned to DRAM_ALIGNMENT
                     uint16_t length_adjust =
-                        uint16_t(relayed_bytes - align(kg_transfer_info.lengths[kernel_idx], NOC_DRAM_ALIGNMENT_BYTES));
+                        uint16_t(relayed_bytes - align(kg_transfer_info.lengths[kernel_idx], DRAM_ALIGNMENT));
 
                     uint32_t base_address, page_offset;
                     if (kg_transfer_info.page_offsets[kernel_idx] > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
