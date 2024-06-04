@@ -16,6 +16,9 @@ from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, L
 @pytest.mark.parametrize("use_all_gather", [True, False])
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_multi_device_single_trace(pcie_device_mesh, shape, use_all_gather, enable_async):
+    if pcie_device_mesh.get_num_devices() <= 1:
+        pytest.skip("This test requires multiple devices")
+
     # Trace requires program cache to be enabled
     for device_id in pcie_device_mesh.get_device_ids():
         pcie_device_mesh.get_device(device_id).enable_async(enable_async)
@@ -102,6 +105,9 @@ def test_multi_device_multi_trace(pcie_device_mesh, shape, use_all_gather, enabl
         # Currently all-gather tests pass only if blocking == False
         if shape == (1, 1, 32, 32) or shape == (1, 3, 512, 512) or shape == (1, 3, 32, 32):
             pytest.skip("This configuration is not working with all-gather")
+
+    if pcie_device_mesh.get_num_devices() <= 1:
+        pytest.skip("This test requires multiple devices")
 
     # Trace requires program cache to be enabled
     for device_id in pcie_device_mesh.get_device_ids():

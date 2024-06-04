@@ -604,6 +604,8 @@ Tensor Tensor::to(Layout target_layout, DeviceMesh* device_mesh) const {
             auto& worker = workers[worker_index];
             worker->push_work([*this, tensor_modified_layout, target_layout, worker, worker_index]() mutable {
                 TT_ASSERT(
+                    this->storage_type() == StorageType::OWNED ||
+                    this->storage_type() == StorageType::BORROWED||
                     this->storage_type() == StorageType::MULTI_DEVICE_HOST &&
                     "to(layout) must be called on host tensors with MULTI_DEVICE_HOST_STORAGE when multiple workers "
                     "are specified");
