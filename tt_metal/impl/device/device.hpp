@@ -77,7 +77,8 @@ class Device {
         const uint8_t num_hw_cqs,
         std::size_t l1_small_size,
         const std::vector<uint32_t> &l1_bank_remap = {},
-        bool minimal = false);
+        bool minimal = false,
+        uint32_t worker_core = 0);
 
     ~Device();
 
@@ -277,6 +278,7 @@ class Device {
     // Work Executor for this device - can asynchronously process host side work for
     // all tasks scheduled on this device
     WorkExecutor work_executor;
+    uint32_t worker_thread_core;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_;
 
