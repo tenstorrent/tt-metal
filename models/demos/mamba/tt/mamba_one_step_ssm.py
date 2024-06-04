@@ -9,14 +9,11 @@ import tt_lib as ttl
 from typing import Callable
 
 from models.demos.mamba.reference.args import ModelArgs
-from models.demos.mamba.tt.transforms import MambaSsmBlockTransformer
 
 
 class TtMambaSSM(torch.nn.Module):
-    def __init__(self, args: ModelArgs, device, configs, load_fn: Callable, transformer: MambaSsmBlockTransformer):
+    def __init__(self, args: ModelArgs, device, configs, load_fn: Callable):
         super().__init__()
-
-        self.transformer = transformer
 
         self.device = device
         self.args = args

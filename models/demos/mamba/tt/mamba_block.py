@@ -10,11 +10,10 @@ from typing import Callable
 
 from models.demos.mamba.reference.args import ModelArgs
 from models.demos.mamba.tt.mamba_one_step_ssm import TtMambaSSM
-from models.demos.mamba.tt.transforms import MambaSsmBlockTransformer
 
 
 class TtMambaBlock(torch.nn.Module):
-    def __init__(self, args: ModelArgs, device, configs, load_fn: Callable, transformer: MambaSsmBlockTransformer):
+    def __init__(self, args: ModelArgs, device, configs, load_fn: Callable):
         super().__init__()
 
         self.device = device
@@ -76,7 +75,7 @@ class TtMambaBlock(torch.nn.Module):
                 )
             )
 
-        self.tt_ssm = TtMambaSSM(self.args, self.device, configs, load_fn, transformer)
+        self.tt_ssm = TtMambaSSM(self.args, self.device, configs, load_fn)
 
         self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.HiFi3,
