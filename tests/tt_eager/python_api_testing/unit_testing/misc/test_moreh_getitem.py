@@ -20,7 +20,6 @@ def to_output_4d_shape(shape, index_dims, index_size):
     return output_4d_shape
 
 
-@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/9076")
 @pytest.mark.parametrize(
     "shape_index_dim",
     (
@@ -80,7 +79,6 @@ def test_getitem_RAW_MJOR_one_index(shape_index_dim, dtype, index_size, device):
     assert passing
 
 
-@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/9076")
 @pytest.mark.parametrize(
     "shape_index_dims",
     (
@@ -139,7 +137,6 @@ def test_getitem_RAW_MAJOR_two_indices(shape_index_dims, dtype, index_size, devi
     assert passing
 
 
-@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/9076")
 @pytest.mark.parametrize(
     "shape_index_dims",
     (((10, 15, 7, 80), (0, 1, 2)),),
@@ -193,7 +190,6 @@ def test_getitem_RAW_MAJOR_three_indices(shape_index_dims, dtype, index_size, de
     assert passing
 
 
-@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/9076")
 @pytest.mark.parametrize(
     "shape_index_dim",
     (
@@ -286,7 +282,6 @@ def test_getitem_tilized_one_index(shape_index_dim, dtype, index_size, row_major
     assert passing
 
 
-@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/9076")
 @pytest.mark.parametrize(
     "shape_index_dims",
     (
@@ -372,7 +367,6 @@ def test_getitem_tilized_two_indices(shape_index_dims, dtype, index_size, row_ma
     assert passing
 
 
-@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/9076")
 @pytest.mark.parametrize(
     "shape_index_dims",
     (
@@ -455,7 +449,6 @@ def test_getitem_tilized_three_indices(shape_index_dims, dtype, index_size, row_
     assert passing
 
 
-@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/9076")
 @pytest.mark.parametrize(
     "shape_index_dims",
     (((10, 15, 7, 80), (0, 1, 2, 3)),),
