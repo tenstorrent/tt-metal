@@ -194,10 +194,10 @@ def run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device):
 
 @pytest.mark.parametrize(
     "shape",
-    (
-        (1, 1, 32, 32),  # single
-        (12, 6, 64, 64),  # multi tile
-    ),
+    [
+        [1, 1, 32, 32],  # single
+        [12, 6, 64, 64],  # multi tile
+    ],
 )
 @pytest.mark.parametrize("lr", [0.0, 1e-2])
 @pytest.mark.parametrize("betas", ((0.9, 0.999), (0.5, 0.555)))
@@ -213,7 +213,7 @@ def test_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)
 
 @pytest.mark.parametrize(
     "shape",
-    ((1, 1, 32, 32),),  # single
+    [[1, 1, 32, 32]],  # single
 )
 @pytest.mark.parametrize("lr", [1e-2])
 @pytest.mark.parametrize("betas", [[0.9, 0.999], [0.5, 0.555]])
