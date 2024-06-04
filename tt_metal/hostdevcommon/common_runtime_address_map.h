@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "common_values.hpp"
 #include "dev_mem_map.h"
+#include "noc/noc_parameters.h"
 
 /*
 * This file contains addresses that are visible to both host and device compiled code.
@@ -86,7 +87,7 @@ constexpr static std::uint32_t ERISC_L1_UNRESERVED_BASE = L1_UNRESERVED_BASE; //
 // Reserved DRAM addresses
 // Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been committed
 constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
-constexpr static std::uint32_t DRAM_ALIGNMENT = 32;
+constexpr static std::uint32_t DRAM_ALIGNMENT = std::max(NOC_DRAM_READ_ALIGNMENT_BYTES, NOC_DRAM_WRITE_ALIGNMENT_BYTES);
 constexpr static std::uint32_t DRAM_BARRIER_SIZE = ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 constexpr static std::uint32_t DRAM_UNRESERVED_BASE = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE; // Start of unreserved space
 
