@@ -476,7 +476,7 @@ uint64_t get_l1_noc_addr(const uint32_t id, const uint32_t page_size, const uint
 }
 
 uint64_t get_system_memory_noc_addr(const uint32_t id, const uint32_t page_size, const uint32_t base_addr, const uint32_t offset = 0) {
-    constexpr static uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32;
+    uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_PCIE_ENCODING(NOC_X(PCIE_NOC_X), NOC_Y(PCIE_NOC_Y), noc_index)) << 32;
     uint32_t addr = base_addr + page_size * id + offset;
     uint64_t noc_addr = pcie_core_noc_encoding | addr;
     return noc_addr;
