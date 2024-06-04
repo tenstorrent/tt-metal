@@ -211,7 +211,9 @@ Tensor moreh_getitem(
                 optional_output_tensors);
         },
         new_input_tensors,
-        output_tensors);
+        output_tensors,
+        {},
+        {output_tensor});
 
     return output_tensors.at(0);
 }
