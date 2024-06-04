@@ -56,10 +56,10 @@ def create_tt_tensor(tensor, device):
 
 @pytest.mark.parametrize(
     "shape",
-    (
-        (32, 32),  # single
-        (12, 6, 64, 64),  # multiple tiles
-    ),
+    [
+        [32, 32],  # single
+        [12, 6, 64, 64],  # multiple tiles
+    ],
 )
 @pytest.mark.parametrize("lr", [3.0])
 @pytest.mark.parametrize("momentum", [0.0, 7.7])
@@ -195,7 +195,7 @@ def test_moreh_sgd(
 
 @pytest.mark.parametrize(
     "shape",
-    ((32, 32),),  # single
+    [[32, 32]],  # single
 )
 @pytest.mark.parametrize("lr", [3.0])
 @pytest.mark.parametrize("momentum", [7.7])
