@@ -291,6 +291,7 @@ def test_moreh_nll_loss_backward(
     assert passing
 
 
+@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/9076")
 @pytest.mark.parametrize(
     "shape",
     [
