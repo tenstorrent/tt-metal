@@ -34,6 +34,10 @@ CHECK_COMPILERS()
 find_package(Boost REQUIRED COMPONENTS thread filesystem system regex)
 find_package(GTest REQUIRED)
 find_package (Python3 COMPONENTS Interpreter Development)
+find_library(NUMA_LIBRARY NAMES numa)
+if (NOT NUMA_LIBRARY)
+    message(FATAL_ERROR "NUMA library not found")
+endif()
 
 ############################################################################################################################
 # Setting build type flags
@@ -84,7 +88,7 @@ set(CMAKE_INSTALL_DATAROOTDIR "${CMAKE_BINARY_DIR}/tmp/share")
 ############################################################################################################################
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(metal_common_libs INTERFACE
-    dl z pthread atomic stdc++ # system libraries
+    dl z pthread atomic stdc++ numa # system libraries
     Boost::thread Boost::filesystem Boost::system Boost::regex hwloc    # hwloc has no cmake support, find_package won't find it
 )
 
