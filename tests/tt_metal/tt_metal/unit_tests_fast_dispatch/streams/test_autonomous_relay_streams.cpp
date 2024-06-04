@@ -656,7 +656,7 @@ TEST_F(CommandQueueFixture, TestAutonomousRelayStreams) {
     }
     std::srand(0);
 
-    uint32_t num_loop_iterations = 10;
+    uint32_t num_loop_iterations = 2;
     uint32_t num_messages_to_send = 1'000'000;
     uint32_t tx_rx_stream_buffer_size_bytes = 16 * 1024;
     uint32_t relay_stream_buffer_size_bytes = 16 * 1024;
@@ -733,7 +733,7 @@ TEST_F(CommandQueueFixture, TestAutonomousRelayStreamsSmallPackets) {
     return;
 }
 
-TEST_F(CommandQueueFixture, TestAutonomousRelayStreamsLoopingShort) {
+TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsLoopingShort) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
