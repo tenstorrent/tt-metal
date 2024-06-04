@@ -71,8 +71,8 @@ def test_lgamma(device, h, w):
     run_math_unary_test(device, h, w, ttnn.lgamma, torch.lgamma, pcc=0.999)
 
 
-@pytest.mark.parametrize("h", [5])
-@pytest.mark.parametrize("w", [5])
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [32])
 def test_eq(device, h, w):
     torch.manual_seed(0)
 

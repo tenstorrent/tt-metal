@@ -50,6 +50,9 @@ std::map<string, string> get_defines(
             break;
         case BinaryOpType::EQ:
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst));
+            defines.insert({"SFPU_OP_CHAIN_0", "typecast_tile_init(); typecast_tile(i);"});
+            defines.insert({"SFPU_OP_TYPECAST_INCLUDE", "1"});
+
             break;
         case BinaryOpType::NE:
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst));

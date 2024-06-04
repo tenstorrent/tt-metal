@@ -134,31 +134,20 @@ struct make_eltwise_binary {
                     (in_a.get_legacy_shape() == in_b.get_legacy_shape()) or
                     (in_a.get_legacy_shape().without_padding() == in_b.get_legacy_shape().without_padding()),
                     "Input shapes must be the same!");
-                // DataType dtype = output_dtype.value_or(in_a.get_dtype());
-                // if(binary_op_type == BinaryOpType::EQ) {
-                //     dtype = DataType::UINT32;
-                // }
 
+                DataType dtype = output_dtype.value_or(in_a.get_dtype());
+                if(binary_op_type == BinaryOpType::EQ) {
+                    dtype = DataType::UINT32;
+                }
                 auto output_tensors = operation::run_with_autoformat(
                         EltwiseBinary{
                             binary_op_type,
                             fused_activations,
                             output_mem_config,
-                            output_dtype.value_or(in_a.get_dtype()),
+                            dtype,
                             false /*in place*/},
                         {in_a, in_b});
-
-                if(binary_op_type == BinaryOpType::EQ) {
-                    const auto new_output_tensor = operation::run(Copy{output_mem_config, DataType::UINT32}, {output_tensors});
-                    tt::log_warning("Input A {}", in_a.write_to_string());
-                    tt::log_warning("Input B {}", in_b.write_to_string());
-                    tt::log_warning("Output BLOAT16 {}", output_tensors.at(0).write_to_string());
-                    tt::log_warning("Output UINT16 {}", new_output_tensor.at(0).write_to_string());
-                    return new_output_tensor;
-                }
-                else {
-                    return output_tensors;
-                }
+                return output_tensors;
             },
         {input_tensor_a, input_tensor_b}, output_tensors, {}, {output_tensor});
         return output_tensors.at(0);
