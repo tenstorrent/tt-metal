@@ -47,7 +47,7 @@ class AllGatherConfig {
 
         erisc_handshake_address(round_up(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, 16)),
         topology(topology),
-        enable_bidirectional(/*false*/topology == all_gather_op::Topology::Ring && dim != 0 && dim != 1),
+        enable_bidirectional(topology == all_gather_op::Topology::Ring),
 
         input_is_dram(input_tensor.buffer()->buffer_type() == BufferType::DRAM),
         output_is_dram(output_tensor.buffer()->buffer_type() == BufferType::DRAM),
