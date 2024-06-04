@@ -37,7 +37,7 @@ struct MorehSumBackward {
     }
 };
 
-operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_grad, const Tensor &input_grad, const DeviceComputeKernelConfig &compute_kernel_config);
+operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keepdim, const DeviceComputeKernelConfig &compute_kernel_config);
 
 Tensor moreh_sum_backward(
     const Tensor &output_grad,
