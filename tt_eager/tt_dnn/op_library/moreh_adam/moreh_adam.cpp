@@ -68,13 +68,13 @@ operation::ProgramWithCallbacks moreh_adam_(
         all_cores,
         data_format,
         {
-            {CB::c_in0, 1},  // param_in
-            {CB::c_in1, 1},  // grad
-            {CB::c_in2, 1},  // exp_avg_in
-            {CB::c_in3, 1},  // exp_avg_sq_in
-            {CB::c_in4, 1},  // max_exp_avg_sq_in (optional)
-            {CB::c_in5, 5},  // lr, beta1, beta2, eps, weight_decay
-            {CB::c_in6, 1},  // 1.0f
+            {CB::c_in0, 1},                      // param_in
+            {CB::c_in1, 1},                      // grad
+            {CB::c_in2, 1},                      // exp_avg_in
+            {CB::c_in3, 1},                      // exp_avg_sq_in
+            {CB::c_in4, 1},                      // max_exp_avg_sq_in (optional)
+            {CB::c_in5, 5, intermed_cb_format},  // lr, beta1, beta2, eps, weight_decay
+            {CB::c_in6, 1, intermed_cb_format},  // 1.0f
 
             {CB::c_intermed0, 1, intermed_cb_format},  // tmp_grad
             {CB::c_intermed1, 1, intermed_cb_format},  // tmp_exp_avg
@@ -118,6 +118,9 @@ operation::ProgramWithCallbacks moreh_adam_(
     std::map<std::string, std::string> data_movement_defines{};
     if (amsgrad) {
         data_movement_defines["AMSGRAD"] = "1";
+    }
+    if (fp32_dest_acc_en) {
+        data_movement_defines["FP32_DEST_ACC_EN"] = "1";
     }
     const auto reader_kernel_id =
         CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, data_movement_defines);

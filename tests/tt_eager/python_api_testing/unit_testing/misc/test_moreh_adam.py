@@ -15,9 +15,9 @@ fp32_dest_acc_en = [
     False,  # for grayskull
 ]
 fp32_dest_acc_en_ids = ["fp32_dest_acc_en=False"]
-# if is_wormhole_b0:
-#     fp32_dest_acc_en.append(True)
-#     fp32_dest_acc_en_ids.append("fp32_dest_acc_en=True")
+if is_wormhole_b0:
+    fp32_dest_acc_en.append(True)
+    fp32_dest_acc_en_ids.append("fp32_dest_acc_en=True")
 
 
 def create_tt_tensor(tensor, device):
@@ -55,15 +55,10 @@ def get_compute_kernel_options(fp32_dest_acc_en):
 
 @pytest.mark.parametrize(
     "shape",
-    [
-        [32, 32],
-        [3, 32, 32],
-        [12, 6, 64, 64],
-        [3, 4, 6, 64, 64],
-    ],
+    [[32, 32], [2, 2, 2, 2, 2, 2, 64, 64]],
 )
 @pytest.mark.parametrize("lr", [0.0, 1e-1])
-@pytest.mark.parametrize("betas", [[0.9, 0.999], [0.5, 0.555]])
+@pytest.mark.parametrize("betas", ((0.9, 0.999), (0.5, 0.555)))
 @pytest.mark.parametrize("eps", [1e-06, 1e-08])
 @pytest.mark.parametrize("weight_decay", [0.0, 0.3])
 @pytest.mark.parametrize("amsgrad", [True, False])
