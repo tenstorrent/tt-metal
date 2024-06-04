@@ -149,7 +149,7 @@ struct make_eltwise_binary {
                             output_mem_config,
                             output_dtype.value_or(in_a.get_dtype()),
                             false /*in place*/},
-                        {in_a, in_b});
+                        {in_a, in_b}, {}, {output_tensor});
                 return output_tensors;
             },
         {input_tensor_a, input_tensor_b}, output_tensors, {}, {output_tensor});

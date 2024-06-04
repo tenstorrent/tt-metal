@@ -104,7 +104,6 @@ struct ExecuteBinary {
         std::optional<Tensor> optional_output_tensor = std::nullopt,
         std::optional<std::vector<std::string>> activations = std::nullopt) {
 
-        // We should instead use
         if(output_dtype.has_value() && optional_output_tensor.has_value()){
             TT_FATAL(output_dtype.value() != optional_output_tensor.value().get_dtype(), "If both providedOutput dtype and output tensor dtype mismatch");
         }
