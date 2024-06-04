@@ -94,7 +94,7 @@ else
 fi
 
 echo "Building tt-metal"
-cmake_args="-B build -G Ninja -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
+cmake_args="-B build -G Ninja -DCMAKE_CXX_COMPILER=clang++-17 -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
 
 if [ "$enable_ccache" = "ON" ]; then
     cmake_args="$cmake_args -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
