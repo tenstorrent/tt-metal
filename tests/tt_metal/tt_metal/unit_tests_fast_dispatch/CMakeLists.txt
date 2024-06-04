@@ -10,6 +10,7 @@ set(UNIT_TESTS_FD_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/multichip/test_eth_EnqueueProgram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/multichip/test_eth_ring_gather_EnqueueProgram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pipelining/basic_pipeline.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/streams/test_autonomous_relay_streams.cpp
 )
 
 add_executable(unit_tests_fast_dispatch ${UNIT_TESTS_FD_SRC} $<TARGET_OBJECTS:unit_tests_common_o>)
