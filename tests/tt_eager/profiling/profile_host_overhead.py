@@ -11,6 +11,7 @@ import statistics
 from loguru import logger
 from models.utility_functions import torch2tt_tensor
 from tests.tt_eager.profiling import ops_for_profiling
+from tracy import signpost
 
 
 test_sweep_args = [
@@ -173,6 +174,7 @@ def measure_host_overhead_ternary(
 def run_measure_host_overhead(op, device, text_file, measuring_func):
     results_overhead = []
     results_op = []
+    op_count = 0
 
     for input_shape, dtype, dlayout, in_mem_config, out_mem_config in test_sweep_args:
         logger.info("")
@@ -197,6 +199,8 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
             shape_func=shape_func,
         )
 
+        signpost(header=f"start {op['name']}")
+
         for num_call_to_stack in all_num_call_to_stack:
             overhead_ms, op_ms = measuring_func(
                 input_shape,
@@ -211,17 +215,20 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
                 shape_func=shape_func,
             )
 
+            op_count += len(overhead_ms) * num_call_to_stack * 2
             results_overhead += overhead_ms
             results_op += op_ms
+
+        signpost(header=f"end {op['name']}")
 
     min_val = round(min(results_overhead), 2)
     mean_val = round(statistics.mean(results_overhead), 2)
 
-    min_val_op = round(min(results_op), 2)
+    # min_val_op = round(min(results_op), 2)
     mean_val_op = round(statistics.mean(results_op), 2)
 
     logger.info(f"Measure overhead of launching {op['name']} is {min_val:.2f}ms (mean {mean_val:.2f}ms)")
-    text_file.write(f"{op['name']}, {min_val}, {mean_val}\n")
+    text_file.write(f"{op['name']},{op_count},{min_val},{mean_val},{mean_val_op}\n")
 
 
 def test_host_overhead(device, user_input):
@@ -233,20 +240,39 @@ def test_host_overhead(device, user_input):
     python -m tracy -v -r -p -o host_overhead_profile -m "pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile"
     """
 
-    out_directory = user_input[0]
-    out_file_path = os.path.join(out_directory, "host_overhead_profiler_output.csv")
+    if "::" in user_input[0]:
+        splitted = user_input[0].split("::")
+        out_directory = splitted[0]
+        op_name = splitted[1]
+        out_file_path = os.path.join(out_directory, f"host_overhead_{op_name}.csv")
+    else:
+        out_directory = user_input[0]
+        out_file_path = os.path.join(out_directory, f"host_overhead_profiler_output.csv")
+        op_name = ""
 
     if not os.path.exists(out_directory):
         os.makedirs(out_directory)
 
     with open(out_file_path, "w") as text_file:
-        text_file.write(f"op, overhead min(ms), overhead mean(ms)\n")
+        text_file.write(f"op,count,overhead min(ms),overhead mean(ms),total mean(ms)\n")
 
         for op in ops_for_profiling.all_binary_ops:
+            if op_name != "":
+                if op["name"] != op_name:
+                    continue
+
             run_measure_host_overhead(op, device, text_file, measure_host_overhead_binary)
 
         for op in ops_for_profiling.all_unary_ops:
+            if op_name != "":
+                if op["name"] != op_name:
+                    continue
+
             run_measure_host_overhead(op, device, text_file, measure_host_overhead_unary)
 
         for op in ops_for_profiling.all_ternary_ops:
+            if op_name != "":
+                if op["name"] != op_name:
+                    continue
+
             run_measure_host_overhead(op, device, text_file, measure_host_overhead_ternary)
