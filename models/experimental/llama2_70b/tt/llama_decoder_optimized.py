@@ -55,6 +55,9 @@ class TtLlamaDecoder_optimized:
         self.head_dim = self.hidden_size // self.n_heads
         self.max_seq_len = configuration.max_seq_len
         self.norm_eps = configuration.norm_eps
+        self.rope_theta = configuration.rope_theta
+
+        self.llama3 = configuration.vocab_size == 128256
 
         self.layer_name = f"{base_url}.{layer_num}"
         self.cache_path = cache_path
@@ -133,7 +136,7 @@ class TtLlamaDecoder_optimized:
         assert len(x.size()) == 3
         batch, seq_len, hidden_size = x.shape
 
-        cache_name = lambda name: self.cache_path / (f"{name}")
+        cache_name = lambda name: self.cache_path / (f"{'llama3_' if self.llama3 else ''}{name}")
 
         as_tensor = lambda tensor, dtype, layout, name, mesh_mapper, device_mesh: ttnn.as_tensor(
             tensor,
@@ -157,26 +160,28 @@ class TtLlamaDecoder_optimized:
             )
             xs = ttnn.to_device(xs, self.device_mesh)
 
-            cos, sin = precompute_freqs(self.head_dim, self.max_seq_len * 2)
+            cos, sin = precompute_freqs(self.head_dim, self.max_seq_len * 2, self.rope_theta)
             cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
             assert cos_gathered.size() == (1, 1, seq_len, self.head_dim)
             assert sin_gathered.size() == (1, 1, seq_len, self.head_dim)
 
-            cos_gathereds = as_tensor(
+            cos_gathereds = ttnn.as_tensor(
                 cos_gathered,
-                ttnn.bfloat16,
-                ttnn.TILE_LAYOUT,
-                f"cos_gathered_prefill_{seq_len}",
-                ReplicateTensorToMesh(self.device_mesh),
-                self.device_mesh,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
+                memory_config=self.model_config["DRAM_MEMCFG"],
+                device=self.device_mesh,
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
             )
-            sin_gathereds = as_tensor(
+            sin_gathereds = ttnn.as_tensor(
                 sin_gathered,
-                ttnn.bfloat16,
-                ttnn.TILE_LAYOUT,
-                f"sin_gathered_prefill_{seq_len}",
-                ReplicateTensorToMesh(self.device_mesh),
-                self.device_mesh,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
+                memory_config=self.model_config["DRAM_MEMCFG"],
+                device=self.device_mesh,
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
             )
             cos_gathereds = ttnn.to_device(cos_gathereds, self.device_mesh)
             sin_gathereds = ttnn.to_device(sin_gathereds, self.device_mesh)
