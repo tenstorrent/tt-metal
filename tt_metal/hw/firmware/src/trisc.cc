@@ -14,6 +14,7 @@
 #include "debug/fw_debug.h"
 #include "debug/status.h"
 #include "circular_buffer.h"
+#include "debug/dprint.h"
 // clang-format on
 
 namespace kernel_profiler {
@@ -105,10 +106,13 @@ int main(int argc, char *argv[]) {
 
         DEBUG_STATUS("R");
         kernel_init();
+        DPRINT << "TDK" << ENDL();
         DEBUG_STATUS("D");
 
         // Signal completion
-        tensix_sync();
+        DPRINT << "TSTS" << ENDL();
+        tensix_sync(); // commenting this out enables pass
+        DPRINT << "TDTS" << ENDL();
         *trisc_run = RUN_SYNC_MSG_DONE;
     }
 }
