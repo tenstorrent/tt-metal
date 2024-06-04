@@ -24,25 +24,19 @@ void MorehNllLossBackward::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<std::optional<Tensor>>& output_tensors) const {
-    TT_ASSERT(input_tensors.size() == 3, "Must have 3 input tensors");
+    TT_ASSERT(input_tensors.size() == 2, "Must have 2 input tensors");
     TT_ASSERT(optional_input_tensors.size() == 2, "Must have 2 optional input tensors");
 
-    auto& input_tensor = input_tensors.at(0);
-    auto& target_tensor = input_tensors.at(1);
-    auto& output_grad_tensor = input_tensors.at(2);
+    auto& target_tensor = input_tensors.at(0);
+    auto& output_grad_tensor = input_tensors.at(1);
     auto& weight_tensor = optional_input_tensors.at(0);
     auto& divisor_tensor = optional_input_tensors.at(1);
     auto& input_grad_tensor = output_tensors.at(0);
 
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
-    TT_ASSERT((input_tensor.get_layout() == Layout::TILE), "intput_tensor to nll_loss must be tilized");
-    TT_ASSERT(input_tensor.get_dtype() == DataType::BFLOAT16);
-
     TT_ASSERT(target_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
     TT_ASSERT(target_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
     TT_ASSERT((target_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
-    TT_ASSERT(target_tensor.get_dtype() == DataType::UINT32);
+    TT_ASSERT(target_tensor.get_dtype() == DataType::INT32);
 
     TT_ASSERT(output_grad_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
     TT_ASSERT(
