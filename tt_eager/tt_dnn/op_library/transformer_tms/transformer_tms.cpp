@@ -544,11 +544,8 @@ void SSMEltwiseMul::validate(const std::vector<Tensor>& input_tensors) const {
         "Unsupported data format for input a!");
     TT_FATAL(
         input_tensor_b.get_dtype() == tt::tt_metal::DataType::BFLOAT16 ||
-            input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+            input_tensor_b.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format for input b!");
-    TT_FATAL(
-        input_tensor_a.get_dtype() == input_tensor_b.get_dtype(),
-        "Input a and input b must have the same data format!");
 
     TT_FATAL(
         this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
