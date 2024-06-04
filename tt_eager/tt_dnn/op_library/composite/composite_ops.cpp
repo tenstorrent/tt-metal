@@ -992,6 +992,34 @@ Tensor trunc(const Tensor& input, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _trunc)(input, output_mem_config);
 }
 
+Tensor _div_trunc(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config) {
+    Tensor result = div(input_a, input_b, true);
+    return trunc(result);
+}
+Tensor div_trunc(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _div_trunc)(input_a, input_b, output_mem_config);
+}
+
+Tensor _div_trunc_overload(
+    const Tensor& input,
+    float value,
+    const MemoryConfig& output_mem_config) {
+    Tensor result = div_unary(input, value);
+    return trunc(result);
+}
+Tensor div_trunc(
+    const Tensor& input,
+    float value,
+    const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _div_trunc_overload)(input, value, output_mem_config);
+}
+
 Tensor is_odd(const Tensor& input, const MemoryConfig& output_mem_config) {
     Tensor result = div_unary(input, 2.0f);
     Tensor floor_res = tt::tt_metal::floor(result);
