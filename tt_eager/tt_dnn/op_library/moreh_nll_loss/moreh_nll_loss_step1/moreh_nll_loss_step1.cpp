@@ -146,37 +146,10 @@ operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(
         tile_offset += num_units_per_core;
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h](
-            const Program &program,
-            const std::vector<Buffer *> &input_buffers,
-            const std::vector<Buffer *> &output_buffers) {
-            TT_ASSERT(input_buffers.size() == 2);
-            TT_ASSERT(output_buffers.size() == 1);
-
-            auto target_dram_buffer = input_buffers.at(0);
-            auto weight_dram_buffer = input_buffers.at(1);
-            auto dst_dram_buffer = output_buffers.at(0);
-
-            for (uint32_t icore = 0; icore < num_cores; icore++) {
-                CoreCoord core = {icore / core_h, icore % core_h};
-
-                {
-                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = target_dram_buffer->address();
-                    if (weight_dram_buffer != nullptr) {
-                        runtime_args[1] = weight_dram_buffer->address();
-                    }
-                }
-
-                {
-                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                    runtime_args[0] = dst_dram_buffer->address();
-                }
-            }
-        };
-
-    return {std::move(program), override_runtime_args_callback};
+    return {
+        .program = std::move(program),
+        .override_runtime_arguments_callback =
+            create_override_runtime_arguments_callback(reader_kernel_id, writer_kernel_id, num_cores, core_h)};
 }
 
 }  // namespace primary
