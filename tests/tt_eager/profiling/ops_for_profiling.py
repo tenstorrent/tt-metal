@@ -577,7 +577,7 @@ all_binary_ops = [
     },
     {
         "op": bcast_mul_w,
-        "name": "tt_lib.tensor.bcast_mul_w_",
+        "name": "tt_lib.tensor.bcast_mul_w",
         "shape_func": bcast_w_shape_func,
     },
     {
@@ -623,7 +623,7 @@ all_binary_ops = [
     },
     {
         "op": lerp_binary,
-        "name": "tt_lib.tensor.lerp_binary_",
+        "name": "tt_lib.tensor.lerp_binary",
     },
     {
         "op": tt_lib.tensor.xlogy,
@@ -741,7 +741,7 @@ all_binary_ops = [
     },
     {
         "op": gelu_bw_tanh,
-        "name": "tt_lib.tensor.gelu_bw_tanh_",
+        "name": "tt_lib.tensor.gelu_bw_tanh",
     },
     {
         "op": bias_gelu_unary_bw_none,
@@ -749,7 +749,7 @@ all_binary_ops = [
     },
     {
         "op": bias_gelu_unary_bw_tanh,
-        "name": "tt_lib.tensor.bias_gelu_unary_bw_tanh_",
+        "name": "tt_lib.tensor.bias_gelu_unary_bw_tanh",
     },
     {
         "op": tt_lib.tensor.hardsigmoid_bw,
