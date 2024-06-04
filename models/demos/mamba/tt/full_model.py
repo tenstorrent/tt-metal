@@ -86,6 +86,7 @@ class MambaTT(torch.nn.Module):
         ]
 
         load_fn = loader.get_tensor_loader()
+        self.embedding_weights = load_fn("embedding.weight", tt_dtype=ttnn.bfloat16, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
         self.norm_f_weights = load_fn(
             "norm_f.weight",
             tt_dtype=ttnn.bfloat8_b,
@@ -98,19 +99,27 @@ class MambaTT(torch.nn.Module):
 
     def forward(self, x):
         assert len(x.shape) == 2, f"Mamba expects inputs to be rank 2 (was {len(x.shape)})"
-
-        x = self.embedding(x)  # (B, 1, E)
-        x = x.squeeze(1).unsqueeze(0).unsqueeze(0)  # (1, 1, B, E)
-
-        assert len(x.shape) == 4, f"Expected embedding to be rank 4 (was {len(x.shape)})"
-
+        x = x.squeeze(1).unsqueeze(-1)  # (B, E)
         x = ttnn.from_torch(
             x,
             device=self.device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.uint32,
         )
+        print("X", x.shape, " - WEIGHT", self.embedding_weights.shape)
+        embedding = ttnn.embedding(x, self.embedding_weights)  # (B, E)
+        ttnn.deallocate(x)
+        print("OUT", embedding.shape)
+
+        embedding_4d = ttnn.permute(ttnn.unsqueeze_to_4D(embedding), (0, 2, 1, 3))  # (1, 1, B, E)
+        ttnn.deallocate(embedding)
+        print("OUT 4D", embedding_4d.shape)
+
+        x = ttnn.to_layout(embedding_4d, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(embedding_4d)
+
+        assert len(x.shape) == 4, f"Expected embedding to be rank 4 (was {len(x.shape)})"
 
         for layer in self.layers:
             x = layer(x)
@@ -131,6 +140,7 @@ class MambaTT(torch.nn.Module):
             use_1d_systolic_array=True,
             core_grid=ttnn.CoreGrid(y=7, x=8),
         )
+        # x = ttnn.experimental.operations.primary.topk(x, 32)
 
         x = ttnn.to_torch(x).to(torch.float32)  # (1, 1, B, E)
         x = x.squeeze(0).squeeze(0).unsqueeze(1)
