@@ -155,6 +155,16 @@ Tensor div(
     string round_mode = "None",
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor div_trunc(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor div_trunc(
+    const Tensor& input,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 Tensor div_no_nan(
     const Tensor& input_a,
     const Tensor& input_b,

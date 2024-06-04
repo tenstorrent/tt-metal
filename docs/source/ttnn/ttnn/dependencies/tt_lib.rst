@@ -274,6 +274,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.div
 
+.. autofunction:: tt_lib.tensor.div_trunc
+
 .. autofunction:: tt_lib.tensor.div_no_nan
 
 .. autofunction:: tt_lib.tensor.add_unary

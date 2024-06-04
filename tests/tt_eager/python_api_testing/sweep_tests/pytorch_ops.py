@@ -753,6 +753,17 @@ def div(x, y, *args, accurate_mode, round_mode, **kwargs):
     return torch.div(x, y, rounding_mode=round_mode)
 
 
+def div_trunc(x, y, *args, **kwargs):
+    result = torch.div(x, y, rounding_mode="trunc")
+    return result
+
+
+def unary_div_trunc(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.div(x, value, rounding_mode="trunc")
+    return result
+
+
 def div_no_nan(x, y, *args, **kwargs):
     result = torch.where(y == 0, 0, x / y)
     return result
