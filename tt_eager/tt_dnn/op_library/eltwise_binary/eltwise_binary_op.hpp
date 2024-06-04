@@ -142,7 +142,7 @@ struct make_eltwise_binary {
                     (in_a.get_legacy_shape().without_padding() == in_b.get_legacy_shape().without_padding()),
                     "Input shapes must be the same!");
 
-                auto output_tensors = operation::run_with_autoformat(
+                auto output_tensors = operation::run(
                         EltwiseBinary{
                             binary_op_type,
                             fused_activations,

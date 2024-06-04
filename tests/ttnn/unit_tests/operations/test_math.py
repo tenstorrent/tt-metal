@@ -88,18 +88,19 @@ def test_eq(device, h, w):
     torch_input_tensor_b[0, 2] = same
 
     torch_output_tensor = torch.eq(torch_input_tensor_a, torch_input_tensor_b)
-    logger.warning(f"{torch_output_tensor}")
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
+    # bfloat16
     output_tensor = ttnn.eq(input_tensor_a, input_tensor_b)
+    assert output_tensor.get_dtype() == ttnn.DataType.BFLOAT16
     output_tensor = ttnn.to_torch(output_tensor)
-    logger.warning(f"{output_tensor}")
 
+    # uint32
     output_tensor_uint = ttnn.eq(input_tensor_a, input_tensor_b, dtype=ttnn.DataType.UINT32)
+    assert output_tensor_uint.get_dtype() == ttnn.DataType.UINT32
     output_tensor_uint = ttnn.to_torch(output_tensor_uint)
-    logger.warning(f"{output_tensor_uint}")
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
     assert_with_pcc(torch_output_tensor, output_tensor_uint, 0.999)
