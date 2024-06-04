@@ -128,14 +128,12 @@ struct ExecuteBinary {
         if(binary_op_type == BinaryOpType::EQ) {
             dtype = DataType::UINT32;
         }
-        auto output_tensors = operation::run(
-                   Binary{BinaryProgramConfig{
-                       binary_op_type,
-                       in_place,
-                       activations,
-                       output_memory_config,
-                       dtype}},//output_dtype.value_or(input_tensor_a.get_dtype())}},
-                   {input_tensor_a, input_tensor_b});
+        auto output_tensors = operation::run(Binary{BinaryProgramConfig{binary_op_type,
+                                                                        in_place,
+                                                                        activations,
+                                                                        output_memory_config,
+                                                                        dtype}},
+                                                    {input_tensor_a, input_tensor_b});
 
         return output_tensors.at(0);
     }

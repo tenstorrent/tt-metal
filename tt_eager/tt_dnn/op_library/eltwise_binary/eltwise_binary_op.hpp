@@ -10,7 +10,6 @@
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/repeat/repeat_op.hpp"
-#include "tt_dnn/op_library/copy/copy_op.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/logger.hpp"
