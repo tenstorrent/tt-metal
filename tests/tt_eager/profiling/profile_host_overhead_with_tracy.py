@@ -33,9 +33,13 @@ def main(output_directory, output_csv):
     for op in ops_for_profiling.all_ternary_ops:
         all_ops.append(op["name"])
 
+    i = 0
+
     for op_name in all_ops:
-        command = f'python -m tracy -v -r -p -o {output_directory} -m "pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input {output_directory}::{op_name}"'
+        op_id = f"{i:03d}"
+        command = f'python -m tracy -v -r -p -o {output_directory} -n {op_id}_{op_name} -m "pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input {output_directory}::{op_name}"'
         subprocess.run([command], shell=True, check=False, env=currentEnvs, timeout=1200)
+        i += 1
 
     # Top level csv files
     top_level_files = Path(output_directory).glob("*.csv")
@@ -62,11 +66,10 @@ def main(output_directory, output_csv):
             final_df = pd.concat([final_df, df], ignore_index=True)
 
     # Subfolder csv files
-    subfolder_files = Path(output_directory).glob("**/*.csv")  # glob.glob('**/*.csv', recursive=True)
+    subfolder_files = Path(output_directory).glob("**/*.csv")
 
     # Iterate over subfolder csv files
     for file in subfolder_files:
-        # file = str(file)
         basename = os.path.basename(file)
 
         if not basename.startswith("ops_perf_results_"):
