@@ -2192,13 +2192,14 @@ def eltwise_typecast(
     *args,
     device,
     dtype,
+    tt_output_dtype,
     layout,
     input_mem_config,
     output_mem_config,
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.eltwise_typecast(t0, output_mem_config=output_mem_config)
+    t1 = ttl.tensor.eltwise_typecast(t0, tt_output_dtype[0], output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 

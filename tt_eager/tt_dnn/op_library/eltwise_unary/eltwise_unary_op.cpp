@@ -177,6 +177,11 @@ std::pair<string, string> get_op_init_and_func_parameterized(
                     Converter::to_hex(param1))};
             break;
         }
+        case UnaryOpType::TYPECAST:
+            op_init_and_name = {
+                "typecast_tile_init();",
+                fmt::format("typecast_tile<{1}u>({0});", idst, std::to_string((uint32_t)datatype_to_dataformat_converter((DataType)param0)))};
+            break;
         default: TT_ASSERT(false && "unexpected parameterized type");
     };
     return op_init_and_name;
@@ -257,9 +262,6 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, stri
             break;
         case UnaryOpType::NEG:
             op_init_and_name = {"negative_tile_init();", fmt::format("negative_tile({});", idst)};
-            break;
-        case UnaryOpType::TYPECAST:
-            op_init_and_name = {"typecast_tile_init();", fmt::format("typecast_tile({});", idst)};
             break;
         default: TT_ASSERT(false && "Undefined non-parametrized op type");
     }
