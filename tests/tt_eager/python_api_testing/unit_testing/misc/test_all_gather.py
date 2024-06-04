@@ -224,7 +224,6 @@ def test_all_gather_on_t3000_post_commit_looping(
     [
         (4, 2, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
         (8, 1, [8, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
-        # (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
         (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),
         (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),
         (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
@@ -259,6 +258,8 @@ def test_all_gather_on_t3000_post_commit_looping(
         (8, 1, [1, 1, 1024, 256], 3, ttl.tensor.Layout.TILE),
         (8, 1, [1, 1, 256, 2048], 2, ttl.tensor.Layout.TILE),
         (8, 1, [1, 1, 256, 8192], 2, ttl.tensor.Layout.TILE),  # double on reduction dim for 8 chip
+        (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
+        (8, 1, [8, 8, 128, 4096], 1, ttl.tensor.Layout.TILE),
     ],
 )
 @pytest.mark.parametrize(
@@ -424,6 +425,11 @@ def test_line_all_gather_on_t3000_post_commit(
         ([8, 8, 256, 384], 3, ttl.tensor.Layout.TILE),
         ([8, 8, 256, 768], 3, ttl.tensor.Layout.ROW_MAJOR),
         ([8, 8, 256, 768], 3, ttl.tensor.Layout.TILE),
+        ([8, 8, 1024, 4096], 1, ttl.tensor.Layout.TILE),
+        ([8, 8, 2048, 4096], 1, ttl.tensor.Layout.TILE),
+        ([8, 8, 128, 4096], 1, ttl.tensor.Layout.ROW_MAJOR),
+        ([8, 8, 1024, 4096], 1, ttl.tensor.Layout.ROW_MAJOR),
+        ([8, 8, 2048, 4096], 1, ttl.tensor.Layout.ROW_MAJOR),
         # Only for BFP8B
         # ([1, 1, 640, 32768], 3, ttl.tensor.Layout.TILE),
         # MLP AllGather. Llama 2 decode attn, mlp. Llama2, Falcon 40B decode mlp attn
