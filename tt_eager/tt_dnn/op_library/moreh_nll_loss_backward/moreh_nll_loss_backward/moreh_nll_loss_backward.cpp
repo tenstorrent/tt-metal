@@ -156,9 +156,9 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_4d(
 
         std::vector<uint32_t> reader_args = {
             target_addr,
+            output_grad_addr,
             weight_addr,
             divisor_addr,
-            output_grad_addr,
             static_cast<uint32_t>(ignore_index),
             units_per_core,
             tile_offset,
@@ -187,46 +187,11 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_4d(
         tile_offset += units_per_core;
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h](
-            const void *operation,
-            Program &program,
-            const std::vector<Tensor> &input_tensors,
-            const std::vector<std::optional<const Tensor>> &optional_input_tensors,
-            const std::vector<Tensor> &output_tensors) {
-            TT_ASSERT(input_tensors.size() == 2);
-            TT_ASSERT(optional_input_tensors.size() == 2);
-            TT_ASSERT(output_tensors.size() == 1);
-
-            auto target_addr = input_tensors.at(0).buffer()->address();
-            auto output_grad_addr = input_tensors.at(1).buffer()->address();
-            auto weight_addr =
-                optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-            auto divisor_addr =
-                optional_input_tensors.at(1).has_value() ? optional_input_tensors.at(1).value().buffer()->address() : 0;
-            auto input_grad_addr = output_tensors.at(0).buffer()->address();
-
-            for (uint32_t icore = 0; icore < num_cores; icore++) {
-                CoreCoord core = {icore / core_h, icore % core_h};
-
-                {
-                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = target_addr;
-                    runtime_args[1] = weight_addr;
-                    runtime_args[2] = divisor_addr;
-                    runtime_args[3] = output_grad_addr;
-                }
-
-                {
-                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                    runtime_args[0] = input_grad_addr;
-                }
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {
+        .program = std::move(program),
+        .override_runtime_arguments_callback =
+            create_override_runtime_arguments_callback(reader_kernel_id, writer_kernel_id, num_cores, core_h)};
 }
-
 
 operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_3d(
     const Tensor &target,
@@ -238,7 +203,6 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_3d(
     const bool reduction_mean,
     const CoreRange core_range,
     const DeviceComputeKernelConfig compute_kernel_config) {
-
     // split work
 
     // input_grad: (N, C, W)
@@ -370,9 +334,9 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_3d(
 
         std::vector<uint32_t> reader_args = {
             target_addr,
+            output_grad_addr,
             weight_addr,
             divisor_addr,
-            output_grad_addr,
             static_cast<uint32_t>(ignore_index),
             units_per_core,
             tile_offset,
@@ -401,46 +365,11 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_3d(
         tile_offset += units_per_core;
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h](
-            const void *operation,
-            Program &program,
-            const std::vector<Tensor> &input_tensors,
-            const std::vector<std::optional<const Tensor>> &optional_input_tensors,
-            const std::vector<Tensor> &output_tensors) {
-            TT_ASSERT(input_tensors.size() == 2);
-            TT_ASSERT(optional_input_tensors.size() == 2);
-            TT_ASSERT(output_tensors.size() == 1);
-
-            auto target_addr = input_tensors.at(0).buffer()->address();
-            auto output_grad_addr = input_tensors.at(1).buffer()->address();
-            auto weight_addr =
-                optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-            auto divisor_addr =
-                optional_input_tensors.at(1).has_value() ? optional_input_tensors.at(1).value().buffer()->address() : 0;
-            auto input_grad_addr = output_tensors.at(0).buffer()->address();
-
-            for (uint32_t icore = 0; icore < num_cores; icore++) {
-                CoreCoord core = {icore / core_h, icore % core_h};
-
-                {
-                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = target_addr;
-                    runtime_args[1] = weight_addr;
-                    runtime_args[2] = divisor_addr;
-                    runtime_args[3] = output_grad_addr;
-                }
-
-                {
-                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                    runtime_args[0] = input_grad_addr;
-                }
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {
+        .program = std::move(program),
+        .override_runtime_arguments_callback =
+            create_override_runtime_arguments_callback(reader_kernel_id, writer_kernel_id, num_cores, core_h)};
 }
-
 
 operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_2d(
     const Tensor &target,
@@ -579,9 +508,9 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_2d(
 
         std::vector<uint32_t> reader_args = {
             target_addr,
+            output_grad_addr,
             weight_addr,
             divisor_addr,
-            output_grad_addr,
             static_cast<uint32_t>(ignore_index),
             units_per_core,
             tile_offset,
@@ -609,47 +538,11 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_2d(
         tile_offset += units_per_core;
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h](
-            const void *operation,
-            Program &program,
-            const std::vector<Tensor> &input_tensors,
-            const std::vector<std::optional<const Tensor>> &optional_input_tensors,
-            const std::vector<Tensor> &output_tensors) {
-            TT_ASSERT(input_tensors.size() == 2);
-            TT_ASSERT(optional_input_tensors.size() == 2);
-            TT_ASSERT(output_tensors.size() == 1);
-
-            auto target_addr = input_tensors.at(0).buffer()->address();
-            auto output_grad_addr = input_tensors.at(1).buffer()->address();
-            auto weight_addr =
-                optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-            auto divisor_addr =
-                optional_input_tensors.at(1).has_value() ? optional_input_tensors.at(1).value().buffer()->address() : 0;
-            auto input_grad_addr = output_tensors.at(0).buffer()->address();
-
-            for (uint32_t icore = 0; icore < num_cores; icore++) {
-                CoreCoord core = {icore / core_h, icore % core_h};
-
-                {
-                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = target_addr;
-                    runtime_args[1] = weight_addr;
-                    runtime_args[2] = divisor_addr;
-                    runtime_args[3] = output_grad_addr;
-                }
-
-                {
-                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                    runtime_args[0] = input_grad_addr;
-                }
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {
+        .program = std::move(program),
+        .override_runtime_arguments_callback =
+            create_override_runtime_arguments_callback(reader_kernel_id, writer_kernel_id, num_cores, core_h)};
 }
-
-
 
 }  // namespace
 
