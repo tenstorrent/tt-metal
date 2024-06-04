@@ -20,6 +20,7 @@ def to_output_4d_shape(shape, index_dims, index_size):
     return output_4d_shape
 
 
+@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/9076")
 @pytest.mark.parametrize(
     "shape_index_dim",
     (
