@@ -48,7 +48,6 @@ class TtMoeLayer(LightweightModule):
             device=self.device_mesh,
             mesh_mapper=ReplicateTensorToMesh(device_mesh),
         )
-        self.reduce_mask = ttnn.to_device(self.reduce_mask, device_mesh)
         self.expert_mask_11BB = ttnn.from_torch(
             torch.cat([torch.full((1, 1, 32, 32), fill_value=i + 1) for i in range(8)], dim=3),
             dtype=ttnn.uint16,

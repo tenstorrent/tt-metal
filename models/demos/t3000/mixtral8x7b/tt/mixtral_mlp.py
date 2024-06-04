@@ -43,11 +43,8 @@ class TtMixtralMLP(LightweightModule):
         )
 
         self.w1 = as_tensor("w1")
-        self.w1 = ttnn.to_device(self.w1, device_mesh)
         self.w2 = as_tensor("w2")
-        self.w2 = ttnn.to_device(self.w2, device_mesh)
         self.w3 = as_tensor("w3")
-        self.w3 = ttnn.to_device(self.w3, device_mesh)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
