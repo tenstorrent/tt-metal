@@ -22,14 +22,14 @@ Command for running a single sweep test has the following pattern
 `pytest test_script --input-path yaml_path --input-method cli --cli-input output_dir`
 
 This script has two crucial parameters:
-1) yaml_path - The YAML file defining op sweep test itself
+1) `--input-path yaml_path` - The YAML file defining op sweep test itself is given as yaml_path
 Path pattern for ttlib ops:
 `tests/tt_eager/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_state/device_name/my_sweep.yaml` 
 Various test variants:
   1.1) state: a) working - Passes in all cases b)broken - Fails at least in one test case for any reason - Low PCC, specified or unspecified error
   1.2) device_name - Variant of the sweeps for specific device: a) grayskull b) wormhole
 
-2) output_dir - Optional folder name to dump result CSV's in. If not specified, it will default to `pytorch_test_folder`. If this folder (or any folder specified) already exists, the tests will not run. In case if provided - after sweep run, here we can find the test results within the generated CSV file as outcome.
+2) `--input-method cli --cli-input output_dir` - Here, we use output_dir as optional folder name to dump result CSV's in. If not specified, it will default to `pytorch_test_folder`. If this folder (or any folder specified) already exists, the tests will not run. In case if provided - after sweep run, here we can find the test results within the generated CSV file as outcome.
 
 
 example:
@@ -44,19 +44,13 @@ The script used for multiple YAML sweeps at once:
 The command pattern:
 `python tests/tt_eager/python_api_testing/sweep_tests/run_sweep_tests.py -d path_to_yaml_dir -r output_dir`
 
-This script has two crucial parameters:
+This script has two crucial parameters as well:
 1) path_to_yaml_dir - Folder containing the YAML files of the sweeps which we want to run at once
 2) output_folder - After sweep run, here we can find the test results within the generated CSV file as outcome
 
 example:
 
 `python tests/tt_eager/python_api_testing/sweep_tests/run_sweep_tests.py -d tests/tt_eager/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/grayskull/ -r result_sweeps`
-
-
-The inputs are:
-- `-i, --input-test-config`: Input test config containing list of tests to run (see below for description on what this config should look like).
-- `-o, --output-folder-path`: Optional folder name to dump result CSV's in. If not specified, it will default to `pytorch_test_folder`. If this folder (or any folder specified) already exists, the tests will not run.
-
 
 ## Adding test configs
 Here is an example of a test config:
