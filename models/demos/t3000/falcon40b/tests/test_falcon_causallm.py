@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 
 import ttnn
+from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
@@ -19,13 +20,7 @@ from models.demos.t3000.falcon40b.tt.model_config import (
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    nearest_32,
-    skip_for_grayskull,
-    get_devices_for_t3000,
-)
+from models.utility_functions import skip_for_grayskull
 
 
 class PytorchFalconCausalLM(torch.nn.Module):
@@ -49,7 +44,7 @@ class PytorchFalconCausalLM(torch.nn.Module):
 
 
 def run_test_FalconCausalLM_inference(
-    devices,
+    device_mesh,
     model_version,
     llm_mode,
     batch,
@@ -97,33 +92,25 @@ def run_test_FalconCausalLM_inference(
 
         past_key_values = None
         tt_layer_past = ()
-        tt_k_cache_host = torch.zeros(batch, num_kv_heads, max_position_embeddings, head_dim)
-        tt_v_cache_host = torch.zeros(batch, num_kv_heads, max_position_embeddings, head_dim)
-        tt_k_cache_host = torch.chunk(tt_k_cache_host, len(devices), 1)
-        tt_v_cache_host = torch.chunk(tt_v_cache_host, len(devices), 1)
+        tt_kv_cache_host = torch.zeros(batch, num_kv_heads, max_position_embeddings, head_dim)
 
         for i in range(num_layers):
-            tt_k_cache = []
-            tt_v_cache = []
-            for i in range(len(devices)):
-                tt_k_cache.append(
-                    torch2tt_tensor(
-                        tt_k_cache_host[i],
-                        devices[i],
-                        ttnn.experimental.tensor.Layout.TILE,
-                        model_config["KV_CACHE_MEMCFG"],
-                        model_config["KV_CACHE_DTYPE"],
-                    )
-                )
-                tt_v_cache.append(
-                    torch2tt_tensor(
-                        tt_v_cache_host[i],
-                        devices[i],
-                        ttnn.experimental.tensor.Layout.TILE,
-                        model_config["KV_CACHE_MEMCFG"],
-                        model_config["KV_CACHE_DTYPE"],
-                    )
-                )
+            tt_k_cache = ttnn.as_tensor(
+                tensor=tt_kv_cache_host,
+                dtype=model_config["KV_CACHE_DTYPE"],
+                layout=ttnn.TILE_LAYOUT,
+                device=device_mesh,
+                memory_config=model_config["KV_CACHE_MEMCFG"],
+                mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+            )
+            tt_v_cache = ttnn.as_tensor(
+                tensor=tt_kv_cache_host,
+                dtype=model_config["KV_CACHE_DTYPE"],
+                layout=ttnn.TILE_LAYOUT,
+                device=device_mesh,
+                memory_config=model_config["KV_CACHE_MEMCFG"],
+                mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+            )
             tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
     elif llm_mode == "decode":
@@ -147,32 +134,25 @@ def run_test_FalconCausalLM_inference(
             tt_v_cache_host = torch.zeros(batch, num_kv_heads, max_position_embeddings, head_dim)
             tt_k_cache_host[:, :, :kv_cache_len, :] = k_cache
             tt_v_cache_host[:, :, :kv_cache_len, :] = v_cache
-            tt_k_cache_host = torch.chunk(tt_k_cache_host, len(devices), 1)
-            tt_v_cache_host = torch.chunk(tt_v_cache_host, len(devices), 1)
 
-            tt_k_cache = []
-            tt_v_cache = []
-            for j in range(len(devices)):
-                tt_k_cache.append(
-                    torch2tt_tensor(
-                        tt_k_cache_host[j],
-                        devices[j],
-                        ttnn.experimental.tensor.Layout.TILE,
-                        model_config["KV_CACHE_MEMCFG"],
-                        model_config["KV_CACHE_DTYPE"],
-                    )
-                )
-                tt_v_cache.append(
-                    torch2tt_tensor(
-                        tt_v_cache_host[j],
-                        devices[j],
-                        ttnn.experimental.tensor.Layout.TILE,
-                        model_config["KV_CACHE_MEMCFG"],
-                        model_config["KV_CACHE_DTYPE"],
-                    )
-                )
+            tt_k_cache = ttnn.as_tensor(
+                tensor=tt_k_cache_host,
+                dtype=model_config["KV_CACHE_DTYPE"],
+                layout=ttnn.TILE_LAYOUT,
+                device=device_mesh,
+                memory_config=model_config["KV_CACHE_MEMCFG"],
+                mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+            )
+            tt_v_cache = ttnn.as_tensor(
+                tensor=tt_v_cache_host,
+                dtype=model_config["KV_CACHE_DTYPE"],
+                layout=ttnn.TILE_LAYOUT,
+                device=device_mesh,
+                memory_config=model_config["KV_CACHE_MEMCFG"],
+                mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+            )
+
             tt_layer_past += ((tt_k_cache, tt_v_cache),)
-
     else:
         raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
 
@@ -186,7 +166,7 @@ def run_test_FalconCausalLM_inference(
     # since we don't yet have embedding support on device
     # device, state_dict, base_url, max_position_embeddings, config, num_decoders
     tt_FalconCausalLM = TtFalconCausalLM(
-        devices,
+        device_mesh,
         state_dict,
         base_url,
         num_layers,
@@ -217,7 +197,12 @@ def run_test_FalconCausalLM_inference(
                 layer_past_len=kv_cache_len,
                 use_cache=use_cache,
             )
-            tt_outs.append(torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_out], -1))
+
+            tt_out_tensor = ttnn.to_torch(
+                tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1)
+            )
+            tt_outs.append(tt_out_tensor.squeeze(1))
+
         tt_out = torch.vstack(tt_outs)
 
     elif llm_mode == "decode":
@@ -232,7 +217,8 @@ def run_test_FalconCausalLM_inference(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-        tt_out = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_out], -1)
+        tt_out = ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1))
+        tt_out = tt_out.squeeze(0)
         tt_out = tt_out.transpose(0, 1)
 
     # check outputs ----------------------------------------------------------------------
@@ -242,8 +228,12 @@ def run_test_FalconCausalLM_inference(
     for i in range(num_layers):
         pytorch_layer_pres = pytorch_layer_present[i]
         tt_layer_pres = (
-            torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[i][0]], 1),
-            torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[i][1]], 1),
+            ttnn.to_torch(
+                tt_layer_present[i][0], device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=1)
+            ),
+            ttnn.to_torch(
+                tt_layer_present[i][1], device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=1)
+            ),
         )
         tt_layer_pres = (
             torch.repeat_interleave(
@@ -341,7 +331,7 @@ def test_FalconCausalLM_inference(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    all_devices,
+    t3k_device_mesh,
     use_program_cache,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
@@ -351,7 +341,7 @@ def test_FalconCausalLM_inference(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
-    devices = get_devices_for_t3000(all_devices, num_devices)
+    devices = t3k_device_mesh.get_devices()
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
@@ -361,7 +351,7 @@ def test_FalconCausalLM_inference(
     )
 
     run_test_FalconCausalLM_inference(
-        devices,
+        t3k_device_mesh,
         model_version,
         llm_mode,
         batch,

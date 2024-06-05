@@ -5,7 +5,8 @@
 import torch
 import pytest
 from loguru import logger
-
+import ttnn
+from ttnn import ConcatMeshToTensor
 
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
@@ -17,7 +18,7 @@ from models.demos.t3000.falcon40b.tt.model_config import (
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
+from models.utility_functions import skip_for_grayskull
 
 
 class PytorchFalconMLPModel(torch.nn.Module):
@@ -34,7 +35,7 @@ class PytorchFalconMLPModel(torch.nn.Module):
 
 
 def run_test_FalconMLP_inference(
-    devices,
+    device_mesh,
     model_version,
     llm_mode,
     batch,
@@ -66,10 +67,10 @@ def run_test_FalconMLP_inference(
     # PyTorch output --------------------------------------------------------------------
     pytorch_FalconMLP_model = PytorchFalconMLPModel(hugging_face_reference_model, layer_num)
     pytorch_out = pytorch_FalconMLP_model(mlp_input)
-
     # TT hardware execution -------------------------------------------------------------
+
     tt_FalconMLP_model = TtFalconMLP(
-        devices,
+        device_mesh,
         state_dict,
         base_url,
         layer_num,
@@ -78,16 +79,19 @@ def run_test_FalconMLP_inference(
         tt_cache_path,
     )
 
-    tt_mlp_input_host = torch2tt_tensor(mlp_input, None, tt_dtype=model_config["LN_MLP_OUTPUT_DTYPE"])
-    tt_mlp_input = []
-    for device in devices:
-        tt_mlp_input.append(tt_mlp_input_host.to(device, model_config["LN_MLP_OUTPUT_MEMCFG"]))
+    tt_mlp_input = ttnn.as_tensor(
+        mlp_input,
+        dtype=model_config["LN_MLP_OUTPUT_DTYPE"],
+        device=device_mesh,
+        memory_config=model_config["LN_MLP_OUTPUT_MEMCFG"],
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+    )
 
     tt_out = tt_FalconMLP_model(tt_mlp_input, llm_mode)
-    tt_out = torch.concat([tt2torch_tensor(tt_o) for tt_o in tt_out], -1)
-
+    tt_out_tensor = ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3))
     # check outputs ----------------------------------------------------------------------
-    does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
+    does_pass, output_pcc = comp_pcc(pytorch_out, tt_out_tensor, pcc)
     logger.info(f"PCC value: {output_pcc}")
 
     if does_pass:
@@ -139,7 +143,7 @@ def test_FalconMLP_inference(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    all_devices,
+    t3k_device_mesh,
     use_program_cache,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
@@ -149,7 +153,7 @@ def test_FalconMLP_inference(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
-    devices = get_devices_for_t3000(all_devices, num_devices)
+    devices = t3k_device_mesh.get_devices()
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
@@ -157,9 +161,8 @@ def test_FalconMLP_inference(
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )
-
     run_test_FalconMLP_inference(
-        devices,
+        t3k_device_mesh,
         model_version,
         llm_mode,
         batch,

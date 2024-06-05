@@ -4,50 +4,45 @@
 
 import torch
 import ttnn
+from ttnn import ShardTensorToMesh
 
 
 class TtFalconEmbeddings(torch.nn.Module):
-    def __init__(self, devices, state_dict, cache_path, model_config):
+    def __init__(self, device_mesh, state_dict, cache_path, model_config):
         super().__init__()
 
         self.state_dict = state_dict
-        self.devices = devices
+        self.device_mesh = device_mesh
         self.model_config = model_config
-        self.num_devices = len(devices)
+        self.num_devices = device_mesh.get_num_devices()
 
         base_name = "transformer.word_embeddings.weight"
-        torch_weights = [
-            weight.unsqueeze(0).unsqueeze(0)
-            for weight in torch.chunk(self.state_dict[base_name], self.num_devices, dim=-1)
-        ]
 
-        cache_name = lambda name, device_id: cache_path / (f"{name}_{device_id}_{self.num_devices}")
-        as_tensor = lambda tensor, name, device_id: ttnn.as_tensor(
-            tensor,
-            dtype=ttnn.bfloat16,  # row_major has to be bfloat16 for now
+        self.embd_weights = ttnn.as_tensor(
+            tensor=self.state_dict[base_name],
+            dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.devices[device_id],
+            device=self.device_mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(name, device_id),
+            cache_file_name=cache_path / base_name,
+            mesh_mapper=ShardTensorToMesh(device_mesh, dim=-1),
+            preprocess=lambda x: x.reshape(1, 1, *x.shape),
         )
-
-        self.embd_weights = [
-            as_tensor(torch_weight, base_name, device_id) for device_id, torch_weight in enumerate(torch_weights)
-        ]
 
     def set_model_config(self, model_config):
         self.model_config = model_config
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        for i in range(self.num_devices):
-            x[i] = ttnn.experimental.tensor.embeddings(
-                x[i], self.embd_weights[i], tilized=True, output_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"]
-            )
+        x = ttnn.experimental.tensor.embeddings(
+            x,
+            self.embd_weights,
+            tilized=True,
+            output_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
+        )
 
         if self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"].is_sharded():
-            for i in range(self.num_devices):
-                x[i] = ttnn.experimental.tensor.interleaved_to_sharded(
-                    x[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
-                )
+            x = ttnn.experimental.tensor.interleaved_to_sharded(
+                x, sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
+            )
 
         return x

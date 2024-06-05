@@ -8,7 +8,6 @@ from models.demos.t3000.falcon40b.demo.demo import run_falcon_demo_kv
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model_config_entries
 from models.utility_functions import (
     disable_compilation_reports,
-    get_devices_for_t3000,
     skip_for_grayskull,
 )
 
@@ -32,12 +31,9 @@ def test_demo(
     max_seq_len,
     model_location_generator,
     get_tt_cache_path,
-    all_devices,
+    t3k_device_mesh,
     use_program_cache,
 ):
-    num_devices = 8
-    devices = get_devices_for_t3000(all_devices, num_devices)
-
     # disable_persistent_kernel_cache()
     disable_compilation_reports()
 
@@ -67,7 +63,7 @@ def test_demo(
             max_seq_len=max_seq_len,
             model_location_generator=model_location_generator,
             get_tt_cache_path=get_tt_cache_path,
-            devices=devices,
+            device_mesh=t3k_device_mesh,
             prefill_on_host=False,
             perf_mode=perf_mode,
             greedy_sampling=greedy_sampling,

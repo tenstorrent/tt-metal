@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 
 import ttnn
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
@@ -18,7 +19,6 @@ from models.utility_functions import nearest_32, skip_for_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, get_devices_for_t3000
 
 
 class PytorchFalconAttentionModel(torch.nn.Module):
@@ -41,7 +41,7 @@ class PytorchFalconAttentionModel(torch.nn.Module):
 
 
 def run_test_FalconAttention_inference(
-    devices,
+    device_mesh,
     model_version,
     llm_mode,
     batch,
@@ -84,60 +84,52 @@ def run_test_FalconAttention_inference(
         attention_mask_bool = torch.ones(batch, 1, q_len, kv_len, dtype=bool).triu(diagonal=1)
         layer_past = None
 
-        tt_attention_input_host = torch2tt_tensor(
-            attention_input.unsqueeze(1), None, tt_dtype=model_config["ATTN_INPUT_DTYPE"]
+        tt_attention_input = ttnn.as_tensor(
+            tensor=attention_input.unsqueeze(1),
+            dtype=model_config["ATTN_INPUT_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            memory_config=model_config["ATTN_INPUT_MEMCFG"],
+            mesh_mapper=ReplicateTensorToMesh(device_mesh),
         )
-        tt_attention_input = []
-        for device in devices:
-            tt_attention_input.append(tt_attention_input_host.to(device, model_config["ATTN_INPUT_MEMCFG"]))
 
-        attention_mask_bool_chunks = torch.chunk(
-            (attention_mask_bool * -100000).expand(-1, len(devices), -1, -1),
-            len(devices),
-            1,
-        )
-        tt_attention_mask = []
         attention_mask_memconfig = model_config["ATTN_MASK_MEMCFG"]
         if attention_mask_memconfig.is_sharded():
             attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
             attn_mask_shard_shape[-1] = kv_len
             attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
 
-        for i in range(len(devices)):
-            tt_attention_mask.append(
-                torch2tt_tensor(
-                    attention_mask_bool_chunks[i],
-                    devices[i],
-                    tt_memory_config=attention_mask_memconfig,
-                    tt_dtype=model_config["ATTN_MASK_DTYPE"],
-                )
-            )
+        tt_attention_mask = ttnn.as_tensor(
+            tensor=attention_mask_bool,
+            dtype=model_config["ATTN_MASK_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            memory_config=attention_mask_memconfig,
+            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            preprocess=lambda x: x * (-1e5),
+        )
 
         tt_k_cache_host = torch.zeros(batch, configuration.num_kv_heads, max_position_embeddings, head_dim)
         tt_v_cache_host = torch.zeros(batch, configuration.num_kv_heads, max_position_embeddings, head_dim)
-        tt_k_cache_host = torch.chunk(tt_k_cache_host, len(devices), 1)
-        tt_v_cache_host = torch.chunk(tt_v_cache_host, len(devices), 1)
-        tt_k_cache = []
-        tt_v_cache = []
-        for j in range(len(devices)):
-            tt_k_cache.append(
-                torch2tt_tensor(
-                    tt_k_cache_host[j],
-                    devices[j],
-                    ttnn.experimental.tensor.Layout.TILE,
-                    model_config["KV_CACHE_MEMCFG"],
-                    model_config["KV_CACHE_DTYPE"],
-                )
-            )
-            tt_v_cache.append(
-                torch2tt_tensor(
-                    tt_v_cache_host[j],
-                    devices[j],
-                    ttnn.experimental.tensor.Layout.TILE,
-                    model_config["KV_CACHE_MEMCFG"],
-                    model_config["KV_CACHE_DTYPE"],
-                )
-            )
+
+        tt_k_cache = ttnn.as_tensor(
+            tensor=tt_k_cache_host,
+            dtype=model_config["KV_CACHE_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            memory_config=model_config["KV_CACHE_MEMCFG"],
+            mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+        )
+
+        tt_v_cache = ttnn.as_tensor(
+            tensor=tt_v_cache_host,
+            dtype=model_config["KV_CACHE_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            memory_config=model_config["KV_CACHE_MEMCFG"],
+            mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+        )
+
         tt_layer_past = (tt_k_cache, tt_v_cache)
 
     elif llm_mode == "decode":
@@ -157,13 +149,15 @@ def run_test_FalconAttention_inference(
                 v_cache, configuration.num_attention_heads // configuration.num_kv_heads, 1
             ).flatten(0, 1),
         )
-
-        tt_attention_input_host = torch2tt_tensor(
-            attention_input.unsqueeze(1).transpose(0, 2), None, tt_dtype=model_config["LN_ATTN_OUTPUT_DTYPE"]
+        tt_attention_input = ttnn.as_tensor(
+            tensor=attention_input,
+            dtype=model_config["LN_ATTN_OUTPUT_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            memory_config=model_config["LN_ATTN_OUTPUT_MEMCFG"],
+            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            preprocess=lambda x: x.unsqueeze(1).transpose(0, 2),
         )
-        tt_attention_input = []
-        for device in devices:
-            tt_attention_input.append(tt_attention_input_host.to(device, model_config["LN_ATTN_OUTPUT_MEMCFG"]))
 
         kv_len_padded = nearest_32(kv_len)
         attention_mask_bool_padded = torch.cat(
@@ -173,56 +167,43 @@ def run_test_FalconAttention_inference(
             ),
             dim=-1,
         )
-        attention_mask_bool_padded = torch.chunk(
-            (attention_mask_bool_padded.transpose(0, 2) * -100000).expand(
-                -1, configuration.num_attention_heads, -1, -1
-            ),
-            len(devices),
-            1,
-        )
-        tt_attention_mask = []
         attention_mask_memconfig = model_config["ATTN_MASK_MEMCFG"]
         if attention_mask_memconfig.is_sharded():
             attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
             attn_mask_shard_shape[-1] = kv_len_padded
             attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
 
-        for i in range(len(devices)):
-            tt_attention_mask.append(
-                torch2tt_tensor(
-                    attention_mask_bool_padded[i],
-                    devices[i],
-                    tt_memory_config=attention_mask_memconfig,
-                    tt_dtype=model_config["ATTN_MASK_DTYPE"],
-                )
-            )
+        tt_attention_mask = ttnn.as_tensor(
+            tensor=attention_mask_bool_padded,
+            dtype=model_config["ATTN_MASK_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            memory_config=attention_mask_memconfig,
+            mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+            preprocess=lambda x: (x.transpose(0, 2) * -1e5).expand(-1, configuration.num_attention_heads, -1, -1),
+        )
+
         tt_k_cache_host = torch.zeros(batch, configuration.num_kv_heads, max_position_embeddings, head_dim)
         tt_v_cache_host = torch.zeros(batch, configuration.num_kv_heads, max_position_embeddings, head_dim)
         tt_k_cache_host[:, :, :kv_cache_len, :] = k_cache
         tt_v_cache_host[:, :, :kv_cache_len, :] = v_cache
-        tt_k_cache_host = torch.chunk(tt_k_cache_host, len(devices), 1)
-        tt_v_cache_host = torch.chunk(tt_v_cache_host, len(devices), 1)
-        tt_k_cache = []
-        tt_v_cache = []
-        for j in range(len(devices)):
-            tt_k_cache.append(
-                torch2tt_tensor(
-                    tt_k_cache_host[j],
-                    devices[j],
-                    ttnn.experimental.tensor.Layout.TILE,
-                    model_config["KV_CACHE_MEMCFG"],
-                    model_config["KV_CACHE_DTYPE"],
-                )
-            )
-            tt_v_cache.append(
-                torch2tt_tensor(
-                    tt_v_cache_host[j],
-                    devices[j],
-                    ttnn.experimental.tensor.Layout.TILE,
-                    model_config["KV_CACHE_MEMCFG"],
-                    model_config["KV_CACHE_DTYPE"],
-                )
-            )
+
+        tt_k_cache = ttnn.as_tensor(
+            tensor=tt_k_cache_host,
+            dtype=model_config["KV_CACHE_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            memory_config=model_config["KV_CACHE_MEMCFG"],
+            mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+        )
+        tt_v_cache = ttnn.as_tensor(
+            tensor=tt_v_cache_host,
+            dtype=model_config["KV_CACHE_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            memory_config=model_config["KV_CACHE_MEMCFG"],
+            mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+        )
         tt_layer_past = (tt_k_cache, tt_v_cache)
 
     else:
@@ -240,7 +221,7 @@ def run_test_FalconAttention_inference(
 
     # TT hardware execution -------------------------------------------------------------
     tt_FalconAttention_model = TtFalconAttention(
-        devices,
+        device_mesh,
         state_dict,
         base_url,
         layer_num,
@@ -262,10 +243,11 @@ def run_test_FalconAttention_inference(
         use_cache=use_cache,
     )
 
-    tt_out = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_out], -1)
+    tt_out = ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3))
+
     tt_layer_present = (
-        torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[0]], 1),
-        torch.cat([tt2torch_tensor(tt_layer_p) for tt_layer_p in tt_layer_present[1]], 1),
+        ttnn.to_torch(tt_layer_present[0], device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=1)),
+        ttnn.to_torch(tt_layer_present[1], device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=1)),
     )
 
     if llm_mode == "decode":
@@ -359,7 +341,7 @@ def test_FalconAttention_inference(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    all_devices,
+    t3k_device_mesh,
     use_program_cache,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
@@ -369,7 +351,7 @@ def test_FalconAttention_inference(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
-    devices = get_devices_for_t3000(all_devices, num_devices)
+    devices = t3k_device_mesh.get_devices()
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
@@ -379,7 +361,7 @@ def test_FalconAttention_inference(
     )
 
     run_test_FalconAttention_inference(
-        devices,
+        t3k_device_mesh,
         model_version,
         llm_mode,
         batch,
