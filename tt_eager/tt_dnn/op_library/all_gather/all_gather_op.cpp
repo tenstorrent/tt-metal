@@ -100,18 +100,6 @@ operation::ProgramWithCallbacks AllGather::create_program(const std::vector<Tens
     };
 }
 
-tt::stl::reflection::Attributes AllGather::attributes() const {
-    return {
-        {"dim", this->dim},
-        {"num_links", this->num_links},
-        {"ring_size", this->ring_size},
-        {"ring_index", this->ring_index},
-        {"receiver_device_id", this->receiver_device_id},
-        {"sender_device_id", this->sender_device_id},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 std::vector<Tensor> all_gather_impl(const std::vector<Tensor>& input_tensors, const uint32_t dim, const uint32_t num_links, const MemoryConfig& output_mem_config, const all_gather_op::Topology topology) {
 
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
