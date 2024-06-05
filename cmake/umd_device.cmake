@@ -55,6 +55,7 @@ ExternalProject_Add(
         STATIC_LIB_FLAGS=${STATIC_LIB_FLAGS_}
         LDFLAGS=${LDFLAGS_}
         CXXFLAGS=${CMAKE_CXX_FLAGS_}
+        DEVICE_CXX=${CMAKE_CXX_COMPILER}
 )
 if($ENV{ENABLE_TRACY})
     add_dependencies(umd_device TracyClient)
