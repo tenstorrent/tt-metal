@@ -24,14 +24,10 @@ struct TensorRecord {
     const std::optional<MemoryConfig> memory_config;
 
     static constexpr auto attribute_names =
-        std::make_tuple("storage_type", "shape", "data_type", "layout", "memory_config");
+        std::forward_as_tuple("storage_type", "shape", "data_type", "layout", "memory_config");
     const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->storage_type),
-            std::cref(this->shape),
-            std::cref(this->data_type),
-            std::cref(this->layout),
-            std::cref(this->memory_config));
+        return std::forward_as_tuple(
+            this->storage_type, this->shape, this->data_type, this->layout, this->memory_config);
     }
 };
 

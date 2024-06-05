@@ -361,20 +361,15 @@ struct Tensor {
     // Size in bytes of a single element held in tensor
     uint32_t element_size() const;
 
-    static constexpr auto attribute_names = std::make_tuple("storage", "shape", "dtype", "layout");
+    static constexpr auto attribute_names = std::forward_as_tuple("storage", "shape", "dtype", "layout");
     const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->tensor_attributes->storage),
-            std::cref(this->tensor_attributes->shape),
-            std::cref(this->tensor_attributes->dtype),
-            std::cref(this->tensor_attributes->layout));
+        return std::forward_as_tuple(this->tensor_attributes->storage, this->tensor_attributes->shape, this->tensor_attributes->dtype, this->tensor_attributes->layout);
     }
 
     std::vector<uint32_t> host_page_ordering();
 
     // Main Thread - Wait for all workers in this tensor to populate the entire tensor
     inline void wait_for_tensor_data_populated() const {
-        ZoneScoped;
         // Stall until all the workers for this tensor
         // have populated the full tensor
         while (this->tensor_attributes->num_workers_completed < this->tensor_attributes->num_shards_to_be_populated) {
@@ -383,7 +378,6 @@ struct Tensor {
 
     // Main Thread - Wait for the first worker in this tensor to populate the global metadata fields
     inline void wait_for_tensor_metadata_populated() const {
-        ZoneScoped;
         // First worker is responsible for updating all metadata fields
         // Stall until this worker is done
         while (not this->tensor_attributes->metadata_populated) {

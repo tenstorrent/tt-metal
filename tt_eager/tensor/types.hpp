@@ -83,8 +83,8 @@ struct Padding {
         std::size_t front;
         std::size_t back;
 
-        static constexpr auto attribute_names = std::make_tuple("front", "back");
-        const auto attribute_values() const { return std::make_tuple(std::cref(this->front), std::cref(this->back)); }
+        static constexpr auto attribute_names = std::forward_as_tuple("front", "back");
+        const auto attribute_values() const { return std::forward_as_tuple(this->front, this->back); }
     };
 
     std::size_t rank_;
@@ -114,9 +114,9 @@ struct Padding {
 
     PadValue pad_value() const;
 
-    static constexpr auto attribute_names = std::make_tuple("rank", "pad_dimensions", "pad_value");
+    static constexpr auto attribute_names = std::forward_as_tuple("rank", "pad_dimensions", "pad_value");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->rank_), std::cref(this->pad_dimensions_), std::cref(this->pad_value_));
+        return std::forward_as_tuple(this->rank_, this->pad_dimensions_, this->pad_value_);
     }
     friend std::ostream &operator<<(std::ostream &os, const Padding &padding);
 };
@@ -205,9 +205,9 @@ class Shape {
 
     const uint32_t get_normalized_index(std::int64_t index) const;
 
-    static constexpr auto attribute_names = std::make_tuple("rank", "dimensions", "padding");
+    static constexpr auto attribute_names = std::forward_as_tuple("rank", "dimensions", "padding");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->rank_), std::cref(this->dimensions_), std::cref(this->padding_));
+        return std::forward_as_tuple(this->rank_, this->dimensions_, this->padding_);
     }
     friend std::ostream &operator<<(std::ostream &os, const Shape &shape);
 };
@@ -240,10 +240,9 @@ struct MemoryConfig {
     bool is_l1() const;
     bool is_dram() const;
 
-    static constexpr auto attribute_names = std::make_tuple("memory_layout", "buffer_type", "shard_spec");
+    static constexpr auto attribute_names = std::forward_as_tuple("memory_layout", "buffer_type", "shard_spec");
     const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->memory_layout), std::cref(this->buffer_type), std::cref(this->shard_spec));
+        return std::forward_as_tuple(this->memory_layout, this->buffer_type, this->shard_spec);
     }
 };
 
@@ -272,8 +271,8 @@ struct OwnedStorage {
     OwnedStorage() = default;
     OwnedStorage(OwnedBuffer buffer_) : buffer(std::move(buffer_)) {}
 
-    static constexpr auto attribute_names = std::make_tuple();
-    const auto attribute_values() const { return std::make_tuple(); }
+    static constexpr auto attribute_names = std::forward_as_tuple();
+    const auto attribute_values() const { return std::forward_as_tuple(); }
 
     inline void insert_buffer(OwnedBuffer buffer_) {
         this->buffer = buffer_;
@@ -310,10 +309,8 @@ struct DeviceStorage {
         this->buffer = buffer_;
     }
 
-    inline DeviceBuffer get_buffer() const {
-        return this->buffer;
-    }
-    static constexpr auto attribute_names = std::make_tuple("memory_config");
+    inline DeviceBuffer get_buffer() const { return this->buffer; }
+    static constexpr auto attribute_names = std::forward_as_tuple("memory_config");
     const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
 };
 
@@ -372,8 +369,8 @@ struct BorrowedStorage {
 
     ~BorrowedStorage() { this->on_destruction_callback(); }
 
-    static constexpr auto attribute_names = std::make_tuple();
-    const auto attribute_values() const { return std::make_tuple(); }
+    static constexpr auto attribute_names = std::forward_as_tuple();
+    const auto attribute_values() const { return std::forward_as_tuple(); }
 };
 
 struct MultiDeviceHostStorage {
@@ -417,8 +414,8 @@ struct MultiDeviceHostStorage {
             return this->strategy == other.strategy and this->buffers == other.buffers and this->shapes == other.shapes;
         }
 
-        static constexpr auto attribute_names = std::make_tuple();
-        const auto attribute_values() const { return std::make_tuple(); }
+    static constexpr auto attribute_names = std::forward_as_tuple();
+    const auto attribute_values() const { return std::forward_as_tuple(); }
 
         // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
         // preinitialize empty tensor handles and use/populate them in the worker threads.
@@ -521,8 +518,8 @@ struct MultiDeviceHostStorage {
 
         }
 
-        static constexpr auto attribute_names = std::make_tuple();
-        const auto attribute_values() const { return std::make_tuple(); }
+    static constexpr auto attribute_names = std::forward_as_tuple();
+    const auto attribute_values() const { return std::forward_as_tuple(); }
 
         // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
         // preinitialize empty tensor handles and use/populate them in the worker threads.
@@ -663,8 +660,8 @@ struct RankedShape {
 
     const auto operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
 
-    static constexpr auto attribute_names = std::make_tuple("rank", "value");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->rank), std::cref(this->value)); }
+    static constexpr auto attribute_names = std::forward_as_tuple("rank", "value");
+    const auto attribute_values() const { return std::forward_as_tuple(this->rank, this->value); }
 };
 
 template <std::size_t Rank>
@@ -807,8 +804,8 @@ struct Shape {
             this->ranked_shape);
     }
 
-    static constexpr auto attribute_names = std::make_tuple("ranked_shape");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->ranked_shape)); }
+    static constexpr auto attribute_names = std::forward_as_tuple("ranked_shape");
+    const auto attribute_values() const { return std::forward_as_tuple(this->ranked_shape); }
 };
 
 static std::ostream &operator<<(std::ostream &os, const Shape &self) {
@@ -828,7 +825,7 @@ struct TensorSchema {
     const bool is_optional;
 
     static constexpr auto attribute_names() {
-        return std::make_tuple(
+        return std::forward_as_tuple(
             "min_rank",
             "max_rank",
             "dtypes",
@@ -840,15 +837,15 @@ struct TensorSchema {
     }
 
     const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->min_rank),
-            std::cref(this->max_rank),
-            std::cref(this->dtypes),
-            std::cref(this->layouts),
-            std::cref(this->can_be_on_device),
-            std::cref(this->can_be_on_cpu),
-            std::cref(this->can_be_scalar),
-            std::cref(this->is_optional));
+        return std::forward_as_tuple(
+            this->min_rank,
+            this->max_rank,
+            this->dtypes,
+            this->layouts,
+            this->can_be_on_device,
+            this->can_be_on_cpu,
+            this->can_be_scalar,
+            this->is_optional);
     }
 };
 
