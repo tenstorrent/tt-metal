@@ -33,32 +33,6 @@ def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def compute_lcm(x, y):
-    # choose the greater number
-    if x > y:
-        greater = x
-    else:
-        greater = y
-
-    while True:
-        if (greater % x == 0) and (greater % y == 0):
-            lcm = greater
-            break
-        greater += 1
-
-    return lcm
-
-
-def roundTo32(x):
-    if x < 32:
-        return 32
-    else:
-        if x % 32 == 0:
-            return x
-        else:
-            return ((x // 32) * 32) + 32
-
-
 def run(
     dtype,
     height,
