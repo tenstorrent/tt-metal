@@ -674,7 +674,17 @@ void TensorModule(py::module& m_tensor) {
     // input embeddings
     m_tensor.def(
         "embeddings",
-        &embeddings,
+        [](const Tensor &input,
+        const Tensor &weights,
+        bool tilized,
+        EmbeddingsType embeddings_type,
+        std::optional<uint32_t> pad_token,
+        const MemoryConfig &output_mem_config,
+        std::optional<const DataType> output_dtype,
+        std::optional<Tensor> &output_tensor,
+        uint8_t queue_id) {
+            return embeddings(queue_id, input, weights, tilized, embeddings_type, pad_token, output_mem_config, output_dtype, output_tensor);
+        },
         py::arg("input").noconvert(),
         py::arg("weights").noconvert(),
         py::arg("tilized").noconvert() = false,
@@ -682,6 +692,8 @@ void TensorModule(py::module& m_tensor) {
         py::arg("pad_token").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
+        py::arg("output_tensor").noconvert() = std::nullopt,
+        py::arg("queue_id").noconvert() = 0,
         R"doc(
         Returns specific indices of the embedding table specified by the input tensor
 
@@ -695,6 +707,8 @@ void TensorModule(py::module& m_tensor) {
             "pad_token", "pad_token used in token ids", "uint32_t", "Default is None", "No"
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
             "output_dtype", "DataType of output tensor", "DataType", "Default is weights dtype", "No"
+            "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+            "queue_id", "queue_id", "uint8_t", "Default is 0", "No"
     )doc");
 
     // FC

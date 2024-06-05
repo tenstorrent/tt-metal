@@ -32,6 +32,7 @@ void py_module(py::module& module) {
                 * :attr:`pad_token`: the padding token. Default is None.
                 * :attr:`layout`: the layout of the input and output tensors. Default is ttnn.ROW_MAJOR_LAYOUT.
                 * :attr:`memory_config`: the memory configuration of the output tensor. Default is input tensor memory config.
+                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
 
             Example:
                 >>> device_id = 0
@@ -53,7 +54,8 @@ void py_module(py::module& module) {
             py::arg("weight"),
             py::arg("pad_token") = std::nullopt,
             py::arg("layout") = ttnn::ROW_MAJOR_LAYOUT,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 }
 
 }  // namespace embedding
