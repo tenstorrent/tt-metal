@@ -403,6 +403,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_requir
                 input_tensor, input_tensor_sharded_memory_config, {});
             if (conv_config.deallocate_activation) {
                 input_tensor.deallocate();
+                resharded_input_tensor = ttnn::operations::core::reallocate(resharded_input_tensor, resharded_input_tensor.memory_config());
             }
             input_tensor = resharded_input_tensor;
         } else {

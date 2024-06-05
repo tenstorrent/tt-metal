@@ -4,35 +4,24 @@
 
 import pytest
 from loguru import logger
-import math
-from typing import Union, Tuple, List
 
 import torch
 import torchvision
 
 import ttnn
 from ttnn.model_preprocessing import (
-    preprocess_model,
     preprocess_model_parameters,
-    preprocess_conv2d,
     fold_batch_norm2d_into_conv2d,
-    fold_conv7s2_into_conv4s1,
-    preprocess_remaining_children_and_parameters,
     convert_torch_model_to_ttnn_model,
 )
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
-    is_wormhole_b0,
-    is_grayskull,
     pad_and_fold_conv_filters_for_unity_stride,
-    pad_and_fold_conv_activation_for_unity_stride,
     enable_memory_reports,
-    skip_for_grayskull,
-    skip_for_wormhole_b0,
 )
 
-from models.experimental.resnet.tt.ttnn_functional_resnet50_new_conv_api import resnet50
+from models.experimental.resnet.tt.ttnn_functional_resnet50_xxlarge_new_conv_api import resnet50
 
 
 def preprocess_conv_parameter(parameter, *, dtype):
@@ -205,7 +194,7 @@ class ResNet50TestInfra:
             "ACTIVATIONS_DTYPE": act_dtype,
         }
 
-        input_shape = (batch_size, 3, 224, 224)
+        input_shape = (1, 3, 1024, 1024)
 
         self.torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
 
@@ -218,7 +207,9 @@ class ResNet50TestInfra:
 
         ## golden
 
+        print(f"Running golden model")
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
+        print(f"Golden model run complete")
 
         ## ttnn
 
@@ -270,36 +261,19 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
     return ResNet50TestInfra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
 
 
-# @skip_for_wormhole_b0("PCC error with B=16. Fitting issue with B=20 due to 1x1s2 repleacement.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
-    (
-        (
-            8,
-            ttnn.bfloat8_b,
-            ttnn.bfloat8_b,
-            ttnn.MathFidelity.LoFi,
-        ),  ## memory config issue due to l4m1 downsample reshard
-        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
-        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
-        (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
-        (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
-    ),
+    ((1, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-def test_resnet_50(device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity):
-    if batch_size == 8:
-        pytest.skip("Skipping batch size 8 due to memory config issue")
-    if is_wormhole_b0() and batch_size == 20:
-        pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
-
+def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
     test_infra = create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
     enable_memory_reports()
     test_infra.preprocess_torch_input()
     # First run configures convs JIT
     test_infra.run()
-    # Optimized run
+    # # Optimized run
     test_infra.run()
-    # More optimized run with caching
+    # # More optimized run with caching
     test_infra.run()
     test_infra.validate()
