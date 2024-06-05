@@ -28,9 +28,12 @@ struct Transpose {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     TransposeOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+
     const operation::Hash compute_program_hash(
         const std::vector<Tensor> &input_tensors) const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("dim", "output_mem_config");
+    const auto attribute_values() const { return std::forward_as_tuple(dim, output_mem_config); }
 };
 
 // TODO: Accept parallelization
