@@ -238,10 +238,12 @@ class resnet50Bottleneck:
                 act_block_h_override = 160
 
         self.run_downsample_before_conv2 = False
-        # if not (input_height == 56 and self.conv1_input_channels == 64):
-        #     self.run_downsample_before_conv2 = True
+        if not (input_height == 56 and self.conv1_input_channels == 64):
+            self.run_downsample_before_conv2 = True
 
         if self.run_downsample_before_conv2:
+            ttnn.dump_device_memory_state(device, "before_reallocate_")
+            x = ttnn.reallocate(x)
             ttnn.dump_device_memory_state(device, "before_downsample_")
             ds_out = self.run_downsample_if_req(
                 x, device, batch_size, input_height, input_width, conv_op_cache, reshard_if_not_optimal, height_sharding
@@ -590,6 +592,7 @@ class resnet50:
         if self.batch_size == 20 and is_wormhole_b0():
             x = ttnn.reallocate(x)
 
+        logger.debug(f"==== Running layer 2 module 1")
         layer2_module1_input_shape = [
             x.get_legacy_shape()[0],
             x.get_legacy_shape()[1],
