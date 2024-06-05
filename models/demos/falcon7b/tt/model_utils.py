@@ -75,7 +75,7 @@ def get_weights_cached(
         weights = [weights_host.to(device, model_config[f"{weight_config_str}_MEMCFG"]) for device in devices]
         # Save weights for reuse between prefill/decode
         if weights_dict is not None:
-            weights_dict[str(path)] = weights[0]
+            weights_dict[str(path)] = weights
         # Store weights
         ttnn.experimental.tensor.dump_tensor(str(path), weights_host)
 
