@@ -173,10 +173,12 @@ class resnet50Bottleneck:
                     math_fidelity=self.model_config["MATH_FIDELITY"],
                     height_sharding=height_sharding,
                     deallocate_activation=True,
+                    reallocate_halo_output=True,
                     reshard_if_not_optimal=reshard_if_not_optimal,
                 ),
                 conv_op_cache=conv_op_cache,
             )
+            ttnn.deallocate(x)
             ds_out = ttnn.reallocate(ds_out)
         else:
             ds_out = x
@@ -194,7 +196,7 @@ class resnet50Bottleneck:
         height_sharding=None,
         eltwise_binary_out_in_place=True,
     ):
-        breakpoint()
+        # breakpoint()
 
         # conv1 is 1x1 conv
         # print("Running conv1")
@@ -237,13 +239,18 @@ class resnet50Bottleneck:
             ):
                 act_block_h_override = 160
 
-        self.run_downsample_before_conv2 = False
+        run_downsample_before_conv2 = False
         if not (input_height == 56 and self.conv1_input_channels == 64):
-            self.run_downsample_before_conv2 = True
+            run_downsample_before_conv2 = True
 
-        if self.run_downsample_before_conv2:
+        if run_downsample_before_conv2:
+            # breakpoint()
+
             ttnn.dump_device_memory_state(device, "before_reallocate_")
-            x = ttnn.reallocate(x)
+            if input_height == 56 and self.conv1_input_channels == 256 and self.downsample:
+                x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.deallocate(x)
+                x = ttnn.reallocate(x_rm)
             ttnn.dump_device_memory_state(device, "before_downsample_")
             ds_out = self.run_downsample_if_req(
                 x, device, batch_size, input_height, input_width, conv_op_cache, reshard_if_not_optimal, height_sharding
@@ -308,7 +315,7 @@ class resnet50Bottleneck:
             conv_op_cache=conv_op_cache,
         )
 
-        if not self.run_downsample_before_conv2:
+        if not run_downsample_before_conv2:
             ds_out = self.run_downsample_if_req(
                 x, device, batch_size, input_height, input_width, conv_op_cache, reshard_if_not_optimal, height_sharding
             )
