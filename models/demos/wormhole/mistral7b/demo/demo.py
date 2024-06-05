@@ -6,7 +6,17 @@ import torch
 import json
 from time import time
 from loguru import logger
+import os
+
+# Set Mistral flags for CI, if CI environment is setup
+if os.getenv("CI") == "true":
+    os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+    os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+    os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
+
 import ttnn
+import pytest
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
     prepare_inputs_ttnn,
     sample,
@@ -84,10 +94,9 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, embd, instruc
     return emb_inputs, pt_tokenized_inputs, input_mask, rot_emb_matrix_list
 
 
-def run_mistral_demo(user_input, batch_size, device):
+def run_mistral_demo(user_input, batch_size, device, instruct_mode):
     assert batch_size == 32, "Batch size must be 32"
 
-    instruct_mode = True
     embed_on_device = False
     dtype = ttnn.bfloat8_b
 
@@ -98,9 +107,10 @@ def run_mistral_demo(user_input, batch_size, device):
         input_prompts = load_inputs(user_input, 32)
 
     # Load model args, weights, and tokenizer
-    # Specify model_base_path=<MISTRAL_WEIGHTS_PATH> below to use your own weights
-    model_args = TtModelArgs(device, instruct=instruct_mode)  # TtModelArgs(model_base_path=<weights_path>)
+    model_args = TtModelArgs(device, instruct=instruct_mode)
     tokenizer = Tokenizer(model_args.tokenizer_path)
+
+    model_args.n_layers = 32
 
     logger.info("Loading weights...")
     state_dict = torch.load(model_args.consolidated_weights_path)
@@ -140,7 +150,7 @@ def run_mistral_demo(user_input, batch_size, device):
         device=device,
         dtype=dtype,
         state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype, instruct=instruct_mode),
+        weight_cache_path=model_args.weight_cache_path(dtype),
         layers=list(range(model_args.n_layers)),
         rot_mat=rot_emb_matrix_list,
         start_pos=generation_start_pos,
@@ -148,7 +158,7 @@ def run_mistral_demo(user_input, batch_size, device):
     tt_embd = TtMistralEmbedding(
         device=device,
         args=model_args,
-        weight_cache_path=model_args.weight_cache_path(dtype, instruct=instruct_mode),
+        weight_cache_path=model_args.weight_cache_path(dtype),
         state_dict=state_dict,
         dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
     )
@@ -241,5 +251,13 @@ def run_mistral_demo(user_input, batch_size, device):
             users_decoding = False
 
 
-def test_demo(user_input, device, use_program_cache):
-    return run_mistral_demo(user_input=user_input, batch_size=32, device=device)
+@pytest.mark.parametrize(
+    "input_prompts, instruct_weights",
+    [
+        ("models/demos/wormhole/mistral7b/demo/input_data.json", False),
+        ("models/demos/wormhole/mistral7b/demo/input_data_questions.json", True),
+    ],
+    ids=["general_weights", "instruct_weights"],
+)
+def test_demo(device, use_program_cache, input_prompts, instruct_weights):
+    return run_mistral_demo(user_input=input_prompts, batch_size=32, device=device, instruct_mode=instruct_weights)
