@@ -125,16 +125,9 @@ def run_model(device, tt_image, tt_resnet50):
 def run_2cq_model(device, tt_image, tt_resnet50):
     input_shape = tt_image.get_legacy_shape()
     shard_spec = tt_lib.tensor.ShardSpec(
-        tt_lib.tensor.CoreRangeSet(
-            {
-                tt_lib.tensor.CoreRange(
-                    tt_lib.tensor.CoreCoord(0, 0),
-                    tt_lib.tensor.CoreCoord(7, 0),
-                )
-            }
-        ),
+        tt_resnet50.dram_shard_grid,
         [
-            divup(tt_image.volume() // input_shape[3], 8),
+            divup(tt_image.volume() // input_shape[3], tt_resnet50.n_dram_cores),
             input_shape[3],
         ],
         tt_lib.tensor.ShardOrientation.ROW_MAJOR,
@@ -170,16 +163,9 @@ def run_2cq_model(device, tt_image, tt_resnet50):
 def run_trace_model(device, tt_image, tt_resnet50):
     input_shape = tt_image.get_legacy_shape()
     shard_spec = tt_lib.tensor.ShardSpec(
-        tt_lib.tensor.CoreRangeSet(
-            {
-                tt_lib.tensor.CoreRange(
-                    tt_lib.tensor.CoreCoord(0, 0),
-                    tt_lib.tensor.CoreCoord(7, 0),
-                )
-            }
-        ),
+        tt_resnet50.dram_shard_grid,
         [
-            divup(tt_image.volume() // input_shape[3], 8),
+            divup(tt_image.volume() // input_shape[3], tt_resnet50.n_dram_cores),
             input_shape[3],
         ],
         tt_lib.tensor.ShardOrientation.ROW_MAJOR,
@@ -209,9 +195,101 @@ def run_trace_model(device, tt_image, tt_resnet50):
     return tt_output_res.cpu(blocking=True)
 
 
+def run_trace_2cq_model(device, tt_image, tt_resnet50):
+    input_shape = tt_image.get_legacy_shape()
+    shard_spec = tt_lib.tensor.ShardSpec(
+        tt_resnet50.dram_shard_grid,
+        [
+            divup(tt_image.volume() // input_shape[3], tt_resnet50.n_dram_cores),
+            input_shape[3],
+        ],
+        tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+        False,
+    )
+    sharded_mem_config_DRAM = tt_lib.tensor.MemoryConfig(
+        tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.DRAM, shard_spec
+    )
+
+    tt_image_res = tt_lib.tensor.allocate_tensor_on_device(
+        tt_image.shape, tt_image.dtype, tt_image.layout, device, sharded_mem_config_DRAM
+    )
+
+    tt_image_res_shape = tt_image_res.get_legacy_shape()
+    reshard_shard_spec = tt_lib.tensor.ShardSpec(
+        tt_resnet50.shard_grid,
+        [
+            tt_image_res_shape[2] // tt_resnet50.first_conv_num_cores_nhw,
+            tt_image_res_shape[3],
+        ],
+        tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+        False,
+    )
+    reshard_mem_config = tt_lib.tensor.MemoryConfig(
+        tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, reshard_shard_spec
+    )
+    interleaved_dram_mem_config = tt_lib.tensor.MemoryConfig(
+        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    )
+
+    op_event = tt_lib.device.CreateEvent()
+    write_event = tt_lib.device.CreateEvent()
+    # Initialize the op event so we can write
+    tt_lib.device.RecordEvent(device, 0, op_event)
+
+    # Compile
+    tt_lib.device.WaitForEvent(device, 1, op_event)
+    tt_lib.tensor.write_tensor(tt_image, tt_image_res)
+    tt_lib.device.RecordEvent(device, 1, write_event)
+
+    tt_lib.device.WaitForEvent(device, 0, write_event)
+    reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config)
+    tt_lib.device.RecordEvent(device, 0, op_event)
+    first_out_addr = reshard_out.buffer_address()
+
+    tt_resnet50(reshard_out, final_out_mem_config=interleaved_dram_mem_config)
+    tt_lib.device.Synchronize(device)
+    # Trace
+    tt_lib.device.WaitForEvent(device, 1, op_event)
+    tt_lib.tensor.write_tensor(tt_image, tt_image_res)
+    tt_lib.device.RecordEvent(device, 1, write_event)
+
+    tt_lib.device.WaitForEvent(device, 0, write_event)
+    reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config)
+    tt_lib.device.RecordEvent(device, 0, op_event)
+
+    tid = tt_lib.device.BeginTraceCapture(device, 0, 1500000)
+    tt_output_res = tt_resnet50(reshard_out, final_out_mem_config=interleaved_dram_mem_config)
+    reshard_out = tt_lib.tensor.allocate_tensor_on_device(
+        reshard_out.shape, reshard_out.dtype, reshard_out.layout, device, reshard_mem_config
+    )
+    tt_lib.device.EndTraceCapture(device, 0, tid)
+    assert first_out_addr == reshard_out.buffer_address()
+    tt_lib.device.Synchronize(device)
+
+    # Test overlapping write
+    tt_lib.device.RecordEvent(device, 0, op_event)
+    outputs = []
+    for iter in range(0, 2):
+        tt_lib.device.WaitForEvent(device, 1, op_event)
+        tt_lib.tensor.write_tensor(tt_image, tt_image_res)
+        tt_lib.device.RecordEvent(device, 1, write_event)
+
+        tt_lib.device.WaitForEvent(device, 0, write_event)
+        reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config, reshard_out)
+        tt_lib.device.RecordEvent(device, 0, op_event)
+
+        tt_lib.device.ReplayTrace(device, 0, tid, False)
+        outputs.append(tt_output_res.cpu(blocking=False))
+
+    tt_lib.device.Synchronize(device)
+    # Done with the trace, can deallocate the buffers now.
+    tt_lib.device.ReleaseTrace(device, tid)
+
+    return outputs[1]
+
+
 def run_resnet50_inference(
     device,
-    use_program_cache,
     batch_size,
     weights_dtype,
     activations_dtype,
@@ -314,7 +392,6 @@ def test_run_resnet50_inference(
 ):
     run_resnet50_inference(
         device,
-        use_program_cache,
         batch_size,
         weights_dtype,
         activations_dtype,
@@ -322,81 +399,3 @@ def test_run_resnet50_inference(
         imagenet_sample_input,
         run_model,
     )
-
-
-@skip_for_wormhole_b0("This test is not supported on WHB0, please use the TTNN version.")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "num_hw_cqs": 2}], indirect=True)
-@pytest.mark.parametrize("batch_size", [20], ids=["batch_20"])
-@pytest.mark.parametrize(
-    "weights_dtype",
-    [tt_lib.tensor.DataType.BFLOAT8_B],
-    ids=["weights_BFLOAT8_B"],
-)
-@pytest.mark.parametrize(
-    "activations_dtype",
-    [tt_lib.tensor.DataType.BFLOAT8_B],
-    ids=["activations_BFLOAT8_B"],
-)
-@pytest.mark.parametrize(
-    "math_fidelity",
-    [tt_lib.tensor.MathFidelity.LoFi],
-    ids=["LoFi"],
-)
-def test_run_resnet50_2cqs_inference(
-    device, use_program_cache, batch_size, weights_dtype, activations_dtype, math_fidelity, imagenet_sample_input
-):
-    run_resnet50_inference(
-        device,
-        use_program_cache,
-        batch_size,
-        weights_dtype,
-        activations_dtype,
-        math_fidelity,
-        imagenet_sample_input,
-        run_2cq_model,
-    )
-
-
-@skip_for_wormhole_b0("This test is not supported on WHB0, please use the TTNN version.")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "num_hw_cqs": 2}], indirect=True)
-@pytest.mark.parametrize("batch_size", [20], ids=["batch_20"])
-@pytest.mark.parametrize(
-    "weights_dtype",
-    [tt_lib.tensor.DataType.BFLOAT8_B],
-    ids=["weights_BFLOAT8_B"],
-)
-@pytest.mark.parametrize(
-    "activations_dtype",
-    [tt_lib.tensor.DataType.BFLOAT8_B],
-    ids=["activations_BFLOAT8_B"],
-)
-@pytest.mark.parametrize(
-    "math_fidelity",
-    [tt_lib.tensor.MathFidelity.LoFi],
-    ids=["LoFi"],
-)
-@pytest.mark.parametrize("enable_async", [True, False])
-def test_run_resnet50_trace_inference(
-    device,
-    use_program_cache,
-    batch_size,
-    weights_dtype,
-    activations_dtype,
-    math_fidelity,
-    imagenet_sample_input,
-    enable_async,
-):
-    device.enable_async(enable_async)
-
-    run_resnet50_inference(
-        device,
-        use_program_cache,
-        batch_size,
-        weights_dtype,
-        activations_dtype,
-        math_fidelity,
-        imagenet_sample_input,
-        run_trace_model,
-    )
-
-    device.enable_async(False)
