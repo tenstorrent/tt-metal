@@ -157,19 +157,17 @@ class TtMambaBlock(torch.nn.Module):
             compute_kernel_config=self.compute_kernel_config,
             use_1d_systolic_array=True,
             dtype=self.configs["dtype"]["activations"],
+            activation="silu",
         )
         ttnn.deallocate(residual_connection)
 
-        residual_with_silu = ttnn.silu(residual, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(residual)
-
         out = ttnn.mul(
             ssm_output,
-            residual_with_silu,
+            residual,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=self.configs["dtype"]["activations"],
         )
-        ttnn.deallocate(residual_with_silu)
+        ttnn.deallocate(residual)
         ttnn.deallocate(ssm_output)
 
         out_proj = ttnn.linear(
