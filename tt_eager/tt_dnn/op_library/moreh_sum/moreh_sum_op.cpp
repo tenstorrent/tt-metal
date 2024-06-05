@@ -78,32 +78,28 @@ inline void validate_output_tensor_with_keep_batch_dim(const Tensor& input, cons
             TT_FATAL(input_shape[i] == output_shape[i]);
             TT_FATAL(input_shape_wo_padding[i] == output_shape_wo_padding[i]);
         }
-        } else {
-            std::vector<uint32_t> expected_output_shape;
-            std::vector<uint32_t> expected_output_shape_wo_padding;
-            for (int i = 0; i < output_shape.rank(); ++i) {
-                if (i == dim && !is_tile_dim) {
-                    expected_output_shape.push_back(1);
-                    expected_output_shape_wo_padding.push_back(1);
-                }
-                expected_output_shape.push_back(output_shape[i]);
-                expected_output_shape_wo_padding.push_back(output_shape_wo_padding[i]);
+    } else {
+        std::vector<uint32_t> expected_output_shape;
+        std::vector<uint32_t> expected_output_shape_wo_padding;
+        for (int i = 0; i < output_shape.rank(); ++i) {
+            if (i == dim && !is_tile_dim) {
+                expected_output_shape.push_back(1);
+                expected_output_shape_wo_padding.push_back(1);
             }
-
-            log_debug(LogOp, "{}:{} expected_output_shape {}", __func__, __LINE__, expected_output_shape);
-            log_debug(
-                LogOp,
-                "{}:{} expected_output_shape_wo_padding {}",
-                __func__,
-                __LINE__,
-                expected_output_shape_wo_padding);
-            for (int i = 0; i < input_rank; ++i) {
-                if (i == dim)
-                    continue;
-                TT_FATAL(input_shape[i] == expected_output_shape[i]);
-                TT_FATAL(input_shape_wo_padding[i] == expected_output_shape_wo_padding[i]);
-            }
+            expected_output_shape.push_back(output_shape[i]);
+            expected_output_shape_wo_padding.push_back(output_shape_wo_padding[i]);
         }
+
+        log_debug(LogOp, "{}:{} expected_output_shape {}", __func__, __LINE__, expected_output_shape);
+        log_debug(
+            LogOp, "{}:{} expected_output_shape_wo_padding {}", __func__, __LINE__, expected_output_shape_wo_padding);
+        for (int i = 0; i < input_rank; ++i) {
+            if (i == dim)
+                continue;
+            TT_FATAL(input_shape[i] == expected_output_shape[i]);
+            TT_FATAL(input_shape_wo_padding[i] == expected_output_shape_wo_padding[i]);
+        }
+    }
 }
 
 Tensor _moreh_sum(
@@ -241,6 +237,12 @@ Tensor moreh_sum(
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<int64_t> dims = get_dim(dim, input.get_legacy_shape().rank());
     std::sort(dims.begin(), dims.end());
+
+    std::cout << input.get_legacy_shape().rank() << " +_+1 \n";
+    if (output.has_value()) {
+    std::cout << output.value().get_legacy_shape().rank() << " +_+2 \n";
+
+    }
 
     auto temp_input = input;
     for (uint32_t i = dims.size() - 1; i > 0; i--) {

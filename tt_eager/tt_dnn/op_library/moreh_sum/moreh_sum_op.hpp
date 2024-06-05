@@ -79,9 +79,9 @@ struct MorehSum {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &inputs, std::vector<Tensor> &outputs) const;
     stl::reflection::Attributes attributes() const;
-    static constexpr auto attribute_names = std::make_tuple("dim", "keep_batch_dim", "output_mem_config", "compute_kernel_config");
+    static constexpr auto attribute_names = std::make_tuple("dim", "output_mem_config", "compute_kernel_config");
     const auto attribute_values() const {
-        return std::make_tuple(std::cref(this->dim), std::cref(this->keep_batch_dim), std::cref(this->output_mem_config), std::cref(this->compute_kernel_config));
+        return std::make_tuple(std::cref(this->dim), std::cref(this->output_mem_config), std::cref(this->compute_kernel_config));
     }
 };
 
