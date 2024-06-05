@@ -42,20 +42,61 @@ std::vector<ttnn::Tensor> _atan2_bw(
 }
 
 
-std::vector<ttnn::Tensor> _embedding_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& weight, const MemoryConfig& output_mem_config) {
+std::vector<std::optional<Tensor>> _embedding_bw(
+    const Tensor& grad, const Tensor& input, const Tensor& weight, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad) {
+    std::vector<std::optional<Tensor>> result;
     TT_FATAL(input.get_dtype() == DataType::UINT32, "Input must be UINT32");
-    TT_FATAL(
-        grad.get_legacy_shape()[0] == 1 && grad.get_legacy_shape()[1] == 1,
-        "First two dimensions for the grad must be 1");
-    TT_FATAL(
-        input.get_legacy_shape()[1] == 1 && input.get_legacy_shape()[2] == 1,
-        "Only dim 0 && 3 for the input can be non 1");
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_a = embeddings(input, grad, false);
-    grad_tensor.emplace_back(grad_a);
+    TT_FATAL(grad.get_legacy_shape()[0] == 1 && grad.get_legacy_shape()[1] == 1, "First two dimensions for the grad must be 1");
+    TT_FATAL(input.get_legacy_shape()[1] == 1 && input.get_legacy_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
+    if (are_required_outputs.at(0)) {
+        if(input_grad.has_value()){
+            embeddings(input, grad, false, EmbeddingsType::GENERIC, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, input_grad.value());
+        } else {
+            input_grad = embeddings(input, grad, false);
+        }
+        result.push_back(input_grad.value());
+    } else {
+        result.push_back(std::nullopt);
+    }
 
-    return grad_tensor;
+    return std::move(result);
+}
+
+std::vector<std::optional<Tensor>> _embedding_bw_overload(uint8_t cq_id, const Tensor& grad, const Tensor& input, const Tensor& weight, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad) {
+    std::vector<std::optional<Tensor>> result;
+    TT_FATAL(input.get_dtype() == DataType::UINT32, "Input must be UINT32");
+    TT_FATAL(grad.get_legacy_shape()[0] == 1 && grad.get_legacy_shape()[1] == 1, "First two dimensions for the grad must be 1");
+    TT_FATAL(input.get_legacy_shape()[1] == 1 && input.get_legacy_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
+    if (are_required_outputs.at(0)) {
+        if(input_grad.has_value()){
+            assign(cq_id, embeddings(cq_id, input, grad, false, EmbeddingsType::GENERIC, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, input_grad.value()), input_grad.value());
+        } else {
+            input_grad = embeddings(input, grad, false);
+        }
+        result.push_back(input_grad.value());
+    } else {
+        result.push_back(std::nullopt);
+    }
+
+    return std::move(result);
+}
+
+std::vector<ttnn::Tensor> _embedding_bw_inter(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+
+    auto result = _embedding_bw_overload(0, grad, input, other, output_mem_config, {true, true}, std::nullopt, std::nullopt);
+
+    std::vector<ttnn::Tensor> output_tensors;
+    output_tensors.reserve(result.size());
+
+    for (const auto& opt_tensor : result) {
+        if (opt_tensor) {
+            output_tensors.emplace_back(*opt_tensor);
+        } else {
+            output_tensors.emplace_back();
+        }
+    }
+    return output_tensors;
 }
 
 std::vector<std::optional<ttnn::Tensor>> _addalpha_bw(
@@ -434,8 +475,6 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
     switch (OpType) {
         case BinaryBackwardOpType::ATAN2_BW:
             return _atan2_bw;
-        case BinaryBackwardOpType::EMBEDDING_BW:
-            return _embedding_bw;
         case BinaryBackwardOpType::SUB_BW:
             return _sub_bw;
         case BinaryBackwardOpType::XLOGY_BW:
@@ -460,6 +499,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _binary_le_bw;
         case BinaryBackwardOpType::RSUB_BW:
             return _rsub_bw;
+        case BinaryBackwardOpType::EMBEDDING_BW:
+            return _embedding_bw_inter;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
@@ -516,6 +557,8 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, 
             return _add_bw;
         case BinaryBackwardOpType::BINARY_EQ_BW:
             return _binary_eq_bw;
+        case BinaryBackwardOpType::EMBEDDING_BW:
+            return _embedding_bw_overload;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
@@ -528,6 +571,8 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tens
             return _add_bw_overload;
         case BinaryBackwardOpType::BINARY_EQ_BW:
             return _binary_eq_bw_overload;
+        case BinaryBackwardOpType::EMBEDDING_BW:
+            return _embedding_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
