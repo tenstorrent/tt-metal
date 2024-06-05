@@ -31,11 +31,11 @@ def compare(tensor, name, permute=False):
 
 
 class basic_transformer_block:
-    def __init__(self, device, parameters):
+    def __init__(self, device, parameters, seq_len):
         self.device = device
         self.parameters = parameters
-        self.cross_attention_1 = cross_attention(device, self.parameters.attn1)
-        self.cross_attention_2 = cross_attention(device, self.parameters.attn2)
+        self.cross_attention_1 = cross_attention(device, self.parameters.attn1, seq_len=seq_len)
+        self.cross_attention_2 = cross_attention(device, self.parameters.attn2, seq_len=seq_len)
         self.ff = feedforward(device, parameters=self.parameters.ff)
 
     def __call__(

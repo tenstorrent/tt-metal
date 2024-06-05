@@ -246,18 +246,24 @@ def determine_blocking(M, K, N, grid_size, transpose_mcast=False):
     return in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w
 
 
-def reshard_to(tensor, grid_size, layout, col_major=False):
+def reshard_to(tensor, grid_size, layout, col_major=False, shape=None):
+    if shape is not None:
+        shape = list(shape)
+        volume = math.prod(shape)
+    else:
+        shape = tensor.shape
+        volume = tensor.volume()
     if layout == ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED:
         logical_grid_size = list(grid_size)
         if col_major:
             logical_grid_size[0], logical_grid_size[1] = grid_size[1], grid_size[0]
         shard_spec = [
-            tensor.volume() // tensor.shape[-1] // logical_grid_size[1],
-            tensor.shape[-1] // logical_grid_size[0],
+            volume // shape[-1] // logical_grid_size[1],
+            shape[-1] // logical_grid_size[0],
         ]
     elif layout == ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED:
         num_cores = grid_size[0] * grid_size[1]
-        shard_spec = [tensor.volume() // tensor.shape[-1] // num_cores, tensor.shape[-1]]
+        shard_spec = [volume // shape[-1] // num_cores, shape[-1]]
     output_shard_grid = ttnn.experimental.tensor.CoreRangeSet(
         {
             ttnn.experimental.tensor.CoreRange(

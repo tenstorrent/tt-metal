@@ -178,8 +178,8 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
             return_dict=return_dict,
             config=config,
         )
-        profiler.end(f"model_run_for_inference_{i}")
         ttnn_output = ttnn_to_torch(ttnn_output)
+        profiler.end(f"model_run_for_inference_{i}")
 
     # printout the perf
     profiler.print()
