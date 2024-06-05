@@ -185,7 +185,13 @@ Tensor fmod(
     const Tensor& input_b,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+<<<<<<< HEAD
 Tensor trunc(const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+=======
+Tensor frac(
+    const Tensor& input,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+>>>>>>> #8681: Add frac op
 
 Tensor round(
     const Tensor& input,

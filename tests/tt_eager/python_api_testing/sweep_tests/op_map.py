@@ -632,6 +632,10 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_trunc,
         "pytorch_op": pytorch_ops.trunc,
     },
+    "eltwise-frac": {
+        "tt_op": tt_lib_ops.eltwise_frac,
+        "pytorch_op": pytorch_ops.frac,
+    },
     "eltwise-floor_div": {
         "tt_op": tt_lib_ops.eltwise_floor_div,
         "pytorch_op": pytorch_ops.floor_div,

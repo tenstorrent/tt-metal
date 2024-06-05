@@ -655,6 +655,11 @@ def trunc(x, *args, **kwargs):
     return torch.trunc(x)
 
 
+def frac(x, *args, **kwargs):
+    result = torch.frac(x)
+    return result
+
+
 def floor_div(x, y, *args, **kwargs):
     result = torch.floor_divide(x, y)
     return result

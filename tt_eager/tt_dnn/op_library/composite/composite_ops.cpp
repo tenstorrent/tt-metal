@@ -994,6 +994,15 @@ Tensor trunc(const Tensor& input, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _trunc)(input, output_mem_config);
 }
 
+Tensor _frac(const Tensor& input, const MemoryConfig& output_mem_config) {
+    Tensor trunc_res = trunc(input, output_mem_config);
+    Tensor result = sub(input, trunc_res, std::nullopt, output_mem_config);
+    return result;
+}
+Tensor frac(const Tensor& input, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _frac)(input, output_mem_config);
+}
+
 Tensor _div_trunc(
     const Tensor& input_a,
     const Tensor& input_b,
@@ -1020,7 +1029,6 @@ Tensor div_trunc(
     float value,
     const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _div_trunc_overload)(input, value, output_mem_config);
-}
 
 Tensor is_odd(const Tensor& input, const MemoryConfig& output_mem_config) {
     Tensor result = ttnn::multiply(input, (1.0f/2.0f));

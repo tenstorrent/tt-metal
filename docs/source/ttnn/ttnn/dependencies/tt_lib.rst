@@ -458,6 +458,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.trunc
 
+.. autofunction:: tt_lib.tensor.frac
+
 .. autofunction:: tt_lib.tensor.round
 
 .. autofunction:: tt_lib.tensor.floor_div
