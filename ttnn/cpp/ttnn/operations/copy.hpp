@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "tt_eager/tt_dnn/op_library/pool/average_pool.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
+#include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -47,11 +47,10 @@ struct Typecast {
         }
 
         auto memory_config = memory_config_arg.value_or(input.memory_config());
-        return operation::run(Copy{memory_config_arg.value_or(input.memory_config()), output_dtype},
-                              {input},
-                              {}, // optional_input_tensors
-                              {optional_output_tensor},
-                              queue_id).at(0);
+        bool fp32_dest_acc_en = output_dtype == DataType::UINT32;
+        auto unary_op = UnaryWithParam{UnaryOpType::TYPECAST, static_cast<float>(output_dtype)};
+        auto eltwise_op = EltwiseUnary{{unary_op}, memory_config, fp32_dest_acc_en, output_dtype};
+        return operation::run(eltwise_op, {input}, {}, {optional_output_tensor}, queue_id).at(0);
     }
 
     template <typename... Args>
