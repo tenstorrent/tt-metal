@@ -539,7 +539,7 @@ namespace tt::tt_metal::detail{
             R"doc(Converts tensor from sharded_to_interleaved memory layout)doc"
         );
         m_tensor.def("reshard", &reshard,
-            py::arg("input"), py::arg("output_mem_config").noconvert(),
+            py::arg("input"), py::arg("output_mem_config").noconvert(), py::arg("output_tensor").noconvert() = std::nullopt,
             R"doc(Converts a tensor sharded one way to another way)doc"
         );
 
