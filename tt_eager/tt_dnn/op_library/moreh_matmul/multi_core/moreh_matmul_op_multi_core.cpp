@@ -396,30 +396,39 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
                                            num_cores,
                                            num_cores_y
                                             ](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<Tensor>& output_tensors
+        ) {
         log_debug(LogOp, "{}:{} args_callback ", __func__, __LINE__);
-        auto src_buffer_a = input_buffers.at(0);
-        auto src_buffer_b = input_buffers.at(1);
+        const auto input_address = input_tensors.at(0).buffer()->address();
+        const auto other_address = input_tensors.at(1).buffer()->address();
+        const auto output_address = output_tensors.at(0).buffer()->address();
+        const auto bias = optional_input_tensors.at(0);
 
-        auto dst_buffer = output_buffers.at(0);
         for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             {
                 auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_buffer_a->address();
-                runtime_args[1] = src_buffer_b->address();
+                runtime_args[0] = input_address;
+                runtime_args[1] = other_address;
+
+                if (bias.has_value()) {
+                    const auto bias_address = bias.value().buffer()->address();
+                    runtime_args[runtime_args.size() - 1] = bias_address;
+                }
             }
 
             {
                 auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
+                runtime_args[0] = output_address;
             }
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 }  // namespace primary

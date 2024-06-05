@@ -264,25 +264,6 @@ void MorehMatmul::validate_with_output_tensors(
     }
 }
 
-const operation::Hash MorehMatmul::compute_program_hash(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    const auto& input = input_tensors.at(0);
-    const auto& other = input_tensors.at(1);
-    const auto& bias = optional_input_tensors.at(0);
-
-    operation::Hash hash = tt::stl::hash::hash_objects(
-        0,
-        typeid(*this).hash_code(),
-        input,
-        other,
-        bias,
-        this->transpose_input,
-        this->transpose_other,
-        this->compute_kernel_config);
-    return hash;
-}
-
 Tensor moreh_matmul_(
     const Tensor& input,
     const Tensor& other,
