@@ -253,9 +253,9 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     #         config=config,
     #     )
     #     ttnn_output = ttnn_to_torch(ttnn_output)
+    #     end = time.time()
     #     passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.99)
     #     print(output)
-    #     end = time.time()
     #     times.append(end - start)
     #     print(f"Current iteration took {end - start} seconds")
     # total_time = 0
