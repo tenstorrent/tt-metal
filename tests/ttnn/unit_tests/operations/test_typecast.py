@@ -13,13 +13,9 @@ from models.utility_functions import is_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 
-from loguru import logger
-
 
 # The idea of the test is to convert bfloat16 to uint32 into preallocated uint32 tensor
-pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32/uint32/uint16 data types")
-
-
+@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32/uint32/uint16 data types")
 def test_typecast_output_tensor(device):
     torch.manual_seed(0)
 
