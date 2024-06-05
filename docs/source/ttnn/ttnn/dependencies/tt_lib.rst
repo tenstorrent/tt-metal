@@ -413,6 +413,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.heaviside
 
+.. autofunction:: tt_lib.tensor.right_shift
+
 .. autofunction:: tt_lib.tensor.logaddexp
 
 .. autofunction:: tt_lib.tensor.logaddexp2

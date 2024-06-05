@@ -67,7 +67,16 @@ def run_topk_test(N, C, H, W, k, dtype, device):
         # "FLOAT32",
     ],
 )
-@pytest.mark.parametrize("N, C, H, W, k,", ((1, 1, 32, 64, 32),))
+@pytest.mark.parametrize(
+    "N, C, H, W, k,",
+    (
+        (1, 1, 32, 64, 32),
+        (1, 1, 32, 256, 32),
+        (1, 1, 128, 64, 32),
+        (1, 1, 1024, 64, 32),
+        (1, 1, 2048, 64, 32),
+    ),
+)
 def test_topk(N, C, H, W, k, dtype, device):
     run_topk_test(N, C, H, W, k, dtype, device)
 

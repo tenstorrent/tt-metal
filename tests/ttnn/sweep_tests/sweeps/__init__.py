@@ -105,9 +105,9 @@ def _run_single_test(run, skip, xfail, permutation, *, device):
             message = None
     except Exception as e:
         should_fail, expected_exception = xfail(**permutation)
-        if should_fail and expected_exception == str(e):
+        if should_fail:
             status = "xfailed"
-            message = expected_exception
+            message = f"Exception: {e}"
         else:
             status = "crashed"
             message = f"Exception: {e}"

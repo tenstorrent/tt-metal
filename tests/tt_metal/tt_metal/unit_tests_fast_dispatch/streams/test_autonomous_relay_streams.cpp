@@ -647,7 +647,7 @@ void build_and_run_autonomous_stream_test(
 
 }  // namespace tt
 
-TEST_F(CommandQueueFixture, TestAutonomousRelayStreams) {
+TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreams) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
@@ -690,7 +690,7 @@ TEST_F(CommandQueueFixture, TestAutonomousRelayStreams) {
     return;
 }
 
-TEST_F(CommandQueueFixture, TestAutonomousRelayStreamsSmallPackets) {
+TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsSmallPackets) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {

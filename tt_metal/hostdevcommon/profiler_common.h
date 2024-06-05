@@ -4,6 +4,8 @@
 
 #pragma once
 
+#define PROFILER_OPT_DO_DISPATCH_CORES 2
+
 namespace kernel_profiler{
 
     constexpr static uint32_t PADDING_MARKER = ((1<<16) - 1);
@@ -40,7 +42,9 @@ namespace kernel_profiler{
         RUN_COUNTER,
         NOC_X,
         NOC_Y,
-        FLAT_ID
+        FLAT_ID,
+        DROPPED_ZONES,
+        PROFILER_DONE,
     };
 
 

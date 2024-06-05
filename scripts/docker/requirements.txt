@@ -6,7 +6,6 @@ libgoogle-glog-dev=0.4.0-1build1
 libyaml-cpp-dev=0.6.2-4ubuntu1
 git
 git-lfs
-clang-6.0=1:6.0.1-14
 libboost-all-dev=1.71.0.0ubuntu2
 libsndfile1=1.0.28-7ubuntu0.2
 pandoc
@@ -18,10 +17,8 @@ curl
 wget
 python3-pip
 libhwloc-dev
-
 libhdf5-serial-dev
 ruby=1:2.7+1
 python3.8-venv=3.8.10-0ubuntu1~20.04.9
-
 cargo
 ninja-build

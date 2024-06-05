@@ -799,9 +799,9 @@ inline void print_trailing_comma(std::ostream& ss, std::size_t index, std::size_
 template <typename T>
 inline void print_datum(std::ostream& ss, T datum) {
     if (std::is_integral<T>::value) {
-        ss << fmt::format("{:5}", datum);
+        ss << std::setw(5) << datum;
     } else {
-        ss << fmt::format("{:8.5f}", datum);
+        ss << std::fixed << std::setw(8) << std::setprecision(5) << datum;
     }
 }
 

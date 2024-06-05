@@ -200,11 +200,11 @@ def pytest_generate_tests(metafunc):
         )
 
     if uses_silicon_arch:
-        metafunc.parametrize("silicon_arch_name", available_archs)
+        metafunc.parametrize("silicon_arch_name", available_archs, scope="session")
         for test_requested_silicon_arch_fixture in test_requested_silicon_arch_fixtures:
             # The values of these arch-specific fixtures should not be used in
             # the test function, so use any parameters, like [True]
-            metafunc.parametrize(test_requested_silicon_arch_fixture, [True])
+            metafunc.parametrize(test_requested_silicon_arch_fixture, [True], scope="session")
 
     input_method = metafunc.config.getoption("--input-method")
     if input_method == "json":
@@ -273,7 +273,7 @@ def device(request, device_params):
 
     yield device
 
-    ttl.device.DumpDeviceProfiler(device, True)
+    ttl.device.DumpDeviceProfiler(device)
     ttl.device.DeallocateBuffers(device)
 
     ttl.device.Synchronize(device)
@@ -292,7 +292,7 @@ def pcie_devices(request, device_params):
     yield [devices[i] for i in range(num_devices)]
 
     for device in devices.values():
-        ttl.device.DumpDeviceProfiler(device, True)
+        ttl.device.DumpDeviceProfiler(device)
         ttl.device.DeallocateBuffers(device)
 
     ttl.device.CloseDevices(devices)
@@ -310,7 +310,7 @@ def all_devices(request, device_params):
     yield [devices[i] for i in range(num_devices)]
 
     for device in devices.values():
-        ttl.device.DumpDeviceProfiler(device, True)
+        ttl.device.DumpDeviceProfiler(device)
         ttl.device.DeallocateBuffers(device)
 
     ttl.device.CloseDevices(devices)
@@ -334,7 +334,7 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
     import tt_lib as ttl
 
     for device in device_mesh.get_devices():
-        ttl.device.DumpDeviceProfiler(device, True)
+        ttl.device.DumpDeviceProfiler(device)
         ttl.device.DeallocateBuffers(device)
 
     ttnn.close_device_mesh(device_mesh)
@@ -361,7 +361,7 @@ def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
     import tt_lib as ttl
 
     for device in device_mesh.get_devices():
-        ttl.device.DumpDeviceProfiler(device, True)
+        ttl.device.DumpDeviceProfiler(device)
         ttl.device.DeallocateBuffers(device)
 
     ttnn.close_device_mesh(device_mesh)
@@ -388,7 +388,7 @@ def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
     import tt_lib as ttl
 
     for device in device_mesh.get_devices():
-        ttl.device.DumpDeviceProfiler(device, True)
+        ttl.device.DumpDeviceProfiler(device)
         ttl.device.DeallocateBuffers(device)
 
     ttnn.close_device_mesh(device_mesh)
