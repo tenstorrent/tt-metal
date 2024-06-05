@@ -238,12 +238,6 @@ Tensor moreh_sum(
     std::vector<int64_t> dims = get_dim(dim, input.get_legacy_shape().rank());
     std::sort(dims.begin(), dims.end());
 
-    std::cout << input.get_legacy_shape().rank() << " +_+1 \n";
-    if (output.has_value()) {
-    std::cout << output.value().get_legacy_shape().rank() << " +_+2 \n";
-
-    }
-
     auto temp_input = input;
     for (uint32_t i = dims.size() - 1; i > 0; i--) {
         log_debug(LogOp, "{}:{} dim {} keep_batch_dim {}", __func__, __LINE__, dims[i], keep_batch_dim);
