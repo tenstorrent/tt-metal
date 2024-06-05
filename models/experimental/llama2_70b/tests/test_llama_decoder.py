@@ -41,9 +41,10 @@ from models.experimental.llama2_70b.tt.llama_common import (
 
 
 class PytorchLlamaDecoderModel(torch.nn.Module):
-    def __init__(self, hf_reference_model, layer_num):
+    def __init__(self, hf_reference_model, layer_num, rope_theta):
         super().__init__()
         self.decoder = hf_reference_model.layers[layer_num]
+        self.rope_theta = rope_theta
 
         # Disable dropout
         self.decoder.eval()
@@ -60,7 +61,7 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
         start_pos, and KV cache has valid data up to start_pos.
         """
         batch = x.size(0)
-        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2)
+        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta)
         freqs_cis = freqs_cis[start_pos : start_pos + 1]
 
         attn_mask = torch.zeros(batch, 1, 1, start_pos + 1)
@@ -76,7 +77,7 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
         """
         batch = x.size(0)
         seq_len = x.size(1)
-        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2)
+        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta)
         freqs_cis = freqs_cis[start_pos : start_pos + seq_len]
 
         attn_mask = torch.full((seq_len, seq_len), float("-inf"))
@@ -136,7 +137,9 @@ def run_test_LlamaDecoder_inference(
     head_dim = configuration.dim // configuration.n_heads
 
     # PyTorch model --------------------------------------------------------------------
-    pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(hugging_face_reference_model, UNIT_TEST_LAYER_NUM)
+    pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(
+        hugging_face_reference_model, UNIT_TEST_LAYER_NUM, configuration.rope_theta
+    )
     # TT model -------------------------------------------------------------------------
     transformation_mat_torch = get_rot_transformation_mat(head_dim)
     transformation_mats = ttnn.as_tensor(
@@ -289,12 +292,31 @@ def test_LlamaDecoder_inference(
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
-    run_test_LlamaDecoder_inference(
-        t3k_device_mesh,
-        batch,
-        seq_len,
-        pcc,
-        model_config,
-        n_devices,
-        emulated,
-    )
+    for i in t3k_device_mesh.get_device_ids():
+        device = t3k_device_mesh.get_device(i)
+        device.enable_program_cache()
+
+    inp = torch.rand(1, 1, 32, 32)
+    for i in range(2):
+        run_test_LlamaDecoder_inference(
+            t3k_device_mesh,
+            batch,
+            seq_len,
+            pcc,
+            model_config,
+            n_devices,
+            emulated,
+        )
+
+        for i in t3k_device_mesh.get_device_ids():
+            device = t3k_device_mesh.get_device(i)
+            test_tensor = (
+                ttnn.Tensor(
+                    inp.reshape(-1).tolist(),
+                    inp.shape,
+                    ttnn.bfloat16,
+                    ttnn.Layout.ROW_MAJOR,
+                )
+                .to(ttnn.Layout.TILE)
+                .to(device)
+            )

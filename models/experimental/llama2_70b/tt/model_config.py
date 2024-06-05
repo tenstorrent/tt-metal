@@ -79,6 +79,9 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
     assert num_devices in (8, 32)
     assert llm_mode in ("decode", "prefill")
+    assert seq_len in (1, 128, 2048)
+
+    seq_tiles = seq_len // 32
 
     DRAM_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
@@ -436,15 +439,25 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             block_w=num_tiles_per_core_w,
             inplace=True,
         )
-        model_config[
-            "LM_HEAD_MM_PROGCFG_LAMBDA"
-        ] = lambda seq_tiles: ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        model_config["LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
-            out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
             per_core_M=seq_tiles // 4,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
             per_core_N=16,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        model_config["LLAMA3_LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 4) if seq_len == 128 else (8, 8),
+            in0_block_w=1,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=seq_tiles
+            // (4 if seq_len == 128 else 8),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=64,  # 16 * 1024 // 32 // (8 if seq_len == 128 else 4) ,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
             fused_activation=None,
         )
@@ -689,10 +702,13 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
                 ),
             )
         else:
+            q_chunk_size = 128 if seq_len == 128 else 128
+            k_chunk_size = 64 if seq_len == 128 else 256
+
             model_config["SDPA_PROGCFG"] = ttl.operations.primary.transformers.SDPAMultiCoreProgramConfig(
                 compute_with_storage_grid_size=[8, 7],
-                q_chunk_size=128,
-                k_chunk_size=128,
+                q_chunk_size=q_chunk_size,
+                k_chunk_size=k_chunk_size,
             )
     elif num_devices == 32:
         model_config["Q_TRANSPOSE_MEMCFG"] = ttl.tensor.MemoryConfig(
@@ -826,14 +842,13 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             mcast_in0=True,
         )
     else:
-        seq_len_tiles = seq_len // 32
         cores_y = 4  # 8 if seq_len_tiles % 8 == 0 else 4
-        model_config["SELFOUT_MM_PROGCFG_LAMBDA"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        model_config["SELFOUT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, cores_y),
             in0_block_w=8,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=seq_len_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_M=seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
             per_core_N=4,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
             fused_activation=None,
@@ -901,7 +916,6 @@ def get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=8, seq_len=1)
             )
         else:
             # Llama 2 MLP Module Prefill
-            seq_tiles = seq_len // 32
             cores_y = 4  # 8 if seq_tiles % 8 == 0 else 4
             model_config["PADDED_FF1_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, cores_y),

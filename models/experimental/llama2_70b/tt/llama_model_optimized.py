@@ -165,19 +165,7 @@ class TtLlamaModel_optimized:
         assert inp_ids.dim() == 2
         batch, seq_len = inp_ids.shape
 
-        cache_name = lambda name: self.cache_path / (f"{name}")
-
-        cache_file_name = lambda name, dtype, layout: f"{cache_name(name)}_dtype_{dtype}_layout_{layout}.bin"
-
-        as_tensor = lambda tensor, dtype, layout, name, mesh_mapper, device_mesh: ttnn.as_tensor(
-            tensor,
-            dtype=dtype,
-            layout=layout,
-            device=self.device_mesh,
-            mesh_mapper=mesh_mapper,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(name) if name is not None else None,
-        )
+        cache_name = lambda name: self.cache_path / (f"{'llama3_' if self.llama3 else ''}{name}")
 
         if self.model_config["LLM_MODE"] == "decode":
             inp_ids = inp_ids.reshape(seq_len, 1, 1, batch)
@@ -209,21 +197,23 @@ class TtLlamaModel_optimized:
             assert cos_gathered.size() == (1, 1, seq_len, self.head_dim)
             assert sin_gathered.size() == (1, 1, seq_len, self.head_dim)
 
-            cos_gathereds = as_tensor(
+            cos_gathereds = ttnn.as_tensor(
                 cos_gathered,
-                ttnn.bfloat16,
-                ttnn.TILE_LAYOUT,
-                f"cos_gathered_prefill_{seq_len}",
-                ReplicateTensorToMesh(self.device_mesh),
-                self.device_mesh,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
+                memory_config=self.model_config["DRAM_MEMCFG"],
+                device=self.device_mesh,
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
             )
-            sin_gathereds = as_tensor(
+            sin_gathereds = ttnn.as_tensor(
                 sin_gathered,
-                ttnn.bfloat16,
-                ttnn.TILE_LAYOUT,
-                f"sin_gathered_prefill_{seq_len}",
-                ReplicateTensorToMesh(self.device_mesh),
-                self.device_mesh,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
+                memory_config=self.model_config["DRAM_MEMCFG"],
+                device=self.device_mesh,
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
             )
             cos_gathereds = ttnn.to_device(cos_gathereds, self.device_mesh)
             sin_gathereds = ttnn.to_device(sin_gathereds, self.device_mesh)
@@ -240,13 +230,14 @@ class TtLlamaModel_optimized:
                 ).min  # Mask rows beyond valid_seq_len as padding
             attn_mask = attn_mask.expand(batch, 1, -1, -1)
 
-            attn_masks = as_tensor(
+            attn_masks = ttnn.as_tensor(
                 attn_mask,
-                ttnn.bfloat16,
-                ttnn.TILE_LAYOUT,
-                f"attn_mask_prefill_{seq_len}",
-                ReplicateTensorToMesh(self.device_mesh),
-                self.device_mesh,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                memory_config=self.model_config["DRAM_MEMCFG"],
+                device=self.device_mesh,
             )
             attn_masks = ttnn.to_device(attn_masks, self.device_mesh)
 
@@ -266,7 +257,7 @@ class TtLlamaModel_optimized:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device_mesh,
-                cache_file_name=self.cache_path / f"rot_mat_decode_{start_pos}",
+                cache_file_name=cache_name(f"rot_mat_decode_{start_pos}"),
                 memory_config=self.model_config["DRAM_MEMCFG"],
                 mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
             )
@@ -287,6 +278,7 @@ class TtLlamaModel_optimized:
                 attn_mask,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name(f"attn_masks_decode_{start_pos}"),
                 memory_config=self.model_config["DRAM_MEMCFG"],
                 mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
                 device=self.device_mesh,
@@ -483,8 +475,8 @@ class TtLlamaModel_optimized:
         xs.deallocate(True)
 
         ### Each device does an LM head fracture
-        seq_tiles = norm_out_replicated.shape[2] // 32
-        self.model_config["LM_HEAD_MM_PROGCFG"] = self.model_config["LM_HEAD_MM_PROGCFG_LAMBDA"](seq_tiles)
+        if self.llama3:
+            self.model_config["LM_HEAD_MM_PROGCFG"] = self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
 
         lm_head_out = tt_lib.operations.primary.matmul(
             norm_out_replicated,

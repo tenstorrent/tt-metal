@@ -678,7 +678,7 @@ class TtLlamaAttention_optimized:
             memory_config=self.model_config["DRAM_MEMCFG"],
         )
 
-        dense_out_prog_cfg = self.model_config["SELFOUT_MM_PROGCFG_LAMBDA"]
+        dense_out_prog_cfg = self.model_config["SELFOUT_MM_PROGCFG"]
         # print('wo matmul')
         attn_output = tt_lib.operations.primary.matmul(
             attn_output,
