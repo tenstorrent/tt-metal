@@ -106,6 +106,9 @@ run_t3000_tests() {
   # Run tteager tests
   #run_t3000_tteager_tests
 
+  # Run llama2-70b experimental tests
+  run_t3000_llama2_70b_experimental_tests
+
   # Run falcon40b tests
   run_t3000_falcon40b_tests
 
