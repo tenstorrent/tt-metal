@@ -73,7 +73,7 @@ struct ToMemoryConfig {
                                Reshard{
                                    .output_mem_config = memory_config,
                                },
-                               {tensor})
+                               {tensor}, {}, {std::nullopt})
                         .at(0);
                 } else {
                     // for row-major tensors where shard-spec[1] is different for input shard and output shard

@@ -178,9 +178,9 @@ struct CorePageStride {
 struct Reshard {
     const MemoryConfig output_mem_config;
 
-    void validate(const std::vector<Tensor> &input_tensors) const;
+    void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     ShardedOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
@@ -189,13 +189,13 @@ struct Reshard {
     const auto attribute_values() const { return std::make_tuple(std::cref(this->output_mem_config)); }
 };
 
-inline Tensor reshard(const Tensor &input_tensor, const MemoryConfig &output_mem_config) {
+inline Tensor reshard(const Tensor &input_tensor, const MemoryConfig &output_mem_config, std::optional<Tensor> output_tensor = std::nullopt) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) -> std::vector<Tensor> {
+        [output_mem_config, output_tensor] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
-            return operation::run(Reshard{.output_mem_config = output_mem_config,}, {input_tensor});
-        }, {input_tensor}, output_tensors);
+            return operation::run(Reshard{.output_mem_config = output_mem_config,}, {input_tensor}, {}, {output_tensor});
+        }, {input_tensor}, output_tensors, {}, {output_tensor});
     return output_tensors.at(0);
 }
 
