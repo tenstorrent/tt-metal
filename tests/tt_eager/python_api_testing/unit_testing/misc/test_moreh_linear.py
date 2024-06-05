@@ -33,7 +33,7 @@ def get_bias_tensors(bias_shape, require_bias_grad, device):
     return tt_bias, bias, tt_bias_grad
 
 
-def moreh_linear(shapes, has_bias, has_output, device):
+def moreh_linear(shapes, has_bias, has_output, compute_kernel_config, device):
     torch.manual_seed(3072)
     input_shape, weight_shape, bias_shape, output_shape = shapes
     tt_input, tt_weight, _, _, _, _, torch_input, torch_weight, _ = get_tensors(
@@ -54,7 +54,9 @@ def moreh_linear(shapes, has_bias, has_output, device):
         tt_bias, torch_bias = None, None
 
     ## TT Op
-    tt_output = ttl.operations.primary.moreh_linear(tt_input, tt_weight, bias=tt_bias, output=tt_output)
+    tt_output = ttl.operations.primary.moreh_linear(
+        tt_input, tt_weight, bias=tt_bias, output=tt_output, compute_kernel_config=compute_kernel_config
+    )
 
     ## reference
     torch_output = torch.nn.functional.linear(torch_input, torch_weight, torch_bias)
@@ -90,9 +92,11 @@ def moreh_linear(shapes, has_bias, has_output, device):
     ),
 )
 @pytest.mark.parametrize("has_bias", [False, True])
-def test_moreh_linear(shapes, has_bias, device):
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_moreh_linear(shapes, has_bias, compute_kernel_options, device):
     torch.manual_seed(3072)
-    passing = moreh_linear(shapes, has_bias, True, device)
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
+    passing = moreh_linear(shapes, has_bias, True, compute_kernel_config, device)
     assert passing
 
 
@@ -101,16 +105,33 @@ def test_moreh_linear(shapes, has_bias, device):
     (
         # input, weight, bias(1d or scalar), output
         ([31, 31], [30, 31], [1, 30], [31, 30]),
-        ([31, 31], [30, 31], [1, 1], [31, 30]),
         ([2, 1, 2, 3, 2, 2, 96, 95], [511, 95], [1, 1], [2, 1, 2, 3, 2, 2, 96, 511]),
-        ([2, 1, 2, 3, 2, 2, 96, 95], [511, 95], [1, 511], [2, 1, 2, 3, 2, 2, 96, 511]),
     ),
 )
 @pytest.mark.parametrize("has_bias", [False, True])
 def test_moreh_linear_wo_output(shapes, has_bias, device):
     torch.manual_seed(3072)
-    passing = moreh_linear(shapes, has_bias, False, device)
+    compute_kernel_config = get_compute_kernel_options(False)
+    passing = moreh_linear(shapes, has_bias, False, compute_kernel_config, device)
     assert passing
+
+
+@pytest.mark.parametrize(
+    "shapes",
+    (
+        # input, weight, bias(1d or scalar), output
+        ([31, 31], [30, 31], [1, 1], [31, 30]),
+        ([2, 1, 2, 3, 2, 2, 96, 95], [511, 95], [1, 511], [2, 1, 2, 3, 2, 2, 96, 511]),
+    ),
+)
+def test_moreh_linear_enable_cache(shapes, device, use_program_cache):
+    torch.manual_seed(3072)
+    compute_kernel_config = get_compute_kernel_options(False)
+    for i in range(2):
+        passing = moreh_linear(shapes, True, True, compute_kernel_config, device)
+        assert passing
+
+    assert device.num_program_cache_entries() == 1
 
 
 def moreh_linear_backward(
