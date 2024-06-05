@@ -10,8 +10,20 @@ from models.experimental.llama2_70b.tests.test_llama_model import run_test_Llama
 
 import os
 
+# Set Llama flags for CI, if CI environment is setup
+if os.getenv("CI") == "true":
+    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
+    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
+
 
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "llama_version",
+    (
+        ("llama2"),
+        # ("llama3"),
+    ),
+)
 @pytest.mark.parametrize(
     "pcc, n_layers",
     (
@@ -31,8 +43,30 @@ def test_LlamaModel_inference(
     pcc,
     n_layers,
     t3k_device_mesh,
+    llama_version,
     n_devices=8,
 ):
+    # Set Llama flags for CI, if CI environment is setup
+    if os.getenv("CI") == "true":
+        if llama_version == "llama3":
+            os.environ["LLAMA_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/llama-3/llama-3-70b-repacked/"
+            os.environ["LLAMA_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/llama-3/tokenizer.model"
+            os.environ["LLAMA_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/llama-3/llama-data-cache/weights-cache-3"
+        else:
+            os.environ["LLAMA_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/llama-2/llama-2-70b-repacked/"
+            os.environ["LLAMA_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/llama-2/tokenizer.model"
+            os.environ["LLAMA_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/llama-2/llama-data-cache/weights-cache-2"
+    # For local testing
+    else:
+        if llama_version == "llama3":
+            os.environ["LLAMA_CKPT_DIR"] = "/home/llama3-data-repacked/llama-3-70b/"
+            os.environ["LLAMA_TOKENIZER_PATH"] = "/home/llama3-data/Meta-Llama-3-70B/tokenizer.model"
+            os.environ["LLAMA_CACHE_PATH"] = "/home/llama3-data-cache/weights-cache"
+        else:
+            os.environ["LLAMA_CKPT_DIR"] = "/home/llama-data-repacked-2/llama-2-70b/"
+            os.environ["LLAMA_TOKENIZER_PATH"] = "/home/llama-data/tokenizer.model"
+            os.environ["LLAMA_CACHE_PATH"] = "/home/llama-data-cache/weights-cache-2"
+
     model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
 
     if t3k_device_mesh.get_num_devices() < n_devices:
