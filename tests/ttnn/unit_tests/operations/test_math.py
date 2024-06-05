@@ -7,7 +7,6 @@ import pytest
 import torch
 
 import ttnn
-import tt_lib
 from models.utility_functions import is_grayskull
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -114,8 +113,8 @@ def test_eq(device, h, w, output_dtype):
     output_tensor_preallocated = output_tensor_preallocated_bfloat16
     # There is no good way to create uint16 tensor in ttnn/torch, so we create bfloat16 and typecast to target
     if output_dtype != ttnn.DataType.BFLOAT16:
-        output_tensor_preallocated = tt_lib.tensor.typecast(
-            output_tensor_preallocated_bfloat16, output_dtype, ttnn.L1_MEMORY_CONFIG
+        output_tensor_preallocated = ttnn.typecast(
+            output_tensor_preallocated_bfloat16, output_dtype, memory_config=ttnn.L1_MEMORY_CONFIG
         )
 
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
