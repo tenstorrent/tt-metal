@@ -225,6 +225,21 @@ int get_cpu_core_for_device_worker_thread(
     return core_assigned_to_device;
 }
 
+std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(const std::vector<chip_id_t>& device_ids, std::unordered_set<uint32_t>& free_cores, bool use_numa_node_based_thread_binding) {
+    std::unordered_map<uint32_t, uint32_t> device_to_core_map = {};
+    if (use_numa_node_based_thread_binding) {
+        auto cpu_cores_per_numa_node = device_cpu_allocator::get_cpu_cores_per_numa_node(free_cores);
+        for (const auto &device_id : device_ids) {
+            device_to_core_map.insert({device_id, device_cpu_allocator::get_cpu_core_for_device_worker_thread(device_id, cpu_cores_per_numa_node, free_cores)});
+        }
+    } else {
+        for (const auto &device_id : device_ids) {
+            device_to_core_map.insert({device_id, device_id % sysconf(_SC_NPROCESSORS_ONLN)});
+        }
+    }
+    return device_to_core_map;
+}
+
 void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t> &free_cores) {
     cpu_set_t cpuset;
     pthread_t current_thread = pthread_self();
@@ -253,23 +268,39 @@ std::map<chip_id_t, Device *> CreateDevices(
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
     std::map<chip_id_t, Device *> active_devices;  // TODO: pass this to CloseDevices
+    static bool use_numa_node_based_thread_binding = parse_env("TT_METAL_NUMA_BASED_AFFINITY", false);
+
+    std::unordered_set<uint32_t> free_cores = {};
+    std::vector<chip_id_t> all_device_ids = {};
+
     for (const auto &device_id : device_ids) {
+        // Get list of all devices in the cluster connected to the passed in device_ids
         const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-        if (active_devices.find(mmio_device_id) == active_devices.end()) {
-            for (const auto &mmio_controlled_device_id :
-                 tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
-                int core_assigned_to_device = mmio_controlled_device_id % sysconf(_SC_NPROCESSORS_ONLN);
-                Device *dev = new Device(
-                    mmio_controlled_device_id,
-                    num_hw_cqs,
-                    l1_small_size,
-                    l1_bank_remap,
-                    false,
-                    core_assigned_to_device);
-                active_devices.insert({mmio_controlled_device_id, dev});
-                detail::InitDeviceProfiler(dev);
+        if (std::find(all_device_ids.begin(), all_device_ids.end(), mmio_device_id) == all_device_ids.end()) {
+            for (const auto &mmio_controlled_device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
+                all_device_ids.push_back(mmio_controlled_device_id);
             }
         }
+    }
+    // Determine which CPU cores the worker threads need to be placed on for each device
+    std::unordered_map<uint32_t, uint32_t> device_to_core_map = device_cpu_allocator::get_device_id_to_core_map(all_device_ids, free_cores, use_numa_node_based_thread_binding);
+
+    for (const auto& device_id : all_device_ids) {
+        int core_assigned_to_device = device_to_core_map.at(device_id);
+        Device *dev = new Device(
+            device_id,
+            num_hw_cqs,
+            l1_small_size,
+            l1_bank_remap,
+            false,
+            core_assigned_to_device);
+        active_devices.insert({device_id, dev});
+        detail::InitDeviceProfiler(dev);
+    }
+
+    if (use_numa_node_based_thread_binding) {
+        // Bind main thread to cores not being used by workers.
+        device_cpu_allocator::bind_current_thread_to_free_cores(free_cores);
     }
     // TODO: need to only enable routing for used mmio chips
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
@@ -794,8 +825,14 @@ Device *CreateDevice(
     const size_t l1_small_size,
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
-    int core_assigned_to_device = device_id % sysconf(_SC_NPROCESSORS_ONLN);
+    static bool use_numa_node_based_thread_binding = parse_env("TT_METAL_NUMA_BASED_AFFINITY", false);
+    std::unordered_set<uint32_t> free_cores = {};
+    int core_assigned_to_device = device_cpu_allocator::get_device_id_to_core_map({device_id}, free_cores, use_numa_node_based_thread_binding)[device_id];
     Device *dev = new Device(device_id, num_hw_cqs, l1_small_size, l1_bank_remap, false, core_assigned_to_device);
+    if (use_numa_node_based_thread_binding) {
+        // Bind main thread to cores not being used by workers.
+        device_cpu_allocator::bind_current_thread_to_free_cores(free_cores);
+    }
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     detail::InitDeviceProfiler(dev);
     return dev;
