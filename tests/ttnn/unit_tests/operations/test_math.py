@@ -75,8 +75,8 @@ def test_lgamma(device, h, w):
 @pytest.mark.parametrize("w", [32])
 @pytest.mark.parametrize("output_dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.UINT16, ttnn.DataType.UINT32])
 def test_eq(device, h, w, output_dtype):
-    if is_grayskull() and output_dtype == ttnn.DataType.UINT32:
-        pytest.skip("GS does not support fp32/uint32")
+    if is_grayskull() and output_dtype in (ttnn.DataType.UINT32, ttnn.DataType.UINT16):
+        pytest.skip("GS does not support fp32/uint32/uint16 data types")
 
     torch.manual_seed(0)
 
