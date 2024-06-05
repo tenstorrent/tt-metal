@@ -859,7 +859,7 @@ class TtFalconAttentionDecode(nn.Module):
                         block_h=self.padded_local_heads // 32,
                         block_w=padded_layer_past_len // 32,
                     ),
-                    is_causal_mask=True,
+                    is_causal_mask=False,  # causal_mask=False will broadcast attention mask across all heads
                 )
 
         ######################

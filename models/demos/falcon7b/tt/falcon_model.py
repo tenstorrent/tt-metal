@@ -205,12 +205,8 @@ class TtFalconModelShared(torch.nn.Module):
                         )
                     )
                 else:
-                    # keep attention_heads in dim[2]
-                    attention_masks.append(
-                        (attention_mask_bool_padded * -1e3).expand(
-                            -1, -1, nearest_32(self.config.num_attention_heads), -1
-                        )
-                    )
+                    # Reshape width to tile-size since that is required by scale_mask_softmax_in_place with causal_mask=False (in falcon_attention.py)
+                    attention_masks.append(attention_mask_bool_padded.reshape(batch_size, 1, -1, 32) * -1e3)
             # Send attn masks to device
             tt_attention_mask = torch_tensors_to_tt_tensors(
                 attention_masks,
@@ -219,21 +215,13 @@ class TtFalconModelShared(torch.nn.Module):
                 self.model_config["ATTN_MASK_MEMCFG"],
                 self.devices,
             )
-            # Tilize attn masks
-            for i in range(self.num_devices):
-                tt_attention_mask[i] = ttnn.experimental.tensor.tilize(
-                    tt_attention_mask[i],
-                    output_mem_config=self.model_config["ATTN_MASK_MEMCFG"],
-                    output_dtype=self.model_config["ATTN_MASK_DTYPE"],
-                )
-
-            if self.model_config["l1_sharded"]:
-                for i, device in enumerate(self.devices):
-                    tt_attention_mask[i] = ttnn.experimental.tensor.interleaved_to_sharded(
+            if not self.model_config["l1_sharded"]:
+                # Tilize attn masks
+                for i in range(self.num_devices):
+                    tt_attention_mask[i] = ttnn.experimental.tensor.tilize(
                         tt_attention_mask[i],
-                        sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](
-                            nearest_32(self.config.num_attention_heads), num_max_tokens
-                        ),
+                        output_mem_config=self.model_config["ATTN_MASK_MEMCFG"],
+                        output_dtype=self.model_config["ATTN_MASK_DTYPE"],
                     )
 
             for i, device in enumerate(self.devices):
