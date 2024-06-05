@@ -175,7 +175,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
         static_cast<uint64_t>(alloc_config.worker_l1_size) - L1_UNRESERVED_BASE - alloc_config.l1_small_size;
     // Assuming top down allocation for L1 buffers so the allocatable memory space is the top alloc_config.l1_bank_size bytes of L1
     uint64_t alloc_offset = L1_UNRESERVED_BASE;
-    allocator.l1_manager = BankManager(BufferType::L1, bank_id_to_bank_offset, allocatable_l1_size, interleaved_address_limit, alloc_offset);
+    allocator.l1_manager = BankManager(BufferType::L1, bank_id_to_bank_offset, allocatable_l1_size, interleaved_address_limit, ALLOCATOR_ALIGNMENT, alloc_offset);
 
     uint64_t small_interleaved_address_limit = alloc_config.worker_l1_size - alloc_config.l1_small_size;
     uint64_t small_alloc_offset = alloc_offset + allocatable_l1_size;
@@ -188,6 +188,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
             small_bank_id_to_bank_offset,
             alloc_config.l1_small_size,
             small_interleaved_address_limit,
+            ALLOCATOR_ALIGNMENT,
             small_alloc_offset);
     }
 }

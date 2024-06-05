@@ -24,7 +24,7 @@ void Repeat::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(this->repeat_dim < input_shape.rank(), "Repeat dim specified is larger than input tensor rank.");
     if (input_tensor.get_layout() == Layout::ROW_MAJOR && this->repeat_dim == input_shape.rank() - 1) {
         TT_FATAL(
-            (input_shape[this->repeat_dim] * input_tensor.element_size()) % ADDRESS_ALIGNMENT == 0,
+            (input_shape[this->repeat_dim] * input_tensor.element_size()) % input_tensor.buffer()->alignment() == 0,
             "Current repeat implementation requires aligned last dim when repeating on last dim");
     }
     TT_FATAL(this->num_repeats > 0, "Number of repeats should be greater than 0");
@@ -75,7 +75,7 @@ Tensor repeat(const Tensor &input_tensor, const Shape &shape, const MemoryConfig
                 TT_FATAL(shape[dim] > 0, "Number of repetitions along a dim must be greater than 0");
                 if (input_tensor.get_layout() == Layout::ROW_MAJOR && dim == input_rank - 1) {
                     TT_FATAL(
-                        (input_tensor.get_legacy_shape()[dim] * input_tensor.element_size()) % ADDRESS_ALIGNMENT == 0,
+                        (input_tensor.get_legacy_shape()[dim] * input_tensor.element_size()) % input_tensor.buffer()->alignment() == 0,
                         "Current repeat implementation requires aligned last dim when repeating on last dim");
                 }
                 output = operation::run_without_autoformat(Repeat{dim, shape[dim], output_mem_config}, {output}).at(0);

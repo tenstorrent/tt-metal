@@ -97,8 +97,8 @@ inline void debug_sanitize_post_noc_addr_and_hang(
 
 // Return value is the alignment mask for the type of core the noc address points
 // to. Need to do this because L1 alignment needs to match the noc address alignment requirements,
-// even if it's different than the inherent L1 alignment requirements. Note that additional
-// alignment restrictions only apply for writes from L1, so need to specify direction as well.
+// even if it's different than the inherent L1 alignment requirements.
+// Direction is specified because reads and writes may have different L1 requirements (see noc_parameters.h).
 uint32_t debug_sanitize_noc_addr(
     uint64_t noc_addr,
     uint32_t l1_addr,
@@ -129,16 +129,15 @@ uint32_t debug_sanitize_noc_addr(
 
     // Check noc addr, we save the alignment requirement from the noc src/dst because the L1 address
     // needs to match alignment.
+    // Reads and writes may have different alignment requirements, see noc_parameters.h for details.
     uint32_t alignment_mask = (dir == DEBUG_SANITIZE_NOC_READ ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES) - 1;  // Default alignment, only override in ceratin cases.
     uint32_t invalid = multicast ? DebugSanitizeNocInvalidMulticast : DebugSanitizeNocInvalidUnicast;
     if (NOC_PCIE_XY_P(x, y)) {
-        // Additional alignment restriction only applies to reads
         alignment_mask = (dir == DEBUG_SANITIZE_NOC_READ ? NOC_PCIE_READ_ALIGNMENT_BYTES : NOC_PCIE_WRITE_ALIGNMENT_BYTES) - 1;
         if (!DEBUG_VALID_PCIE_ADDR(noc_local_addr, noc_len)) {
             debug_sanitize_post_noc_addr_and_hang(noc_addr, l1_addr, noc_len, multicast, invalid);
         }
     } else if (NOC_DRAM_XY_P(x, y)) {
-        // Additional alignment restriction only applies to reads
         alignment_mask = (dir == DEBUG_SANITIZE_NOC_READ ? NOC_DRAM_READ_ALIGNMENT_BYTES : NOC_DRAM_WRITE_ALIGNMENT_BYTES) - 1;
         if (!DEBUG_VALID_DRAM_ADDR(noc_local_addr, noc_len)) {
             debug_sanitize_post_noc_addr_and_hang(noc_addr, l1_addr, noc_len, multicast, invalid);
