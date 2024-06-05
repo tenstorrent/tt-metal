@@ -94,6 +94,17 @@ void kernel_main() {
     };
     #endif
 
+    // RT and COMPILE TIME ARGS for DRAM sharded weights
+    #ifdef IN1_DRAM_SHARDED
+    const uint32_t num_dram_shards_to_read                          = get_arg_val<uint32_t>(18);
+    const uint32_t dram_tensor_start_offset                         = get_arg_val<uint32_t>(19);
+    volatile tt_l1_ptr uint32_t * in1_block_w_dram_stride_bytes     = (volatile tt_l1_ptr uint32_t*)get_arg_addr(20);
+    volatile tt_l1_ptr uint32_t * current_dram_bank_id              = (volatile tt_l1_ptr uint32_t*)get_arg_addr(21);
+
+    constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(26);
+    constexpr uint32_t in1_block_w_dram_bytes= get_compile_time_arg_val(27);
+    #endif
+
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
@@ -149,34 +160,79 @@ void kernel_main() {
     #endif
     #endif
 
+    #ifdef IN1_DRAM_SHARDED
+    constexpr uint32_t in1_dram_block_size_bytes = in1_dram_block_num_tiles * in1_single_tile_size_bytes;
+    uint32_t l1_read_addr_in1_offset = 0;
+    uint32_t in1_block_w_bytes = in1_block_w * in1_single_tile_size_bytes;
+    #endif
+
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
         for (uint32_t block = 0; block < num_blocks; ++block) {
-            #ifndef IN1_SHARDED
-            // Operand 1
-            cb_reserve_back(cb_id_in1, in1_block_num_tiles);
-            l1_write_addr_in1 = get_write_ptr(cb_id_in1);
 
-            uint64_t in1_start_address = l1_write_addr_in1; // copy start address of block, to be used for mcasting
+            #ifdef IN1_DRAM_SHARDED
+                // Operand 1
+                cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
-            // Copy in1 block into CB, as the default kernel
-            uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_block_start_tile_id;
-            for(uint32_t h = 0; h < in1_block_h; ++h) {
-                uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
-                for(uint32_t w = 0; w < in1_block_w; ++w) {
-                    if (w < last_block_w) {
-                        noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
+                uint64_t in1_start_address = get_write_ptr(cb_id_in1); // copy start address of block, to be used for mcasting
+
+                uint32_t l1_write_addr_in1_offset = 0;
+                uint32_t next_bank_id_and_dram_stride_index = 0;
+
+                for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
+                    uint32_t in1_base_addr = noc_async_read_tile_dram_sharded_set_state<in1_single_tile_size_bytes, false>(in1_tensor_addr, current_dram_bank_id[next_bank_id_and_dram_stride_index]);
+
+                    if (i == 0) {
+                        in1_base_addr += dram_tensor_start_offset;
                     }
-                    l1_write_addr_in1 += in1_single_tile_size_bytes;
-                    in1_tensor_tile_id += in1_tensor_stride_w;
-                }
-                in1_tensor_row_start_tile_id += in1_tensor_stride_h;
-            }
-            in1_tensor_current_block_start_tile_id += in1_tensor_next_block_stride;
 
-            // Barrier! make sure the reads are done
-            noc_async_read_barrier();
-            #endif
+                    uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
+                    uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1) + l1_write_addr_in1_offset;
+                    uint32_t in1_block_w_dram = in1_block_w_dram_stride_bytes[next_bank_id_and_dram_stride_index] / in1_single_tile_size_bytes;
+
+                    for (uint32_t m = 0; m < in1_block_h; ++m) {
+                        uint32_t l1_read_addr_in1_temp = l1_read_addr_in1;
+                        uint32_t l1_write_addr_in1_temp = l1_write_addr_in1;
+                        for (uint32_t w = 0; w < in1_block_w_dram; ++w) {
+                            noc_async_read_tile_dram_sharded_with_state(in1_base_addr, l1_read_addr_in1_temp, l1_write_addr_in1_temp);
+                            l1_read_addr_in1_temp += in1_single_tile_size_bytes;
+                            l1_write_addr_in1_temp += in1_single_tile_size_bytes;
+                        }
+                        l1_read_addr_in1 += in1_block_w_dram_bytes;
+                        l1_write_addr_in1 += in1_block_w_bytes;
+                    }
+                    l1_write_addr_in1_offset += in1_block_w_dram_stride_bytes[next_bank_id_and_dram_stride_index];
+                    next_bank_id_and_dram_stride_index += 2;
+                }
+                l1_read_addr_in1_offset += in1_dram_block_size_bytes;
+                noc_async_read_barrier();
+            #else
+                #ifndef IN1_SHARDED
+                // Operand 1
+                cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+                l1_write_addr_in1 = get_write_ptr(cb_id_in1);
+
+                uint64_t in1_start_address = l1_write_addr_in1; // copy start address of block, to be used for mcasting
+
+                // Copy in1 block into CB, as the default kernel
+                uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_block_start_tile_id;
+                for(uint32_t h = 0; h < in1_block_h; ++h) {
+                    uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
+                    for(uint32_t w = 0; w < in1_block_w; ++w) {
+                        if (w < last_block_w) {
+                            noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
+                        }
+                        l1_write_addr_in1 += in1_single_tile_size_bytes;
+                        in1_tensor_tile_id += in1_tensor_stride_w;
+                    }
+                    in1_tensor_row_start_tile_id += in1_tensor_stride_h;
+                }
+                in1_tensor_current_block_start_tile_id += in1_tensor_next_block_stride;
+
+                // Barrier! make sure the reads are done
+                noc_async_read_barrier();
+                #endif
+            #endif // IN1_DRAM_SHARDED
 
             #ifndef SKIP_MCAST
             // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr (i.e. its value should be in0_mcast_num_dests), then reset
@@ -213,6 +269,32 @@ void kernel_main() {
                 uint64_t in3_start_address = l1_write_addr_in3; // copy start address of block, to be used for mcasting
                 uint32_t in3_block_size_bytes = 0; // can be optimized later, pass it to kernel
 
+                #ifdef IN1_DRAM_SHARDED
+                uint32_t l1_write_addr_in3_offset = 0;
+                uint32_t next_bank_id_and_dram_stride_index = 0;
+
+                for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
+                    uint32_t in3_base_addr = noc_async_read_tile_dram_sharded_set_state<bias_single_tile_size_bytes, false>(in3_tensor_addr, current_dram_bank_id[next_bank_id_and_dram_stride_index]);
+
+                    if (i == 0) {
+                        in3_base_addr += dram_tensor_start_offset;
+                    }
+
+                    uint32_t l1_read_addr_in3 = 0;
+                    uint32_t l1_write_addr_in3 = get_write_ptr(cb_id_in3) + l1_write_addr_in3_offset;
+                    uint32_t in3_block_w_dram = in1_block_w_dram_stride_bytes[next_bank_id_and_dram_stride_index] / bias_single_tile_size_bytes;
+
+                    for (uint32_t w = 0; w < in3_block_w_dram; ++w) {
+                        noc_async_read_tile_dram_sharded_with_state(in3_base_addr, l1_read_addr_in3, l1_write_addr_in3);
+                        l1_read_addr_in3 += bias_single_tile_size_bytes;
+                        l1_write_addr_in3 += bias_single_tile_size_bytes;
+                        in3_block_size_bytes += bias_single_tile_size_bytes;
+                    }
+                    l1_write_addr_in3_offset += in1_block_w_dram_stride_bytes[next_bank_id_and_dram_stride_index];
+                    next_bank_id_and_dram_stride_index += 2;
+                }
+                noc_async_read_barrier();
+                #else
                 // Copy in1 block into CB, as the default kernel
                 uint32_t in3_tensor_tile_id = in3_tensor_start_tile_id;
                 for(uint32_t w = 0; w < in1_block_w; ++w) {
@@ -225,6 +307,7 @@ void kernel_main() {
                 }
                 // Barrier! make sure the reads are done
                 noc_async_read_barrier();
+                #endif
 
                 #ifndef SKIP_MCAST
 
