@@ -142,6 +142,8 @@ def get_model_config(model_config_str, prefill_seq_len=0):
             model_config[key] = BFP8_DTYPE
 
     if model_config_str in ("BFLOAT16-L1", "BFLOAT16-L1_SHARDED"):
+        if model_config_str == "BFLOAT16-L1_SHARDED":
+            model_config["ATTN_MASK_MEMCFG"] = L1_MEMCFG
         model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"] = L1_MEMCFG
         model_config["K_CACHE_SLICE_OUTPUT_MEMCFG"] = L1_MEMCFG
         model_config["V_CACHE_SLICE_OUTPUT_MEMCFG"] = L1_MEMCFG
