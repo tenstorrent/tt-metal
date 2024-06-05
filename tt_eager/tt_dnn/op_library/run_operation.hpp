@@ -322,6 +322,7 @@ OutputTensors run_without_autoformat(
     const DeviceOperation<OutputTensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors = {},
+    const OptionalTensors& optional_output_tensors = {},
     uint8_t cq_id = 0
 );
 template <typename ConcreteOperation>
@@ -329,11 +330,12 @@ inline auto run_without_autoformat(
     ConcreteOperation&& concrete_op,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {},
     uint8_t cq_id = 0)
     -> ProgramOutputTensors<ConcreteOperation>{
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     const auto operation = DeviceOperation<OutputTensors>(concrete_op);
-    return run_without_autoformat<OutputTensors>(operation, input_tensors, optional_input_tensors, cq_id);
+    return run_without_autoformat<OutputTensors>(operation, input_tensors, optional_input_tensors, optional_output_tensors, cq_id);
 }
 
 Tensors run_with_autoformat(
@@ -380,7 +382,7 @@ inline auto run_with_autoformat(
 )-> ProgramOutputTensors<ConcreteOperation> {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     const auto operation = DeviceOperation<OutputTensors>(concrete_op);
-    return run_with_autoformat(operation, input_tensors, input_formatting, output_layouts, optional_input_tensors, optional_input_formatting, optional_output_tensors, cq_id);
+    return run_with_autoformat(operation, input_tensors, input_formatting, output_layouts, optional_input_tensors, optional_input_formatting, cq_id);
 }
 
 void launch_op(
