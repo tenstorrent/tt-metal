@@ -486,7 +486,7 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
             .per_core_N = per_core_N,
         };
     }
-    TT_FATAL(false, "Matmul program config could not be determined for given input shapes!");
+    return tt::operations::primary::create_matmul_program_config(input_tensor_a, input_tensor_b, grid_size, fused_activation, compute_kernel_config);
 }
 
 tuple<uint32_t, uint32_t> get_subblock_sizes(
@@ -1041,7 +1041,7 @@ void Matmul::validate(
                 // subbblock constraint
                 TT_FATAL(program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1);
                 // tensor in1
-                TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+                TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
                 if (input_tensor_a.memory_config().is_sharded()) {
                     auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout;

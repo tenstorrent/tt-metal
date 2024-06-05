@@ -590,16 +590,14 @@ void Program::populate_dispatch_data(Device *device) {
         {RISCV::ERISC, eth_l1_mem::address_map::FIRMWARE_BASE}};
 
     auto extract_dst_noc_unicast_info =
-        [&device](const set<CoreRange> &ranges, const CoreType core_type) -> vector<pair<uint32_t, uint32_t>> {
+        [&device](const set<CoreRange> &ranges, const CoreType core_type) -> vector<pair<transfer_info_cores, uint32_t>> {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
-        vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info;
+        vector<pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info;
         for (const CoreRange &core_range : ranges) {
             for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
                 for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
                     CoreCoord physical_coord = device->physical_core_from_logical_core(CoreCoord({x, y}), core_type);
-                    uint32_t dst_noc_unicast_encoding =
-                        NOC_XY_ENCODING(NOC_X(physical_coord.x), NOC_Y(physical_coord.y));
-                    dst_noc_unicast_info.push_back(std::make_pair(dst_noc_unicast_encoding, /*num_mcast_dests=*/0));
+                    dst_noc_unicast_info.push_back(std::make_pair(physical_coord, /*num_mcast_dests=*/0));
                 }
             }
         }
@@ -613,7 +611,7 @@ void Program::populate_dispatch_data(Device *device) {
 
         // TODO: use semaphore.core_type from main
         if (semaphore.core_type() == CoreType::WORKER) {
-            vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
+            vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
                 extract_dst_noc_multicast_info<std::set<CoreRange>>(
                     device, semaphore.core_range_set().ranges(), semaphore.core_type());
             transfer_info_2 transfer_info = {
@@ -623,7 +621,7 @@ void Program::populate_dispatch_data(Device *device) {
                 .data = semaphore_data};
             this->program_transfer_info.multicast_semaphores[semaphore.address()].push_back(transfer_info);
         } else if (semaphore.core_type() == CoreType::ETH) {
-            vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info =
+            vector<pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                 extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), semaphore.core_type());
             transfer_info_2 transfer_info = {
                 .dst_base_addr = semaphore.address(),
@@ -640,7 +638,7 @@ void Program::populate_dispatch_data(Device *device) {
     // Program Binaries and Go Signals
     // TODO: cleanup put the WORKERS and ETH logic together..
     for (KernelGroup &kernel_group : this->get_kernel_groups(CoreType::WORKER)) {
-        vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info = extract_dst_noc_multicast_info<std::set<CoreRange>>(
+        vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info = extract_dst_noc_multicast_info<std::set<CoreRange>>(
             device, kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
 
         // So far, we don't support linking optimizations for kernel groups
@@ -710,7 +708,7 @@ void Program::populate_dispatch_data(Device *device) {
         }
     }
     for (KernelGroup &kernel_group : this->get_kernel_groups(CoreType::ETH)) {
-        vector<pair<uint32_t, uint32_t>> dst_noc_unicast_info =
+        vector<pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
             extract_dst_noc_unicast_info(kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
 
         vector<KernelHandle> kernel_ids;

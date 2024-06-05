@@ -52,6 +52,7 @@ constexpr uint32_t is_h_variant = get_compile_time_arg_val(22);
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
+constexpr uint32_t pcie_noc_xy = uint32_t(NOC_XY_PCIE_ENCODING(NOC_0_X(static_cast<uint8_t>(NOC_INDEX), noc_size_x, PCIE_NOC_X), NOC_0_Y(static_cast<uint8_t>(NOC_INDEX), noc_size_y, PCIE_NOC_Y), NOC_INDEX));
 constexpr uint32_t downstream_cb_page_size = 1 << downstream_cb_log_page_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + (1 << downstream_cb_log_page_size) * downstream_cb_pages;
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
@@ -146,7 +147,7 @@ void read_from_pcie(volatile tt_l1_ptr prefetch_q_entry_type *& prefetch_q_rd_pt
         pcie_read_ptr = pcie_base;
     }
 
-    uint64_t host_src_addr = get_noc_addr_helper(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y), pcie_read_ptr);
+    uint64_t host_src_addr = get_noc_addr_helper(pcie_noc_xy, pcie_read_ptr);
     DPRINT << "read_from_pcie: " << fence + preamble_size << " " << pcie_read_ptr << ENDL();
     noc_async_read(host_src_addr, fence + preamble_size, size);
     pending_read_size = size + preamble_size;
@@ -341,16 +342,21 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr,
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
-template<uint32_t extra_space,
+// The hard problem here is: when an xfer lands exactly at a page boundary, who is responsible for getting the next page?
+// For inner loop, call N grabs page N+1.  No client should ever hit this as inline_noflush puts 16 bytes at the top of
+// the first page
+// At the end, do not grab page N+1
+template<int32_t round,
          bool test_for_nonzero>
 static uint32_t write_pages_to_dispatcher(uint32_t& downstream_data_ptr,
                                           uint32_t& scratch_write_addr,
                                           uint32_t& amt_to_write) {
 
     uint32_t page_residual_space = downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1));
-    uint32_t npages = (amt_to_write - page_residual_space + downstream_cb_page_size + extra_space - 1) / downstream_cb_page_size;
+    uint32_t npages = (amt_to_write - page_residual_space + downstream_cb_page_size - round) / downstream_cb_page_size;
 
     // Grabbing all pages at once is ok if scratch_size < 3 * downstream_cb_block_size
+    // test_for_nonzero is an optimization: inner loops moving lots of pages don't bother
     if (!test_for_nonzero || npages != 0) {
         cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages);
     }
@@ -464,7 +470,7 @@ uint32_t process_relay_paged_cmd_large(uint32_t cmd_ptr,
         uint32_t amt_to_write = write_length;
         ASSERT((amt_to_write & 0x1f) == 0);
 
-        uint32_t npages = write_pages_to_dispatcher<CQ_DISPATCH_CMD_SIZE, true>
+        uint32_t npages = write_pages_to_dispatcher<1, true>
             (downstream_data_ptr, scratch_write_addr, amt_to_write);
 
         // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
@@ -577,7 +583,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr,
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_read - cmd->relay_paged.length_adjust;
     ASSERT((amt_to_write & 0x1f) == 0);
-    uint32_t npages = write_pages_to_dispatcher<CQ_DISPATCH_CMD_SIZE, true>
+    uint32_t npages = write_pages_to_dispatcher<1, true>
         (downstream_data_ptr, scratch_write_addr, amt_to_write);
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
@@ -643,7 +649,7 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr,
     // Third step - write from DB
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_to_read;
-    uint32_t npages = write_pages_to_dispatcher<CQ_DISPATCH_CMD_SIZE, true>
+    uint32_t npages = write_pages_to_dispatcher<1, true>
         (downstream_data_ptr, scratch_write_addr, amt_to_write);
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);

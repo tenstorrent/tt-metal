@@ -20,8 +20,3 @@ pytest --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES
 
 # working on both
 pytest --disable-warnings --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo
-
-# Not working on N150, working on N300
-unset WH_ARCH_YAML
-rm -rf built
-pytest --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py::test_demo[models/demos/metal_BERT_large_11/demo/input_data.json-1-batch_7]

@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "ckernel_sfpu_dropout.h"
-#include "llk_math_eltwise_unary_sfpu_2_param.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
+#include "ckernel_sfpu_dropout.h"
 
 namespace ckernel {
 
@@ -18,10 +18,8 @@ inline void llk_math_eltwise_unary_sfpu_dropout_init(uint seed = 0) {
 }
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_dropout(
-    uint dst_index, int vector_mode = (int)VectorMode::RC, int integer_dropout, int scale_factor) {
-    llk_math_eltwise_unary_sfpu_2_param<APPROXIMATE>(
-        ckernel::sfpu::calculate_dropout<APPROXIMATE>,
+inline void llk_math_eltwise_unary_sfpu_dropout(uint dst_index, int vector_mode = (int)VectorMode::RC, int integer_dropout, int scale_factor) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
         ckernel::sfpu::calculate_dropout<APPROXIMATE>,
         dst_index,
         vector_mode,
@@ -29,4 +27,4 @@ inline void llk_math_eltwise_unary_sfpu_dropout(
         scale_factor);
 }
 
-}  // namespace ckernel
+}

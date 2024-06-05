@@ -14,6 +14,9 @@
 #define NOC_XY_ENCODING(x, y) \
     ((((uint64_t)(y)) << (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) | (((uint64_t)(x)) << NOC_ADDR_LOCAL_BITS))
 
+#define NOC_XY_PCIE_ENCODING(x, y, noc_index) \
+    NOC_XY_ENCODING(x, y)
+
 #define NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end)                      \
     ((((uint64_t)(x_start)) << (NOC_ADDR_LOCAL_BITS + 2 * NOC_ADDR_NODE_ID_BITS)) | \
      (((uint64_t)(y_start)) << (NOC_ADDR_LOCAL_BITS + 3 * NOC_ADDR_NODE_ID_BITS)) | \

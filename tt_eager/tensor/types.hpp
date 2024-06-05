@@ -504,16 +504,17 @@ struct MultiDeviceHostStorage {
 
         inline const MemoryConfig memory_config() const {
             std::lock_guard<std::mutex> lock(buffer_mtx);
-            if (this->buffers.at(0).get() == nullptr) {
+            auto first_device_id = this->ordered_device_ids.at(0);
+            if (this->buffers.at(first_device_id).get() == nullptr) {
                 TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
             }
             std::optional<ShardSpec> shard_spec = std::nullopt;
-            if (is_sharded(this->buffers.at(0)->buffer_layout())) {
-                shard_spec = this->buffers.at(0)->shard_spec().tensor_shard_spec;
+            if (is_sharded(this->buffers.at(first_device_id)->buffer_layout())) {
+                shard_spec = this->buffers.at(first_device_id)->shard_spec().tensor_shard_spec;
             }
             return MemoryConfig{
-                .memory_layout = this->buffers.at(0)->buffer_layout(),
-                .buffer_type = this->buffers.at(0)->buffer_type(),
+                .memory_layout = this->buffers.at(first_device_id)->buffer_layout(),
+                .buffer_type = this->buffers.at(first_device_id)->buffer_type(),
                 .shard_spec = shard_spec};
 
         }

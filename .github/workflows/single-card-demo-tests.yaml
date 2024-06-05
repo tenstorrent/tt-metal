@@ -22,13 +22,13 @@ jobs:
             name: "N150",
             arch: wormhole_b0,
             runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"],
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card --dispatch-mode ""'
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card_n150 --dispatch-mode ""'
           },
           {
             name: "N300",
             arch: wormhole_b0,
             runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"],
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card --dispatch-mode ""'
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card_n300 --dispatch-mode ""'
           }
         ]
     name: ${{ matrix.test-group.name }}
@@ -41,6 +41,11 @@ jobs:
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Ensure weka mount is active
+        run: |
+          sudo systemctl restart mnt-MLPerf.mount
+          sudo /etc/rc.local
+          ls -al /mnt/MLPerf/bit_error_tests
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV

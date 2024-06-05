@@ -10,7 +10,6 @@ import ttnn
 from models.demos.mamba.tt.full_model import TtTensorLoader
 from models.demos.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
 from models.demos.mamba.tt.mamba_block import TtMambaBlock
-from models.demos.mamba.tt.transforms import MambaSsmBlockTransformer
 from models.demos.mamba.tt import model_config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
@@ -30,13 +29,12 @@ class PytorchMambaBlock(torch.nn.Module):
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, pcc, cache_dir",
+    "model_version, batch, pcc",
     (
         (
             "state-spaces/mamba-2.8b",
             32,
             0.99,
-            None,
         ),
     ),
 )
@@ -46,7 +44,6 @@ def test_mamba_block_inference(
     model_version: MambaPretrainedModelName,
     batch: int,
     pcc: float,
-    cache_dir: Optional[str],
 ):
     torch.manual_seed(0)
 
@@ -63,19 +60,11 @@ def test_mamba_block_inference(
     residual_block = reference_model.layers[LAYER_NUM]
     assert not isinstance(residual_block, torch.Tensor), "Expected torch.Module"
 
-    if cache_dir:
-        cache_path = model_config.get_weights_cache_path(model_version, cache_dir)
-    else:
-        cache_path = None
-
     config = model_config.create_model_config(batch, d_model)
 
-    loader = TtTensorLoader(reference_model.state_dict(), device, tt_cache_path=cache_path)
-    transformer = MambaSsmBlockTransformer(
-        device, batch, reference_model.args.d_inner, reference_model.args.d_state * 2
-    )
+    loader = TtTensorLoader(reference_model.state_dict(), device)
 
-    model = TtMambaBlock(reference_model.args, device, config, loader.get_tensor_loader(LAYER_NUM), transformer)
+    model = TtMambaBlock(reference_model.args, device, config, loader.get_tensor_loader(LAYER_NUM))
     tt_input = input.view(1, 1, batch, d_model)
     tt_input = ttnn.to_device(
         ttnn.from_torch(tt_input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),

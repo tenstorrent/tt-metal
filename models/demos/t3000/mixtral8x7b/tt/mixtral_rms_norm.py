@@ -88,7 +88,6 @@ class TtRMSNormSharded(LightweightModule):
             cache_file_name=cache_name,
             mesh_mapper=ReplicateTensorToMesh(device_mesh),
         )
-        self.weight = ttnn.to_device(self.weight, device_mesh)
 
     def forward(self, x: ttnn.Tensor, out_sharded=False) -> ttnn.Tensor:
         x = ttnn.experimental.tensor.interleaved_to_sharded(
