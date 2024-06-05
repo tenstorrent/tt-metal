@@ -29,6 +29,8 @@ namespace binary {
 
 using BinaryOpType = tt::tt_metal::BinaryOpType;
 
+constexpr uint8_t DefaultQueueId = 0;
+
 struct BinaryProgramConfig {
     BinaryOpType binary_op_type;
     bool in_place;
@@ -48,9 +50,9 @@ struct Binary {
     const BinaryProgramConfig program_config;
     std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
-    void validate(const std::vector<Tensor> &input_tensors) const;
+    void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
 
@@ -92,16 +94,23 @@ struct ExecuteBinary {
     }
 
     template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
+    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
         return std::forward_as_tuple(input_tensor_a, input_tensor_b);
     }
 
     static Tensor execute_on_worker_thread(
+        uint8_t queue_id,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        const std::optional<const DataType> &dtype = std::nullopt,
+        const std::optional<const DataType> &output_dtype = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
         std::optional<std::vector<std::string>> activations = std::nullopt) {
+
+        if(output_dtype.has_value() && optional_output_tensor.has_value()){
+            TT_FATAL(output_dtype.value() == optional_output_tensor.value().get_dtype(), "If both output dtype and output tensor provided dtype should match");
+        }
+
         auto &&[input_tensor_a, input_tensor_b] = [](const auto &input_tensor_a_arg, const auto &input_tensor_b_arg) {
             const auto input_shape_a = input_tensor_a_arg.get_shape();
             const auto input_shape_b = input_tensor_b_arg.get_shape();
@@ -111,6 +120,7 @@ struct ExecuteBinary {
             }
             return std::make_tuple(input_tensor_a_arg, input_tensor_b_arg);
         }(input_tensor_a_arg, input_tensor_b_arg);
+
         auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
 
         // TODO(arakhmati): #7731 - remove this!
@@ -124,15 +134,38 @@ struct ExecuteBinary {
             input_tensor_b = tt::tt_metal::repeat(input_tensor_b, repeats.value(), output_memory_config);
         }
 
-        return operation::run(
-                   Binary{BinaryProgramConfig{
-                       binary_op_type,
-                       in_place,
-                       activations,
-                       output_memory_config,
-                       dtype.value_or(input_tensor_a.get_dtype())}},
-                   {input_tensor_a, input_tensor_b})
-            .at(0);
+        DataType dtype = output_dtype.value_or(input_tensor_a.get_dtype());
+        if(optional_output_tensor.has_value()) {
+            dtype = optional_output_tensor.value().get_dtype();
+        }
+
+        auto output_tensors = operation::run(Binary{BinaryProgramConfig{binary_op_type,
+                                                                        in_place,
+                                                                        activations,
+                                                                        output_memory_config,
+                                                                        dtype}},
+                                                    {input_tensor_a, input_tensor_b},
+                                                    {},
+                                                    {optional_output_tensor},
+                                                    queue_id);
+
+        return output_tensors.at(0);
+    }
+
+    template <typename... Args>
+    static auto input_tensors_to_validate(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
+        return std::forward_as_tuple(input_tensor_a, input_tensor_b);
+    }
+
+    static Tensor execute_on_worker_thread(
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<const DataType> &output_dtype = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        std::optional<std::vector<std::string>> activations = std::nullopt)
+    {
+        return execute_on_worker_thread(DefaultQueueId, input_tensor_a_arg, input_tensor_b_arg, memory_config, output_dtype, optional_output_tensor, activations);
     }
 
     template <typename... Args>
@@ -147,6 +180,24 @@ struct ExecuteBinary {
         const float scalar,
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<const DataType> &dtype = std::nullopt,
+        const std::optional<Tensor> &optional_output_tensor = std::nullopt,
+        std::optional<std::vector<std::string>> activations = std::nullopt) {
+
+        return ExecuteBinary::execute_on_worker_thread(DefaultQueueId, input_tensor_a, scalar, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, optional_output_tensor, activations);
+    }
+
+    template <typename... Args>
+    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor &input_tensor_a, const float input_tensor_b, Args &&...args) {
+        return std::forward_as_tuple(input_tensor_a, input_tensor_b);
+    }
+
+    static Tensor execute_on_worker_thread(
+        uint8_t queue_id,
+        const ttnn::Tensor &input_tensor_a,
+        const float scalar,
+        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<const DataType> &dtype = std::nullopt,
+        const std::optional<Tensor> &optional_output_tensor = std::nullopt,
         std::optional<std::vector<std::string>> activations = std::nullopt) {
         // Cast Float Scalar to a device tensor
         auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(TILE_HEIGHT * TILE_WIDTH));
@@ -159,7 +210,7 @@ struct ExecuteBinary {
         Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.device());
         // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
         return ExecuteBinary::execute_on_worker_thread(
-            input_tensor_a, scalar_tensor_device, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, activations);
+            input_tensor_a, scalar_tensor_device, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, optional_output_tensor, activations);
     }
 };
 

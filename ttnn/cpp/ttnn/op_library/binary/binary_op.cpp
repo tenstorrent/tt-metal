@@ -80,7 +80,7 @@ inline BinaryProgramType get_program_type(const Binary& operation, const std::ve
     TT_THROW("ttnn::operations::binary::Binary: unsupported broadcast");
 }
 
-void Binary::validate(const std::vector<Tensor>& input_tensors) const {
+void Binary::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     auto program_type = get_program_type(*this, input_tensors);
 
     const auto& input_tensor_a = input_tensors.at(0);
@@ -170,6 +170,14 @@ void Binary::validate(const std::vector<Tensor>& input_tensors) const {
     if (program_type != BinaryProgramType::ElementWiseMultiCore) {
         TT_FATAL(not this->program_config.activations.has_value());
     }
+
+    if (!output_tensors.empty()) {
+        TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensors");
+
+        if(output_tensors.at(0).has_value()) {
+            TT_FATAL(!this->program_config.in_place, "Operation is configured as in_place. First input is used as output. Provided output tensor is ignored");
+        }
+    }
 }
 
 std::vector<tt::tt_metal::Shape> Binary::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -181,12 +189,16 @@ std::vector<tt::tt_metal::Shape> Binary::compute_output_shapes(const std::vector
     return {input_tensor_b.get_legacy_shape()};
 }
 
-std::vector<Tensor> Binary::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+std::vector<Tensor> Binary::create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     if (this->program_config.in_place) {
         return {input_tensor_a};
     } else {
+        if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
+            return {output_tensors.at(0).value()};
+        }
+
         auto program_type = get_program_type(*this, input_tensors);
 
         if (program_type == BinaryProgramType::ElementWiseMultiCore) {

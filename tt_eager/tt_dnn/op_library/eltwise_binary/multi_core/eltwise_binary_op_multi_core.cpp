@@ -312,7 +312,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
-    std::map<string, string> eltwise_defines = eltwise_binary_op_utils::get_defines(op_type, fused_activations);
+    std::map<string, string> eltwise_defines = eltwise_binary_op_utils::get_defines(op_type, output.get_dtype(), fused_activations);
 
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
         tt_metal::CircularBufferConfig cb_interm_config = tt_metal::CircularBufferConfig(1 * src0_single_tile_size, {{CB::c_intermed0, src0_cb_data_format}})
@@ -371,12 +371,12 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
+    bool fp32_dest_acc_en = dst_cb_data_format == tt::DataFormat::UInt32 || dst_cb_data_format == tt::DataFormat::Int32 || dst_cb_data_format == tt::DataFormat::Float32;
     auto eltwise_binary_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/eltwise_binary/kernels/compute/eltwise_binary.cpp",
         all_device_cores,
-        tt_metal::ComputeConfig{.defines = eltwise_defines}
-    );
+        tt_metal::ComputeConfig{.fp32_dest_acc_en=fp32_dest_acc_en, .defines = eltwise_defines});
 
 
     set_eltwise_binary_runtime_args<true>(

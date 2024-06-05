@@ -12,6 +12,7 @@
 #include "tt_dnn/op_library/repeat/repeat_op.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/common/logger.hpp"
 
 namespace tt {
 
@@ -37,6 +38,14 @@ enum class BinaryOpType {
     LOGADDEXP2,
     DIV_FAST
 };
+
+namespace eltwise_binary_op_utils {
+
+std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<DataType> out_dtype = std::nullopt,
+                                    const std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt);
+
+}  // namespace eltwise_binary_op_utils
+
 
 enum class BinaryOpParallelizationStrategy { MULTI_CORE };
 
@@ -132,14 +141,16 @@ struct make_eltwise_binary {
                     (in_a.get_legacy_shape() == in_b.get_legacy_shape()) or
                     (in_a.get_legacy_shape().without_padding() == in_b.get_legacy_shape().without_padding()),
                     "Input shapes must be the same!");
-                return operation::run(
+
+                auto output_tensors = operation::run(
                         EltwiseBinary{
                             binary_op_type,
                             fused_activations,
                             output_mem_config,
                             output_dtype.value_or(in_a.get_dtype()),
-                            false},
+                            false /*in place*/},
                         {in_a, in_b}, {}, {output_tensor});
+                return output_tensors;
             },
         {input_tensor_a, input_tensor_b}, output_tensors, {}, {output_tensor});
         return output_tensors.at(0);
@@ -231,11 +242,3 @@ inline Tensor add(
 }  // namespace operations
 
 }  // namespace tt
-
-namespace eltwise_binary_op_utils {
-using namespace tt::tt_metal;
-
-std::map<string, string> get_defines(
-    BinaryOpType op_typee, const std::optional<std::vector<UnaryWithParam>> fused_activations);
-
-}  // namespace eltwise_binary_op_utils
