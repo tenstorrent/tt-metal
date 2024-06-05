@@ -11,7 +11,7 @@ if [[ -z "$ARCH_NAME" ]]; then
     exit 1
 fi
 
-ENABLE_TRACY=1 ENABLE_PROFILER=1 cmake -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++-17
+ENABLE_TRACY=1 ENABLE_PROFILER=1 cmake -B build -G Ninja
 
 if [[ $1 == "NO_CLEAN" ]]; then
     cmake --build build
