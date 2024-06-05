@@ -655,7 +655,7 @@ operation::ProgramWithCallbacks SSM1DSumReduce::create_program(
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
-    return multi_core_ssm_1d_sum_reduce(input_tensor_a, output_tensor, device_compute_with_storage_grid_size);
+    return multi_core_ssm_1d_sum_reduce(input_tensor_a, output_tensor, math_fidelity, device_compute_with_storage_grid_size);
 }
 
 tt::stl::reflection::Attributes SSM1DSumReduce::attributes() const {

@@ -16,7 +16,7 @@ namespace primary {
 namespace transformers {
 
 operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
-    const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
+    const Tensor& a, Tensor& output, MathFidelity math_fidelity, CoreCoord compute_with_storage_grid_size) {
     constexpr uint32_t ONE_TILE = 1;
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t LATENT_DIM = TILE_WIDTH;
@@ -119,7 +119,11 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
         program,
         "tt_eager/tt_dnn/op_library/transformer_tms/kernels/compute/ssm_1d_sum_reduce.cpp",
         all_cores,
-        tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
+        tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = false,
+            .math_approx_mode = false,
+            .compile_args = compute_compile_time_args});
 
     uint32_t g1_numcores = core_group_1.num_cores();
     uint32_t g2_numcores = core_group_2.num_cores();
