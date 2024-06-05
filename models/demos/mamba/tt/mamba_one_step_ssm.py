@@ -98,6 +98,7 @@ class TtMambaSSM(torch.nn.Module):
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
+        self.eltwise_math_fidelity = ttl.tensor.MathFidelity.HiFi2
         self.core_grid_row = 5
         self.core_grid_col = 8
 
@@ -144,6 +145,7 @@ class TtMambaSSM(torch.nn.Module):
                 ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
             ),
             output_dtype=self.configs["dtype"]["activations"],
+            math_fidelity=self.eltwise_math_fidelity,
         )
         ttnn.deallocate(abar0)
 
@@ -183,6 +185,7 @@ class TtMambaSSM(torch.nn.Module):
                 ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
             ),
             output_dtype=self.configs["dtype"]["activations"],
+            math_fidelity=self.eltwise_math_fidelity,
         )
         ttnn.deallocate(delta_t2)
         ttnn.deallocate(B0)
@@ -195,6 +198,7 @@ class TtMambaSSM(torch.nn.Module):
                 ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
             ),
             output_dtype=self.configs["dtype"]["activations"],
+            math_fidelity=self.eltwise_math_fidelity,
         )
 
         # deallocate bbar
@@ -228,6 +232,7 @@ class TtMambaSSM(torch.nn.Module):
                 ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
             ),
             output_dtype=self.configs["dtype"]["activations"],
+            math_fidelity=self.eltwise_math_fidelity,
         )
         ttnn.deallocate(hidden_state1)
         ttnn.deallocate(C0)
