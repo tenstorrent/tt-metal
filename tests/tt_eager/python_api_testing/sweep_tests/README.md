@@ -98,10 +98,10 @@ test-list:
     - `method`: Defaults to `default`; determines how the shapes are swept across
 - _comparison_: Maps to `python_api_testing/sweep_tests/comparison_funcs.py`.
 - _args-gen_: Maps to `python_api_testing/sweep_tests/generation_funcs.py`. You can choose what function is used to generate arguments for the test (dtype, layout etc). For example, for `glu` you might want to generate a `dim` parameter, so default `args-gen` won't be useful.
-- _sanitize-args_: `True` if `args-gen` is doing arg sanitization, `False` otherwise. If not stated, the default is `True`. When ON, args sanitization won't allow some problematic combinations of args (Eg. `BFLOAT8_B` and `ROW_MAJOR` layout). But args sanitization might be an obstacle when we want to create some more flexible tests.
+- _sanitize-args_: `True` if `args-gen` is doing arg sanitization, `False` otherwise. If not stated, the default is `True`. When ON, args sanitization won't allow some problematic combinations of args (Eg. `ROW_MAJOR` layout for `BFLOAT8_B` and `BFLOAT4_B`). But args sanitization might be an obstacle when we want to create some more flexible tests.
 - _args_: Defines how arguments to operation can be configured in terms of data-layout, data_type and memory config.
   - `data-layout`: Data layout each input argument can take. Can be TILE or ROW_MAJOR.
-  - `data-type`: Data type each input argument can take. Can be BFLOAT16 or BFLOAT8_B.
+  - `data-type`: Data type each input argument can take. Can be one of the follwoing: BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, UINT16 or INT32.
   - `buffer-type`: Buffer type each input argument can take. Can be DRAM, L1, or SYSTEM_MEMORY.
   - `out-buffer-type`: Buffer type output can take. Can be DRAM, L1, or SYSTEM_MEMORY.
 - _output-file_: Name of the output csv dumped inside the output folder. You can write results for additional tests to the same file if you provide the same output file path.
