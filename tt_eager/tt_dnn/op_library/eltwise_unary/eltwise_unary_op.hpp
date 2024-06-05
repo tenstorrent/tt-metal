@@ -196,7 +196,7 @@ inline Tensor run_eltwise_unary(
     const std::vector<UnaryWithParam>& ops_chain,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     TT_FATAL(ops_chain.size() > 0, "At least 1 unary op must be specified");
-    DataType output_dtype = (ops_chain[0].op_type == UnaryOpType::TYPECAST) ? (DataType)ops_chain[0].params[0] : input_tensor.get_dtype();
+    DataType output_dtype = (ops_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(ops_chain[0].params[0]) : input_tensor.get_dtype();
     bool fp32_dest_acc_en =
         output_dtype == DataType::UINT32 or
         input_tensor.get_dtype() == DataType::UINT32 or
@@ -242,7 +242,7 @@ inline Tensor run_eltwise_unary(
     const std::vector<UnaryWithParam>& ops_chain,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     TT_FATAL(ops_chain.size() > 0, "At least 1 unary op must be specified");
-    DataType output_dtype = (ops_chain[0].op_type == UnaryOpType::TYPECAST) ? (DataType)ops_chain[0].params[0] : input_tensor.get_dtype();
+    DataType output_dtype = (ops_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(ops_chain[0].params[0]) : input_tensor.get_dtype();
     bool fp32_dest_acc_en =
         output_dtype == DataType::UINT32 or
         input_tensor.get_dtype() == DataType::UINT32 or
