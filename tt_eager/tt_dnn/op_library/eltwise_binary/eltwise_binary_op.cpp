@@ -13,11 +13,13 @@
 
 using namespace tt::constants;
 
+namespace tt {
+namespace tt_metal {
 namespace eltwise_binary_op_utils {
 using namespace tt::tt_metal;
 
 std::map<string, string> get_defines(
-    BinaryOpType op_type, const std::optional<std::vector<UnaryWithParam>> fused_activations) {
+    BinaryOpType op_type, const std::optional<DataType> output_dtype, const std::optional<std::vector<UnaryWithParam>> fused_activations) {
     std::map<string, string> defines;
     string op_name = "sub_tiles";
     string op_binary_type = "EltwiseBinaryType::ELWSUB";
@@ -104,6 +106,15 @@ std::map<string, string> get_defines(
         default: TT_ASSERT(false && "Undefined op type");
     }
 
+    if(output_dtype.has_value() && output_dtype.value()  == DataType::UINT32){
+        TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0 && "SFPU_OP_CHAIN_0 already defined");
+
+        auto dataformat = std::to_string((uint32_t)datatype_to_dataformat_converter(output_dtype.value()));
+        defines.insert({"SFPU_OP_CHAIN_0",
+                        fmt::format("typecast_tile_init(); typecast_tile<{0}u>(i);", dataformat)});
+        defines.insert({"SFPU_OP_TYPECAST_INCLUDE", "1"});
+    }
+
     defines["ELTWISE_OP"] = op_name.c_str();
     defines["ELTWISE_OP_TYPE"] = op_binary_type.c_str();
     if (fused_activations.has_value()) {
@@ -119,11 +130,6 @@ std::map<string, string> get_defines(
 }
 
 }  // namespace eltwise_binary_op_utils
-
-namespace tt {
-
-namespace tt_metal {
-
 
 void EltwiseBinary::validate_with_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
