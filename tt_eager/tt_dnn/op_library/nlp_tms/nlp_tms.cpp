@@ -146,15 +146,6 @@ operation::ProgramWithCallbacks NlpCreateHeadsDecode::create_program(const std::
     return  multi_core_nlp_create_qkv_heads_decode(input_tensor, this->num_q_heads, this->num_kv_heads, this->head_dim, output_tensors, compute_with_storage_grid_size);
 }
 
-tt::stl::reflection::Attributes NlpCreateHeadsDecode::attributes() const {
-    return {
-        {"num_q_heads", this->num_q_heads},
-        {"num_kv_heads", this->num_kv_heads},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
-
 // Generic NLP CreateHeads op
 void NlpCreateHeads::validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
@@ -421,12 +412,6 @@ operation::ProgramWithCallbacks NlpConcatHeadsDecode::create_program(const std::
     return  multi_core_nlp_concat_heads_decode(input_tensor, output_tensor, compute_with_storage_grid_size);
 }
 
-tt::stl::reflection::Attributes NlpConcatHeadsDecode::attributes() const {
-    return {
-        {"num_heads", this->num_heads},
-    };
-}
-
 // NLP KV Cache Unpad To Sharded op
 void NlpKVCacheLoadSlice::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
@@ -497,13 +482,6 @@ operation::ProgramWithCallbacks NlpKVCacheLoadSlice::create_program(const std::v
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     return multi_core_nlp_kv_cache_load_slice(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
-}
-
-tt::stl::reflection::Attributes NlpKVCacheLoadSlice::attributes() const {
-    return {
-        {"output_tensor_start", this->output_tensor_start},
-        {"output_tensor_end", this->output_tensor_end},
-    };
 }
 
 void CreateQKVHeads::validate(const std::vector<Tensor> &input_tensors) const {

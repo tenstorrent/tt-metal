@@ -149,15 +149,6 @@ operation::ProgramWithCallbacks Softmax::create_program(
     );
 }
 
-tt::stl::reflection::Attributes Softmax::attributes() const {
-    return {
-        {"scale", this->scale},
-        {"inplace", this->inplace},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
-
 const operation::Hash Softmax::compute_program_hash(
     const std::vector<Tensor> &input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {

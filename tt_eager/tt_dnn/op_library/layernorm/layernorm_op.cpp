@@ -200,15 +200,6 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
     );
 }
 
-tt::stl::reflection::Attributes LayerNorm::attributes() const {
-    return {
-        {"norm_type", this->norm_type},
-        {"eps", this->eps},
-        {"output_mem_config", this->output_mem_config},
-        {"program_config", this->program_config}
-    };
-}
-
 }  // namespace tt_metal
 
 }  // namespace tt

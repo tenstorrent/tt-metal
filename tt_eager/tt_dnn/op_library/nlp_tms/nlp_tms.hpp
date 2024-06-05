@@ -91,7 +91,12 @@ struct NlpCreateHeadsDecode {
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("num_q_heads", "num_kv_heads", "head_dim", "output_mem_config");
+    const auto attribute_values() const {
+        return std::forward_as_tuple(this->num_q_heads, this->num_kv_heads, this->head_dim, this->output_mem_config);
+    }
 };
 
 struct NlpCreateHeads {
@@ -125,7 +130,9 @@ struct NlpConcatHeadsDecode {
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("num_heads");
+    const auto attribute_values() const { return std::forward_as_tuple(this->num_heads); }
 };
 
 struct NlpKVCacheLoadSlice {
@@ -138,7 +145,9 @@ struct NlpKVCacheLoadSlice {
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("output_tensor_start", "output_tensor_end", "output_shape", "input_shape");
+    const auto attribute_values() const { return std::forward_as_tuple(this->output_tensor_start, this->output_tensor_end, this->output_shape, this->input_shape); }
 };
 
 inline std::vector<Tensor> nlp_create_qkv_heads_falcon7b(const Tensor& input_tensor_a, const MemoryConfig& mem_config) {

@@ -42,18 +42,6 @@ std::vector<Tensor> ReduceScatter::create_output_tensors(const std::vector<Tenso
     }
 }
 
-tt::stl::reflection::Attributes ReduceScatter::attributes() const {
-    return {
-        {"scatter_dim", this->scatter_dim},
-        {"num_links", this->num_links},
-        {"ring_size", this->ring_size},
-        {"ring_index", this->ring_index},
-        {"receiver_device_id", this->receiver_device_id},
-        {"sender_device_id", this->sender_device_id},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 operation::ProgramWithCallbacks ReduceScatter::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     return ccl::reduce_scatter_detail::reduce_scatter_with_workers(

@@ -147,12 +147,6 @@ TransposeOpParallelizationStrategy Transpose::get_parallelization_strategy(const
     }
 }
 
-tt::stl::reflection::Attributes Transpose::attributes() const {
-    return {
-        {"dim", this->dim},
-    };
-}
-
 const operation::Hash Transpose::compute_program_hash(
     const std::vector<Tensor> &input_tensors) const {
     auto input_tensor = input_tensors.at(0);
