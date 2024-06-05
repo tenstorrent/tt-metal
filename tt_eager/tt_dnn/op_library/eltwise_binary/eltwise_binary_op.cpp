@@ -106,7 +106,7 @@ std::map<string, string> get_defines(
         default: TT_ASSERT(false && "Undefined op type");
     }
 
-    if(output_dtype.has_value() && output_dtype.value()  == DataType::UINT32){
+    if(output_dtype.has_value() && (output_dtype.value() == DataType::UINT32 || output_dtype.value() == DataType::UINT16)){
         TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0 && "SFPU_OP_CHAIN_0 already defined");
 
         auto dataformat = std::to_string((uint32_t)datatype_to_dataformat_converter(output_dtype.value()));

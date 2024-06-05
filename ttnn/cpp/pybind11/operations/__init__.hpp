@@ -19,6 +19,7 @@
 #include "pybind11/operations/maxpool2d.hpp"
 #include "pybind11/operations/normalization.hpp"
 #include "pybind11/operations/pool.hpp"
+#include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/reduction.hpp"
 #include "pybind11/operations/ternary.hpp"
 #include "pybind11/operations/transformer.hpp"
@@ -78,6 +79,9 @@ void py_module(py::module& module) {
 
     auto m_pool = module.def_submodule("pool", "pool operations");
     pool::py_module(m_pool);
+
+    auto m_copy = module.def_submodule("copy", "copy operations");
+    copy::py_module(m_copy);
 }
 
 }  // namespace operations

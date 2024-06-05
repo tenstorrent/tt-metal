@@ -332,49 +332,6 @@ OutputTensors run_without_autoformat(
     const DeviceOperation<OutputTensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    uint8_t cq_id) {
-    ZoneScoped;
-    Device* device = detail::get_device(input_tensors, optional_input_tensors);
-    detail::validate_op_launch(device);
-    Tensors input_tensors_on_dev;
-    input_tensors_on_dev.reserve(input_tensors.size());
-    for (auto& input_tensor : input_tensors) {
-        if (input_tensor.storage_type() != StorageType::DEVICE) {
-            input_tensors_on_dev.push_back(AutoFormat::move_tensor_to_device(input_tensor, device));
-        } else {
-            input_tensors_on_dev.push_back(input_tensor);
-        }
-    }
-    OptionalConstTensors optional_input_tensors_on_dev;
-    optional_input_tensors_on_dev.reserve(optional_input_tensors.size());
-    for (auto& optional_input_tensor : optional_input_tensors) {
-        if (optional_input_tensor.has_value() and optional_input_tensor.value().storage_type() != StorageType::DEVICE) {
-            optional_input_tensors_on_dev.push_back(
-                AutoFormat::move_tensor_to_device(optional_input_tensor.value(), device));
-        } else {
-            optional_input_tensors_on_dev.push_back(optional_input_tensor);
-        }
-    }
-    return run<OutputTensors>(operation, input_tensors_on_dev, optional_input_tensors_on_dev, {}, cq_id);
-}
-
-template Tensors run_without_autoformat<Tensors>(
-    const DeviceOperation<Tensors>& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    uint8_t cq_id);
-
-template OptionalTensors run_without_autoformat<OptionalTensors>(
-    const DeviceOperation<OptionalTensors>& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    uint8_t cq_id);
-
-template <class OutputTensors>
-OutputTensors run_without_autoformat(
-    const DeviceOperation<OutputTensors>& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
     uint8_t cq_id) {
     ZoneScoped;
@@ -518,7 +475,7 @@ Tensors run_with_autoformat(
         }
     }
 
-    auto output_tensors = run<Tensors>(operation, formatted_input_tensors, formatted_optional_input_tensors, {}, cq_id);
+    auto output_tensors = run<Tensors>(operation, formatted_input_tensors, formatted_optional_input_tensors, {std::nullopt}, cq_id);
 
     TT_ASSERT(output_tensors.size() == output_shapes.size());
     TT_ASSERT(output_tensors.size() == output_layouts.size());

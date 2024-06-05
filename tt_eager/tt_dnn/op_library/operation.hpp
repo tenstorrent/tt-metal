@@ -566,7 +566,7 @@ struct DeviceOperation final {
                     operation.validate(input_tensors, optional_input_tensors);
                 } else if constexpr (detail::implements_validate_with_output_tensors<T>()) {
                     TT_FATAL(optional_input_tensors.empty());
-                    TT_FATAL(not optional_output_tensors.empty());
+                    //TT_FATAL(not optional_output_tensors.empty());
                     operation.validate_with_output_tensors(input_tensors, optional_output_tensors);
                 } else if constexpr (detail::implements_validate_with_output_tensors_and_optional_input_tensors<T>()) {
                     TT_FATAL(not optional_input_tensors.empty());

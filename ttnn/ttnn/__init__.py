@@ -475,3 +475,4 @@ from ttnn.operations.pool import (
     MaxPool2d,
     global_avg_pool2d,
 )
+from ttnn.operations.copy import typecast

@@ -47,7 +47,7 @@ void bind_unary_operation(py::module& module, const unary_operation_t& operation
         module,
         operation,
         doc,
-        ttnn::pybind_arguments_t{py::arg("input_tensor"), py::kw_only(), py::arg("memory_config") = std::nullopt});
+        ttnn::pybind_arguments_t{py::arg("input_tensor"), py::kw_only(), py::arg("memory_config") = std::nullopt, py::arg("output_tensor") = std::nullopt});
 }
 
 template <typename unary_operation_t>
@@ -83,7 +83,8 @@ void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, con
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("fast_and_approximate_mode") = false,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 }
 
 template <typename unary_operation_t>
@@ -125,7 +126,8 @@ void bind_unary_operation_with_float_parameter(
             py::arg("input_tensor"),
             py::arg(parameter_name.c_str()),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 }
 
 void bind_softplus(py::module& module) {
@@ -162,7 +164,8 @@ void bind_softplus(py::module& module) {
             py::kw_only(),
             py::arg("beta") = 1.0f,
             py::arg("threshold") = 20.0f,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 }
 
 }  // namespace detail

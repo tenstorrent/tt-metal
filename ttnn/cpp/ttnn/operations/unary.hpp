@@ -41,7 +41,8 @@ inline auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args
 inline Tensor execute_on_worker_thread(
     const Tensor& input_tensor,
     const std::vector<tt::tt_metal::UnaryWithParam>& op_chain,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
     DataType output_dtype = (op_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(op_chain[0].params[0]) : input_tensor.get_dtype();
     bool fp32_dest_acc_en = output_dtype == DataType::UINT32 or
                             input_tensor.get_dtype() == DataType::UINT32 or
@@ -49,9 +50,10 @@ inline Tensor execute_on_worker_thread(
                                                                           // DST directly, fp32 is converted to fp16b
     return operation::run(
                EltwiseUnary{op_chain, memory_config.value_or(input_tensor.memory_config()), fp32_dest_acc_en, output_dtype},
-               {input_tensor})
+               {input_tensor}, {}, {optional_output_tensor})
         .at(0);
 }
+
 }  // namespace detail
 
 template <UnaryOpType... unary_op_types>
@@ -63,8 +65,9 @@ struct ExecuteUnary {
         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
     }
     static Tensor execute_on_worker_thread(
-        const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return detail::execute_on_worker_thread(input_tensor, {UnaryWithParam{unary_op_types}...}, memory_config);
+        const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        return detail::execute_on_worker_thread(input_tensor, {UnaryWithParam{unary_op_types}...}, memory_config, optional_output_tensor);
     }
 };
 
@@ -80,9 +83,10 @@ struct ExecuteUnaryWithFastAndApproximateMode {
     static Tensor execute_on_worker_thread(
         const Tensor& input_tensor,
         const bool parameter = false,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
         return detail::execute_on_worker_thread(
-            input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config);
+            input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config, optional_output_tensor);
     }
 };
 
@@ -98,9 +102,10 @@ struct ExecuteUnaryWithFloatParameter {
     static Tensor execute_on_worker_thread(
         const Tensor& input_tensor,
         const float parameter,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
         return detail::execute_on_worker_thread(
-            input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config);
+            input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config, optional_output_tensor);
     }
 };
 
@@ -116,10 +121,11 @@ struct Softplus {
         const Tensor& input,
         const float beta,
         const float threshold,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
         TT_ASSERT(input.device()->arch() != tt::ARCH::GRAYSKULL, "Softplus is not currently supported on Grayskull");
         return detail::execute_on_worker_thread(
-            input, {UnaryWithParam{ttnn::operations::unary::UnaryOpType::SOFTPLUS, {beta, threshold}}}, memory_config);
+            input, {UnaryWithParam{ttnn::operations::unary::UnaryOpType::SOFTPLUS, {beta, threshold}}}, memory_config, optional_output_tensor);
     }
 };
 }  // namespace unary
