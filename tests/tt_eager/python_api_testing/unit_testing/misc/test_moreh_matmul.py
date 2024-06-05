@@ -364,9 +364,15 @@ def test_moreh_matmul_wo_output(params, device):
 )
 def test_moreh_matmul_enable_cache(params, device, use_program_cache):
     torch.manual_seed(3072)
-    for i in range(2):
+    for i in range(4):
+        # change input's transpose option
+        if i % 2 == 1:
+            param_list = list(params)
+            param_list[3] = False if param_list[3] else True
+            params = tuple(param_list)
         passing = moreh_matmul(params, True, None, device)
         assert passing
+    assert device.num_program_cache_entries() == 2
 
 
 @pytest.mark.parametrize(
