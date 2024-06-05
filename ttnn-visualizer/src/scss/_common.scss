@@ -1,0 +1,168 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+
+:root {
+    color-scheme: dark;
+}
+
+::-webkit-scrollbar-track {
+    background-color: transparent;
+    pointer-events: none;
+}
+
+::-webkit-scrollbar-button {
+}
+
+body {
+    margin: 0;
+    background: $tt-background;
+    color: $tt-white-text;
+    font-family: 'Arial Nova', Arial, sans-serif;
+    //font-family: 'Helvetica Neue', Helvetica, sans-serif;
+
+    //overflow-y: hidden;
+    //overflow-x: hidden;
+    //height: 100vh;
+    //display: flex;
+}
+
+*, *::before, *::after {
+    box-sizing: border-box;
+}
+
+a {
+    color: $tt-light-blue;
+}
+
+
+:focus {
+    outline-offset: 0px;
+}
+
+.bp4-control input:focus ~ .bp4-control-indicator {
+    outline-offset: 0;
+}
+
+:focus {
+    outline: $focus-ring solid 2px;
+    outline-offset: 0px;
+}
+
+.bp4-control input:focus ~ .bp4-control-indicator {
+    outline: $focus-ring solid 2px;
+    outline-offset: 0;
+}
+
+
+.node-item:focus {
+    outline: none;
+    //outline-offset: -2px;
+}
+
+.tt-keyboard-focus {
+    .node-item:focus {
+        outline: $focus-ring solid 2px;
+        outline-offset: -2px;
+    }
+}
+
+$top-nav-height: 70px;
+$footer-height: 20px;
+
+// Ful app layout, which is side bar, top nav, main content, and footer
+.App {
+    color: $tt-white-text;
+    //display: grid;
+    grid-template-columns: 50px 1fr;
+    grid-template-rows: $top-nav-height 1fr;
+}
+
+.Footer {
+    position: absolute;
+    bottom: 0px;
+    min-width: 100vw;
+    background: $tt-purple;
+    min-height: #{$footer-height};
+    display: flex;
+}
+
+.data-box {
+    border: 2px solid $tt-light-gray;
+    border-radius: 15px;
+    padding: 10px;
+    margin-right: 10px;
+    margin-top: 10px;
+
+    h3 {
+        margin: 5px 0;
+    }
+}
+
+.bp3-select-popover .bp3-menu {
+    max-height: 400px;
+    overflow: auto;
+}
+
+.header {
+    margin-top: 10px;
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 20px;
+    margin-inline-end: 10px;
+}
+
+.splash-screen {
+    display: flex;
+    width: 100vw;
+    height: calc(100vh - 50px);
+    grid-template-columns: 1fr;
+    justify-content: center;
+    align-items: center;
+    align-content: center;
+    gap: 40px;
+}
+
+button, .button {
+    background-color: $tt-medium-blue;
+    border: none;
+    border-radius: 2px;
+    color: #fff;
+    cursor: pointer;
+    display: inline-flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+    font-weight: 200;
+    font-size: 16px;
+    line-height: 120%;
+    padding: 5px 36px;
+    text-align: center;
+    text-decoration: none;
+    transition: color 250ms linear, background-color 250ms linear;
+
+    &:not(.node-item) {
+        &:hover {
+            background-color: lighten($tt-medium-blue, 20%);
+        }
+
+        //&:focus {
+        //    outline: none;
+        //}
+    }
+
+    &.node-item {
+        background-color: inherit;
+        cursor: default;
+        transition: color 100ms linear, background-color 100ms linear;
+
+        &:hover {
+            background-color: transparentize($tt-medium-blue, 0.9);
+        }
+    }
+}
+
+h1, h2, h3, h4, h5 {
+    margin: 0;
+}

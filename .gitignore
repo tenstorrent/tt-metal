@@ -25,7 +25,7 @@ device_desc.yaml
 /clean
 *coverage.txt
 blobgen_cmd_log
-
+.DS_Store
 __pycache__
 
 *.vcd
