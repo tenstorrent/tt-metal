@@ -109,7 +109,9 @@ std::map<string, string> get_defines(
     if(output_dtype.has_value() && output_dtype.value()  == DataType::UINT32){
         TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0 && "SFPU_OP_CHAIN_0 already defined");
 
-        defines.insert({"SFPU_OP_CHAIN_0", "typecast_tile_init(); typecast_tile(i);"});
+        auto dataformat = std::to_string((uint32_t)datatype_to_dataformat_converter(output_dtype.value()));
+        defines.insert({"SFPU_OP_CHAIN_0",
+                        fmt::format("typecast_tile_init(); typecast_tile<{0}u>(i);", dataformat)});
         defines.insert({"SFPU_OP_TYPECAST_INCLUDE", "1"});
     }
 

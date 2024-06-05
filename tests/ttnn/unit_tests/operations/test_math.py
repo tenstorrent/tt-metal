@@ -7,6 +7,7 @@ import pytest
 import torch
 
 import ttnn
+import tt_lib
 from models.utility_functions import is_grayskull
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -72,7 +73,7 @@ def test_lgamma(device, h, w):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
-@pytest.mark.parametrize("output_dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.UINT32])
+@pytest.mark.parametrize("output_dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.UINT16, ttnn.DataType.UINT32])
 def test_eq(device, h, w, output_dtype):
     if is_grayskull() and output_dtype == ttnn.DataType.UINT32:
         pytest.skip("GS does not support fp32/uint32")
@@ -99,8 +100,6 @@ def test_eq(device, h, w, output_dtype):
         torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    output_tensor_preallocated = ttnn.ones([h, w], output_dtype, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG)
-
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
     output_tensor = ttnn.eq(input_tensor_a, input_tensor_b, dtype=output_dtype)
     assert output_tensor.get_dtype() == output_dtype
@@ -109,6 +108,16 @@ def test_eq(device, h, w, output_dtype):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     # EQ with a preallocated output tensor
+    output_tensor_preallocated_bfloat16 = ttnn.ones(
+        [h, w], ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+    )
+    output_tensor_preallocated = output_tensor_preallocated_bfloat16
+    # There is no good way to create uint16 tensor in ttnn/torch, so we create bfloat16 and typecast to target
+    if output_dtype != ttnn.DataType.BFLOAT16:
+        output_tensor_preallocated = tt_lib.tensor.typecast(
+            output_tensor_preallocated_bfloat16, output_dtype, ttnn.L1_MEMORY_CONFIG
+        )
+
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
     ttnn.eq(input_tensor_a, input_tensor_b, dtype=output_dtype, output_tensor=output_tensor_preallocated)
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
