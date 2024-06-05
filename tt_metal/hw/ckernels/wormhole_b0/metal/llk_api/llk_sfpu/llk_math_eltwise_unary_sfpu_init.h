@@ -11,22 +11,12 @@ namespace ckernel {
 
 template <SfpuType sfpu_op, bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_init() {
-    eltwise_unary_sfpu_configure_addrmod<sfpu_op>();
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    _llk_math_eltwise_unary_sfpu_init_<sfpu_op>();
 }
 
-template <SfpuType sfpu_op, bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_init(void (*func)()) {
-    eltwise_unary_sfpu_configure_addrmod<sfpu_op>();
-    func();
-    math::reset_counters(p_setrwc::SET_ABD_F);
+template <SfpuType sfpu_op, bool APPROXIMATE, class F, class ... ARGS>
+inline void llk_math_eltwise_unary_sfpu_init(F&& init_func, ARGS&& ... args) {
+    _llk_math_eltwise_unary_sfpu_init_<sfpu_op>();
+    init_func(static_cast<ARGS&&>(args)...);
 }
-
-template <SfpuType sfpu_op, bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_init_1_param(void (*func)(uint), uint param0 = 0) {
-    eltwise_unary_sfpu_configure_addrmod<sfpu_op>();
-    func(param0);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
-
 }
