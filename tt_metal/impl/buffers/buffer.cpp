@@ -11,7 +11,6 @@
 #include "tt_metal/hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/tt_stl/stacktrace.hpp"
 
 namespace tt {
 

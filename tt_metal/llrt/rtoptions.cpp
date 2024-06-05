@@ -47,10 +47,15 @@ RunTimeOptions::RunTimeOptions() {
     test_mode_enabled = false;
 
     profiler_enabled = false;
+    profile_dispatch_cores = false;
 #if defined(PROFILER)
     const char *profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
     if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
         profiler_enabled = true;
+        const char *profile_dispatch_str = std::getenv("TT_METAL_DEVICE_PROFILER_DISPATCH");
+        if (profile_dispatch_str != nullptr && profile_dispatch_str[0] == '1') {
+            profile_dispatch_cores = true;
+        }
     }
 #endif
     TT_FATAL(
