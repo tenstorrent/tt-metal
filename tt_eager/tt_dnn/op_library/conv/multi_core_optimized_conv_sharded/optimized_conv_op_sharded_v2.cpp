@@ -92,6 +92,7 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
                 CircularBufferConfig(num_cb0_tiles * tilized_act_tile_size, {{act_cb, tilized_act_df}})
                     .set_page_size(act_cb, tilized_act_tile_size);
             auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
+            log_debug(LogOp, "Act CB: {}, npages: {}, pagesize: {}", act_cb, num_cb0_tiles, tilized_act_tile_size);
 
             // num_cb0_tilized_tiles is single buffered
             CircularBufferConfig cb_act_row_major_bfloat16_config =
@@ -99,6 +100,7 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
                     .set_page_size(act_cb_row_major_bfloat16, act_tile_size);
             auto cb_act_row_major_bfloat16 =
                 tt_metal::CreateCircularBuffer(program, core, cb_act_row_major_bfloat16_config);
+            log_debug(LogOp, "Act CB Row Major BFLOAT16: {}, npages: {}, pagesize: {}", act_cb_row_major_bfloat16, num_cb0_tilized_tiles, act_tile_size);
         } else {
             // For 1D convs, locally create act matrix in act_cb, which is always ROW_MAJOR BFLOAT16
             // Then, tilize input in compute
@@ -112,11 +114,13 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
                     CircularBufferConfig(num_cb0_tiles * act_tile_size, {{act_cb_second_reader, act_df}})
                         .set_page_size(act_cb_second_reader, act_tile_size);
                 auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
+                log_debug(LogOp, "Act CB Second Reader: {}, npages: {}, pagesize: {}", act_cb_second_reader, num_cb0_tiles, act_tile_size);
             }
 
             CircularBufferConfig cb_act_config = CircularBufferConfig(num_cb0_tiles * act_tile_size, {{act_cb, act_df}})
                                                      .set_page_size(act_cb, act_tile_size);
             auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
+            log_debug(LogOp, "Act CB: {}, npages: {}, pagesize: {}", act_cb, num_cb0_tiles, act_tile_size);
         }
     } else {
         TT_ASSERT(false, "Input must be sharded!");
@@ -126,6 +130,7 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
         CircularBufferConfig(num_cb1_tiles * weight_tile_size, {{weight_cb, weight_df}})
             .set_page_size(weight_cb, weight_tile_size);
     auto cb_weight = tt_metal::CreateCircularBuffer(program, core, cb_weight_config);
+    log_debug(LogOp, "Weight CB: {}, npages: {}, pagesize: {}", weight_cb, num_cb1_tiles, weight_tile_size);
 
     // Used for placing tilized activations
     CircularBufferConfig cb_src0_tilized_config =
@@ -133,6 +138,7 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
             num_cb0_tilized_tiles * tilized_act_tile_size, {{tilize_mode_tilized_act_cb, tilized_act_df}})
             .set_page_size(tilize_mode_tilized_act_cb, tilized_act_tile_size);
     auto cb_src0_tilized = tt_metal::CreateCircularBuffer(program, core, cb_src0_tilized_config);
+    log_debug(LogOp, "Tilized Act CB: {}, npages: {}, pagesize: {}", tilize_mode_tilized_act_cb, num_cb0_tilized_tiles, tilized_act_tile_size);
 
     CBHandle cb_output = 0;
     if (untilize_out) {
@@ -140,6 +146,7 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
             CircularBufferConfig(num_output_tiles * interm0_single_tile_size, {{matmul_partials_cb, interm0_df}})
                 .set_page_size(matmul_partials_cb, interm0_single_tile_size);
         auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
+        log_debug(LogOp, "Matmul Partials CB: {}, npages: {}, pagesize: {}", matmul_partials_cb, num_output_tiles, interm0_single_tile_size);
 
         // Supposed to be a small CB only responsible for reorganizing
         // the output blocks to fill the whole "per core output block width"
@@ -147,6 +154,7 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
             CircularBufferConfig(num_reblock_cb_tiles * out_tile_size, {{untilize_mode_reblock_cb, out_df}})
                 .set_page_size(untilize_mode_reblock_cb, out_tile_size);
         auto cb_reblock = tt_metal::CreateCircularBuffer(program, core, cb_reblock_config);
+        log_debug(LogOp, "Reblock CB: {}, npages: {}, pagesize: {}", untilize_mode_reblock_cb, num_reblock_cb_tiles, out_tile_size);
 
         CircularBufferConfig cb_output_config =
             CircularBufferConfig(num_writer_output_tiles * out_tile_size, {{out0_cb, out_df}})
@@ -175,6 +183,7 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
                 CircularBufferConfig(num_output_tiles * interm0_single_tile_size, {{matmul_partials_cb, interm0_df}})
                     .set_page_size(matmul_partials_cb, interm0_single_tile_size);
             auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
+            log_debug(LogOp, "Matmul Partials CB: {}, npages: {}, pagesize: {}", matmul_partials_cb, num_output_tiles, interm0_single_tile_size);
 
             CircularBufferConfig cb_output_config =
                 CircularBufferConfig(num_output_tiles * out_tile_size, {{out0_cb, out_df}})
@@ -284,8 +293,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // assert(out_block_h_ntiles == act_block_h_ntiles); // TODO: fix output block sizing
     TT_ASSERT(
         out_block_h_ntiles >= act_block_h_ntiles,
-        "Output block height (in # of tiles) should be greater than or equal to activation block height (in # of "
-        "tiles)");
+        "Output block height (in # of tiles) ({}) should be greater than or equal to activation block height (in # of "
+        "tiles) ({})", out_block_h_ntiles, act_block_h_ntiles);
 
     // Tensor b has weights and it should be tiled layout after converting conv weights into weight matrix
     TT_ASSERT(b.get_layout() == Layout::TILE, "Conv weights should be in tiled layout");
@@ -655,7 +664,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     CoreRangeSet all_active_cores(all_active_cores_set);
     std::set<CoreRange> noop_cores_set;
     if (total_noop_cores > 0) {
-        assert(total_noop_cores == (num_cores_x - num_active_cores_x_last_y));
+        TT_FATAL(total_noop_cores == num_cores_x - num_active_cores_x_last_y, "Expected total_noop_cores {} to be equal to num_cores_x {} - num_active_cores_x_last_y {}", total_noop_cores, num_cores_x, num_active_cores_x_last_y);
         noop_cores_set.insert(CoreRange(
             CoreCoord(num_active_cores_x_last_y, num_active_cores_y_with_full_x),
             CoreCoord(num_cores_x - 1, num_active_cores_y_with_full_x)));
@@ -1322,7 +1331,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             // Reader config indices is an optional static sharded tensor, so no need to update address
-            // TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 4);
             TT_ASSERT(output_tensors.size() == 1);
 
             auto src_buffer_a = input_tensors.at(0).buffer();

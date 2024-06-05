@@ -115,6 +115,11 @@ def run_conv(
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
         print("Setting Act Block H to ", conv_config.act_block_h_override)
+    if config_override and "num_cores_nhw" in config_override:
+        if config_override["num_cores_nhw"] == 98:
+            conv_config.core_grid = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (11, 7)), ttnn.CoreRange((0, 8), (1, 8))})
+            conv_config.override_sharding_config = True
+            print("Setting num_cores_nhw to 98")
 
     [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
@@ -295,24 +300,26 @@ def run_conv_with_split(
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array",
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
     (
         # unique convs in rn50 (complete list)
         # first conv post folding and input_channels padding to tile width
         # (64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True), act_block_h_ntiles % 2 == 0
         # rn50 layer1
-        (64, 64, 56, 56, 1, 1, 1, 1, 0, 0, True),
-        (64, 64, 56, 56, 1, 1, 2, 2, 0, 0, True),
-        (64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True),
+        (64, 64, 56, 56, 1, 1, 1, 1, 0, 0, True, None),
+        (64, 64, 56, 56, 1, 1, 2, 2, 0, 0, True, None),
+        (64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
         # rn50 layer2
-        (128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True),
-        (128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True),
+        (128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),
+        (128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
         # rn50 layer3
-        (256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False),
-        (256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False),
+        (256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None),
+        (256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None),
         # rn50 layer4
-        (512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False),
-        (512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False),
+        (512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None),
+        (512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
+        ## 1x1s2
+        # (256, 256, 28, 28, 1, 1, 2, 2, 0, 0, True, {"num_cores_nhw": 98}),
     ),
 )
 @pytest.mark.parametrize(
@@ -346,10 +353,11 @@ def test_resnet50_conv_gs(
     pad_h,
     pad_w,
     use_1d_systolic_array,
+    config_override,
 ):
     if batch_size > 8 and (activations_dtype != ttnn.bfloat8_b or weights_dtype != ttnn.bfloat8_b):
         pytest.skip("Batch > 8 must be run fully bfp8")
-    if batch_size == 20 and input_channels >= 128:
+    if batch_size == 20 and input_channels >= 128 and filter_width > 1:
         pytest.skip("L1 Allocation error")
     if (
         activations_dtype == ttnn.bfloat16
@@ -381,7 +389,7 @@ def test_resnet50_conv_gs(
         pad_h,
         pad_w,
         use_1d_systolic_array,
-        config_override=None,
+        config_override=config_override,
         use_shallow_conv_variant=input_channels == 16,
         padded_input_channels=16 if input_channels == 16 else None,
         debug=not (batch_size == 20 and input_height == 115),
@@ -438,6 +446,7 @@ def test_resnet50_conv_gs(
         # (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, True, None), - doesnt fit
         (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, False, None),  # r50 fourth bottleneck downsample shape
         # (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, True, None), - doesnt fit
+        # (20, 128, 256, 56, 56, 1, 1, 2, 2, 0, 0, True, None),  ## L2M1 DS: doesn't fit
     ),
 )
 @pytest.mark.parametrize(
