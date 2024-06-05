@@ -205,6 +205,13 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     std::vector<uint32_t> in0_sender_compile_time_args;
 
+    uint32_t num_dram_banks = 0;
+    uint32_t per_core_N_storage = 0;
+    if (in1_is_sharded and in1_is_dram) {
+        num_dram_banks = device->num_dram_channels();
+        per_core_N_storage = (N + num_dram_banks - 1) / num_dram_banks;
+    }
+
     if (in0_block_sharded) {
         uint32_t num_x, num_y;
         if (transpose_mcast) {
@@ -301,6 +308,14 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)in3_is_dram);
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);
     }
+    if (in1_is_sharded and in1_is_dram) {
+        if (bias_buffer == nullptr) {
+            in1_sender_writer_compile_time_args.push_back(0);
+            in1_sender_writer_compile_time_args.push_back(0);
+        }
+        in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in0_block_w);
+        in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in1_single_tile_size);
+    }
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         // in0 block args
         (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
@@ -372,8 +387,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     if (in0_height_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
     }
-    if (in1_is_sharded) {
+    if (in1_is_sharded and not in1_is_dram) {
         mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
+    }
+    if (in1_is_sharded and in1_is_dram) {
+        mm_kernel_in1_sender_writer_defines["IN1_DRAM_SHARDED"] = "1";
     }
 
     // if (in0_is_sharded) {
@@ -524,7 +542,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size);
-    if (in1_is_sharded) {
+    if (in1_is_sharded and not in1_is_dram) {
         src1_cb_config.set_globally_allocated_address(*in1_buffer);
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
@@ -665,6 +683,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     if (in0_noc == NOC::NOC_1) {
         std::swap(diff_start_coord, diff_end_coord);
     }
+
+    // dram sharded weights stride params
+    uint32_t worker_core_stride = 0; // stride in the worker core
+    uint32_t storage_core_stride = 0; // stride in the dram bank
+    uint32_t curr_worker_core = 0; // current worker core
+    uint32_t curr_storage_core = 0; // current read dram bank
 
     const auto& cores = grid_to_cores(all_cores.start, all_cores.end, true);
     const auto& in0_sender_cores = grid_to_cores(in0_sender.start, in0_sender.end, true);
@@ -823,6 +847,72 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             if (bias_buffer != nullptr) {
                 mm_in1_sender_writer_args.push_back((std::uint32_t)bias_buffer->address());
                 mm_in1_sender_writer_args.push_back((std::uint32_t)per_core_N * in1_idx);  // in1_tensor_start_tile_id
+            }
+
+            if (in1_is_sharded and in1_is_dram) { // in1 is dram sharded
+                if (bias_buffer == nullptr) {
+                    mm_in1_sender_writer_args.push_back(0);
+                    mm_in1_sender_writer_args.push_back(0);
+                }
+
+                uint32_t num_iter = 0; // iterate how many banks, till fill the current worker block
+
+                if (curr_storage_core < num_dram_banks) {
+                    num_iter++;
+
+                    worker_core_stride = per_core_N_storage - storage_core_stride;
+
+                    mm_in1_sender_writer_args.push_back(
+                        storage_core_stride * in1_single_tile_size);  // dram_tensor_start_offset
+                    mm_in1_sender_writer_args.push_back(
+                        worker_core_stride * in1_single_tile_size);  // per_core_N_dram_bytes
+                    mm_in1_sender_writer_args.push_back(
+                        curr_storage_core);  // current_dram_bank_id
+
+                    log_debug(
+                        "curr worker core: {} read {} tiles from dram bank: {}, start from index: {}",
+                        curr_worker_core,
+                        worker_core_stride,
+                        curr_storage_core,
+                        storage_core_stride);
+
+                    curr_storage_core += (storage_core_stride + worker_core_stride) / per_core_N_storage;
+                    storage_core_stride = (storage_core_stride + worker_core_stride) % per_core_N_storage;
+
+                    uint32_t curr_worker_core_old = curr_worker_core;
+                    if (worker_core_stride >= per_core_N) {
+                        curr_worker_core += 1;
+                    }
+
+                    while (curr_worker_core <= curr_worker_core_old and curr_storage_core < num_dram_banks) {
+                        num_iter++;
+
+                        uint32_t stride = worker_core_stride + per_core_N_storage;
+                        if (stride >= per_core_N) {
+                            stride = per_core_N;
+                        }
+
+                        mm_in1_sender_writer_args.push_back(
+                            (stride - worker_core_stride) * in1_single_tile_size);  // per_core_N_dram_bytes
+                        mm_in1_sender_writer_args.push_back(
+                            curr_storage_core);  // current_dram_bank_id
+
+                        log_debug(
+                            "curr worker core: {} read {} tiles from dram bank: {}, start from index: {}",
+                            curr_worker_core,
+                            (stride - worker_core_stride),
+                            curr_storage_core,
+                            storage_core_stride);
+
+                        if (stride >= per_core_N) {
+                            curr_worker_core += 1;
+                        }
+                        storage_core_stride = (stride - worker_core_stride) % per_core_N_storage;
+                        curr_storage_core += (stride - worker_core_stride) / per_core_N_storage;
+                        worker_core_stride = stride;
+                    }
+                }
+                mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 18, num_iter);
             }
             tt_metal::SetRuntimeArgs(
                 program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_1_default

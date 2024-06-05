@@ -78,7 +78,7 @@ def run_test_matmul_in1_dram_sharded(
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     in1_shard_shape = [K, N_padded // num_banks]
-    bias_shape = [1, 1, 32, N]
+    bias_shape = [1, 1, N]
     bias_shard_shape = [32, N_padded // num_banks]
     num_cores = grid_size[0] * grid_size[1]
 
@@ -116,12 +116,14 @@ def run_test_matmul_in1_dram_sharded(
 
     in0 = torch.randn(in0_shape).bfloat16().float()
     in1 = torch.randn(in1_shape).bfloat16().float()
-    bias = torch.randn(bias_shape).bfloat16().float()
 
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=in0_dtype)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=in1_mem_config, tt_dtype=in1_dtype)
 
     if has_bias:
+        bias = torch.randn(bias_shape).bfloat16().float()
+        bias_padded = bias.unsqueeze(2)
+        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, 32 - bias_padded.size(2)), "constant", 0)
         bias_shard_grid = ttl.tensor.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
         bias_shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), bias_shard_grid)})
         bias_shard_spec = ttl.tensor.ShardSpec(
@@ -130,7 +132,9 @@ def run_test_matmul_in1_dram_sharded(
         bias_mem_config = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.DRAM, bias_shard_spec
         )
-        bias_t = torch2tt_tensor(bias, device, tt_memory_config=bias_mem_config, tt_dtype=ttl.tensor.DataType.BFLOAT16)
+        bias_t = torch2tt_tensor(
+            bias_padded, device, tt_memory_config=bias_mem_config, tt_dtype=ttl.tensor.DataType.BFLOAT16
+        )
 
     in0_t = ttl.tensor.interleaved_to_sharded(
         in0_t,
@@ -463,3 +467,173 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
         function_level_defaults,
         use_program_cache,
     )
+
+
+@pytest.mark.skipif(is_grayskull(), reason="not tested for GS")
+@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
+@pytest.mark.parametrize(
+    "fp32_acc_mode",
+    [
+        True,
+    ],
+    ids=["fp32"],
+)
+@pytest.mark.parametrize(
+    "fidelity",
+    [
+        ttl.tensor.MathFidelity.LoFi,
+    ],
+    ids=["LoFi"],
+)
+@pytest.mark.parametrize("has_bias", [True, False], ids=["bias", "no_bias"])
+@pytest.mark.parametrize(
+    "M, K, N, activation",
+    [
+        (1024, 1024, 1024, None),
+    ],
+)
+def test_matmul_2d_in1_dram_sharded(
+    device,
+    fidelity,
+    has_bias,
+    fp32_acc_mode,
+    packer_l1_acc,
+    M,
+    K,
+    N,
+    activation,
+    function_level_defaults,
+):
+    if is_grayskull():
+        N_padded = N
+        num_banks = 8
+    else:
+        N_padded = pad_to_dram_banks(N)
+        num_banks = 12
+
+    in0_shape = [1, 1, M, K]
+    in1_shape = [1, 1, K, N]
+    in1_shard_shape = [K, N_padded // num_banks]
+    bias_shape = [1, 1, N]
+    bias_shard_shape = [32, N_padded // num_banks]
+    grid_size = (8, 4)
+
+    in0_block_h = M // grid_size[1] // 32
+    in0_block_w = K // grid_size[0] // 32
+    out_block_h = M // grid_size[1] // 32
+    out_block_w = N // grid_size[0] // 32
+
+    # full block too large to fit in L1
+    if in0_block_h * in0_block_w >= 48 or in0_block_w * out_block_w >= 48:
+        in0_block_w = in0_block_w // 2
+
+    if out_block_w < 4:
+        out_subblock_w = out_block_w
+        out_subblock_h = out_block_h // out_subblock_w
+    else:
+        out_subblock_w = 4
+        out_subblock_h = 1
+
+    logger.debug("in0 block w h " + str(in0_block_w * 32) + " " + str(in0_block_h * 32))
+    logger.debug("in1 block w h " + str(out_block_w * 32) + " " + str(in0_block_w * 32))
+    logger.debug("out block w h " + str(out_block_w * 32) + " " + str(out_block_h * 32))
+    logger.debug("out subblock w h " + str(out_subblock_w * 32) + " " + str(out_subblock_h * 32))
+
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+    interleaved_mem_config_L1 = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+    interleaved_mem_config_DRAM = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.DRAM,
+    )
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in0_t = torch2tt_tensor(
+        in0, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT16
+    )
+    in0_t = ttl.tensor.interleaved_to_sharded(
+        in0_t,
+        grid_size,
+        [M // grid_size[1], K // grid_size[0]],
+        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttl.tensor.ShardOrientation.ROW_MAJOR,
+    )
+
+    in1 = torch.randn(in1_shape).bfloat16().float()
+    in1_shard_grid = ttl.tensor.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+    in1_shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), in1_shard_grid)})
+    in1_shard_spec = ttl.tensor.ShardSpec(in1_shard_grid, in1_shard_shape, ttl.tensor.ShardOrientation.ROW_MAJOR, False)
+    in1_mem_config = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.DRAM, in1_shard_spec
+    )
+    in1_t = torch2tt_tensor(in1, device, tt_memory_config=in1_mem_config, tt_dtype=ttl.tensor.DataType.BFLOAT16)
+
+    if has_bias:
+        bias = torch.ones(bias_shape).bfloat16().float()
+        bias_padded = bias.unsqueeze(2)
+        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, 32 - bias_padded.size(2)), "constant", 0)
+        bias_shard_grid = ttl.tensor.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+        bias_shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), bias_shard_grid)})
+        bias_shard_spec = ttl.tensor.ShardSpec(
+            bias_shard_grid, bias_shard_shape, ttl.tensor.ShardOrientation.ROW_MAJOR, False
+        )
+        bias_mem_config = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.DRAM, bias_shard_spec
+        )
+        bias_t = torch2tt_tensor(
+            bias_padded, device, tt_memory_config=bias_mem_config, tt_dtype=ttl.tensor.DataType.BFLOAT16
+        )
+
+    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        transpose_mcast=False,
+        fused_activation=activation,
+    )
+
+    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_acc_mode,
+        packer_l1_acc=packer_l1_acc,
+    )
+    if has_bias:
+        output_t = ttl.operations.primary.matmul(
+            in0_t,
+            in1_t,
+            bias=bias_t,
+            program_config=program_config,
+            output_mem_config=sharded_mem_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+    else:
+        output_t = ttl.operations.primary.matmul(
+            in0_t,
+            in1_t,
+            program_config=program_config,
+            output_mem_config=sharded_mem_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+    output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_DRAM)
+    tt_out = tt2torch_tensor(output_t)
+
+    pt_out = in0 @ in1
+    if has_bias:
+        pt_out = pt_out + bias
+
+    if activation != None:
+        pt_out = torch.nn.functional.gelu(pt_out)
+
+    passing, output = comp_pcc(pt_out, tt_out)
+    logger.info(output)
+    assert passing

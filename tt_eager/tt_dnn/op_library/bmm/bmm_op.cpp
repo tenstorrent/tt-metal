@@ -1086,7 +1086,9 @@ void Matmul::validate(
                 if (input_tensor_b.memory_config().is_sharded()) {
                     auto tensor_b_memory_layout = input_tensor_b.memory_config().memory_layout;
                     TT_FATAL(tensor_b_memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
-                    TT_FATAL(program_config.per_core_N == (input_tensor_b.shard_spec().value().shape[0] / TILE_WIDTH));
+                    if (input_tensor_b.buffer()->buffer_type() != tt_metal::BufferType::DRAM) {
+                        TT_FATAL(program_config.per_core_N == (input_tensor_b.shard_spec().value().shape[0] / TILE_WIDTH));
+                    }
                     TT_FATAL(
                         input_tensor_b.shard_spec()->grid.bounding_box().start.y ==
                         input_tensor_b.shard_spec()->grid.bounding_box().end.y);
