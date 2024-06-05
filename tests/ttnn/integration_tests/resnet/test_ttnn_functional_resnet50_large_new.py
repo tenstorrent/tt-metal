@@ -273,7 +273,7 @@ def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
     # First run configures convs JIT
     test_infra.run()
     # # Optimized run
-    # test_infra.run()
+    test_infra.run()
     # # # More optimized run with caching
-    # test_infra.run()
-    test_infra.validate()
+    test_infra.run()
+    # test_infra.validate()
