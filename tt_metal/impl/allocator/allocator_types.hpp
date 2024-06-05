@@ -9,6 +9,7 @@
 #include <functional>
 #include "common/core_coord.h"
 #include "hostdevcommon/common_values.hpp"
+#include "hostdevcommon/common_runtime_address_map.h"
 #include "dev_mem_map.h"
 
 namespace tt::tt_metal {
@@ -57,7 +58,7 @@ enum class MemoryAllocator {
 
 // L1 write barrier
 // Host writes (4B value) to and reads from this address across all L1s to ensure previous writes have been committed
-constexpr static std::uint32_t STORAGE_ONLY_RESERVED_SIZE = ((MEM_MAILBOX_END + ADDRESS_ALIGNMENT - 1) / ADDRESS_ALIGNMENT) * ADDRESS_ALIGNMENT;
+constexpr static std::uint32_t STORAGE_ONLY_RESERVED_SIZE = ((MEM_MAILBOX_END + L1_ALIGNMENT - 1) / L1_ALIGNMENT) * L1_ALIGNMENT;
 // Storage only cores only need to reserve mailbox space to hold barriers
 constexpr static std::uint32_t STORAGE_ONLY_UNRESERVED_BASE = STORAGE_ONLY_RESERVED_SIZE;
 

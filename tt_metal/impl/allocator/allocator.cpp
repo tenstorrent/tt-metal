@@ -26,12 +26,12 @@ static char const *get_memory_pool_name(BufferType buffer_type) {
 }
 #endif
 
-void BankManager::init_allocator(uint64_t size_bytes, uint64_t offset) {
+void BankManager::init_allocator(uint64_t size_bytes, uint32_t alignment_bytes, uint64_t offset) {
     this->allocator_ = std::make_unique<FreeList>(
         size_bytes,
         offset,
-        this->min_allocation_size_bytes_,
-        ADDRESS_ALIGNMENT,
+        alignment_bytes,
+        alignment_bytes,
         FreeList::SearchPolicy::FIRST
     );
 }
@@ -53,7 +53,7 @@ void validate_num_banks(uint32_t num_banks, const BufferType &buffer_type) {
     }
 }
 
-BankManager::BankManager(const BufferType &buffer_type, const std::vector<int64_t> &bank_offsets, uint64_t size_bytes, uint64_t alloc_offset) : buffer_type_(buffer_type) {
+BankManager::BankManager(const BufferType &buffer_type, const std::vector<int64_t> &bank_offsets, uint64_t size_bytes, uint32_t alignment_bytes, uint64_t alloc_offset) : buffer_type_(buffer_type) {
     unsigned int bank_id = 0;
     for (const auto bank_offset : bank_offsets) {
         this->bank_id_to_bank_offset_.insert({bank_id, bank_offset});
@@ -61,12 +61,12 @@ BankManager::BankManager(const BufferType &buffer_type, const std::vector<int64_
     }
     this->interleaved_address_limit_ = 0;
     validate_num_banks(this->bank_id_to_bank_offset_.size(), this->buffer_type_);
-    this->init_allocator(size_bytes, alloc_offset);
+    this->init_allocator(size_bytes, alignment_bytes, alloc_offset);
 }
 
-BankManager::BankManager(const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_bank_offset, uint64_t size_bytes, uint64_t interleaved_address_limit, uint64_t alloc_offset) : buffer_type_(buffer_type), bank_id_to_bank_offset_(bank_id_to_bank_offset), interleaved_address_limit_(interleaved_address_limit) {
+BankManager::BankManager(const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_bank_offset, uint64_t size_bytes, uint64_t interleaved_address_limit, uint32_t alignment_bytes, uint64_t alloc_offset) : buffer_type_(buffer_type), bank_id_to_bank_offset_(bank_id_to_bank_offset), interleaved_address_limit_(interleaved_address_limit) {
     validate_num_banks(this->bank_id_to_bank_offset_.size(), this->buffer_type_);
-    this->init_allocator(size_bytes, alloc_offset);
+    this->init_allocator(size_bytes, alignment_bytes, alloc_offset);
 }
 
 uint32_t BankManager::num_banks() const {
@@ -105,8 +105,8 @@ uint64_t BankManager::allocate_buffer(uint32_t size, uint32_t page_size, bool bo
         TT_FATAL(num_shards.value() <= num_compute_banks, "Expected number of shards to be less than or equal to total number of L1 banks in compute cores");
         num_banks = num_shards.value();
     }
-    // Each page needs to be at a 32B aligned address
-    uint32_t size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks);
+    uint32_t alignment_bytes = this->buffer_type_ == BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT;
+    uint32_t size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks, alignment_bytes);
     uint64_t address_limit = 0;
     if(!is_sharded and this->buffer_type_ == BufferType::L1) {
         address_limit = this->interleaved_address_limit_;
@@ -183,7 +183,7 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
     for (uint32_t channel_id = 0; channel_id < alloc_config.num_dram_channels; channel_id++) {
         bank_offsets.at(channel_id) = static_cast<int32_t>(alloc_config.dram_bank_offsets.at(channel_id));
     }
-    allocator.dram_manager = BankManager(BufferType::DRAM, bank_offsets, dram_bank_size, offset_bytes);
+    allocator.dram_manager = BankManager(BufferType::DRAM, bank_offsets, dram_bank_size, DRAM_ALIGNMENT, offset_bytes);
     for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
         CoreCoord logical_core = CoreCoord{bank_id, 0};
         allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
@@ -199,7 +199,7 @@ void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_con
     uint64_t offset_bytes = static_cast<uint64_t>(L1_UNRESERVED_BASE);
     uint32_t l1_bank_size = alloc_config.worker_l1_size - L1_UNRESERVED_BASE;
     std::vector<int64_t> bank_offsets (num_l1_banks, 0);
-    allocator.l1_manager = BankManager(BufferType::L1, bank_offsets, l1_bank_size, offset_bytes);
+    allocator.l1_manager = BankManager(BufferType::L1, bank_offsets, l1_bank_size, L1_ALIGNMENT, offset_bytes);
 
     uint32_t bank_id = 0;
     for (uint32_t y = 0; y < alloc_config.worker_grid_size.y; y++) {

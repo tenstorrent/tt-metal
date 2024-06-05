@@ -127,7 +127,8 @@ Buffer::Buffer(
     page_size_(page_size),
     buffer_type_(buffer_type),
     buffer_layout_(buffer_layout),
-    shard_parameters_(shard_parameters) {
+    shard_parameters_(shard_parameters),
+    alignment_bytes_(buffer_type == BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT) {
     TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr);
     validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
     if (allocate) {
@@ -289,14 +290,14 @@ uint64_t Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
     auto num_banks = this->device_->num_banks(this->buffer_type_);
     TT_ASSERT(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     int pages_offset_within_bank = (int)page_index / num_banks;
-    auto offset = (round_up(this->page_size_, ADDRESS_ALIGNMENT) * pages_offset_within_bank);
+    auto offset = (round_up(this->page_size_, this->alignment_bytes_) * pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
 }
 
 uint64_t Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {
     TT_ASSERT(is_sharded(this->buffer_layout()));
     int pages_offset_within_bank = page_index % shard_spec().size();
-    auto offset = (round_up(this->page_size_, ADDRESS_ALIGNMENT) * pages_offset_within_bank);
+    auto offset = (round_up(this->page_size_, this->alignment_bytes_) * pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
 }
 

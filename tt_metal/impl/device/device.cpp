@@ -106,9 +106,9 @@ void Device::initialize_allocator(size_t l1_small_size, const std::vector<uint32
          .compute_grid_size = this->compute_with_storage_grid_size()});
     TT_FATAL(config.l1_small_size < config.l1_bank_size, "Reserved size must be less than bank size");
     TT_FATAL(
-        config.l1_small_size % ADDRESS_ALIGNMENT == 0,
-        "Reserved size must be aligned to ADDRESS_ALIGNMENT",
-        ADDRESS_ALIGNMENT);
+        config.l1_small_size % L1_ALIGNMENT == 0,
+        "Reserved size must be aligned to L1_ALIGNMENT {}",
+        L1_ALIGNMENT);
     // Initialize dram_offsets from soc_descriptor
     for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
@@ -1265,6 +1265,7 @@ bool Device::initialize(size_t l1_small_size, const std::vector<uint32_t> &l1_ba
     watcher_init(this);
 
     this->initialize_and_launch_firmware();
+    std::cout << "Launched fw!" << std::endl;
 
     watcher_attach(this);
 
