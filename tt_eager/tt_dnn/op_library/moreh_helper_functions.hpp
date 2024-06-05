@@ -185,7 +185,7 @@ create_override_runtime_arguments_callback(
     KernelHandle writer_kernel_id,
     uint32_t num_cores,
     uint32_t core_h,
-    CallbackArgMap &arg_map) {
+    CallbackArgMap arg_map) {
     return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, arg_map, num_cores, core_h](
                const void *operation,
                Program &program,
