@@ -252,7 +252,6 @@ class resnet50Bottleneck:
         if not (input_height == 56 and self.conv1_input_channels == 64):
             self.run_downsample_before_conv2 = True
 
-        ds_out_mem_config = None
         if self.run_downsample_before_conv2:
             ttnn.dump_device_memory_state(device, "before_reallocate_")
             if input_height == 56 and self.conv1_input_channels == 256 and self.downsample:
@@ -263,8 +262,6 @@ class resnet50Bottleneck:
             ds_out = self.run_downsample_if_req(
                 x, device, batch_size, input_height, input_width, conv_op_cache, reshard_if_not_optimal, height_sharding
             )
-            if self.downsample:
-                ds_out_mem_config = ttnn.get_memory_config(ds_out)
 
         reallocate_halo_output = (
             batch_size
@@ -684,7 +681,6 @@ class resnet50:
         )
 
         print(f"=================================== layer: 4, module: 1")
-        # breakpoint()
 
         layer4_module1_input_shape = [
             x.get_legacy_shape()[0],
