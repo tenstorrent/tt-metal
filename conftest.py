@@ -256,45 +256,38 @@ def reset_tensix(request, silicon_arch_name):
 
 
 @pytest.fixture(scope="function")
-def device_l1_small_size(request):
+def device_params(request):
+    return getattr(request, "param", {})
+
+
+@pytest.fixture(scope="function")
+def device(request, device_params):
     import tt_lib as ttl
 
     device_id = request.config.getoption("device_id")
 
     num_devices = ttl.device.GetNumPCIeDevices()
     assert device_id < num_devices, "CreateDevice not supported for non-mmio device"
-
-    if hasattr(request, "param"):
-        l1_small_size = request.param
-        device = ttl.device.CreateDevice(device_id, l1_small_size)
-    else:
-        device = ttl.device.CreateDevice(device_id)
+    device = ttl.device.CreateDevice(device_id=device_id, **device_params)
     ttl.device.SetDefaultDevice(device)
 
     yield device
+
+    ttl.device.DumpDeviceProfiler(device, True)
+    ttl.device.DeallocateBuffers(device)
 
     ttl.device.Synchronize(device)
     ttl.device.CloseDevice(device)
 
 
 @pytest.fixture(scope="function")
-def device(device_l1_small_size):
-    import tt_lib as ttl
-
-    device = ttl.device.GetDefaultDevice()
-    yield device
-    ttl.device.DumpDeviceProfiler(device, True)
-    ttl.device.DeallocateBuffers(device)
-
-
-@pytest.fixture(scope="function")
-def pcie_devices(request):
+def pcie_devices(request, device_params):
     import tt_lib as ttl
 
     num_devices = ttl.device.GetNumPCIeDevices()
 
     # Get only physical devices
-    devices = ttl.device.CreateDevices([i for i in range(num_devices)])
+    devices = ttl.device.CreateDevices(device_ids=[i for i in range(num_devices)], **device_params)
 
     yield [devices[i] for i in range(num_devices)]
 
@@ -306,13 +299,13 @@ def pcie_devices(request):
 
 
 @pytest.fixture(scope="function")
-def all_devices(request):
+def all_devices(request, device_params):
     import tt_lib as ttl
 
     num_devices = ttl.device.GetNumAvailableDevices()
 
     # Get only physical devices
-    devices = ttl.device.CreateDevices([i for i in range(num_devices)])
+    devices = ttl.device.CreateDevices(device_ids=[i for i in range(num_devices)], **device_params)
 
     yield [devices[i] for i in range(num_devices)]
 
@@ -332,9 +325,6 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
         num_devices_requested = min(request.param, len(device_ids))
     except (ValueError, AttributeError):
         num_devices_requested = len(device_ids)
-
-    if num_devices_requested <= 1:
-        pytest.skip("Requires multiple devices to run")
 
     device_mesh = ttnn.open_device_mesh(ttnn.DeviceGrid(1, num_devices_requested), device_ids[:num_devices_requested])
 
@@ -360,9 +350,6 @@ def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
         num_pcie_devices_requested = min(request.param, len(device_ids))
     except (ValueError, AttributeError):
         num_pcie_devices_requested = len(device_ids)
-
-    if num_pcie_devices_requested <= 1:
-        pytest.skip("Requires multiple devices to run")
 
     device_mesh = ttnn.open_device_mesh(
         ttnn.DeviceGrid(1, num_pcie_devices_requested), device_ids[:num_pcie_devices_requested]
@@ -392,9 +379,6 @@ def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0):
         num_devices_requested = min(request.param, len(device_ids))
     except (ValueError, AttributeError):
         num_devices_requested = len(device_ids)
-
-    if num_devices_requested <= 1:
-        pytest.skip("Requires multiple devices to run")
 
     device_mesh = ttnn.open_device_mesh(ttnn.DeviceGrid(1, num_devices_requested), device_ids[:num_devices_requested])
 
@@ -432,8 +416,8 @@ def reset_default_device():
 def use_program_cache(request):
     import tt_lib as ttl
 
-    if "device" in request.fixturenames or "device_l1_small_size" in request.fixturenames:
-        dev = ttl.device.GetDefaultDevice()
+    if "device" in request.fixturenames:
+        dev = request.getfixturevalue("device")
         dev.enable_program_cache()
     elif "all_devices" in request.fixturenames:
         devices = request.getfixturevalue("all_devices")

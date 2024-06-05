@@ -57,7 +57,7 @@ class Config:
             if self.enable_fast_runtime_mode:
                 if self.enable_logging:
                     logger.warning(
-                        "Running in fast runtime mode without logging. Please disable fast runtime mode if you want to enable logging."
+                        "Logging cannot be enabled in fast runtime mode. Please disable fast runtime mode if you want to enable logging."
                     )
 
         if name in {
@@ -315,7 +315,6 @@ from ttnn.operations.data_movement import (
     concat,
     pad,
     permute,
-    split,
     repeat_interleave,
     repeat,
     upsample,

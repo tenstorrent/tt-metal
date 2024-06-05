@@ -1026,24 +1026,27 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     tt_metal::Buffer* in1_buffer = b.buffer();
     if (bcast_batch)
         TT_FATAL(
-            bshape[0] * bshape[1] == 1 &&
-            "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
+            get_batch_size(bshape) == 1 &&
+            "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN or equivalent");
     else {
         // same condition as above, different message
-        TT_FATAL(
-            ashape[1] == bshape[1] && ashape[0] == bshape[0] &&
-            "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
+        TT_FATAL(ashape.rank() == bshape.rank() && "bmm (non-bcast matmul) expects input tensors of the same rank");
+        for (auto i = 0; i < ashape.rank() - 2; i++) {
+            TT_FATAL(
+                ashape[i] == bshape[i] &&
+                "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN or equivalent");
+        }
     }
     TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0);
     TT_FATAL(in1_buffer->size() % in1_single_tile_size == 0);
 
     TT_FATAL(
-        ashape[3] == bshape[2] &&
-        "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op");  // A.K == B.K
-    TT_FATAL(ashape[2] % TILE_HEIGHT == 0);
-    TT_FATAL(ashape[3] % TILE_WIDTH == 0);
-    TT_FATAL(bshape[2] % TILE_HEIGHT == 0);
-    TT_FATAL(bshape[3] % TILE_WIDTH == 0);
+        ashape[-1] == bshape[-2] &&
+        "Dimension K (A.shape[-1] and B.shape[-2]) must match for A and B in bmm_op");  // A.K == B.K
+    TT_FATAL(ashape[-2] % TILE_HEIGHT == 0);
+    TT_FATAL(ashape[-1] % TILE_WIDTH == 0);
+    TT_FATAL(bshape[-2] % TILE_HEIGHT == 0);
+    TT_FATAL(bshape[-1] % TILE_WIDTH == 0);
 
     MathFidelity math_fidelity;
     bool math_approx_mode;
@@ -1082,10 +1085,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    uint32_t B = ashape[0] * ashape[1];
-    uint32_t Mt = ashape[2] / TILE_HEIGHT;
-    uint32_t Kt = ashape[3] / TILE_WIDTH;
-    uint32_t Nt = bshape[3] / TILE_WIDTH;
+    uint32_t B = get_batch_size(ashape);
+    uint32_t Mt = ashape[-2] / TILE_HEIGHT;
+    uint32_t Kt = ashape[-1] / TILE_WIDTH;
+    uint32_t Nt = bshape[-1] / TILE_WIDTH;
 
     if (fuse_batch) {
         Mt = B * Mt;

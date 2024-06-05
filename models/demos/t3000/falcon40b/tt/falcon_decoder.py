@@ -5,7 +5,7 @@
 import torch
 from typing import Optional, Tuple
 
-import tt_lib
+import ttnn
 
 from models.demos.t3000.falcon40b.tt.falcon_attention import TtFalconAttention
 from models.demos.t3000.falcon40b.tt.falcon_mlp import TtFalconMLP
@@ -72,38 +72,38 @@ class TtFalconDecoderLayer:
             tt_cache_path / f"{ln_mlp_weights_str}_rm_{self.model_config['LN_MLP_WEIGHTS_DTYPE'].name}.bin"
         )
         if (ln_mlp_weights_path).exists():
-            ln_mlp_gamma_host = tt_lib.tensor.load_tensor(str(ln_mlp_weights_path))
+            ln_mlp_gamma_host = ttnn.experimental.tensor.load_tensor(str(ln_mlp_weights_path))
             self.ln_mlp_gamma = [
                 ln_mlp_gamma_host.to(device, self.model_config["LN_MLP_WEIGHTS_MEMCFG"]) for device in devices
             ]
         else:
-            ln_mlp_gamma_host = tt_lib.tensor.Tensor(
+            ln_mlp_gamma_host = ttnn.experimental.tensor.Tensor(
                 self.state_dict[ln_mlp_weights_str].reshape([1, 1, -1, 32]),
                 self.model_config["LN_MLP_WEIGHTS_DTYPE"],
             )
             self.ln_mlp_gamma = [
                 ln_mlp_gamma_host.to(device, self.model_config["LN_MLP_WEIGHTS_MEMCFG"]) for device in devices
             ]
-            tt_lib.tensor.dump_tensor(
+            ttnn.experimental.tensor.dump_tensor(
                 str(ln_mlp_weights_path),
                 ln_mlp_gamma_host,
             )
 
         ln_mlp_bias_path = tt_cache_path / f"{ln_mlp_bias_str}_rm_{self.model_config['LN_MLP_BIAS_DTYPE'].name}.bin"
         if (ln_mlp_bias_path).exists():
-            ln_mlp_beta_host = tt_lib.tensor.load_tensor(str(ln_mlp_bias_path))
+            ln_mlp_beta_host = ttnn.experimental.tensor.load_tensor(str(ln_mlp_bias_path))
             self.ln_mlp_beta = [
                 ln_mlp_beta_host.to(device, self.model_config["LN_MLP_BIAS_MEMCFG"]) for device in devices
             ]
         else:
-            ln_mlp_beta_host = tt_lib.tensor.Tensor(
+            ln_mlp_beta_host = ttnn.experimental.tensor.Tensor(
                 self.state_dict[ln_mlp_bias_str].reshape([1, 1, -1, 32]),
                 self.model_config["LN_MLP_BIAS_DTYPE"],
             )
             self.ln_mlp_beta = [
                 ln_mlp_beta_host.to(device, self.model_config["LN_MLP_BIAS_MEMCFG"]) for device in devices
             ]
-            tt_lib.tensor.dump_tensor(
+            ttnn.experimental.tensor.dump_tensor(
                 str(ln_mlp_bias_path),
                 ln_mlp_beta_host,
             )
@@ -115,38 +115,38 @@ class TtFalconDecoderLayer:
             tt_cache_path / f"{ln_attn_weights_str}_rm_{self.model_config['LN_ATTN_WEIGHTS_DTYPE'].name}.bin"
         )
         if (ln_attn_weights_path).exists():
-            ln_attn_gamma_host = tt_lib.tensor.load_tensor(str(ln_attn_weights_path))
+            ln_attn_gamma_host = ttnn.experimental.tensor.load_tensor(str(ln_attn_weights_path))
             self.ln_attn_gamma = [
                 ln_attn_gamma_host.to(device, self.model_config["LN_ATTN_WEIGHTS_MEMCFG"]) for device in devices
             ]
         else:
-            ln_attn_gamma_host = tt_lib.tensor.Tensor(
+            ln_attn_gamma_host = ttnn.experimental.tensor.Tensor(
                 self.state_dict[ln_attn_weights_str].reshape([1, 1, -1, 32]),
                 self.model_config["LN_ATTN_WEIGHTS_DTYPE"],
             )
             self.ln_attn_gamma = [
                 ln_attn_gamma_host.to(device, self.model_config["LN_ATTN_WEIGHTS_MEMCFG"]) for device in devices
             ]
-            tt_lib.tensor.dump_tensor(
+            ttnn.experimental.tensor.dump_tensor(
                 str(ln_attn_weights_path),
                 ln_attn_gamma_host,
             )
 
         ln_attn_bias_path = tt_cache_path / f"{ln_attn_bias_str}_rm_{self.model_config['LN_ATTN_BIAS_DTYPE'].name}.bin"
         if (ln_attn_bias_path).exists():
-            ln_attn_beta_host = tt_lib.tensor.load_tensor(str(ln_attn_bias_path))
+            ln_attn_beta_host = ttnn.experimental.tensor.load_tensor(str(ln_attn_bias_path))
             self.ln_attn_beta = [
                 ln_attn_beta_host.to(device, self.model_config["LN_ATTN_BIAS_MEMCFG"]) for device in devices
             ]
         else:
-            ln_attn_beta_host = tt_lib.tensor.Tensor(
+            ln_attn_beta_host = ttnn.experimental.tensor.Tensor(
                 self.state_dict[ln_attn_bias_str].reshape([1, 1, -1, 32]),
                 self.model_config["LN_ATTN_BIAS_DTYPE"],
             )
             self.ln_attn_beta = [
                 ln_attn_beta_host.to(device, self.model_config["LN_ATTN_BIAS_MEMCFG"]) for device in devices
             ]
-            tt_lib.tensor.dump_tensor(
+            ttnn.experimental.tensor.dump_tensor(
                 str(ln_attn_bias_path),
                 ln_attn_beta_host,
             )
@@ -163,16 +163,16 @@ class TtFalconDecoderLayer:
 
     def __call__(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.experimental.tensor.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
         llm_mode: str,
         user_id: int = 0,
-        layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """Input shape: [batch, 1, seq_len, hidden_size]"""
 
         if llm_mode == "prefill":
@@ -204,16 +204,16 @@ class TtFalconDecoderLayer:
 
     def fwd_prefill(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.experimental.tensor.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
         llm_mode: str,
         user_id: int = 0,
-        layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """Input shape: [batch, 1, seq_len, hidden_size]"""
 
         assert not output_attentions
@@ -222,7 +222,7 @@ class TtFalconDecoderLayer:
             replicated_hidden_states = []
             for i in range(len(hidden_states)):
                 replicated_hidden_states.append(
-                    tt_lib.tensor.sharded_to_interleaved(
+                    ttnn.experimental.tensor.sharded_to_interleaved(
                         hidden_states[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
                     )
                 )
@@ -230,16 +230,18 @@ class TtFalconDecoderLayer:
             replicated_hidden_states = []
             for i in range(len(hidden_states)):
                 replicated_hidden_states.append(
-                    tt_lib.tensor.clone(hidden_states[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"])
+                    ttnn.experimental.tensor.clone(
+                        hidden_states[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
+                    )
                 )
 
         if replicated_hidden_states[0].dtype != self.model_config["BFP8_DTYPE"]:
             for i in range(len(replicated_hidden_states)):
-                replicated_hidden_states[i] = tt_lib.tensor.typecast(
+                replicated_hidden_states[i] = ttnn.experimental.tensor.typecast(
                     replicated_hidden_states[i], self.model_config["BFP8_DTYPE"]
                 )
 
-        replicated_hidden_states = tt_lib.tensor.all_gather(
+        replicated_hidden_states = ttnn.experimental.tensor.all_gather(
             replicated_hidden_states,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             dim=3,
@@ -248,7 +250,7 @@ class TtFalconDecoderLayer:
 
         if self.model_config["LN_INPUT_DTYPE"] != self.model_config["BFP8_DTYPE"]:
             for i in range(len(replicated_hidden_states)):
-                replicated_hidden_states[i] = tt_lib.tensor.typecast(
+                replicated_hidden_states[i] = ttnn.experimental.tensor.typecast(
                     replicated_hidden_states[i], self.model_config["LN_INPUT_DTYPE"]
                 )
 
@@ -302,7 +304,7 @@ class TtFalconDecoderLayer:
         # Note that this is only correct in inference when dropout is disabled
         for i in range(len(residual)):
             output.append(
-                tt_lib.operations.primary.add(
+                ttnn.experimental.operations.primary.add(
                     residual[i],
                     attention_output[i],
                     output_mem_config=self.model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"],
@@ -318,7 +320,7 @@ class TtFalconDecoderLayer:
         # dropout_add
         # For inference, this is just add
         for i in range(len(output)):
-            output[i] = tt_lib.operations.primary.add(
+            output[i] = ttnn.experimental.operations.primary.add(
                 output[i],
                 mlp_output[i],
                 output_mem_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],
@@ -339,16 +341,16 @@ class TtFalconDecoderLayer:
 
     def fwd_decode(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.experimental.tensor.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
         llm_mode: str,
         user_id: int = 0,
-        layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """Input shape: [batch, 1, seq_len, hidden_size]"""
 
         assert not output_attentions
@@ -356,18 +358,18 @@ class TtFalconDecoderLayer:
         replicated_hidden_states = []
         for i in range(len(hidden_states)):
             replicated_hidden_states.append(
-                tt_lib.tensor.sharded_to_interleaved(
+                ttnn.experimental.tensor.sharded_to_interleaved(
                     hidden_states[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
                 )
             )
-        replicated_hidden_states = tt_lib.tensor.all_gather(
+        replicated_hidden_states = ttnn.experimental.tensor.all_gather(
             replicated_hidden_states,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             dim=3,
             output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )
         for i in range(len(replicated_hidden_states)):
-            replicated_hidden_states[i] = tt_lib.tensor.interleaved_to_sharded(
+            replicated_hidden_states[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                 replicated_hidden_states[i], sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
             )
 
@@ -375,7 +377,7 @@ class TtFalconDecoderLayer:
         mlp_ln_output = []
         for i in range(len(replicated_hidden_states)):
             attn_ln_output.append(
-                tt_lib.operations.primary.layernorm(
+                ttnn.experimental.operations.primary.layernorm(
                     replicated_hidden_states[i],
                     self.layernorm_eps,
                     self.ln_attn_gamma[i],
@@ -387,7 +389,7 @@ class TtFalconDecoderLayer:
         # mlp_ln is in place, no need to deallocate original
         for i in range(len(replicated_hidden_states)):
             mlp_ln_output.append(
-                tt_lib.operations.primary.layernorm(
+                ttnn.experimental.operations.primary.layernorm(
                     replicated_hidden_states[i],
                     self.layernorm_eps,
                     self.ln_mlp_gamma[i],
@@ -419,7 +421,7 @@ class TtFalconDecoderLayer:
         # Note that this is only correct in inference when dropout is disabled
         for i in range(len(residual)):
             output.append(
-                tt_lib.operations.primary.add(
+                ttnn.experimental.operations.primary.add(
                     residual[i],
                     attention_output[i],
                     output_mem_config=self.model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"],
@@ -435,7 +437,7 @@ class TtFalconDecoderLayer:
         # dropout_add
         # For inference, this is just add
         for i in range(len(output)):
-            output[i] = tt_lib.operations.primary.add(
+            output[i] = ttnn.experimental.operations.primary.add(
                 output[i],
                 mlp_output[i],
                 output_mem_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],

@@ -2,11 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import ttnn
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule
 
 
-class TtMixtralEmbedding(torch.nn.Module):
+class TtMixtralEmbedding(LightweightModule):
     def __init__(
         self,
         device,

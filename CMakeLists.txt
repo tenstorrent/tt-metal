@@ -201,3 +201,8 @@ install(FILES ${CMAKE_BINARY_DIR}/lib/_C.so
     DESTINATION ${CMAKE_SOURCE_DIR}/tt_eager/tt_lib
     COMPONENT tt_pybinds
 )
+
+# Temporary workaround for Issue #8767
+install(DIRECTORY ${CMAKE_BINARY_DIR}/hw/toolchain
+    DESTINATION ${CMAKE_SOURCE_DIR}/runtime/hw
+)

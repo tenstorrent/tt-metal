@@ -12,12 +12,12 @@ from models.utility_functions import (
     skip_for_grayskull,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.experimental.functional_stable_diffusion.tt.ttnn_functional_transformer_2d import transformer_2d_model
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_transformer_2d import (
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d import transformer_2d_model
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_transformer_2d import (
     transformer_2d_model as transformer_2d_model_tt2,
 )
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
     pre_process_input,
     post_process_output,
 )
@@ -169,7 +169,7 @@ def test_transformer_2d_model_256x256(
     ],
 )
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_transformer_2d_model_512x512(
     input_shape, index1, index2, block, attention_head_dim, model_name, device, reset_seeds
 ):

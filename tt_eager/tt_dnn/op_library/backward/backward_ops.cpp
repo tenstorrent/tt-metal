@@ -1532,12 +1532,27 @@ std::vector<Tensor> binary_gt_bw(const Tensor& grad, const Tensor& input, const 
     return operation::decorate_as_composite(__func__, _binary_gt_bw)(grad, input, output_mem_config);
 }
 
+// Autoformat support
+Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
+    auto formatted_input_tensor = temp;
+    if(formatted_input_tensor.get_layout()==Layout::ROW_MAJOR){
+        auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_legacy_shape(), false, false, true, true);
+        if (!AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
+            formatted_input_tensor = AutoFormat::format_input_tensor(temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
+        }
+    }
+    return formatted_input_tensor;
+}
+
 // Prod
 // along a single dimension --> result: grad_data * (y / input )
 std::vector<Tensor> _prod_bw(
     const Tensor& grad, const Tensor& input, bool all_dimensions, int64_t dim, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor prod_result = prod(input, all_dimensions, dim, output_mem_config);
+    if(prod_result.get_layout()==Layout::ROW_MAJOR && prod_result.storage_type() == StorageType::DEVICE){
+        prod_result = tt::tt_metal::change_layout_to_tile(prod_result, output_mem_config);
+        }
     if (all_dimensions == true) {
         Tensor temp = mul(prod_result, grad, std::nullopt, output_mem_config);  // result is stored in the first position
         Tensor fill_tensor = tt::numpy::fill_first_val_into_tensor<bfloat16>( temp, temp.get_dtype(), temp.get_layout(), temp.device(), output_mem_config);
@@ -1556,6 +1571,14 @@ std::vector<Tensor> _prod_bw(
             Tensor new_unpad_tensor = unpad(required, start_index, end_index);
             after_permute_dims = {0, 2, 3, 1};
             updated_grad = permute(new_unpad_tensor, after_permute_dims, output_mem_config);
+            Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
+            Tensor pad_prod_result = prod_result.pad_to_tile(1.0f);
+            pad_updated_grad = pad_updated_grad.to(Layout::TILE);
+            pad_prod_result = pad_prod_result.to(Layout::TILE);
+            updated_grad = pad_updated_grad.to(input.device());
+            prod_result = pad_prod_result.to(input.device());
+            pad_updated_grad.deallocate();
+            pad_prod_result.deallocate();
         } else if (dim == 2 || dim == -2) {
             std::vector<int64_t> after_permute_dims = {0, 2, 1, 3};
             Tensor required = permute(grad, after_permute_dims, output_mem_config);
@@ -1563,10 +1586,16 @@ std::vector<Tensor> _prod_bw(
             const Shape end_index = { grad.get_legacy_shape()[0] - 1, 0, grad.get_legacy_shape()[1] - 1, grad.get_legacy_shape()[3] - 1};
             Tensor new_unpad_tensor = unpad(required, start_index, end_index);
             updated_grad = permute(new_unpad_tensor, after_permute_dims, output_mem_config);
+            if(updated_grad.get_layout()==Layout::ROW_MAJOR){
+                updated_grad = tt::tt_metal::change_layout_to_tile(updated_grad, output_mem_config);
+            }
         }
     }
     Tensor reciprocal_input = recip(input, output_mem_config);
     Tensor temp = mul(prod_result, (dim == 1 || dim == 0 || dim == -4 || dim == -3) ? grad : updated_grad, std::nullopt, output_mem_config);
+    if(temp.get_layout()==Layout::ROW_MAJOR){
+        temp = tt::tt_metal::change_layout_to_tile(temp, output_mem_config);
+    }
     if (dim == 3 || dim == -1) {
         Tensor grad_result = bcast(reciprocal_input, temp, BcastOpMath::MUL, BcastOpDim::W, output_mem_config);
         grad_tensor.emplace_back(grad_result);

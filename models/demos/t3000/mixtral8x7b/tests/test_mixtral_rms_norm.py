@@ -12,6 +12,7 @@ if os.getenv("CI") == "true":
     os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
+    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
@@ -54,7 +55,7 @@ def test_mistral_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_se
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
     )
-    tt_input = ttnn.to_device(tt_input, t3k_device_mesh)
+
     tt_output = tt_model(tt_input)
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)

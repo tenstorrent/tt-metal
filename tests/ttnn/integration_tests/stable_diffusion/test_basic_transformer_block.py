@@ -8,16 +8,16 @@ import torch
 from diffusers import StableDiffusionPipeline
 import ttnn
 import tt_lib as ttl
-from models.experimental.functional_stable_diffusion.tt.ttnn_functional_basic_transformer_block import (
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_basic_transformer_block import (
     basic_transformer_block as ttnn_basic_transformer_block,
 )
-from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_basic_transformer_block import (
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_basic_transformer_block import (
     basic_transformer_block as tt2_ttnn_basic_transformer_block,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
     pre_process_input,
     post_process_output,
 )
@@ -116,7 +116,7 @@ def test_basic_transformer_block_256x256(device, model_name, N, C, H, W, index, 
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index, attention_head_dim",

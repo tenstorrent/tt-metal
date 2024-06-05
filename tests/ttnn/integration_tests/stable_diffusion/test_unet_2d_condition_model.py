@@ -19,15 +19,15 @@ from models.utility_functions import (
 from diffusers import LMSDiscreteScheduler
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.experimental.functional_stable_diffusion.tt.ttnn_functional_unet_2d_condition_model import (
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model import (
     UNet2DConditionModel,
 )
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_unet_2d_condition_model import (
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_unet_2d_condition_model import (
     UNet2DConditionModel as UNet2D,
 )
 import math
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
     post_process_output,
 )
 from ttnn.operations.core import unsqueeze_to_4D
@@ -70,7 +70,9 @@ def unsqueeze_all_params_to_4d(params):
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_l1_small_size", [24576], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576}], ids=["device_params=l1_small_size_24576"], indirect=True
+)
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width",
     [
@@ -136,7 +138,9 @@ def test_unet_2d_condition_model_256x256(device, batch_size, in_channels, input_
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768}], ids=["device_params=l1_small_size_24576"], indirect=True
+)
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width",
     [

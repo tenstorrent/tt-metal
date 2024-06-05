@@ -9,6 +9,11 @@ from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
 from models.utility_functions import nearest_32
 
 
+class LightweightModule:
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+
 def precompute_freqs(dim: int, end: int, theta: float = 1000000.0):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
@@ -76,7 +81,6 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, sliding_window, device_
         memory_config=ttnn.L1_MEMORY_CONFIG,
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
     )
-    xs_1SBH = ttnn.to_device(xs_1SBH, device_mesh)
 
     # Attention mask
     padded_layer_past_len = min(nearest_32(current_pos + 1), sliding_window)
@@ -103,7 +107,7 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, sliding_window, device_
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
     )
-    attn_mask = ttnn.to_device(attn_mask, device_mesh)
+
     ATTN_MASK_MEMCFG = ttnn.create_sharded_memory_config(
         shape=(32, padded_layer_past_len),
         core_grid=ttnn.CoreGrid(y=4, x=8),
@@ -132,7 +136,6 @@ def prepare_rotation_mat_ttnn(head_dim, max_seq_len, device_mesh):
         )
         for rot_mat_i in rot_mat
     ]
-    rot_mats = [ttnn.to_device(rot_mat, device_mesh) for rot_mat in rot_mats]
 
     return rot_mats
 
@@ -173,7 +176,6 @@ def cache_attention(device_mesh, state_dict, model_args, rot_emb_matrix_list, se
         memory_config=ttnn.L1_MEMORY_CONFIG,
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
     )
-    attention_inputs = ttnn.to_device(attention_inputs, device_mesh)
 
     tt_attn = TtMixtralAttention(
         device_mesh,
@@ -196,7 +198,7 @@ def cache_attention(device_mesh, state_dict, model_args, rot_emb_matrix_list, se
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ReplicateTensorToMesh(device_mesh),
         )
-        attn_mask = ttnn.to_device(attn_mask, device_mesh)
+
         ATTN_MASK_MEMCFG = ttnn.create_sharded_memory_config(
             shape=(32, padded_layer_past_len),
             core_grid=ttnn.CoreGrid(y=4, x=8),

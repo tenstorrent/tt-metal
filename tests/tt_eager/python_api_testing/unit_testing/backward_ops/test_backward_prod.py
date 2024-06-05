@@ -38,7 +38,7 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         (torch.Size([4, 33, 32, 32])),  # 20
         (torch.Size([4, 63, 32, 32])),  # 21
         (torch.Size([4, 64, 32, 32])),  # 22
-        (torch.Size([32, 64, 32, 32])),  # 23
+        (torch.Size([32, 64, 64, 64])),  # 23
     ),
 )
 @pytest.mark.parametrize(

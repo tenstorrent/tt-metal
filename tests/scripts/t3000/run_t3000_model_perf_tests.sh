@@ -22,7 +22,7 @@ run_t3000_mixtral_tests() {
 
   echo "LOG_METAL: Running run_t3000_mixtral_tests"
 
-  env pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_perf.py::test_mixtral_model_perf[wormhole_b0-True-2048-150-7.5] -m "model_perf_t3000"
+  env pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_perf.py::test_mixtral_model_perf[wormhole_b0-True-2048-150-0.025] -m "model_perf_t3000"
 
   # Record the end time
   end_time=$(date +%s)
@@ -52,7 +52,7 @@ run_t3000_llm_tests() {
   run_t3000_mixtral_tests
 
   # Run llama2-70b tests
-  # run_t3000_llama2_70b_tests
+  run_t3000_llama2_70b_tests
 
   # Merge all the generated reports
   env python models/perf/merge_perf_results.py

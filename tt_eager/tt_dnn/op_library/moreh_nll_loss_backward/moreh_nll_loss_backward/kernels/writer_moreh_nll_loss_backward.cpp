@@ -5,9 +5,10 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    uint32_t input_grad_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles_per_core = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
+    uint32_t i = 0;
+    auto input_grad_addr = get_arg_val<uint32_t>(i++);
+    auto num_tiles_per_core = get_arg_val<uint32_t>(i++);
+    auto start_id = get_arg_val<uint32_t>(i++);
 
     constexpr uint32_t cb_input_grad = tt::CB::c_out0;
 

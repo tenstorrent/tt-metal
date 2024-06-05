@@ -3,6 +3,8 @@
 Data Multicasting in `matmul_multicore_reuse_mcast`
 ===================================================
 
+**Note**: This example only works on Grayskull.
+
 Let's level up our code and show how you can leverage and fully customize METALIUM's core-to-core communication through a data broadcasting scheme. METALIUM offers you customizability for creating your very own compute fabric, allowing precise control over which cores disseminate, collect, or process segments of work. This example builds off of the data_reuse one, so we employ the same intemediate (partial) results handling scheme on-core.  However, rather than map tile-work statically to your coregrid, we map in0's rows and in1's columns to the coregrid's edges, and cascade work core-to-core dynamically.  A fun tidbit: "torrent" in Tenstorrent pays homage to this concept of tensor computation flowing like an ultra fast stream of water.
 
 
