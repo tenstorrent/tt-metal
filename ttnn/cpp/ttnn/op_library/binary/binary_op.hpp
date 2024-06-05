@@ -29,6 +29,8 @@ namespace binary {
 
 using BinaryOpType = tt::tt_metal::BinaryOpType;
 
+constexpr uint8_t DefaultQueueId = 0;
+
 struct BinaryProgramConfig {
     BinaryOpType binary_op_type;
     bool in_place;
@@ -92,11 +94,12 @@ struct ExecuteBinary {
     }
 
     template <typename... Args>
-    static auto input_tensors_to_validate(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
+    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
         return std::forward_as_tuple(input_tensor_a, input_tensor_b);
     }
 
     static Tensor execute_on_worker_thread(
+        uint8_t queue_id,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
@@ -105,7 +108,7 @@ struct ExecuteBinary {
         std::optional<std::vector<std::string>> activations = std::nullopt) {
 
         if(output_dtype.has_value() && optional_output_tensor.has_value()){
-            TT_FATAL(output_dtype.value() != optional_output_tensor.value().get_dtype(), "If both providedOutput dtype and output tensor dtype mismatch");
+            TT_FATAL(output_dtype.value() == optional_output_tensor.value().get_dtype(), "If both output dtype and output tensor provided dtype should match");
         }
 
         auto &&[input_tensor_a, input_tensor_b] = [](const auto &input_tensor_a_arg, const auto &input_tensor_b_arg) {
@@ -143,9 +146,26 @@ struct ExecuteBinary {
                                                                         dtype}},
                                                     {input_tensor_a, input_tensor_b},
                                                     {},
-                                                    {optional_output_tensor});
+                                                    {optional_output_tensor},
+                                                    queue_id);
 
         return output_tensors.at(0);
+    }
+
+    template <typename... Args>
+    static auto input_tensors_to_validate(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
+        return std::forward_as_tuple(input_tensor_a, input_tensor_b);
+    }
+
+    static Tensor execute_on_worker_thread(
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<const DataType> &output_dtype = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        std::optional<std::vector<std::string>> activations = std::nullopt)
+    {
+        return execute_on_worker_thread(DefaultQueueId, input_tensor_a_arg, input_tensor_b_arg, memory_config, output_dtype, optional_output_tensor, activations);
     }
 
     template <typename... Args>
@@ -156,6 +176,23 @@ struct ExecuteBinary {
     // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
     // Currently, this is exactly how tt::tt_metal::add_unary works
     static Tensor execute_on_worker_thread(
+        const ttnn::Tensor &input_tensor_a,
+        const float scalar,
+        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<const DataType> &dtype = std::nullopt,
+        const std::optional<Tensor> &optional_output_tensor = std::nullopt,
+        std::optional<std::vector<std::string>> activations = std::nullopt) {
+
+        return ExecuteBinary::execute_on_worker_thread(DefaultQueueId, input_tensor_a, scalar, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, optional_output_tensor, activations);
+    }
+
+    template <typename... Args>
+    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor &input_tensor_a, const float input_tensor_b, Args &&...args) {
+        return std::forward_as_tuple(input_tensor_a, input_tensor_b);
+    }
+
+    static Tensor execute_on_worker_thread(
+        uint8_t queue_id,
         const ttnn::Tensor &input_tensor_a,
         const float scalar,
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,

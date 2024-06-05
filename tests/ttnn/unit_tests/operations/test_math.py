@@ -92,14 +92,28 @@ def test_eq(device, h, w, output_dtype):
 
     torch_output_tensor = torch.eq(torch_input_tensor_a, torch_input_tensor_b)
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
 
-    output_tensor_uint = ttnn.eq(input_tensor_a, input_tensor_b, dtype=output_dtype)
-    assert output_tensor_uint.get_dtype() == output_dtype
-    output_tensor_uint = ttnn.to_torch(output_tensor_uint)
+    output_tensor_preallocated = ttnn.ones([h, w], output_dtype, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG)
 
-    assert_with_pcc(torch_output_tensor, output_tensor_uint, 0.999)
+    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    output_tensor = ttnn.eq(input_tensor_a, input_tensor_b, dtype=output_dtype)
+    assert output_tensor.get_dtype() == output_dtype
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages()) - 1
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+
+    # EQ with a preallocated output tensor
+    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    ttnn.eq(input_tensor_a, input_tensor_b, dtype=output_dtype, output_tensor=output_tensor_preallocated)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    torch_output_tensor_preallocated = ttnn.to_torch(output_tensor_preallocated)
+    assert_with_pcc(torch_output_tensor, torch_output_tensor_preallocated, 0.999)
 
 
 @pytest.mark.parametrize("h", [64])
