@@ -27,14 +27,11 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb) ));
     MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>() ));
 
-    PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb) ));
-    PACK(( llk_pack_init(ocb) ));
-    PACK(( llk_setup_outputs() ));
-    PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>(ocb) ));
-
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_tilize_hw_configure_disaggregated<DST_ACCUM_MODE>(icb) ));
     UNPACK(( llk_unpack_tilize_init(icb, block) ));
+
+    configure_pack(ocb);
 }
 
 #if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
@@ -50,10 +47,7 @@ ALWI void tilizeA_B_reduce_init(uint32_t icb0, uint32_t icb1_scaler, uint32_t bl
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
     MATH(( llk_math_pack_sync_init() ));
 
-    PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb) ));
-    PACK(( llk_pack_init(ocb) ));
-    PACK(( llk_setup_outputs() ));
-    PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>(ocb) ));
+    configure_pack(ocb);
 }
 #endif
 
@@ -82,10 +76,7 @@ ALWI void tilizeA_B_dot_product_init(uint32_t icb0, uint32_t icb1, uint32_t bloc
     MATH(( llk_math_matmul_init<MATH_FIDELITY>(icb0, icb1) ));
     MATH(( llk_math_pack_sync_init() ));
 
-    PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb) ));
-    PACK(( llk_pack_init(ocb) ));
-    PACK(( llk_setup_outputs() ));
-    PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>(ocb) ));
+    configure_pack(ocb);
 }
 
 /**
