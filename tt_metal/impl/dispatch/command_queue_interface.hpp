@@ -36,7 +36,7 @@ struct dispatch_constants {
         return inst;
     }
 
-    typedef uint32_t prefetch_q_entry_type;
+    typedef uint16_t prefetch_q_entry_type;
     static constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;
     static constexpr uint32_t PREFETCH_Q_BASE = DISPATCH_L1_UNRESERVED_BASE;
 
@@ -304,6 +304,7 @@ class SystemMemoryManager {
     vector<int> cq_to_last_completed_event;
     vector<std::mutex> cq_to_event_locks;
     vector<tt_cxy_pair> prefetcher_cores;
+    vector<tt::Writer> prefetch_q_writers;
     vector<uint32_t> prefetch_q_dev_ptrs;
     vector<uint32_t> prefetch_q_dev_fences;
 
@@ -321,6 +322,7 @@ class SystemMemoryManager {
         bypass_buffer_write_offset(0) {
         this->completion_byte_addrs.resize(num_hw_cqs);
         this->prefetcher_cores.resize(num_hw_cqs);
+        this->prefetch_q_writers.reserve(num_hw_cqs);
         this->prefetch_q_dev_ptrs.resize(num_hw_cqs);
         this->prefetch_q_dev_fences.resize(num_hw_cqs);
 
@@ -347,6 +349,7 @@ class SystemMemoryManager {
             tt_cxy_pair prefetcher_physical_core =
                 tt_cxy_pair(prefetcher_core.chip, tt::get_physical_core_coordinate(prefetcher_core, core_type));
             this->prefetcher_cores[cq_id] = prefetcher_physical_core;
+            this->prefetch_q_writers.emplace_back(tt::Cluster::instance().get_static_tlb_writer(prefetcher_physical_core));
 
             tt_cxy_pair completion_queue_writer_core =
                 dispatch_core_manager::get(num_hw_cqs).completion_queue_writer_core(device_id, channel, cq_id);
@@ -639,7 +642,7 @@ class SystemMemoryManager {
         if (this->bypass_enable)
             return;
         tt_driver_atomics::sfence();
-        uint32_t command_size_16B = command_size_B >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE;
+        dispatch_constants::prefetch_q_entry_type command_size_16B = command_size_B >> dispatch_constants::PREFETCH_Q_LOG_MINSIZE;
 
         // stall_prefetcher is used for enqueuing traces, as replaying a trace will hijack the cmd_data_q
         // so prefetcher fetches multiple cmds that include the trace cmd, they will be corrupted by trace pulling data
@@ -648,9 +651,7 @@ class SystemMemoryManager {
         if (stall_prefetcher) {
             command_size_16B |= (1 << ((sizeof(dispatch_constants::prefetch_q_entry_type) * 8) - 1));
         }
-
-        tt::Cluster::instance().write_reg(
-            &command_size_16B, this->prefetcher_cores[cq_id], this->prefetch_q_dev_ptrs[cq_id]);
+        this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
         this->prefetch_q_dev_ptrs[cq_id] += sizeof(dispatch_constants::prefetch_q_entry_type);
     }
 };

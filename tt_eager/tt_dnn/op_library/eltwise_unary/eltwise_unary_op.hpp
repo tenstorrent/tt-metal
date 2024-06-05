@@ -77,7 +77,9 @@ enum class UnaryOpType {
     UNARY_NE,
     UNARY_GT,
     UNARY_LT,
-    TILED_PROD
+    TILED_PROD,
+    TYPECAST,
+    RIGHT_SHIFT
 };
 
 template <typename T>
@@ -103,7 +105,9 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::DIV_UNARY_SFPU:
         case UnaryOpType::UNARY_NE:
         case UnaryOpType::UNARY_GT:
-        case UnaryOpType::UNARY_LT: return true;
+        case UnaryOpType::UNARY_LT:
+        case UnaryOpType::TYPECAST:
+        case UnaryOpType::RIGHT_SHIFT: return true;
         default: return false;
     }
     return false;
@@ -167,10 +171,11 @@ struct EltwiseUnary {
     const std::vector<UnaryWithParam> op_chain;
     const MemoryConfig output_mem_config;
     bool fp32_dest_acc_en;
+    DataType output_dtype;
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
+    void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &optional_output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
     UnaryOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const;
@@ -193,25 +198,27 @@ inline Tensor run_eltwise_unary(
     const std::vector<UnaryWithParam>& ops_chain,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     TT_FATAL(ops_chain.size() > 0, "At least 1 unary op must be specified");
+    DataType output_dtype = (ops_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(ops_chain[0].params[0]) : input_tensor.get_dtype();
     bool fp32_dest_acc_en =
+        output_dtype == DataType::UINT32 or
         input_tensor.get_dtype() == DataType::UINT32 or
         input_tensor.get_dtype() ==
             DataType::INT32;  // MT: Currently only uint32/int32 is moved to DST directly, fp32 is converted to fp16b
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     if (output_mem_config.is_sharded()) {
         operation::launch_op(
-            [ops_chain, output_mem_config, fp32_dest_acc_en](
+            [ops_chain, output_mem_config, fp32_dest_acc_en, output_dtype](
                 const std::vector<Tensor>& input_tensors,
                 const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                 const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 return operation::run_without_autoformat(
-                    EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en}, input_tensors);
+                    EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en, output_dtype}, input_tensors);
             },
             {input_tensor},
             output_tensors);
     } else {
         operation::launch_with_autoformat(
-            [ops_chain, output_mem_config, fp32_dest_acc_en](
+            [ops_chain, output_mem_config, fp32_dest_acc_en, output_dtype](
                 const std::vector<Tensor>& input_tensors,
                 const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                 const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -220,7 +227,7 @@ inline Tensor run_eltwise_unary(
                 FormatParams input_format_params = {
                     .pad_shape = pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
                 return operation::run_with_autoformat(
-                    EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en},
+                    EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en, output_dtype},
                     {input_tensor},
                     {input_format_params},
                     {Layout::TILE});
@@ -232,19 +239,20 @@ inline Tensor run_eltwise_unary(
 }
 
 inline Tensor run_eltwise_unary(
-    CommandQueue& queue,
+    uint8_t cq_id,
     const Tensor& input_tensor,
     const std::vector<UnaryWithParam>& ops_chain,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     TT_FATAL(ops_chain.size() > 0, "At least 1 unary op must be specified");
+    DataType output_dtype = (ops_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(ops_chain[0].params[0]) : input_tensor.get_dtype();
     bool fp32_dest_acc_en =
+        output_dtype == DataType::UINT32 or
         input_tensor.get_dtype() == DataType::UINT32 or
         input_tensor.get_dtype() ==
             DataType::INT32;  // MT: Currently only uint32/int32 is moved to DST directly, fp32 is converted to fp16b
     return operation::run(
-               queue,
-               tt::tt_metal::operation::DeviceOperation(EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en}),
-               {input_tensor})
+               EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en, output_dtype},
+               {input_tensor}, {}, {}, cq_id)
         .at(0);
 }
 
@@ -310,10 +318,10 @@ inline Tensor sqrt(
 }
 
 inline Tensor sqrt(
-    CommandQueue& queue,
+    uint8_t cq_id,
     const Tensor& input_tensor,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    return run_eltwise_unary(queue, input_tensor, {UnaryWithParam(UnaryOpType::SQRT)}, output_mem_config);
+    return run_eltwise_unary(cq_id, input_tensor, {UnaryWithParam(UnaryOpType::SQRT)}, output_mem_config);
 }
 
 constexpr auto recip = make_eltwise_unary<UnaryOpType::RECIP>{};
@@ -359,11 +367,13 @@ constexpr auto leaky_relu = make_eltwise_unary_with_param<UnaryOpType::LEAKY_REL
 constexpr auto prelu = leaky_relu;
 constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
+constexpr auto right_shift = make_eltwise_unary_with_param<UnaryOpType::RIGHT_SHIFT>{};
 constexpr auto unary_ne = make_eltwise_unary_with_param<UnaryOpType::UNARY_NE>{};
 constexpr auto rsub = make_eltwise_unary_with_param<UnaryOpType::RSUB>{};
 constexpr auto silu = make_eltwise_unary<UnaryOpType::SILU>{};
 constexpr auto identity = make_eltwise_unary<UnaryOpType::IDENTITY>{};
 constexpr auto identity_uint32 = make_eltwise_unary<UnaryOpType::IDENTITY_UINT32>{};
+constexpr auto eltwise_typecast = make_eltwise_unary_with_param<UnaryOpType::TYPECAST, uint32_t>{};
 constexpr auto add_unary_sfpu = make_eltwise_symmetric_binop_unary_with_param<UnaryOpType::ADD_UNARY_SFPU>{};
 constexpr auto mul_unary_sfpu = make_eltwise_symmetric_binop_unary_with_param<UnaryOpType::MUL_UNARY_SFPU>{};
 constexpr auto unary_gt = make_eltwise_unary_with_param<UnaryOpType::UNARY_GT>{};

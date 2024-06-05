@@ -1123,6 +1123,24 @@ def lamb_optimizer(
 
 
 @setup_host_and_device
+def eltwise_right_shift(
+    x,
+    *args,
+    value,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttl.tensor.right_shift(t0, value, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
 def eltwise_heaviside(
     x,
     *args,
@@ -1514,6 +1532,28 @@ def where(x, y, z, device, dtype, layout, input_mem_config, output_mem_config, *
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
     t3 = ttl.tensor.where(t0, t1, t2, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t3)
+
+
+@setup_host_and_device
+def where_optional(x, y, z, out, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
+    t3 = setup_tt_tensor(out, device, layout[3], input_mem_config[3], dtype[3])
+    ttl.tensor.where(t0, t1, t2, output_mem_config=output_mem_config, output_tensor=t3)
+
+    return tt2torch_tensor(t3)
+
+
+@setup_host_and_device
+def where_scalar_optional(
+    x, out, device, dtype, layout, input_mem_config, output_mem_config, scalar_true, scalar_false, **kwargs
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t3 = setup_tt_tensor(out, device, layout[1], input_mem_config[1], dtype[1])
+    ttl.tensor.where(t0, scalar_true, scalar_false, output_mem_config=output_mem_config, output_tensor=t3)
 
     return tt2torch_tensor(t3)
 
@@ -2187,6 +2227,24 @@ def eltwise_identity(
 
 
 @setup_host_and_device
+def eltwise_typecast(
+    x,
+    *args,
+    device,
+    dtype,
+    tt_output_dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttl.tensor.eltwise_typecast(t0, tt_output_dtype[0], output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
 def eltwise_rpow(
     x,
     *args,
@@ -2378,6 +2436,73 @@ eltwise_isneginf = make_unary_op(ttl.tensor.isneginf)
 eltwise_isnan = make_unary_op(ttl.tensor.isnan)
 eltwise_logical_not_unary = make_unary_op(ttl.tensor.logical_not_unary)
 eltwise_i0 = make_unary_op(ttl.tensor.i0)
+
+
+def make_binary_op_optional_output(ttl_tensor_binop):
+    @setup_host_and_device
+    def binary_op(
+        x,
+        y,
+        z,
+        *args,
+        device,
+        dtype,
+        layout,
+        input_mem_config,
+        **kwargs,
+    ):
+        t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+        t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+        t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
+
+        ttl_tensor_binop(t0, t1, output_tensor=t2)
+
+        return tt2torch_tensor(t2)
+
+    return binary_op
+
+
+eltwise_add_optional = make_binary_op_optional_output(ttl.tensor.add)
+eltwise_sub_optional = make_binary_op_optional_output(ttl.tensor.sub)
+eltwise_mul_optional = make_binary_op_optional_output(ttl.tensor.mul)
+eltwise_bias_gelu_optional = make_binary_op_optional_output(ttl.tensor.bias_gelu)
+eltwise_squared_difference_optional = make_binary_op_optional_output(ttl.tensor.squared_difference)
+eltwise_ne_optional = make_binary_op_optional_output(ttl.tensor.ne)
+eltwise_gt_optional = make_binary_op_optional_output(ttl.tensor.gt)
+eltwise_lt_optional = make_binary_op_optional_output(ttl.tensor.lt)
+eltwise_gte_optional = make_binary_op_optional_output(ttl.tensor.gte)
+eltwise_lte_optional = make_binary_op_optional_output(ttl.tensor.lte)
+eltwise_ldexp_optional = make_binary_op_optional_output(ttl.tensor.ldexp)
+eltwise_logaddexp_optional = make_binary_op_optional_output(ttl.tensor.logaddexp)
+eltwise_logaddexp2_optional = make_binary_op_optional_output(ttl.tensor.logaddexp2)
+eltwise_logical_and_optional = make_binary_op_optional_output(ttl.tensor.logical_and)
+eltwise_logical_or_optional = make_binary_op_optional_output(ttl.tensor.logical_or)
+
+
+def eltwise_eq_optional(
+    x,
+    y,
+    z,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    queue_id,
+    **kwargs,
+):
+    cq_id = 0
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
+
+    if queue_id == True:
+        ttl.tensor.eq(cq_id, t0, t1, output_tensor=t2)
+    else:
+        ttl.tensor.eq(t0, t1, output_tensor=t2)
+
+    return tt2torch_tensor(t2)
+
 
 ################################################
 #################### Tensor ####################

@@ -13,7 +13,7 @@ from loguru import logger
 
 def get_tt_dtype(torch_dtype):
     if torch_dtype == torch.int32:
-        return ttl.tensor.DataType.UINT32
+        return ttl.tensor.DataType.INT32
     if torch_dtype == torch.bfloat16:
         return ttl.tensor.DataType.BFLOAT16
     if torch_dtype == torch.float32:
@@ -24,7 +24,7 @@ def get_tt_dtype(torch_dtype):
 @pytest.mark.parametrize(
     "start_end_step",
     (
-        (0, 32, 1),  # simple
+        (-5, 27, 1),  # simple
         (2.3, 15.3, 0.5),  # floating point
         (10, 0, -0.3),  # minus step
         (10, 32 * 3, 1),  # multiple cores
@@ -92,7 +92,7 @@ def test_arange_row_major_optioanl_output(start_end_step, optional_output, devic
 
 @pytest.mark.parametrize(
     "start_end_step",
-    ((0, 32 * 5, 1),),  # simple
+    ((-10, 22, 1),),  # simple
 )
 @pytest.mark.parametrize(
     "output_dtype",
@@ -148,12 +148,7 @@ def test_arange_tilized_simple(start_end_step, device):
     L = tt_cpu.shape[0]
 
     tt_dev = (
-        tt_npu.cpu()
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .unpad_from_tile((1, 1, 1, L))
-        .to_torch()
-        .reshape((L))
-        .to(torch.bfloat16)
+        tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((1, L)).to_torch().reshape((L)).to(torch.bfloat16)
     )
 
     rtol = atol = 0.1
@@ -188,7 +183,7 @@ def test_arange_tilized_major_optioanl_output(start_end_step, optional_output, d
         output_cpu = torch.empty_like(tt_cpu)
         output = (
             ttl.tensor.Tensor(output_cpu, ttl.tensor.DataType.BFLOAT16)
-            .reshape([1, 1, 1, L])
+            .reshape([1, L])
             .pad_to_tile(float("nan"))
             .to(ttl.tensor.Layout.TILE)
             .to(device)
@@ -200,12 +195,7 @@ def test_arange_tilized_major_optioanl_output(start_end_step, optional_output, d
     tt_dev = tt_npu.cpu().to_torch()
 
     tt_dev = (
-        tt_npu.cpu()
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .unpad_from_tile((1, 1, 1, L))
-        .to_torch()
-        .reshape((L))
-        .to(torch.bfloat16)
+        tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((1, L)).to_torch().reshape((L)).to(torch.bfloat16)
     )
 
     rtol = atol = 0.1
@@ -217,7 +207,7 @@ def test_arange_tilized_major_optioanl_output(start_end_step, optional_output, d
 
 @pytest.mark.parametrize(
     "start_end_step",
-    ((0, 32 * 5, 1),),  # simple
+    ((-10, 57, 1),),  # simple
 )
 @pytest.mark.parametrize(
     "output_dtype",
@@ -246,12 +236,7 @@ def test_arange_tilized_dtype(start_end_step, output_dtype, device):
     L = tt_cpu.shape[0]
 
     tt_dev = (
-        tt_npu.cpu()
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .unpad_from_tile((1, 1, 1, L))
-        .to_torch()
-        .reshape((L))
-        .to(output_dtype)
+        tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((1, L)).to_torch().reshape((L)).to(output_dtype)
     )
 
     rtol = atol = 0.1

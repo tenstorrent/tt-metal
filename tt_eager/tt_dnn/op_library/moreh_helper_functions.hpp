@@ -126,6 +126,138 @@ struct CircularBufferArg {
     tt::DataFormat data_format,
     CircularBufferArg arg);
 
+
+struct CallbackArgMap {
+    std::map<uint32_t, uint32_t> input;
+    std::map<uint32_t, uint32_t> optional_input;
+    std::map<uint32_t, uint32_t> output;
+};
+
+using Tensors = std::vector<Tensor>;
+using OptionalConstTensors = std::vector<std::optional<const Tensor>>;
+
+// To use this function, the arguments in the reader kernel must always be sorted in the order of input followed by
+// optional_input. Furthermore, input and output tensors must always start from the 0th argument.
+template <typename OutputTensors = Tensors>
+const std::function<void(const void *, Program &, const Tensors &, const OptionalConstTensors &, const OutputTensors &)>
+create_override_runtime_arguments_callback(
+    KernelHandle reader_kernel_id, KernelHandle writer_kernel_id, uint32_t num_cores, uint32_t core_h) {
+    return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h](
+               const void *operation,
+               Program &program,
+               const Tensors &input_tensors,
+               const OptionalConstTensors &optional_input_tensors,
+               const OutputTensors &output_tensors) -> void {
+        for (uint32_t icore = 0; icore < num_cores; icore++) {
+            CoreCoord core = {icore / core_h, icore % core_h};
+
+            // readers
+            {
+                uint32_t rt_idx = 0;
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                for (uint32_t idx = 0; idx < input_tensors.size(); idx++) {
+                    runtime_args[rt_idx++] = input_tensors.at(idx).buffer()->address();
+                }
+                for (uint32_t idx = 0; idx < optional_input_tensors.size(); idx++) {
+                    auto optional_input_tensor = optional_input_tensors.at(idx);
+                    runtime_args[rt_idx++] =
+                        optional_input_tensor.has_value() ? optional_input_tensor.value().buffer()->address() : 0;
+                }
+            }
+
+            // writer
+            {
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                for (uint32_t idx = 0; idx < output_tensors.size(); idx++) {
+                    runtime_args[idx] = output_tensors.at(idx).buffer()->address();
+                }
+            }
+        }
+    };
+}
+
+// Using this structure is not recommended because directly setting the callback argument map doesn't significantly
+// reduce the amount of code.
+template <typename OutputTensors = Tensors>
+const std::function<void(const void *, Program &, const Tensors &, const OptionalConstTensors &, const OutputTensors &)>
+create_override_runtime_arguments_callback(
+    KernelHandle reader_kernel_id,
+    KernelHandle writer_kernel_id,
+    uint32_t num_cores,
+    uint32_t core_h,
+    CallbackArgMap arg_map) {
+    return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, arg_map, num_cores, core_h](
+               const void *operation,
+               Program &program,
+               const Tensors &input_tensors,
+               const OptionalConstTensors &optional_input_tensors,
+               const OutputTensors &output_tensors) -> void {
+        for (uint32_t icore = 0; icore < num_cores; icore++) {
+            CoreCoord core = {icore / core_h, icore % core_h};
+
+            // readers
+            {
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                for (const auto &pair : arg_map.input) {
+                    runtime_args[pair.first] = input_tensors.at(pair.second).buffer()->address();
+                }
+                for (const auto &pair : arg_map.optional_input) {
+                    auto optional_input_tensor = optional_input_tensors.at(pair.second);
+                    runtime_args[pair.first] =
+                        optional_input_tensor.has_value() ? optional_input_tensor.value().buffer()->address() : 0;
+                }
+            }
+
+            // writer
+            {
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                for (const auto &pair : arg_map.output) {
+                    runtime_args[pair.first] = output_tensors.at(pair.second).buffer()->address();
+                }
+            }
+        }
+    };
+}
+
+// To use this function, the arguments in the reader kernel must always be sorted in the order of input followed by
+// optional_input. Furthermore, input and output tensors must always start from the 0th argument.
+template <typename OutputTensors = Tensors>
+const std::function<void(const Program&, const std::vector<Buffer*>&, const std::vector<Buffer*>&)>
+create_override_addresses_callback(
+    KernelHandle reader_kernel_id, KernelHandle writer_kernel_id, uint32_t num_cores, uint32_t core_h) {
+    return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h](
+               const Program& program,
+               const std::vector<Buffer*>& input_buffers,
+               const std::vector<Buffer*>& output_buffers) -> void {
+        for (uint32_t icore = 0; icore < num_cores; icore++) {
+            CoreCoord core = {icore / core_h, icore % core_h};
+
+            // readers
+            {
+                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                for (uint32_t idx = 0; idx < input_buffers.size(); idx++) {
+                    auto buffer = input_buffers.at(idx);
+                    if (buffer != nullptr) {
+                        runtime_args[idx] = buffer->address();
+                    }
+                }
+            }
+
+            // writer
+            {
+                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                for (uint32_t idx = 0; idx < output_buffers.size(); idx++) {
+                    auto buffer = output_buffers.at(idx);
+                    if (buffer != nullptr) {
+                        runtime_args[idx] = buffer->address();
+                    }
+                }
+            }
+        }
+    };
+}
+
+
 }  // namespace primary
 }  // namespace operations
 }  // namespace tt

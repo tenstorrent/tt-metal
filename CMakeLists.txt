@@ -5,14 +5,15 @@ cmake_policy(VERSION 3.16)
 # Project setup
 ############################################
 
-### Uncomment this if you don't want to manually pass Clang-17 compiler through CLI ###
-# find_program(CLANG_17 clang++-17)
-# if(CLANG_17)
-#     message(STATUS "Found Clang-17 here: ${CLANG_17}")
-#     set(CMAKE_CXX_COMPILER "${CLANG_17}")
-# else()
-#     message(WARNING "Clang++-17 not found, recommended to build with Clang-17 > GCC for better perf")
-# endif()
+# Use Clang-17 by default until we upgrade to Ubuntu version that supports higher GCC
+# No longer support GCC-9 as it does not support C++20
+find_program(CLANG_17 clang++-17)
+if(CLANG_17)
+    message(STATUS "Found Clang-17 here: ${CLANG_17}")
+    set(CMAKE_CXX_COMPILER "${CLANG_17}")
+else()
+    message(WARNING "Clang++-17 not found!!!")
+endif()
 
 if(${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_BINARY_DIR})
     message(FATAL_ERROR "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!")
@@ -31,7 +32,7 @@ CHECK_COMPILERS()
 ############################################################################################################################
 # Find all required libraries to build
 ############################################################################################################################
-find_package(Boost REQUIRED COMPONENTS thread filesystem system regex)
+include(${CMAKE_SOURCE_DIR}/cmake/CPM_boost.cmake)
 find_package(GTest REQUIRED)
 find_package (Python3 COMPONENTS Interpreter Development)
 find_library(NUMA_LIBRARY NAMES numa)
@@ -57,8 +58,9 @@ set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG=DEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG=DEBUG")
 set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG=DEBUG")
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Set default values for variables/options
 set(UMD_HOME "${CMAKE_SOURCE_DIR}/tt_metal/third_party/umd")
@@ -88,8 +90,7 @@ set(CMAKE_INSTALL_DATAROOTDIR "${CMAKE_BINARY_DIR}/tmp/share")
 ############################################################################################################################
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(metal_common_libs INTERFACE
-    dl z pthread atomic stdc++ numa # system libraries
-    Boost::thread Boost::filesystem Boost::system Boost::regex hwloc    # hwloc has no cmake support, find_package won't find it
+    dl z pthread atomic stdc++ hwloc numa # system libraries, hwloc has no cmake support, find_package won't find it
 )
 
 # Note on flags:
@@ -121,7 +122,11 @@ if($ENV{ENABLE_TRACY})
 endif()
 
 add_library(metal_header_directories INTERFACE)
-target_include_directories(metal_header_directories INTERFACE tt_metal/hw/inc)
+target_include_directories(metal_header_directories INTERFACE ${CMAKE_SOURCE_DIR}/tt_metal/hw/inc)
+foreach(lib ${BoostPackages})
+    target_include_directories(metal_header_directories INTERFACE ${Boost${lib}_SOURCE_DIR}/include)
+endforeach()
+
 if ("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
     target_include_directories(metal_header_directories INTERFACE tt_metal/hw/inc/wormhole
         tt_metal/hw/inc/wormhole/wormhole_b0_defines
@@ -161,7 +166,6 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ttnn)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tests EXCLUDE_FROM_ALL)
 
-
 ############################################################################################################################
 # Install targets for build artifacts and pybinds
 #   If built with Tracy, cannot install 'all' since it will pick up install targets from Tracy
@@ -200,4 +204,9 @@ install(FILES ${CMAKE_BINARY_DIR}/lib/_ttnn.so
 install(FILES ${CMAKE_BINARY_DIR}/lib/_C.so
     DESTINATION ${CMAKE_SOURCE_DIR}/tt_eager/tt_lib
     COMPONENT tt_pybinds
+)
+
+# Temporary workaround for Issue #8767
+install(DIRECTORY ${CMAKE_BINARY_DIR}/hw/toolchain
+    DESTINATION ${CMAKE_SOURCE_DIR}/runtime/hw
 )

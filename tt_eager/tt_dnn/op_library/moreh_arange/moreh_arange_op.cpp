@@ -58,8 +58,8 @@ operation::ProgramWithCallbacks moreh_arange_(
     if (output.get_dtype() == DataType::BFLOAT16) {
         writer_defines["OUTPUT_DTYPE_BFLOAT16"] = 1;
     }
-    if (output.get_dtype() == DataType::UINT32) {
-        writer_defines["OUTPUT_DTYPE_UINT32"] = 1;
+    if (output.get_dtype() == DataType::INT32) {
+        writer_defines["OUTPUT_DTYPE_INT32"] = 1;
     }
     if (output.get_dtype() == DataType::FLOAT32) {
         writer_defines["OUTPUT_DTYPE_FLOAT32"] = 1;
@@ -129,7 +129,13 @@ void MorehArange::validate_with_output_tensors(
         ((this->step > 0) && (this->end >= this->start)) || ((this->step < 0) && (this->end <= this->start)),
         "upper bound and larger bound inconsistent with step sign");
 
-    TT_FATAL(this->output_dtype != DataType::BFLOAT8_B, "moreh arange not support bfloat8_b dtype");
+    auto output_dtype_has_value = this->output_dtype.has_value();
+
+    if (output_dtype_has_value) {
+        auto output_dtype = this->output_dtype.value();
+        TT_FATAL(output_dtype != DataType::BFLOAT8_B, "moreh arange not support bfloat8_b dtype");
+        TT_FATAL(output_dtype != DataType::UINT32, "moreh arange not support uint32 dtype");
+    }
 
     if (output_tensors.empty() || !output_tensors.at(0).has_value()) {
         // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
@@ -141,6 +147,11 @@ void MorehArange::validate_with_output_tensors(
     auto output_memory_layout = output_tensor.memory_config().memory_layout;
     auto output_layout = output_tensor.get_layout();
 
+    if (output_dtype_has_value) {
+        auto output_dtype = this->output_dtype.value();
+        TT_FATAL(output_dtype == output_tensor.get_dtype(), "If output_tensor is provided as input, its dtype should match the output_dtype parameter.");
+    }
+
     TT_FATAL(output_memory_layout == TensorMemoryLayout::INTERLEAVED);
 
     if (this->untilize_out) {
@@ -148,6 +159,7 @@ void MorehArange::validate_with_output_tensors(
     } else {
         TT_FATAL(output_layout == Layout::TILE);
     }
+
 }
 
 std::vector<Shape> MorehArange::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -159,7 +171,16 @@ std::vector<Shape> MorehArange::compute_output_shapes(const std::vector<Tensor> 
 
         return {output_shape};
     }
-    Shape output_shape = {1, 1, TILE_HEIGHT, round_up(num_elems, TILE_WIDTH)};
+
+    std::vector<uint32_t> output_size_vec = {TILE_HEIGHT, round_up(num_elems, TILE_WIDTH)};
+
+    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 31});
+    dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = round_up(num_elems, TILE_WIDTH) - num_elems});
+
+    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
+    auto output_shape = Shape(output_size_vec, padding);
+
     return {output_shape};
 }
 
@@ -169,10 +190,15 @@ std::vector<Tensor> MorehArange::create_output_tensors(
         return {output_tensors.at(0).value()};
     }
 
-    auto dtype = input_tensors.at(0).get_dtype();
+    // default dtype is bfloat16
+    auto output_dtype = DataType::BFLOAT16;
+    if (this->output_dtype.has_value()) {
+        output_dtype = this->output_dtype.value();
+    }
+
     auto layout = (this->untilize_out) ? Layout::ROW_MAJOR : Layout::TILE;
     return operation::generic_create_output_tensors(
-        *this, input_tensors, this->output_dtype, layout, this->output_mem_config);
+        *this, input_tensors, output_dtype, layout, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks MorehArange::create_program(
@@ -194,12 +220,10 @@ Tensor moreh_arange(
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
-    auto default_output_dtype = DataType::BFLOAT16;
-
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({any}))};
 
     operation::launch_op(
-        [start, end, step, untilize_out, output_dtype, all_cores, output_mem_config, default_output_dtype](
+        [start, end, step, untilize_out, output_dtype, all_cores, output_mem_config](
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &optional_input_tensors,
             const std::vector<std::optional<Tensor>> &optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -209,7 +233,7 @@ Tensor moreh_arange(
                     .end = end,
                     .step = step,
                     .untilize_out = untilize_out,
-                    .output_dtype = output_dtype.value_or(default_output_dtype),
+                    .output_dtype = output_dtype,
                     .core_range = all_cores,
                     .output_mem_config = output_mem_config,
                 },
@@ -219,6 +243,7 @@ Tensor moreh_arange(
         },
         {any},
         output_tensors,
+        {},
         {output_tensor});
 
     return output_tensors.at(0);

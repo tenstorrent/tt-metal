@@ -26,6 +26,10 @@ void kernel_main() {
     uint32_t input_noc_id_stride_c = get_arg_val<uint32_t>(i++);
     uint32_t input_noc_id_stride_h = get_arg_val<uint32_t>(i++);
 
+    uint32_t input_size_n = get_arg_val<uint32_t>(i++);
+    uint32_t input_size_c = get_arg_val<uint32_t>(i++);
+    uint32_t input_size_h = get_arg_val<uint32_t>(i++);
+    uint32_t input_size_w = get_arg_val<uint32_t>(i++);
 
     // index
     uint32_t index0_is_defined = get_arg_val<uint32_t>(i++);
@@ -90,6 +94,13 @@ void kernel_main() {
         cb_in2,
         cb_in3,
         cb_in4,
+    };
+
+    uint32_t input_size_list[4] = {
+        input_size_n,
+        input_size_c,
+        input_size_h,
+        input_size_w,
     };
 
     uint32_t output_size_list[4] = {
@@ -163,24 +174,32 @@ void kernel_main() {
                     noc_async_read_barrier();
 
                     if (dim == 3) {
-                        volatile tt_l1_ptr uint32_t* index_l1_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_l1_addr);
+                        volatile tt_l1_ptr int32_t* index_l1_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
                         uint32_t index_dim_offset = index_index % FACE_WIDTH;
                         if ((index_index % TILE_WIDTH) >= 16) index_dim_offset += 256;
 
-                        uint32_t index_val = index_l1_ptr[index_dim_offset];
+                        int32_t index_val = index_l1_ptr[index_dim_offset];
+
+                        if (index_val < 0) {
+                            index_val += input_size_list[dim];
+                        }
 
                         w_index = index_val;
                         input_stick_idx += index_val / FACE_WIDTH;
                     } else {
-                        volatile tt_l1_ptr uint32_t* index_l1_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_l1_addr);
+                        volatile tt_l1_ptr int32_t* index_l1_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
                         uint32_t index_dim_offset;
                         uint32_t index_tile_idx = index_index % TILE_WIDTH;
                         if (index_tile_idx < FACE_WIDTH) index_dim_offset = index_tile_idx;
                         else index_dim_offset = index_tile_idx + 256 - 16;
 
-                        uint32_t index_val = index_l1_ptr[index_dim_offset];
+                        int32_t index_val = index_l1_ptr[index_dim_offset];
+
+                        if (index_val < 0) {
+                            index_val += input_size_list[dim];
+                        }
 
                         input_stick_idx += index_val * input_stick_idx_stride;
                     }
@@ -202,11 +221,15 @@ void kernel_main() {
                     noc_async_read(index_noc_addr, index_l1_addr, NOC_MINIMUM_READ_SIZE);
                     noc_async_read_barrier();
 
-                    volatile tt_l1_ptr uint32_t* index_l1_ptr =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_l1_addr);
+                    volatile tt_l1_ptr int32_t* index_l1_ptr =
+                        reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
 
                     uint32_t index_dim_offset = (index_index * INDEX_SIZE - noc_offset) / INDEX_SIZE;
-                    uint32_t index_val = index_l1_ptr[index_dim_offset];
+                    int32_t index_val = index_l1_ptr[index_dim_offset];
+
+                    if (index_val < 0) {
+                        index_val += input_size_list[dim];
+                    }
 
                     if (dim == 3) {
                         w_index = index_val;

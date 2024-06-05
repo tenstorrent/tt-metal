@@ -11,6 +11,7 @@
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_api.h"
+#include "llk_unpack_A_api.h"
 #endif
 
 
@@ -164,32 +165,74 @@ ALWI void sub_tiles( uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t iti
     MATH(( llk_math_eltwise_binary<ELWSUB, NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE, DST_ACCUM_MODE>(icb0, icb1, idst) ));
 }
 
-template<bool full_init = false>
 /**
  * Init function with a specified op
- * | Argument       | Description                                              | Type     | Valid Range                                    | Required |
- * |----------------|----------------------------------------------------------|----------|------------------------------------------------|----------|
- * | op_code        | op code corresponding to op                              | uint32_t | 0 to 31                                        | True     |
+ * template parameters:
+ * full_init: if true, the full init is performed (unpack+math), otherwise a nof init is performed (only math)
+ * eltwise_binary_op_type: the binary operation type
  */
-ALWI void binary_op_specific_init(int op_code) // TODO(AP): better naming
+template<bool full_init = false, EltwiseBinaryType eltwise_binary_op_type = ELWADD>
+ALWI void binary_op_specific_init() // TODO(AP): better naming
 {
-    #ifdef ELTWISE_OP
     if constexpr (full_init) {
-        if constexpr (ELTWISE_OP_CODE == 0) // TODO(AP): pass an enum probably
+        if constexpr (eltwise_binary_op_type == ELWADD) {
             add_tiles_init();
-        else if constexpr (ELTWISE_OP_CODE == 1)
+        } else if constexpr (eltwise_binary_op_type == ELWSUB) {
             sub_tiles_init();
-        else if constexpr (ELTWISE_OP_CODE == 2)
+        } else if constexpr (eltwise_binary_op_type == ELWMUL) {
             mul_tiles_init();
+        }
     } else {
-        if constexpr (ELTWISE_OP_CODE == 0) // TODO(AP): pass an enum probably
+        if constexpr (eltwise_binary_op_type == ELWADD) {
             add_tiles_init_nof();
-        else if constexpr (ELTWISE_OP_CODE == 1)
+        } else if constexpr (eltwise_binary_op_type == ELWSUB) {
             sub_tiles_init_nof();
-        else if constexpr (ELTWISE_OP_CODE == 2)
+        } else if constexpr (eltwise_binary_op_type == ELWMUL) {
             mul_tiles_init_f();
+        }
     }
-    #endif
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+template<
+EltwiseBinaryType eltwise_binary_type = ELWADD,
+EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+ALWI void binary_dest_reuse_tiles_init(uint32_t icb0) {
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, true, binary_reuse_dest>(false, false, icb0) ));
+    MATH(( llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY, binary_reuse_dest>(false, false) ));
+}
+
+
+/**
+ * Performs element-wise binary operations, such as multiply, add, or sub of tiles.
+ * If binary_reuse_dest = EltwiseBinaryReuseDestType::DST_TO_SRCA, then the tile specified by idst will be loaded from the DST register buffer
+ * into SRCA. The binary operation will operate on SRCA & SRCB inputs, and the result will be written back to the DST register buffer specified by idst.
+ * Similar to DST_TO_SRCA, if binary_reuse_dest = EltwiseBinaryReuseDestType::DST_TO_SRCB, then tile specified by idst will be loaded from the DST
+ * into SRCB register buffer. DST_TO_SRCB feature is not available for Grayskull, only Wormhole.
+ *
+ * EltwiseBinaryReuseDestType::DST_TO_SRCA and EltwiseBinaryReuseDestType::DST_TO_SRCB assume that another operation has populated
+ * the dest register, otherwise dest will contain zeroes.
+ *
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                                               | Type     | Valid Range                                    | Required |
+ * |----------------|-----------------------------------------------------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | in_cb_id       | The identifier of the circular buffer (CB) containing A                                                   | uint32_t | 0 to 31                                        | True     |
+ * | in_tile_index  | The index of tile A within the first CB                                                                   | uint32_t | Must be less than the size of the CB           | True     |
+ * | dst_tile_index | The index of tile B that will be moved to Src reg, and the index of the tile in DST REG for the result C  | uint32_t | Must be less than the acquired size of DST REG | True     |
+ */
+template<
+EltwiseBinaryType eltwise_binary_type = ELWADD,
+EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+ALWI void binary_dest_reuse_tiles( uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index)
+{
+    UNPACK(( llk_unpack_A<BroadcastType::NONE, true, binary_reuse_dest>(in_cb_id, in_tile_index)  ));
+    MATH(( llk_math_eltwise_binary<eltwise_binary_type, NONE, MATH_FIDELITY, binary_reuse_dest, DST_ACCUM_MODE>(in_tile_index, in_tile_index, dst_tile_index) ));
 }
 
 

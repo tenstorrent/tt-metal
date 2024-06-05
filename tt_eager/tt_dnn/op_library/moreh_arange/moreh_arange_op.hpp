@@ -21,7 +21,7 @@ struct MorehArange {
     float end;
     float step;
     bool untilize_out;
-    const DataType output_dtype;
+    const std::optional<DataType> output_dtype;
     const CoreRange core_range;  // unused for now
     const MemoryConfig output_mem_config;
 

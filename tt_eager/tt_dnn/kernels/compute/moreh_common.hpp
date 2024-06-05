@@ -26,6 +26,8 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
+
+// Deprecated
 ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
 ALWI void REL() { release_dst(tt::DstMode::Half); }
 
@@ -44,7 +46,7 @@ ALWI void copy_tile_init_with_dt(uint32_t icb)
     #if defined FP32_DEST_ACC_EN
         unpack_reconfig_data_format_srca(icb);
     #endif
-    copy_tile_init();
+    copy_tile_to_dst_init_short(icb);
 }
 
 ALWI void add_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
@@ -66,6 +68,13 @@ ALWI void mul_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
         unpack_reconfig_data_format(icb0, icb1);
     #endif
     mul_tiles_init(icb0, icb1);
+}
+
+ALWI void mul_tiles_bcast_scalar_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+    #if defined FP32_DEST_ACC_EN
+        unpack_reconfig_data_format(icb0, icb1);
+    #endif
+    mul_tiles_bcast_scalar_init_short(icb0, icb1);
 }
 
 class ArgFetcher {

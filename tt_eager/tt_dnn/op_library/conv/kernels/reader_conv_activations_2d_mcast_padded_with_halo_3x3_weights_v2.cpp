@@ -54,7 +54,6 @@ void kernel_main() {
     constexpr uint32_t act_mcast_sender_semaphore_addr = get_compile_time_arg_val(19);
     constexpr uint32_t act_mcast_receiver_semaphore_addr = get_compile_time_arg_val(20);
     constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(21);
-    constexpr uint32_t pad_w = get_compile_time_arg_val(22);
 
     constexpr bool transpose_mcast = get_compile_time_arg_val(22) == 1;
 
@@ -124,7 +123,7 @@ void kernel_main() {
         cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
         uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
 
-        constexpr uint32_t stride_h_bytes = (conv_act_size_w + (2 * pad_w)) * conv_act_c_read_bytes;
+        constexpr uint32_t stride_h_bytes = (conv_act_size_w + 2) * conv_act_c_read_bytes;
         static_assert(act_block_h_datums % 2 == 0); // need to be even to read 2 in the body, due to packing of 2 indices in 1 uint32_t word
         // #pragma GCC unroll 4 // didn't seem to help (neutral), manual unroll 2x perf drop
         for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {

@@ -4,6 +4,8 @@ These instructions will guide you through the installation of Tenstorrent system
 
 ---
 
+## Installation Steps
+
 ### Step 1. Driver & Firmware
 
 Follow the Software Setup instructions for your specific board or system provided on our [general docs](https://docs.tenstorrent.com/tenstorrent).
@@ -26,7 +28,7 @@ Note the current compatability matrix:
 sudo apt update
 sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.9 libgoogle-glog-dev=0.4.0-1build1 libyaml-cpp-dev=0.6.2-4ubuntu1 libboost-all-dev=1.71.0.0ubuntu2 libsndfile1=1.0.28-7ubuntu0.2 libhwloc-dev graphviz
 
-# Install Clang-17: Recommended to use Clang-17 as that's what is officially supported and tested on CI.
+# Install Clang-17 for C++20 support!!
 wget https://apt.llvm.org/llvm.sh
 chmod u+x llvm.sh
 sudo ./llvm.sh 17
@@ -111,18 +113,18 @@ are less familiar with Python and its various environment tools, just use
 
 5. Start coding
 
-You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent.github.io/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://github.com/tenstorrent/tt-metal/blob/main/README.md)
+You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent.github.io/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://tenstorrent.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
 
 ---
 
 ### Step 5. Software dependencies for codebase contributions
 
-Please follow the next additional steps if you want to contribute to the codebase
+Please follow the next additional steps if you want to contribute to the codebase.
 
 1. Install dependencies
 
 ```sh
-sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc libtbb-dev libcapstone-dev pkg-config ninja-build patchelf
+sudo apt install git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc libtbb-dev libcapstone-dev pkg-config ninja-build patchelf
 ```
 
 2. Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)

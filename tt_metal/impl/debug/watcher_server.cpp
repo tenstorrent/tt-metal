@@ -785,17 +785,17 @@ static void watcher_loop(int sleep_usecs) {
     }
     log_info(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
 
-    double last_elapsed_time = watcher::get_elapsed_secs();
     while (true) {
-        // Delay an amount such that we wait a minimum of the set sleep_usecs between polls.
-        while ((watcher::get_elapsed_secs() - last_elapsed_time) < ((double)sleep_usecs) / 1000000.) {
+        // Delay the amount of time specified by the user. Don't include watcher polling time to avoid the case where
+        // watcher dominates the communication links due to heavy traffic.
+        double last_elapsed_time = watcher::get_elapsed_secs();
+        while ((watcher::get_elapsed_secs() - last_elapsed_time) < ((double) sleep_usecs) / 1000000.) {
             // Odds are this thread will be killed during the usleep, the kill signal is
             // watcher::enabled = false from the main thread.
             if (!watcher::enabled)
                 break;
             usleep(1);
         }
-        last_elapsed_time = watcher::get_elapsed_secs();
 
         {
             const std::lock_guard<std::mutex> lock(watch_mutex);

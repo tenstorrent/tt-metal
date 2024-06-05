@@ -81,7 +81,6 @@ class TtMixtralAttention(LightweightModule):
             cache_file_name=cache_name(f"wqkv_multidevice_4d"),
         )
 
-        self.wqkv = ttnn.to_device(self.wqkv, self.device_mesh)
         self.wo = ttnn.as_tensor(
             torch.transpose(
                 self.state_dict[wo_str],
@@ -91,14 +90,12 @@ class TtMixtralAttention(LightweightModule):
             .unsqueeze(0)
             .unsqueeze(0),
             device=self.device_mesh,
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=-2),
+            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
             dtype=self.dtype,
             memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
             layout=self.model_config["ATTN_W_LAYOUT_TILE"],
-            cache_file_name=cache_name(f"wo_multidevice4d"),
+            cache_file_name=cache_name(f"wo_multidevice4d_H"),
         )
-
-        self.wo = ttnn.to_device(self.wo, self.device_mesh)
 
         cache_k = torch.zeros(
             (
@@ -130,22 +127,8 @@ class TtMixtralAttention(LightweightModule):
             for lp in layer_past
         ]
 
-        self.layer_past = [ttnn.to_device(lp, self.device_mesh) for lp in self.layer_past]
-
         self.scale = self.head_dim**-0.5
 
-        reduce_mask_torch = torch.zeros(1, 1, self.max_batch_size, self.max_batch_size * 8)
-        for i in range(self.max_batch_size):
-            reduce_mask_torch[:, :, i, range(i, self.max_batch_size * 8, self.max_batch_size)] = 1
-        self.reduce_mask = ttnn.from_torch(
-            reduce_mask_torch,
-            device=self.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        self.reduce_mask = ttnn.to_device(self.reduce_mask, self.device_mesh)
         self.compute_kernel = self.model_args.get_compute_kernel_config()
         self.compute_kernel_attn = self.model_args.get_compute_kernel_attn_config()
 
@@ -306,16 +289,19 @@ class TtMixtralAttention(LightweightModule):
         )
         attn_output_1B4D.deallocate(True)
 
-        # attn_output_11BH = ttnn.experimental.tensor.sharded_to_interleaved(
-        #     attn_output_11BH, output_mem_config=ttnn.L1_MEMORY_CONFIG
-        # )
+        attn_output_11BH = ttnn.experimental.tensor.sharded_to_interleaved(
+            attn_output_11BH, output_mem_config=ttnn.L1_MEMORY_CONFIG
+        )
 
         ###
         # Output matmul
         ###
+        # All gather
+        dense_outputs_11BH_gathered = ttnn.all_gather(attn_output_11BH, dim=3, num_links=1)
 
-        dense_out_11BH = ttnn.experimental.operations.primary.matmul(
-            attn_output_11BH,
+        # return the sum of the outputs
+        dense_outputs_11BH = ttnn.experimental.operations.primary.matmul(
+            dense_outputs_11BH_gathered,
             wo,
             output_mem_config=self.model_config["LM_HEAD_OUTPUT_MEMCFG"],
             # compute_with_storage_grid_size=(8, 8),
@@ -323,10 +309,6 @@ class TtMixtralAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel,
             output_dtype=ttnn.bfloat8_b,
         )
-        attn_output_11BH.deallocate(True)
-        # All gather
-        dense_outputs_11BH = ttnn.all_gather(dense_out_11BH, dim=2, num_links=1)
 
-        # return the sum of the outputs
-        dense_outputs_11BH = ttnn.experimental.operations.primary.matmul(self.reduce_mask, dense_outputs_11BH)
+        dense_outputs_11BH_gathered.deallocate(True)
         return dense_outputs_11BH

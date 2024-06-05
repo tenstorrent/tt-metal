@@ -59,11 +59,7 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch) {
     switch (arch) {
         case ARCH::GRAYSKULL: common_flags = "-mgrayskull -march=rv32iy -mtune=rvtt-b1 -mabi=ilp32 "; break;
         case ARCH::WORMHOLE_B0: common_flags = "-mwormhole -march=rv32imw -mtune=rvtt-b1 -mabi=ilp32 "; break;
-        case ARCH::BLACKHOLE:
-            // TODO (abhullar/pgkeller): Update this to be BH specific SFPI version has been updated
-            common_flags = "-mwormhole -march=rv32imw -mtune=rvtt-b1 -mabi=ilp32 ";
-            // common_flags = "-mblackhole -march=rv32iml -mtune=rvtt-b1 -mabi=ilp32 ";
-            break;
+        case ARCH::BLACKHOLE: common_flags = "-mblackhole -march=rv32iml -mtune=rvtt-b1 -mabi=ilp32 "; break;
         default: TT_ASSERT(false, "Invalid arch"); break;
     }
     common_flags += "-std=c++17 -flto -ffast-math ";
@@ -90,7 +86,12 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch) {
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
 
     if (tt::tt_metal::getDeviceProfilerState()) {
-        this->defines_ += "-DPROFILE_KERNEL=1 ";
+        if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores()) {
+            //TODO(MO): Standard bit mask for device side profiler options
+            this->defines_ += "-DPROFILE_KERNEL=2 ";
+        } else {
+            this->defines_ += "-DPROFILE_KERNEL=1 ";
+        }
     }
 
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
@@ -203,7 +204,7 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bo
                 this->srcs_.push_back("tt_metal/hw/firmware/src/brisck.cc");
             }
 
-            this->lflags_ += "-T" + env_.root_ + "build/hw/toolchain/brisc.ld ";
+            this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/brisc.ld ";
 
             break;
 
@@ -221,7 +222,7 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bo
                 this->srcs_.push_back("tt_metal/hw/firmware/src/ncrisck.cc");
             }
 
-            this->lflags_ += "-T" + env_.root_ + "build/hw/toolchain/ncrisc.ld ";
+            this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/ncrisc.ld ";
 
             break;
     }
@@ -267,7 +268,7 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
             this->defines_ += "-DNAMESPACE=chlkc_unpack ";
             this->defines_ += "-DCOMPILE_FOR_TRISC=0 ";
 
-            this->lflags_ += "-T" + env_.root_ + "build/hw/toolchain/trisc0.ld ";
+            this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/trisc0.ld ";
 
             break;
 
@@ -278,7 +279,7 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
             this->defines_ += "-DNAMESPACE=chlkc_math ";
             this->defines_ += "-DCOMPILE_FOR_TRISC=1 ";
 
-            this->lflags_ += "-T" + env_.root_ + "build/hw/toolchain/trisc1.ld ";
+            this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/trisc1.ld ";
 
             break;
 
@@ -289,7 +290,7 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
             this->defines_ += "-DNAMESPACE=chlkc_pack ";
             this->defines_ += "-DCOMPILE_FOR_TRISC=2 ";
 
-            this->lflags_ += "-T" + env_.root_ + "build/hw/toolchain/trisc2.ld ";
+            this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/trisc2.ld ";
 
             break;
     }
@@ -371,7 +372,7 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
                 this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
             }
             this->lflags_ = env_.lflags_ + "-Os ";
-            this->lflags_ += "-T" + env_.root_ + "build/hw/toolchain/idle-erisc.ld ";
+            this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/idle-erisc.ld ";
             break;
     }
     this->process_defines_at_compile = true;

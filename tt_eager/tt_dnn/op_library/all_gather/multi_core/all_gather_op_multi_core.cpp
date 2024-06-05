@@ -318,6 +318,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
             TT_ASSERT(rem_pages < pages_per_chunk || num_full_chunks == 0);
             TT_ASSERT(rem_pages <= max_pages_per_chunk);
             std::vector<uint32_t> num_full_chunks_per_worker(all_gather_config.get_num_eth_buffers_per_edm(), num_full_chunks / all_gather_config.get_num_eth_buffers_per_edm());
+            std::vector<bool> is_channel_shrinkable(all_gather_config.get_num_eth_buffers_per_edm(), false);
+            std::vector<uint32_t> largest_packets_per_channel(all_gather_config.get_num_eth_buffers_per_edm(), 0);
             std::vector<uint32_t> rem_pages_per_worker(all_gather_config.get_num_eth_buffers_per_edm(), 0);
             {
                 uint32_t worker_idx = 0;
@@ -355,10 +357,22 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 );
                     uint32_t max_shards_per_eth_buffer = std::min<uint32_t>(all_gather_config.get_eth_buffer_size() / input_tensor_shard_arg_generator.args_struct.shard_size_in_bytes, input_tensor_shard_arg_generator.args_struct.num_dest_cores);
                     TT_ASSERT(max_shards_per_eth_buffer > 0, "Codepath needs further generalization to support computing multiple sends per shard. Shard size: {}", input_tensor_shard_arg_generator.args_struct.shard_size_in_bytes);
+                    log_info(tt::LogOp, "max_shards_per_eth_buffer: {}", max_shards_per_eth_buffer);
                     num_full_chunks_per_worker.at(b) = input_tensor_shard_arg_generator.args_struct.num_dest_cores < max_shards_per_eth_buffer ? 1 : input_tensor_shard_arg_generator.args_struct.num_dest_cores / max_shards_per_eth_buffer;
                     rem_pages_per_worker.at(b) = max_shards_per_eth_buffer > input_tensor_shard_arg_generator.args_struct.num_dest_cores ? 0 : input_tensor_shard_arg_generator.args_struct.num_dest_cores - (num_full_chunks_per_worker.at(b) * max_shards_per_eth_buffer);
                     TT_ASSERT(rem_pages_per_worker.at(b) == 0 || input_tensor_shard_arg_generator.args_struct.num_dest_cores >= num_full_chunks_per_worker.at(b) * max_shards_per_eth_buffer);
                     TT_ASSERT(input_tensor_shard_arg_generator.args_struct.num_dest_cores == rem_pages_per_worker.at(b) + num_full_chunks_per_worker.at(b) * max_shards_per_eth_buffer);
+
+                    uint32_t full_chunk_size_bytes = max_shards_per_eth_buffer * input_tensor_shard_arg_generator.args_struct.shard_size_in_bytes;
+                    bool shrinkable = num_full_chunks_per_worker.at(b) == 1 && all_gather_config.get_eth_buffer_size() > full_chunk_size_bytes;
+                    is_channel_shrinkable.at(b) = shrinkable;
+                    largest_packets_per_channel.at(b) = shrinkable ? full_chunk_size_bytes : all_gather_config.get_eth_buffer_size();
+                }
+            } else {
+                for(uint32_t b = 0; b < all_gather_config.get_num_eth_buffers_per_edm(); ++b) {
+                    bool shrinkable = num_full_chunks_per_worker.at(b) == 0;
+                    is_channel_shrinkable.at(b) = shrinkable;
+                    largest_packets_per_channel.at(b) = shrinkable ? rem_pages_per_worker.at(b) * input_page_size : all_gather_config.get_eth_buffer_size();
                 }
             }
             for(uint32_t b = 0; b < all_gather_config.get_num_eth_buffers_per_edm(); ++b) {
@@ -412,6 +426,11 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                     log_trace(tt::LogOp, "Adding sender EDM channel");
                     EriscDatamoverBuilder::ChannelBufferInterface const& sender_channel_buffer_info =
                         sender_edm_builder.add_sender_channel(sender_worker_writer_semaphore_addr, clockwise_link_buffer_num_messages_to_send.at(b), sender_worker_coords);
+                    if (is_channel_shrinkable.at(b)) {
+                        TT_ASSERT(largest_packets_per_channel.at(b) > 0);
+                        log_trace(tt::LogOp, "\tsetting channel_max_size to {} for channel {}", largest_packets_per_channel.at(b), b);
+                        sender_edm_builder.set_max_message_size_bytes(sender_channel_buffer_info.channel, largest_packets_per_channel.at(b));
+                    }
                     sender_eth_sem_addrs.push_back(sender_channel_buffer_info.eth_semaphore_l1_address);
                     sender_eth_buffer_addrs.push_back(sender_channel_buffer_info.eth_buffer_l1_address);
                 }
@@ -422,6 +441,11 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                     log_trace(tt::LogOp, "Adding receiver EDM channel");
                     EriscDatamoverBuilder::ChannelBufferInterface const& receiver_channel_buffer_info =
                         receiver_edm_builder.add_receiver_channel(receiver_worker_semaphore_addr, counter_clockwise_link_buffer_num_messages_to_send.at(b), receiver_worker_coords);
+                    if (is_channel_shrinkable.at(b)) {
+                        TT_ASSERT(largest_packets_per_channel.at(b) > 0);
+                        log_trace(tt::LogOp, "\tsetting channel_max_size to {} for channel {}", largest_packets_per_channel.at(b), b);
+                        receiver_edm_builder.set_max_message_size_bytes(receiver_channel_buffer_info.channel, largest_packets_per_channel.at(b));
+                    }
                     receiver_eth_sem_addrs.push_back(receiver_channel_buffer_info.eth_semaphore_l1_address);
                     receiver_eth_buffer_addrs.push_back(receiver_channel_buffer_info.eth_buffer_l1_address);
                 }

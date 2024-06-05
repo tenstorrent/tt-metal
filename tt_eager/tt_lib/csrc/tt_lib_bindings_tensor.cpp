@@ -884,6 +884,23 @@ void TensorModule(py::module& m_tensor) {
     )doc");
 
     m_tensor.def(
+        "convert_conv_weight_tensor_to_grouped_layout",
+        &convert_conv_weight_tensor_to_grouped_layout,
+        py::arg("conv_weight_tensor").noconvert(),
+        py::arg("num_groups"),
+        py::arg("output_dtype").noconvert() = std::nullopt,
+        R"doc(
+        Converts convolution weights to grouped layout with padded zeros
+        Returns a new tensor with the converted layout.
+
+        +----------+----------------------+-----------+-------------+----------+
+        | Argument | Description          | Data type | Valid range | Required |
+        +==========+======================+===========+=============+==========+
+        | a        | Input tensor         | Tensor    |             | Yes      |
+        +----------+----------------------+-----------+-------------+----------+
+    )doc");
+
+    m_tensor.def(
         "format_input_tensor",
         &AutoFormat::format_input_tensor,
         py::arg("input").noconvert(),
@@ -922,6 +939,9 @@ void TensorModule(py::module& m_tensor) {
     m_tensor.def(
         "dump_tensor",
         &dump_tensor,
+        py::arg("filename"),
+        py::arg("tensor"),
+        py::arg("strategy") = std::unordered_map<std::string, std::string>{},
         R"doc(
             Dump tensor to file
         )doc");

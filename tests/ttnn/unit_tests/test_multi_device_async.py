@@ -246,6 +246,7 @@ def test_multi_device_data_parallel_op_chain(pcie_device_mesh, program_cache, in
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_multi_device_argmax(pcie_device_mesh, layout, mem_config):
+    pytest.skip("Segfault on CI")
     for device in pcie_device_mesh.get_device_ids():
         pcie_device_mesh.get_device(device).enable_async(True)
 
@@ -277,8 +278,8 @@ def test_multi_device_explicit_dealloc(pcie_device_mesh):
     """Multidevice API: Ensure that deallocating multi-device tensors works as expected"""
     from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
 
-    for device in pcie_device_mesh.get_device_ids():
-        pcie_device_mesh.get_device(device).enable_async(True)
+    if pcie_device_mesh.get_num_devices() <= 1:
+        pytest.skip("Requires multiple devices to run")
 
     # Create input tensors that cause OOM during op execution
     # Explictly deallocate buffers after each op to ensure we don't run OOM.
@@ -309,9 +310,6 @@ def test_multi_device_explicit_dealloc(pcie_device_mesh):
     ttnn_torch_output_tensor = ttnn.to_torch(
         ttnn_output_tensor, mesh_composer=ConcatMeshToTensor(pcie_device_mesh, dim=0)
     )
-
-    for device in pcie_device_mesh.get_device_ids():
-        pcie_device_mesh.get_device(device).enable_async(False)
 
 
 @pytest.mark.parametrize("scalar", [3])

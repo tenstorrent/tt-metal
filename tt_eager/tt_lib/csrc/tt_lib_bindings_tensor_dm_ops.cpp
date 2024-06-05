@@ -25,6 +25,7 @@
 #include "tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
 #include "tt_dnn/op_library/all_gather/all_gather_op.hpp"
 #include "tt_dnn/op_library/ccl/reduce_scatter/reduce_scatter_op.hpp"
+#include "tt_dnn/op_library/risc_v/risc_v_op.hpp"
 
 
 namespace tt::tt_metal::detail{
@@ -51,7 +52,7 @@ namespace tt::tt_metal::detail{
         detail::export_enum<BcastOpDim>(m_tensor);
 
         detail::bind_unary_op<true, true>(m_tensor, "clone", &clone, R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.)doc");
-        detail::bind_binary_op<false, false, false>(m_tensor, "copy", &copy, R"doc(  Copies the elements from ``{0}`` into ``{1}``. ``{1}`` is modified in place.)doc");
+        detail::bind_binary_op<false, false, false, false>(m_tensor, "copy", &copy, R"doc(  Copies the elements from ``{0}`` into ``{1}``. ``{1}`` is modified in place.)doc");
         detail::bind_unary_op<true, true>(m_tensor, "assign", py::overload_cast<const Tensor&, const MemoryConfig&, std::optional<const DataType>>(&assign), R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.)doc");
 
         // *** tensor manipulation ***
@@ -115,6 +116,23 @@ namespace tt::tt_metal::detail{
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
+                "input_a", "Tensor assign is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_b", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+        )doc");
+
+        m_tensor.def("assign", py::overload_cast<uint8_t, const Tensor&, const Tensor& >(&assign),
+            py::arg("queue_id").noconvert() = 0, py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), R"doc(
+            Copies input tensor ``arg0`` (given by input_a) to ``arg1`` (given by input_b) if their
+            shapes and memory layouts match, and returns input_b tensor.
+
+            Input tensors can be of any data type.
+
+            Output tensor will be of same data type as Input tensor.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "queue_id", "queue_id", "uint8_t", "Default is 0", "No"
                 "input_a", "Tensor assign is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "input_b", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
         )doc");
@@ -215,6 +233,8 @@ namespace tt::tt_metal::detail{
 
                 "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X] where Y%32=0 and X%32=0", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "use_multicore", "Whether to use multi-core parallelization", "bool", "Default is true", "No"
+                "use_pack_untilize", "Whether to use pack untilize", "bool", "Default is true", "No"
         )doc");
 
         m_tensor.def(
@@ -261,9 +281,9 @@ namespace tt::tt_metal::detail{
 
                 "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X] where Y%32=0 and X%32=0", "Yes"
                 "output_tensor_end", "End indices of input tensor in output tensor", "List[int[4]]", "Values along each dim must be < input_tensor_shape[i]", "Yes"
-                "pad_value", "Value to pad input tensor", "float", "", "Yes"
-                "use_multicore", "Whether to use multi-core parallelization", "bool", "Default is false", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "use_multicore", "Whether to use multi-core parallelization", "bool", "Default is false", "No"
+                "use_pack_untilize", "Whether to use pack untilize", "bool", "Default is true", "No"
         )doc");
 
         m_tensor.def("pad", &pad,
@@ -371,6 +391,23 @@ namespace tt::tt_metal::detail{
                 "dim", "Dimension on which reduction is performed", "ReduceOpDim", "W, H, HW", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 "output_dtype", "DataType of output tensor", "DataType", "Default is None (use input dtype)", "No"
+        )doc");
+
+        m_tensor.def("argmax_int", &argmax_int,
+            py::arg("input").noconvert(), py::arg("dim").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Returns the indices of the maximum value of elements in the ``input`` tensor
+            If no ``dim`` is provided, it will return the indices of maximum value of all elements in given ``input``
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have UINT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Tensor argmax is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "dim", "Dimension to perform argmax", "int", "", "No"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
         // *** experimental operations ***

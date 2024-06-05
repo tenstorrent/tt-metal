@@ -666,9 +666,9 @@ void py_module(py::module& m_primary) {
         &moreh_nll_loss,
         py::arg("input_tensor").noconvert(),
         py::arg("target_tensor").noconvert(),
-        py::arg("weight_tensor").noconvert(),
-        py::arg("divisor_tensor").noconvert(),
-        py::arg("output_tensor").noconvert(),
+        py::arg("weight_tensor").noconvert() = std::nullopt,
+        py::arg("divisor_tensor").noconvert() = std::nullopt,
+        py::arg("output_tensor").noconvert() = std::nullopt,
         py::arg("ignore_index").noconvert(),
         py::arg("reduction_mean").noconvert(),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
@@ -679,15 +679,15 @@ void py_module(py::module& m_primary) {
     m_primary.def(
         "moreh_nll_loss_backward",
         &moreh_nll_loss_backward,
-        py::arg("input_tensor").noconvert(),
         py::arg("target_tensor").noconvert(),
-        py::arg("weight_tensor").noconvert(),
-        py::arg("divisor_tensor").noconvert(),
+        py::arg("weight_tensor").noconvert() = std::nullopt,
+        py::arg("divisor_tensor").noconvert() = std::nullopt,
         py::arg("output_grad_tensor").noconvert(),
-        py::arg("input_grad_tensor").noconvert(),
+        py::arg("input_grad_tensor").noconvert() = std::nullopt,
         py::arg("ignore_index").noconvert(),
         py::arg("reduction_mean").noconvert(),
         py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a nll_loss_backward operation. Returns an input_grad tensor.");
 
     // moreh_norm
@@ -779,6 +779,7 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt,
         py::arg("in_place") = false,
+        py::arg("output_tensor").noconvert() = std::nullopt,
         R"doc(Perform an eltwise-binary add (``{0} + {1}``) on two tensors.
 
         Both input tensors must have TILE layout. Output tensor will have TILE layout.
@@ -909,6 +910,7 @@ void py_module(py::module& m_primary) {
         py::arg("dims").noconvert() = std::vector<int64_t>(),
         py::arg("output").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs sum operation. Returns an output tensor.");
 
     m_primary.def(
@@ -930,6 +932,7 @@ void py_module(py::module& m_primary) {
         py::arg("dims").noconvert() = std::vector<int64_t>(),
         py::arg("input_grad").noconvert() = std::nullopt,
         py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs sum backward operation. Returns an input_grad tensor.");
 
     m_primary.def(

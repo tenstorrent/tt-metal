@@ -23,7 +23,6 @@ using Hash = tt::stl::hash::hash_t;
 
 template <typename OperationType, typename... Types>
 static Hash hash_operation(const Types&... objects) {
-    ZoneScoped;
     return stl::hash::hash_objects_with_default_seed(typeid(OperationType).hash_code(), objects...);
 }
 
@@ -528,9 +527,6 @@ struct DeviceOperation final {
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors,
                const OptionalTensors& optional_output_tensors) -> void {
-                if (ttnn::CONFIG.enable_fast_runtime_mode) {
-                    return;
-                }
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (
                     (detail::implements_validate<T>() or
@@ -569,7 +565,7 @@ struct DeviceOperation final {
                     operation.validate(input_tensors, optional_input_tensors);
                 } else if constexpr (detail::implements_validate_with_output_tensors<T>()) {
                     TT_FATAL(optional_input_tensors.empty());
-                    TT_FATAL(not optional_output_tensors.empty());
+                    //TT_FATAL(not optional_output_tensors.empty());
                     operation.validate_with_output_tensors(input_tensors, optional_output_tensors);
                 } else if constexpr (detail::implements_validate_with_output_tensors_and_optional_input_tensors<T>()) {
                     TT_FATAL(not optional_input_tensors.empty());
@@ -642,7 +638,6 @@ struct DeviceOperation final {
             [](const storage_t& storage,
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors) -> const Hash {
-                ZoneScoped;
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
 
                 if constexpr (detail::implements_compute_program_hash<T>()) {

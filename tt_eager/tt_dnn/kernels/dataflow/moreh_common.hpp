@@ -14,6 +14,30 @@ constexpr std::uint32_t TILE_HEIGHT = 32;
 constexpr std::uint32_t TILE_WIDTH = 32;
 constexpr std::uint32_t NOC_MINIMUM_READ_SIZE = 32;  // 32 Bytes
 
+static inline float bfloat16_to_float(uint16_t bfloat_val) {
+    uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
+    float f;
+    std::memcpy(&f, &uint32_data, sizeof(f));
+    return f;
+}
+
+#if defined(FP32_DEST_ACC_EN)
+using FP32_DEST_ACC_FTYPE = float;
+FORCE_INLINE FP32_DEST_ACC_FTYPE fp32_dest_acc_cast(uint16_t val) { return bfloat16_to_float(val); }
+FORCE_INLINE FP32_DEST_ACC_FTYPE fp32_dest_acc_cast(float val) { return val; }
+#else
+using FP32_DEST_ACC_FTYPE = uint16_t;
+FORCE_INLINE FP32_DEST_ACC_FTYPE fp32_dest_acc_cast(uint16_t val) { return val; }
+FORCE_INLINE FP32_DEST_ACC_FTYPE fp32_dest_acc_cast(float val) {
+    union {
+        float f;
+        uint32_t u;
+    } ret;
+    ret.f = val;
+    return FP32_DEST_ACC_FTYPE(ret.u >> 16);
+}
+#endif
+
 union Scalar {
     float f;
     uint32_t u;
@@ -82,19 +106,36 @@ FORCE_INLINE void generate_bcast_scaler(uint32_t cb_scaler, uint32_t scaler) {
     cb_push_back(cb_scaler, 1);
 }
 
+template <typename T>
+FORCE_INLINE void process_data(int cb_id, uint32_t value, int32_t num_of_elems) {
+    T* ptr = reinterpret_cast<T*>(get_write_ptr(cb_id));
+    for (int j = 0; j < num_of_elems; j++)
+    {
+        ptr[j] = static_cast<T>(value);
+    }
+}
+
+template <>
+FORCE_INLINE void process_data<uint16_t>(int cb_id, uint32_t value, int32_t num_of_elems) {
+    uint16_t* ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_id));
+    for (int j = 0; j < num_of_elems; j++)
+    {
+        ptr[j] = static_cast<uint16_t>(value >> 16);
+    }
+}
+
 FORCE_INLINE void fill_cb_with_value(uint32_t cb_id, uint32_t value, int32_t num_of_elems = 1024) {
     cb_reserve_back(cb_id, 1);
-#if defined FP32_DEST_ACC_EN
-    auto ptr = reinterpret_cast<uint32_t *>(get_write_ptr(cb_id));
-    for (int j = 0; j < 1024; j++) {
-        ptr[j] = value;
+    const DataFormat data_format = get_dataformat(cb_id);
+    switch((uint)data_format & 0x1F) {
+        case ((uint8_t)DataFormat::Float32):
+            process_data<uint32_t>(cb_id, value, num_of_elems);
+            break;
+        case ((uint8_t)DataFormat::Float16_b):
+        default:
+            process_data<uint16_t>(cb_id, value, num_of_elems);
+            break;
     }
-#else
-    auto ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_id));
-    for (int j = 0; j < 1024; j++) {
-        ptr[j] = uint16_t(value >> 16);
-    }
-#endif
     cb_push_back(cb_id, 1);
 }
 
@@ -620,13 +661,6 @@ FORCE_INLINE void generate_mask_tiles(
         }
     }
     cb_push_back(cb_mask, num_mask_tiles);
-}
-
-static inline float bfloat16_to_float(uint16_t bfloat_val) {
-    uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
-    float f;
-    std::memcpy(&f, &uint32_data, sizeof(f));
-    return f;
 }
 
 uint32_t get_tilized_idx(uint32_t h, uint32_t w) {
