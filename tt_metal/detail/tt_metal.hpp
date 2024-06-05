@@ -230,7 +230,6 @@ namespace tt::tt_metal{
         {
             bool pass = true;
             TT_FATAL(address >= DRAM_UNRESERVED_BASE, "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!", DRAM_UNRESERVED_BASE);
-            // TODO: add a check for address validating dram alignment
             tt::Cluster::instance().write_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
             return pass;
         }
@@ -251,7 +250,6 @@ namespace tt::tt_metal{
         inline bool ReadFromDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
         {
             bool pass = true;
-            // todo: add a check for address validating dram alignment
             tt::Cluster::instance().dram_barrier(device->id());
             tt::Cluster::instance().read_dram_vec(host_buffer, size, tt_target_dram{device->id(), dram_channel, 0}, address);
             return pass;
@@ -272,7 +270,6 @@ namespace tt::tt_metal{
         inline bool WriteToDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer, CoreType core_type = CoreType::WORKER)
         {
             ZoneScoped;
-            // todo: add a check for address validating l1 alignment
             auto worker_core = device->physical_core_from_logical_core(logical_core, core_type);
             llrt::write_hex_vec_to_core(device->id(), worker_core, host_buffer, address);
             return true;
@@ -301,7 +298,6 @@ namespace tt::tt_metal{
          */
         inline bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
         {
-            // todo: add a check for address validating l1 alignment
             tt::Cluster::instance().l1_barrier(device->id());
             auto worker_core = device->worker_core_from_logical_core(logical_core);
             host_buffer = llrt::read_hex_vec_from_core(device->id(), worker_core, address, size);

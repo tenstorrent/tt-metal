@@ -35,7 +35,7 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& layout = input_tensors[0].get_layout();
     const auto& dtype = input_tensors[0].get_dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
-    TT_FATAL(page_size % ADDRESS_ALIGNMENT == 0, "All Gather currently requires aligned pages");
+    TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 
     // TODO: This can be removed by passing two page sizes, actual and aligned to be used for address offsets
     // Buffer sizes also need to take this aligned page size into consideration

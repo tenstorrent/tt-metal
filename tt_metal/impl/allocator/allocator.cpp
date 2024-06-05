@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/allocator/algorithms/free_list.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
+
+#include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
-#include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_metal/impl/allocator/algorithms/free_list.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
 
 namespace tt {
 
@@ -26,22 +27,18 @@ static char const *get_memory_pool_name(BufferType buffer_type) {
 }
 #endif
 
-void BankManager::init_allocator(uint64_t size_bytes, uint64_t offset) {
-    this->allocator_ = std::make_unique<FreeList>(
-        size_bytes,
-        offset,
-        this->min_allocation_size_bytes_,
-        ADDRESS_ALIGNMENT,
-        FreeList::SearchPolicy::FIRST
-    );
+void BankManager::init_allocator(uint64_t size_bytes, uint32_t alignment_bytes, uint64_t offset) {
+    this->allocator_ =
+        std::make_unique<FreeList>(size_bytes, offset, alignment_bytes, alignment_bytes, FreeList::SearchPolicy::FIRST);
 }
 
 void validate_num_banks(uint32_t num_banks, const BufferType &buffer_type) {
     bool is_pow2_num_banks = num_banks && (!(num_banks & (num_banks - 1)));
-    // Dataflow API does not have a working implementation of generic modulo to determine bank_id for interleaved address gen
-    // For non pow2 num banks, special cases need to be added to avoid falling back to generic implementation.
-    // See https://github.com/tenstorrent/tt-metal/issues/3321
-    bool custom_mod_bank_id_calculation_exists = (num_banks == 12 or num_banks == 56 or num_banks == 94 or num_banks == 124 or num_banks == 126);
+    // Dataflow API does not have a working implementation of generic modulo to determine bank_id for interleaved
+    // address gen For non pow2 num banks, special cases need to be added to avoid falling back to generic
+    // implementation. See https://github.com/tenstorrent/tt-metal/issues/3321
+    bool custom_mod_bank_id_calculation_exists =
+        (num_banks == 12 or num_banks == 56 or num_banks == 94 or num_banks == 124 or num_banks == 126);
     bool doesnt_support_interleaved = buffer_type == BufferType::L1_SMALL;
     bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists or doesnt_support_interleaved);
     if (not valid_num_banks) {
@@ -53,7 +50,13 @@ void validate_num_banks(uint32_t num_banks, const BufferType &buffer_type) {
     }
 }
 
-BankManager::BankManager(const BufferType &buffer_type, const std::vector<int64_t> &bank_offsets, uint64_t size_bytes, uint64_t alloc_offset) : buffer_type_(buffer_type) {
+BankManager::BankManager(
+    const BufferType &buffer_type,
+    const std::vector<int64_t> &bank_offsets,
+    uint64_t size_bytes,
+    uint32_t alignment_bytes,
+    uint64_t alloc_offset) :
+    buffer_type_(buffer_type), alignment_bytes_(alignment_bytes) {
     unsigned int bank_id = 0;
     for (const auto bank_offset : bank_offsets) {
         this->bank_id_to_bank_offset_.insert({bank_id, bank_offset});
@@ -61,17 +64,25 @@ BankManager::BankManager(const BufferType &buffer_type, const std::vector<int64_
     }
     this->interleaved_address_limit_ = 0;
     validate_num_banks(this->bank_id_to_bank_offset_.size(), this->buffer_type_);
-    this->init_allocator(size_bytes, alloc_offset);
+    this->init_allocator(size_bytes, alignment_bytes, alloc_offset);
 }
 
-BankManager::BankManager(const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_bank_offset, uint64_t size_bytes, uint64_t interleaved_address_limit, uint64_t alloc_offset) : buffer_type_(buffer_type), bank_id_to_bank_offset_(bank_id_to_bank_offset), interleaved_address_limit_(interleaved_address_limit) {
+BankManager::BankManager(
+    const BufferType &buffer_type,
+    const std::unordered_map<uint32_t, int64_t> &bank_id_to_bank_offset,
+    uint64_t size_bytes,
+    uint64_t interleaved_address_limit,
+    uint32_t alignment_bytes,
+    uint64_t alloc_offset) :
+    buffer_type_(buffer_type),
+    bank_id_to_bank_offset_(bank_id_to_bank_offset),
+    interleaved_address_limit_(interleaved_address_limit),
+    alignment_bytes_(alignment_bytes) {
     validate_num_banks(this->bank_id_to_bank_offset_.size(), this->buffer_type_);
-    this->init_allocator(size_bytes, alloc_offset);
+    this->init_allocator(size_bytes, alignment_bytes, alloc_offset);
 }
 
-uint32_t BankManager::num_banks() const {
-    return this->bank_id_to_bank_offset_.size();
-}
+uint32_t BankManager::num_banks() const { return this->bank_id_to_bank_offset_.size(); }
 
 uint32_t BankManager::bank_size() const {
     TT_ASSERT(bool(this->allocator_), "Allocator not initialized!");
@@ -96,38 +107,47 @@ void BankManager::validate_bank_id(uint32_t bank_id) const {
         bank_id_to_bank_offset_.size());
 }
 
-uint64_t BankManager::allocate_buffer(uint32_t size, uint32_t page_size, bool bottom_up, CoreCoord compute_grid_size, std::optional<uint32_t> num_shards) {
+uint64_t BankManager::allocate_buffer(
+    uint32_t size,
+    uint32_t page_size,
+    bool bottom_up,
+    CoreCoord compute_grid_size,
+    std::optional<uint32_t> num_shards) {
     uint32_t num_banks = this->num_banks();
     bool is_sharded = false;
-    if(num_shards.has_value()){
+    if (num_shards.has_value()) {
         auto num_compute_banks = compute_grid_size.x * compute_grid_size.y;
         is_sharded = true;
-        TT_FATAL(num_shards.value() <= num_compute_banks, "Expected number of shards to be less than or equal to total number of L1 banks in compute cores");
+        TT_FATAL(
+            num_shards.value() <= num_compute_banks,
+            "Expected number of shards to be less than or equal to total number of L1 banks in compute cores");
         num_banks = num_shards.value();
     }
-    // Each page needs to be at a 32B aligned address
-    uint32_t size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks);
+    uint32_t size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks, this->alignment_bytes_);
     uint64_t address_limit = 0;
-    if(!is_sharded and this->buffer_type_ == BufferType::L1) {
+    if (!is_sharded and this->buffer_type_ == BufferType::L1) {
         address_limit = this->interleaved_address_limit_;
         TT_FATAL(address_limit > 0);
     }
     TT_ASSERT(bool(this->allocator_), "Allocator not initialized!");
     auto address = this->allocator_->allocate(size_per_bank, bottom_up, address_limit);
     if (not address.has_value()) {
-        TT_THROW("Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to store {} B", size, magic_enum::enum_name(this->buffer_type_), num_banks, size_per_bank);
+        TT_THROW(
+            "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
+            "store {} B",
+            size,
+            magic_enum::enum_name(this->buffer_type_),
+            num_banks,
+            size_per_bank);
     }
     allocated_buffers_.insert(address.value());
     return address.value();
 }
 
-void BankManager::deallocate_buffer(uint64_t address) {
-    this->allocator_->deallocate(address);
-}
+void BankManager::deallocate_buffer(uint64_t address) { this->allocator_->deallocate(address); }
 
 void BankManager::deallocate_all() {
-    for (uint64_t addr : this->allocated_buffers_)
-    {
+    for (uint64_t addr : this->allocated_buffers_) {
         this->allocator_->deallocate(addr);
     }
 }
@@ -144,12 +164,13 @@ BankManager::~BankManager() {
     this->allocator_.reset(nullptr);
 }
 
-BankManager&& BankManager::operator=(BankManager&& that) {
+BankManager &&BankManager::operator=(BankManager &&that) {
     buffer_type_ = that.buffer_type_;
     allocated_buffers_ = that.allocated_buffers_;
     bank_id_to_bank_offset_ = that.bank_id_to_bank_offset_;
-    allocator_.reset( that.allocator_.release() );
+    allocator_.reset(that.allocator_.release());
     interleaved_address_limit_ = that.interleaved_address_limit_;
+    alignment_bytes_ = that.alignment_bytes_;
     return std::move(*this);
 }
 
@@ -178,11 +199,12 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
     uint64_t offset_bytes = static_cast<uint64_t>(DRAM_UNRESERVED_BASE);
     // DRAM bank is between unreserved start and trace_region start: UNRESERVED | DRAM BANK | TRACE REGION
     uint32_t dram_bank_size = alloc_config.dram_bank_size - DRAM_UNRESERVED_BASE - alloc_config.trace_region_size;
-    std::vector<int64_t> bank_offsets (alloc_config.num_dram_channels);
+    std::vector<int64_t> bank_offsets(alloc_config.num_dram_channels);
     for (uint32_t channel_id = 0; channel_id < alloc_config.num_dram_channels; channel_id++) {
         bank_offsets.at(channel_id) = static_cast<int32_t>(alloc_config.dram_bank_offsets.at(channel_id));
     }
-    allocator.dram_manager = BankManager(BufferType::DRAM, bank_offsets, dram_bank_size, offset_bytes);
+    allocator.dram_manager =
+        BankManager(BufferType::DRAM, bank_offsets, dram_bank_size, ALLOCATOR_ALIGNMENT, offset_bytes);
     for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
         CoreCoord logical_core = CoreCoord{bank_id, 0};
         allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
@@ -190,8 +212,14 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
         allocator.logical_core_to_bank_ids[BufferType::DRAM].insert({logical_core, {bank_id}});
     }
     if (alloc_config.trace_region_size > 0) {
-        // Trace buffers are allocated in this region (top-down). Trace region is offset at dram_bank_size + UNRESERVED offset
-        allocator.trace_buffer_manager = BankManager(BufferType::TRACE, bank_offsets, alloc_config.trace_region_size, dram_bank_size + DRAM_UNRESERVED_BASE);
+        // Trace buffers are allocated in this region (top-down). Trace region is offset at dram_bank_size + UNRESERVED
+        // offset
+        allocator.trace_buffer_manager = BankManager(
+            BufferType::TRACE,
+            bank_offsets,
+            alloc_config.trace_region_size,
+            ALLOCATOR_ALIGNMENT,
+            dram_bank_size + DRAM_UNRESERVED_BASE);
         for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
             CoreCoord logical_core = CoreCoord{bank_id, 0};
             allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
@@ -207,8 +235,8 @@ void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_con
     // Space up to L1_UNRESERVED_BASE is reserved for risc binaries, kernel args, debug and perf monitoring tools
     uint64_t offset_bytes = static_cast<uint64_t>(L1_UNRESERVED_BASE);
     uint32_t l1_bank_size = alloc_config.worker_l1_size - L1_UNRESERVED_BASE;
-    std::vector<int64_t> bank_offsets (num_l1_banks, 0);
-    allocator.l1_manager = BankManager(BufferType::L1, bank_offsets, l1_bank_size, offset_bytes);
+    std::vector<int64_t> bank_offsets(num_l1_banks, 0);
+    allocator.l1_manager = BankManager(BufferType::L1, bank_offsets, l1_bank_size, ALLOCATOR_ALIGNMENT, offset_bytes);
 
     uint32_t bank_id = 0;
     for (uint32_t y = 0; y < alloc_config.worker_grid_size.y; y++) {
@@ -301,14 +329,10 @@ Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_t
 
 void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_type, std::ofstream &out) {
     switch (buffer_type) {
-        case BufferType::DRAM: allocator.dram_manager.dump_blocks(out);
-        break;
-        case BufferType::L1: allocator.l1_manager.dump_blocks(out);
-        break;
-        case BufferType::L1_SMALL: allocator.l1_small_manager.dump_blocks(out);
-        break;
-        case BufferType::TRACE: allocator.trace_buffer_manager.dump_blocks(out);
-        break;
+        case BufferType::DRAM: allocator.dram_manager.dump_blocks(out); break;
+        case BufferType::L1: allocator.l1_manager.dump_blocks(out); break;
+        case BufferType::L1_SMALL: allocator.l1_small_manager.dump_blocks(out); break;
+        case BufferType::TRACE: allocator.trace_buffer_manager.dump_blocks(out); break;
         default: {
             TT_THROW("Unsupported buffer type!");
         }
@@ -320,29 +344,43 @@ std::optional<uint64_t> lowest_occupied_l1_address(const Allocator &allocator, u
     return allocator.l1_manager.lowest_occupied_address(bank_id);
 }
 
-uint64_t base_alloc(const AllocatorConfig &config, BankManager &bank_manager, uint64_t size, uint64_t page_size, bool bottom_up, std::optional<uint32_t> num_shards) {
+uint64_t base_alloc(
+    const AllocatorConfig &config,
+    BankManager &bank_manager,
+    uint64_t size,
+    uint64_t page_size,
+    bool bottom_up,
+    std::optional<uint32_t> num_shards) {
     return bank_manager.allocate_buffer(size, page_size, bottom_up, config.compute_grid_size, num_shards);
 }
 
-void disable_allocs(Allocator &allocator) {
-    allocator.disabled_allocs = true;
-}
+void disable_allocs(Allocator &allocator) { allocator.disabled_allocs = true; }
 
-void enable_allocs(Allocator &allocator) {
-    allocator.disabled_allocs = false;
-}
+void enable_allocs(Allocator &allocator) { allocator.disabled_allocs = false; }
 
-uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size, const BufferType &buffer_type, bool bottom_up, std::optional<uint32_t> num_shards) {
+uint64_t allocate_buffer(
+    Allocator &allocator,
+    uint32_t size,
+    uint32_t page_size,
+    const BufferType &buffer_type,
+    bool bottom_up,
+    std::optional<uint32_t> num_shards) {
     uint64_t address = 0;
     TT_FATAL(!allocator.disabled_allocs, "Allocation of new buffers has been disabled");
     switch (buffer_type) {
-        case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, size, page_size, bottom_up, num_shards);
-        case BufferType::L1: return allocator.descriptor.l1.alloc(allocator.config, allocator.l1_manager, size, page_size, bottom_up, num_shards);
+        case BufferType::DRAM:
+            return allocator.descriptor.dram.alloc(
+                allocator.config, allocator.dram_manager, size, page_size, bottom_up, num_shards);
+        case BufferType::L1:
+            return allocator.descriptor.l1.alloc(
+                allocator.config, allocator.l1_manager, size, page_size, bottom_up, num_shards);
         case BufferType::L1_SMALL: {
             TT_FATAL(num_shards.has_value(), "L1_SMALL only supports sharded allocations, see validate_num_banks");
             return allocator.descriptor.l1.alloc(
                 allocator.config, allocator.l1_small_manager, size, page_size, bottom_up, num_shards);
-        case BufferType::TRACE: return allocator.descriptor.dram.alloc(allocator.config, allocator.trace_buffer_manager, size, page_size, bottom_up, num_shards);
+            case BufferType::TRACE:
+                return allocator.descriptor.dram.alloc(
+                    allocator.config, allocator.trace_buffer_manager, size, page_size, bottom_up, num_shards);
         }
         default: {
             TT_THROW("Unsupported buffer type!");
@@ -353,18 +391,10 @@ uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size
 
 void deallocate_buffer(Allocator &allocator, uint64_t address, const BufferType &buffer_type) {
     switch (buffer_type) {
-        case BufferType::DRAM:
-            allocator.dram_manager.deallocate_buffer(address);
-        break;
-        case BufferType::L1:
-            allocator.l1_manager.deallocate_buffer(address);
-        break;
-        case BufferType::L1_SMALL:
-            allocator.l1_small_manager.deallocate_buffer(address);
-            break;
-        case BufferType::TRACE:
-            allocator.trace_buffer_manager.deallocate_buffer(address);
-            break;
+        case BufferType::DRAM: allocator.dram_manager.deallocate_buffer(address); break;
+        case BufferType::L1: allocator.l1_manager.deallocate_buffer(address); break;
+        case BufferType::L1_SMALL: allocator.l1_small_manager.deallocate_buffer(address); break;
+        case BufferType::TRACE: allocator.trace_buffer_manager.deallocate_buffer(address); break;
         default: {
             TT_THROW("Unsupported buffer type!");
         }
@@ -387,7 +417,8 @@ void clear(Allocator &allocator) {
 
 }  // namespace allocator
 
-Allocator::Allocator(const AllocatorConfig &alloc_config, const allocator::AllocDescriptor &alloc_descriptor) : config(alloc_config), descriptor(alloc_descriptor) {
+Allocator::Allocator(const AllocatorConfig &alloc_config, const allocator::AllocDescriptor &alloc_descriptor) :
+    config(alloc_config), descriptor(alloc_descriptor) {
     // TODO: add validation for allocator_descriptor?
     this->descriptor.dram.init(*this, alloc_config);
     this->descriptor.l1.init(*this, alloc_config);
@@ -396,9 +427,7 @@ Allocator::Allocator(const AllocatorConfig &alloc_config, const allocator::Alloc
     TT_ASSERT(not bank_id_to_logical_core.empty() and not bank_id_to_logical_core.empty());
 }
 
-Allocator::~Allocator() {
-    reset();
-}
+Allocator::~Allocator() { reset(); }
 
 void Allocator::reset() {
     bank_id_to_dram_channel.clear();

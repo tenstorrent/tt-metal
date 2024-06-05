@@ -72,7 +72,7 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
 }
 
 void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
-    uint32_t padded_page_size = align(this->buffer.page_size(), ADDRESS_ALIGNMENT);
+    uint32_t padded_page_size = this->buffer.aligned_page_size();
     command.add_prefetch_relay_paged(
         this->buffer.is_dram(),
         this->src_page_index,
@@ -82,7 +82,7 @@ void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceComma
 }
 
 void EnqueueReadShardedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
-    uint32_t padded_page_size = align(this->buffer.page_size(), ADDRESS_ALIGNMENT);
+    uint32_t padded_page_size = this->buffer.aligned_page_size();
     const CoreCoord physical_core =
         this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
     command.add_prefetch_relay_linear(
@@ -106,7 +106,7 @@ void EnqueueReadBufferCommand::process() {
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
 
-    uint32_t padded_page_size = align(this->buffer.page_size(), ADDRESS_ALIGNMENT);
+    uint32_t padded_page_size = this->buffer.aligned_page_size();
     bool flush_prefetch = false;
     command_sequence.add_dispatch_write_host(flush_prefetch, this->pages_to_read * padded_page_size);
 
@@ -164,8 +164,7 @@ void EnqueueWriteInterleavedBufferCommand::add_dispatch_write(HugepageDeviceComm
 void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand& command_sequence) {
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
 
-    uint32_t full_page_size =
-        align(this->buffer.page_size(), ADDRESS_ALIGNMENT);  // this->padded_page_size could be a partial page if buffer
+    uint32_t full_page_size = this->buffer.aligned_page_size(); // this->padded_page_size could be a partial page if buffer
                                                              // page size > MAX_PREFETCH_CMD_SIZE
     bool write_partial_pages = this->padded_page_size < full_page_size;
 
@@ -191,7 +190,7 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
         uint32_t unpadded_src_offset =
             (((buffer_addr_offset / this->padded_page_size) * num_banks) + this->dst_page_index) *
             this->buffer.page_size();
-        if (this->buffer.page_size() % ADDRESS_ALIGNMENT != 0 and this->buffer.page_size() != this->buffer.size()) {
+        if (this->buffer.page_size() % this->buffer.alignment() != 0 and this->buffer.page_size() != this->buffer.size()) {
             // If page size is not 32B-aligned, we cannot do a contiguous write
             uint32_t src_address_offset = unpadded_src_offset;
             for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
@@ -273,8 +272,7 @@ void EnqueueWriteBufferCommand::process() {
 
     this->add_dispatch_write(command_sequence);
 
-    uint32_t full_page_size =
-        align(this->buffer.page_size(), ADDRESS_ALIGNMENT);  // this->padded_page_size could be a partial page if buffer
+    uint32_t full_page_size = this->buffer.aligned_page_size(); // this->padded_page_size could be a partial page if buffer
                                                              // page size > MAX_PREFETCH_CMD_SIZE
     bool write_partial_pages = this->padded_page_size < full_page_size;
 
@@ -1318,7 +1316,7 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
     CoreType dispatch_core_type =
         dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());
 
-    uint32_t padded_page_size = align(buffer.page_size(), ADDRESS_ALIGNMENT);
+    uint32_t padded_page_size = buffer.aligned_page_size();
     uint32_t pages_to_read = buffer.num_pages();
     uint32_t unpadded_dst_offset = 0;
     uint32_t src_page_index = 0;
@@ -1466,7 +1464,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
     ZoneScopedN("HWCommandQueue_write_buffer");
     TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Write Buffer cannot be used with tracing");
 
-    uint32_t padded_page_size = align(buffer.page_size(), ADDRESS_ALIGNMENT);
+    uint32_t padded_page_size = buffer.aligned_page_size();
 
     const uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->id);
     CoreType dispatch_core_type =
@@ -1834,7 +1832,7 @@ void HWCommandQueue::copy_into_user_space(
 
         if (dev_page_to_host_page_mapping.empty()) {
             void* contiguous_dst = (void*)(uint64_t(dst) + contig_dst_offset);
-            if ((page_size % ADDRESS_ALIGNMENT) == 0) {
+            if (page_size == padded_page_size) {
                 uint32_t data_bytes_xfered = bytes_xfered - offset_in_completion_q_data;
                 tt::Cluster::instance().read_sysmem(
                     contiguous_dst,
