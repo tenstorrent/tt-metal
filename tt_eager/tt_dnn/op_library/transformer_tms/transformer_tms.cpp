@@ -592,7 +592,7 @@ operation::ProgramWithCallbacks SSMEltwiseMul::create_program(
     auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
 
     return multi_core_ssm_eltwise_mul(
-        input_tensor_a, input_tensor_b, output_tensor, hidden_size, device_compute_with_storage_grid_size);
+        input_tensor_a, input_tensor_b, output_tensor, hidden_size, this->math_fidelity, device_compute_with_storage_grid_size);
 }
 
 tt::stl::reflection::Attributes SSMEltwiseMul::attributes() const {
