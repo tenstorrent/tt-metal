@@ -475,7 +475,7 @@ Tensors run_with_autoformat(
         }
     }
 
-    auto output_tensors = run<Tensors>(operation, formatted_input_tensors, formatted_optional_input_tensors, {}, cq_id);
+    auto output_tensors = run<Tensors>(operation, formatted_input_tensors, formatted_optional_input_tensors, {std::nullopt}, cq_id);
 
     TT_ASSERT(output_tensors.size() == output_shapes.size());
     TT_ASSERT(output_tensors.size() == output_layouts.size());

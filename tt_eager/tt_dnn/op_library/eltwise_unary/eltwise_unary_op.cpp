@@ -320,9 +320,9 @@ namespace tt {
 
 namespace tt_metal {
 
-void EltwiseUnary::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
+void EltwiseUnary::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &optional_output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    auto out_mem_config = (!output_tensors.empty() && output_tensors.at(0).has_value()) ? output_tensors.at(0).value().memory_config() : this->output_mem_config;
+    auto out_mem_config = (!optional_output_tensors.empty() && optional_output_tensors.at(0).has_value()) ? optional_output_tensors.at(0).value().memory_config() : this->output_mem_config;
 
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to eltwise unary need to be on device!");
     TT_FATAL(
@@ -336,9 +336,9 @@ void EltwiseUnary::validate_with_output_tensors(const std::vector<Tensor> &input
             input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
             "Interleaved memory layout supported");
     }
-    if(!output_tensors.empty() && output_tensors.at(0).has_value()){
+    if(!optional_output_tensors.empty() && optional_output_tensors.at(0).has_value()){
         const auto output_shape_required = this->compute_output_shapes(input_tensors);
-        const auto& out_tensor = output_tensors.at(0).value();
+        const auto& out_tensor = optional_output_tensors.at(0).value();
         TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required.at(0), fmt::format("The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape()));
     }
 }
