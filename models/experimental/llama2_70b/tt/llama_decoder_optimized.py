@@ -55,6 +55,9 @@ class TtLlamaDecoder_optimized:
         self.head_dim = self.hidden_size // self.n_heads
         self.max_seq_len = configuration.max_seq_len
         self.norm_eps = configuration.norm_eps
+        self.rope_theta = configuration.rope_theta
+
+        self.llama3 = configuration.vocab_size == 128256
 
         self.layer_name = f"{base_url}.{layer_num}"
         self.cache_path = cache_path
@@ -133,17 +136,7 @@ class TtLlamaDecoder_optimized:
         assert len(x.size()) == 3
         batch, seq_len, hidden_size = x.shape
 
-        cache_name = lambda name: self.cache_path / (f"{name}")
-
-        as_tensor = lambda tensor, dtype, layout, name, mesh_mapper, device_mesh: ttnn.as_tensor(
-            tensor,
-            dtype=dtype,
-            layout=layout,
-            device=device_mesh,
-            mesh_mapper=mesh_mapper,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(name) if name is not None else None,
-        )
+        cache_name = lambda name: self.cache_path / (f"{'llama3_' if self.llama3 else ''}{name}")
 
         if self.model_config["LLM_MODE"] == "prefill":
             assert (
@@ -157,26 +150,28 @@ class TtLlamaDecoder_optimized:
             )
             xs = ttnn.to_device(xs, self.device_mesh)
 
-            cos, sin = precompute_freqs(self.head_dim, self.max_seq_len * 2)
+            cos, sin = precompute_freqs(self.head_dim, self.max_seq_len * 2, self.rope_theta)
             cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
             assert cos_gathered.size() == (1, 1, seq_len, self.head_dim)
             assert sin_gathered.size() == (1, 1, seq_len, self.head_dim)
 
-            cos_gathereds = as_tensor(
+            cos_gathereds = ttnn.as_tensor(
                 cos_gathered,
-                ttnn.bfloat16,
-                ttnn.TILE_LAYOUT,
-                f"cos_gathered_prefill_{seq_len}",
-                ReplicateTensorToMesh(self.device_mesh),
-                self.device_mesh,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
+                memory_config=self.model_config["DRAM_MEMCFG"],
+                device=self.device_mesh,
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
             )
-            sin_gathereds = as_tensor(
+            sin_gathereds = ttnn.as_tensor(
                 sin_gathered,
-                ttnn.bfloat16,
-                ttnn.TILE_LAYOUT,
-                f"sin_gathered_prefill_{seq_len}",
-                ReplicateTensorToMesh(self.device_mesh),
-                self.device_mesh,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
+                memory_config=self.model_config["DRAM_MEMCFG"],
+                device=self.device_mesh,
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
             )
             cos_gathereds = ttnn.to_device(cos_gathereds, self.device_mesh)
             sin_gathereds = ttnn.to_device(sin_gathereds, self.device_mesh)
@@ -185,13 +180,13 @@ class TtLlamaDecoder_optimized:
             attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
             attn_mask = torch.triu(attn_mask, diagonal=1)
             attn_mask = attn_mask.expand(batch, 1, -1, -1)
-            attn_masks = as_tensor(
+            attn_masks = ttnn.as_tensor(
                 attn_mask,
-                ttnn.bfloat16,
-                ttnn.TILE_LAYOUT,
-                f"attn_mask_prefill_{seq_len}",
-                ReplicateTensorToMesh(self.device_mesh),
-                self.device_mesh,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                device=self.device_mesh,
             )
             attn_masks = ttnn.to_device(attn_masks, self.device_mesh)
             repeat_shape = (1, self.n_local_heads, 1, 1)
@@ -203,8 +198,12 @@ class TtLlamaDecoder_optimized:
             assert seq_len == 1, "Only supporting decode mode"
             x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
 
-            xs = as_tensor(
-                x, ttnn.bfloat16, ttnn.TILE_LAYOUT, None, ShardTensorToMesh(self.device_mesh, dim=3), self.device_mesh
+            xs = ttnn.as_tensor(
+                x,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+                device=self.device_mesh,
             )
             xs = ttnn.to_device(xs, self.device_mesh)
             xs = tt_lib.tensor.interleaved_to_sharded(
@@ -214,13 +213,12 @@ class TtLlamaDecoder_optimized:
             rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
             rot_mat = get_rotation_mat(rot_emb, start_pos, seq_len, batch=batch)
             assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
-            rot_mats = as_tensor(
+            rot_mats = ttnn.as_tensor(
                 rot_mat,
-                ttnn.bfloat16,
-                ttnn.TILE_LAYOUT,
-                None,
-                ReplicateTensorToMesh(self.device_mesh),
-                self.device_mesh,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                device=self.device_mesh,
             )
             rot_mats = ttnn.to_device(rot_mats, self.device_mesh)
 
@@ -233,13 +231,12 @@ class TtLlamaDecoder_optimized:
             attn_mask = torch.zeros(*attn_mask_shape)
             attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
 
-            attn_masks = as_tensor(
+            attn_masks = ttnn.as_tensor(
                 attn_mask,
-                ttnn.bfloat16,
-                ttnn.TILE_LAYOUT,
-                None,
-                ReplicateTensorToMesh(self.device_mesh),
-                self.device_mesh,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                device=self.device_mesh,
             )
             attn_masks = ttnn.to_device(attn_masks, self.device_mesh)
 
