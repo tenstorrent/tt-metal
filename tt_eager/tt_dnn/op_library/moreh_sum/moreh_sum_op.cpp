@@ -55,7 +55,7 @@ inline void validate_input_tensor_with_dim(const Tensor& input, const int64_t &d
     TT_FATAL((dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
 }
 
-inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tensor& output, const int64_t &dim, const bool &keepdim) {
+inline void validate_output_tensor_with_keep_batch_dim(const Tensor& input, const Tensor& output, const int64_t &dim, const bool &keep_batch_dim) {
     auto input_shape = input.get_legacy_shape();
     auto input_shape_wo_padding = input_shape.without_padding();
     const auto input_rank = input_shape.rank();
@@ -70,7 +70,7 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
     log_debug(LogOp, "{}:{} input_shape_wo_padding {}", __func__, __LINE__, input_shape_wo_padding);
     log_debug(LogOp, "{}:{} output_shape_wo_padding {}", __func__, __LINE__, output_shape_wo_padding);
 
-    if (keepdim) {
+    if (keep_batch_dim) {
         input_shape[dim] = (is_tile_dim) ? (TILE_HEIGHT) : (1);
         input_shape_wo_padding[dim] = 1;
 
@@ -109,7 +109,7 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
 Tensor _moreh_sum(
     const Tensor& input,
     const int64_t& dim,
-    const bool& keepdim,
+    const bool& keep_batch_dim,
     const std::optional<const Tensor>& output,
     const MemoryConfig& output_mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
@@ -119,14 +119,14 @@ Tensor _moreh_sum(
     auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
     operation::launch_op(
-        [dim, keepdim, output_mem_config, kernel_config_val](
+        [dim, keep_batch_dim, output_mem_config, kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(
                 MorehSum{
                     .dim = dim,
-                    .keepdim = keepdim,
+                    .keep_batch_dim = keep_batch_dim,
                     .output_mem_config = output_mem_config,
                     .compute_kernel_config = kernel_config_val},
                 input_tensors,
@@ -153,7 +153,7 @@ void MorehSum::validate_with_output_tensors(
     validate_input_tensor_with_dim(input, this->dim);
 
     if (output.has_value()) {
-        validate_output_tensor_with_keepdim(input, output.value(), this->dim, this->keepdim);
+        validate_output_tensor_with_keep_batch_dim(input, output.value(), this->dim, this->keep_batch_dim);
     }
 }
 
@@ -162,10 +162,10 @@ std::vector<Shape> MorehSum::compute_output_shapes(const std::vector<Tensor>& in
     const auto& input_shape = input.get_legacy_shape();
     const auto input_rank = input_shape.rank();
     const bool is_tile_dim = (this->dim == input_rank - 1 || this->dim == input_rank - 2);
-    log_debug(LogOp, "{}:{} dim {}, keepdim {}", __func__, __LINE__, this->dim, this->keepdim);
+    log_debug(LogOp, "{}:{} dim {}, keep_batch_dim {}", __func__, __LINE__, this->dim, this->keep_batch_dim);
 
     Shape output_shape = input_shape;
-    if (this->keepdim) {
+    if (this->keep_batch_dim) {
         auto shape = input_shape;
         auto padding = shape.padding();
 
@@ -235,7 +235,7 @@ operation::ProgramWithCallbacks MorehSum::create_program(
 Tensor moreh_sum(
     const Tensor& input,
     std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
-    const bool keepdim,
+    const bool keep_batch_dim,
     const std::optional<const Tensor> output,
     const MemoryConfig& output_mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
@@ -244,13 +244,13 @@ Tensor moreh_sum(
 
     auto temp_input = input;
     for (uint32_t i = dims.size() - 1; i > 0; i--) {
-        log_debug(LogOp, "{}:{} dim {} keepdim {}", __func__, __LINE__, dims[i], keepdim);
+        log_debug(LogOp, "{}:{} dim {} keep_batch_dim {}", __func__, __LINE__, dims[i], keep_batch_dim);
         auto temp_output =
-            _moreh_sum(temp_input, dims[i], keepdim, std::nullopt, output_mem_config, compute_kernel_config);
+            _moreh_sum(temp_input, dims[i], keep_batch_dim, std::nullopt, output_mem_config, compute_kernel_config);
         temp_input = temp_output;
     }
-    log_debug(LogOp, "{}:{} dim {} keepdim {}", __func__, __LINE__, dims.front(), keepdim);
-    return _moreh_sum(temp_input, dims.front(), keepdim, output, output_mem_config, compute_kernel_config);
+    log_debug(LogOp, "{}:{} dim {} keep_batch_dim {}", __func__, __LINE__, dims.front(), keep_batch_dim);
+    return _moreh_sum(temp_input, dims.front(), keep_batch_dim, output, output_mem_config, compute_kernel_config);
 }
 
 }  // namespace primary

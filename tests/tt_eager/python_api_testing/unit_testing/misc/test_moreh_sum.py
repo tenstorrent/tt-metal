@@ -18,6 +18,7 @@ TILE_HEIGHT = 32
 TILE_WIDTH = 32
 
 
+# For keepdim in torch
 def filter_indices(output_shape, dims):
     def not_in_dims(index_value_pair):
         index, value = index_value_pair
@@ -29,7 +30,7 @@ def filter_indices(output_shape, dims):
     return filtered_values
 
 
-# Even if keepdim is false, we force keepdim to be true for the last two dims.
+# For keep_batch_dim in tt
 def filter_indices_with_last_two(output_shape, dims):
     last_two_elements = output_shape[-2:]
     remaining_elements = output_shape[:-2]
@@ -45,7 +46,7 @@ def filter_indices_with_last_two(output_shape, dims):
     return final_output_shape
 
 
-def get_tensors(input_shape, dim, device, *, with_padding=True, use_randint=True, keepdim=False):
+def get_tensors(input_shape, dim, device, *, with_padding=True, use_randint=True, keep_batch_dim=False):
     npu_dtype = ttl.tensor.DataType.BFLOAT16
     cpu_dtype = torch.bfloat16
     npu_layout = ttl.tensor.Layout.TILE
@@ -60,7 +61,7 @@ def get_tensors(input_shape, dim, device, *, with_padding=True, use_randint=True
     for d in dim:
         output_shape[d] = 1
 
-    if keepdim:
+    if keep_batch_dim:
         torch_output_shape = output_shape.copy()
         tt_output_shape = output_shape.copy()
     else:
@@ -152,18 +153,24 @@ def get_backward_tensors(
     ids=["None", "0", "1", "2", "3", "[]", "0,1", "0,1,2", "0,1,2,3", "0,1,3", "0,2,3", "1,2", "1,2,3", "1,3", "2,3"],
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-@pytest.mark.parametrize("keepdim", (True, False), ids=["keepdim-true", "keepdim-flase"])
-def test_moreh_sum(input_shape, dim, keepdim, compute_kernel_options, device):
+@pytest.mark.parametrize("keep_batch_dim", (True, False), ids=["keep_batch_dim-true", "keep_batch_dim-flase"])
+def test_moreh_sum(input_shape, dim, keep_batch_dim, compute_kernel_options, device):
     torch.manual_seed(2023)
 
-    (tt_input, tt_output, output_shape, _, torch_input) = get_tensors(input_shape, dim, device, keepdim=keepdim)
-    torch_output = torch.sum(torch_input, dim, keepdim)
+    (tt_input, tt_output, output_shape, _, torch_input) = get_tensors(
+        input_shape, dim, device, keep_batch_dim=keep_batch_dim
+    )
+    torch_output = torch.sum(torch_input, dim, keep_batch_dim)
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
     tt_output_cpu = (
         ttl.operations.primary.moreh_sum(
-            tt_input, dim=dim, keepdim=keepdim, output=tt_output, compute_kernel_config=compute_kernel_config
+            tt_input,
+            dim=dim,
+            keep_batch_dim=keep_batch_dim,
+            output=tt_output,
+            compute_kernel_config=compute_kernel_config,
         )
         .cpu()
         .to(cpu_layout)
@@ -175,8 +182,8 @@ def test_moreh_sum(input_shape, dim, keepdim, compute_kernel_options, device):
     # TODO(Dongjin) : check while changing rtol after enabling fp32_dest_acc_en
     rtol = atol = 0.12
     passing, output_pcc = comp_allclose_and_pcc(
-        torch_output if keepdim else torch_output.reshape(-1),
-        tt_output_cpu if keepdim else tt_output_cpu.reshape(-1),
+        torch_output if keep_batch_dim else torch_output.reshape(-1),
+        tt_output_cpu if keep_batch_dim else tt_output_cpu.reshape(-1),
         pcc=0.999,
         rtol=rtol,
         atol=atol,
@@ -210,25 +217,31 @@ def test_moreh_sum(input_shape, dim, keepdim, compute_kernel_options, device):
     ids=["0", "1", "2", "3", "4", "5"],
 )
 @pytest.mark.parametrize("use_provide_output", (True, False), ids=["True", "False"])
-@pytest.mark.parametrize("keepdim", (True, False), ids=["keepdim-true", "keepdim-flase"])
-def test_moreh_sum_non_4d(input_shape, dim, keepdim, use_provide_output, device):
+@pytest.mark.parametrize("keep_batch_dim", (True, False), ids=["keep_batch_dim-true", "keep_batch_dim-flase"])
+def test_moreh_sum_non_4d(input_shape, dim, keep_batch_dim, use_provide_output, device):
     torch.manual_seed(2023)
 
     input_rank = len(input_shape)
     if dim >= input_rank:
         pytest.skip(f"input dim {dim} exceeds the dims of input tensor {len(input_shape)}.")
 
-    (tt_input, tt_output, output_shape, _, torch_input) = get_tensors(input_shape, dim, device, keepdim=keepdim)
+    (tt_input, tt_output, output_shape, _, torch_input) = get_tensors(
+        input_shape, dim, device, keep_batch_dim=keep_batch_dim
+    )
     if not use_provide_output:
         tt_output = None
 
     compute_kernel_config = get_compute_kernel_options(False)
 
-    torch_output = torch.sum(torch_input, dim, keepdim)
+    torch_output = torch.sum(torch_input, dim, keep_batch_dim)
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
     tt_output_cpu = (
         ttl.operations.primary.moreh_sum(
-            tt_input, dim=dim, keepdim=keepdim, output=tt_output, compute_kernel_config=compute_kernel_config
+            tt_input,
+            dim=dim,
+            keep_batch_dim=keep_batch_dim,
+            output=tt_output,
+            compute_kernel_config=compute_kernel_config,
         )
         .cpu()
         .to(cpu_layout)
@@ -238,8 +251,8 @@ def test_moreh_sum_non_4d(input_shape, dim, keepdim, use_provide_output, device)
 
     rtol = atol = 0.12
     passing, output_pcc = comp_allclose_and_pcc(
-        torch_output if keepdim else torch_output.reshape(-1),
-        tt_output_cpu if keepdim else tt_output_cpu.reshape(-1),
+        torch_output if keep_batch_dim else torch_output.reshape(-1),
+        tt_output_cpu if keep_batch_dim else tt_output_cpu.reshape(-1),
         pcc=0.999,
         rtol=rtol,
         atol=atol,
@@ -274,7 +287,7 @@ def test_moreh_sum_fp32_dest_acc(input_shape, dim, compute_kernel_options, devic
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
     (tt_input, tt_output, output_shape, torch_output_shape, torch_input) = get_tensors(
-        input_shape, dim, device, use_randint=False, keepdim=True
+        input_shape, dim, device, use_randint=False, keep_batch_dim=True
     )
     torch_input = torch_input.float()
     torch_output = torch.sum(torch_input, dim, True)
@@ -282,7 +295,7 @@ def test_moreh_sum_fp32_dest_acc(input_shape, dim, compute_kernel_options, devic
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
     tt_output_cpu = (
         ttl.operations.primary.moreh_sum(
-            tt_input, dim=dim, keepdim=True, output=tt_output, compute_kernel_config=compute_kernel_config
+            tt_input, dim=dim, keep_batch_dim=True, output=tt_output, compute_kernel_config=compute_kernel_config
         )
         .cpu()
         .to(cpu_layout)
@@ -297,7 +310,7 @@ def test_moreh_sum_fp32_dest_acc(input_shape, dim, compute_kernel_options, devic
     logger.debug(f"std={torch.std(torch.abs(torch_output - tt_output_cpu))}")
     logger.debug(f"mean={torch.abs(torch_output - tt_output_cpu).mean()}")
 
-    # TODO
+    # TODO: Need to check the accuracy for fp32 mode
     # assert passing
 
 
@@ -329,20 +342,20 @@ def test_moreh_sum_fp32_dest_acc(input_shape, dim, compute_kernel_options, devic
     ids=["None", "0", "1", "2", "3", "0,1", "0,1,2", "0,1,2,3", "0,1,3", "0,2,3", "1,2", "1,2,3", "1,3", "2,3"],
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-@pytest.mark.parametrize("keepdim", (True, False), ids=["keepdim-true", "keepdim-flase"])
-def test_moreh_sum_backward(input_shape, dim, compute_kernel_options, keepdim, device):
+@pytest.mark.parametrize("keep_batch_dim", (True, False), ids=["keep_batch_dim-true", "keep_batch_dim-flase"])
+def test_moreh_sum_backward(input_shape, dim, compute_kernel_options, keep_batch_dim, device):
     torch.manual_seed(2023)
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
     (tt_input, _, tt_output_shape, torch_output_shape, torch_input) = get_tensors(
-        input_shape, dim, device, keepdim=keepdim
+        input_shape, dim, device, keep_batch_dim=keep_batch_dim
     )
     (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(
         tt_output_shape, torch_output_shape, input_shape, device
     )
 
-    torch_output = torch.sum(torch_input, dim, keepdim)
+    torch_output = torch.sum(torch_input, dim, keep_batch_dim)
     torch_output.backward(torch_output_grad)
 
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
@@ -351,7 +364,7 @@ def test_moreh_sum_backward(input_shape, dim, compute_kernel_options, keepdim, d
             tt_output_grad,
             tt_input,
             dim=dim,
-            keepdim=keepdim,
+            keep_batch_dim=keep_batch_dim,
             input_grad=tt_input_grad,
             compute_kernel_config=compute_kernel_config,
         )
