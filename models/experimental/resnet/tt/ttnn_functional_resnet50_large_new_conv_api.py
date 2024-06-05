@@ -206,6 +206,8 @@ class resnet50Bottleneck:
         height_sharding=None,
         eltwise_binary_out_in_place=True,
     ):
+        # if batch_size == 1 and input_height == 32 and input_width == 32:
+
         # conv1 is 1x1 conv
         # print("Running conv1")
         module_input_height = input_height
@@ -682,7 +684,7 @@ class resnet50:
         )
 
         print(f"=================================== layer: 4, module: 1")
-        breakpoint()
+        # breakpoint()
 
         layer4_module1_input_shape = [
             x.get_legacy_shape()[0],
@@ -691,7 +693,7 @@ class resnet50:
             x.get_legacy_shape()[3],
         ]
         x, x_height, x_width = self.layer4_module1(
-            x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=False, height_sharding=False
+            x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True, height_sharding=False
         )
         x_memory_config = ttnn.get_memory_config(x)
         ops_parallel_config["layer4_module1_input"] = ttnn.create_sharded_memory_config_(
@@ -819,11 +821,11 @@ class resnet50:
         # x = ttnn.to_device(input_tensor, device=self.device, memory_config=self.conv1.conv.input_sharded_memory_config)
         if is_wormhole_b0():
             if batch_size == 16:
-                act_block_h = 1568
+                act_block_h_override = 1568
             elif batch_size == 20:
-                act_block_h = 640
+                act_block_h_override = 640
         else:
-            act_block_h = None
+            act_block_h_override = 0
 
         x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
             input_tensor=input_tensor,
@@ -845,7 +847,7 @@ class resnet50:
                 activation="relu",
                 deallocate_activation=True,
                 input_channels_alignment=16 if not is_wormhole_b0() else 32,
-                act_block_h=act_block_h,
+                act_block_h_override=act_block_h_override,
             ),
             conv_op_cache=conv_op_cache,
         )
@@ -865,10 +867,6 @@ class resnet50:
         x_width = 128
 
         x = ttnn.reshape(x, (1, 1, x_height * x_width * self.batch_size, 64))
-        # if is_wormhole_b0():
-        #     # TODO: fix the need to do the reshard here
-        #     x = ttnn.to_memory_config(x, self.layer1_module1.conv1.conv.input_sharded_memory_config)
-
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, dtype=self.model_config["ACTIVATIONS_DTYPE"])
 
         if self.batch_size == 20 and not is_wormhole_b0():
@@ -876,25 +874,38 @@ class resnet50:
 
         if is_wormhole_b0() and batch_size == 20:
             x = ttnn.to_memory_config(x, ops_parallel_config["layer1_module1_input"])
+        print(f"=================================== layer: 1, module: 1")
         x, x_height, x_width = self.layer1_module1(x, device, batch_size, x_height, x_width, conv_op_cache)
+        print(f"=================================== layer: 1, module: 2")
         x, x_height, x_width = self.layer1_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
+        print(f"=================================== layer: 1, module: 3")
         x, x_height, x_width = self.layer1_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
         if self.batch_size == 20 and is_wormhole_b0():
             x = ttnn.reallocate(x)
             x = ttnn.to_memory_config(x, ops_parallel_config["layer2_module1_input"])
 
+        print(f"=================================== layer: 2, module: 1")
         x, x_height, x_width = self.layer2_module1(x, device, batch_size, x_height, x_width, conv_op_cache)
+        print(f"=================================== layer: 2, module: 2")
         x, x_height, x_width = self.layer2_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
+        print(f"=================================== layer: 2, module: 3")
         x, x_height, x_width = self.layer2_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
+        print(f"=================================== layer: 2, module: 4")
         x, x_height, x_width = self.layer2_module4(x, device, batch_size, x_height, x_width, conv_op_cache)
 
         # do reshard before layer3
         x = ttnn.to_memory_config(x, ops_parallel_config["layer3_module1_input"])
+        print(f"=================================== layer: 3, module: 1")
         x, x_height, x_width = self.layer3_module1(x, device, batch_size, x_height, x_width, conv_op_cache)
+        print(f"=================================== layer: 3, module: 2")
         x, x_height, x_width = self.layer3_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
+        print(f"=================================== layer: 3, module: 3")
         x, x_height, x_width = self.layer3_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
+        print(f"=================================== layer: 3, module: 4")
         x, x_height, x_width = self.layer3_module4(x, device, batch_size, x_height, x_width, conv_op_cache)
+        print(f"=================================== layer: 3, module: 5")
         x, x_height, x_width = self.layer3_module5(x, device, batch_size, x_height, x_width, conv_op_cache)
+        print(f"=================================== layer: 3, module: 6")
         x, x_height, x_width = self.layer3_module6(
             x,
             device,
@@ -907,8 +918,13 @@ class resnet50:
 
         # do reshard before layer4
         x = ttnn.to_memory_config(x, ops_parallel_config["layer4_module1_input"])
-        x, x_height, x_width = self.layer4_module1(x, device, batch_size, x_height, x_width, conv_op_cache)
+        print(f"=================================== layer: 4, module: 1")
+        x, x_height, x_width = self.layer4_module1(
+            x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True
+        )
+        print(f"=================================== layer: 4, module: 2")
         x, x_height, x_width = self.layer4_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
+        print(f"=================================== layer: 4, module: 3")
         x, x_height, x_width = self.layer4_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
 
         unpadded_shape = x.shape_without_padding()
