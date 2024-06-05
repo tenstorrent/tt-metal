@@ -479,6 +479,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.polygamma
 
+.. autofunction:: tt_lib.tensor.left_shift
+
 Tensor relational operations
 ============================
 .. autofunction:: tt_lib.tensor.gtz
