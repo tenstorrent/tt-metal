@@ -166,7 +166,10 @@ class transformer_2d_model:
         self.output_height = self.proj_out.output_height
         self.output_width = self.proj_out.output_width
 
-        self.blocks = [basic_transformer_block(device, block) for block in parameters.transformer_blocks]
+        self.blocks = [
+            basic_transformer_block(device, block, seq_len=input_height * input_width)
+            for block in parameters.transformer_blocks
+        ]
         self.parameters = parameters
 
     def __call__(

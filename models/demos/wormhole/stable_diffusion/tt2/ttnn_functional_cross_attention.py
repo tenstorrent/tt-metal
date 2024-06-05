@@ -147,7 +147,9 @@ def weight_to_bfp8(weight):
 
 
 class cross_attention:
-    def __init__(self, device, parameters):
+    def __init__(self, device, parameters, seq_len):
+        self.program_configs = {}
+        self.seq_len = seq_len
         self.fused_qkv = parameters.to_q.weight.shape[-2] == parameters.to_k.weight.shape[-2]
         for key in ["to_q", "to_k", "to_v"]:
             parameters[key].weight = pad_heads(parameters[key].weight, 8)
@@ -160,10 +162,13 @@ class cross_attention:
                 parameters.to_q.weight, parameters.to_k.weight, parameters.to_v.weight
             )
             parameters.qkv.weight = ttnn.unsqueeze_to_4D(parameters.qkv.weight)
+            self.qkv_len = parameters.qkv.weight.shape[-1]
         else:
             parameters["kv"] = ttnn.model_preprocessing.ParameterDict()
             parameters.kv["weight"] = concatenate_qkv(None, parameters.to_k.weight, parameters.to_v.weight)
             parameters.to_q.weight = weight_to_bfp8(parameters.to_q.weight)
+            self.q_len = parameters.to_q.weight.shape[-1]
+            self.kv_len = parameters.kv.weight.shape[-1]
 
             parameters.kv.weight = ttnn.unsqueeze_to_4D(parameters.kv.weight)
             parameters.to_q.weight = ttnn.unsqueeze_to_4D(parameters.to_q.weight)
@@ -173,72 +178,31 @@ class cross_attention:
         self.parameters = parameters
         self.device = device
 
-        scale = torch.ones((1, 1, 1, 1)) * 1 / math.sqrt(40)
-        self.scale_40 = ttnn.from_torch(scale, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device)
+        if seq_len == 4096:
+            self.dim_head = 40
+        elif seq_len == 1024:
+            self.dim_head = 80
+        else:
+            self.dim_head = 160
 
-        scale = torch.ones((1, 1, 1, 1)) * 1 / math.sqrt(80)
-        self.scale_80 = ttnn.from_torch(scale, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device)
+        scale = torch.ones((1, 1, 1, 1)) * 1 / math.sqrt(self.dim_head)
+        self.scale = ttnn.from_torch(scale, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device)
 
-        scale = torch.ones((1, 1, 1, 1)) * 1 / math.sqrt(160)
-        self.scale_160 = ttnn.from_torch(scale, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device)
-
-        self.scales = {40: self.scale_40, 80: self.scale_80, 160: self.scale_160}
-
-        attention_mask_4096_96 = torch.ones((1, 1, 4096, 96)) * -1e9
-        attention_mask_4096_96[:, :, :, :77] = 0
-        attention_mask_4096_96 = ttnn.from_torch(
-            attention_mask_4096_96, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
-        attention_mask_1024_96 = torch.ones((1, 1, 1024, 96)) * -1e9
-        attention_mask_1024_96[:, :, :, :77] = 0
-        attention_mask_1024_96 = ttnn.from_torch(
-            attention_mask_1024_96, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
-        attention_mask_256_96 = torch.ones((1, 1, 256, 96)) * -1e9
-        attention_mask_256_96[:, :, :, :77] = 0
-        attention_mask_256_96 = ttnn.from_torch(
-            attention_mask_256_96, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
-        attention_mask_64_96 = torch.ones((1, 1, 64, 96)) * -1e9
-        attention_mask_64_96[:, :, :, :77] = 0
-        attention_mask_64_96 = ttnn.from_torch(
-            attention_mask_64_96, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
+        attention_mask_96 = torch.ones((1, 1, seq_len, 96)) * -1e9
+        attention_mask_96[:, :, :, :77] = 0
+        attention_mask_96 = ttnn.from_torch(
+            attention_mask_96, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
         )
 
-        attention_mask_4096_4096 = torch.zeros((1, 1, 4096, 4096))
-        attention_mask_4096_4096 = ttnn.from_torch(
-            attention_mask_4096_4096, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
+        attention_mask_full = torch.zeros((1, 1, seq_len, seq_len))
+        attention_mask_full = ttnn.from_torch(
+            attention_mask_full, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
         )
-        attention_mask_1024_1024 = torch.zeros((1, 1, 1024, 1024))
-        attention_mask_1024_1024 = ttnn.from_torch(
-            attention_mask_1024_1024, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
-        attention_mask_256_256 = torch.zeros((1, 1, 256, 256))
-        attention_mask_256_256 = ttnn.from_torch(
-            attention_mask_256_256, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
-        attention_mask_64_64 = torch.zeros((1, 1, 64, 64))
-        attention_mask_64_64 = ttnn.from_torch(
-            attention_mask_64_64, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
+        self.attention_masks = {"cross": attention_mask_96, "self": attention_mask_full}
 
-        self.attention_masks = {}
-        self.attention_masks[4096] = {96: attention_mask_4096_96, 4096: attention_mask_4096_4096}
-        self.attention_masks[1024] = {96: attention_mask_1024_96, 1024: attention_mask_1024_1024}
-        self.attention_masks[256] = {96: attention_mask_256_96, 256: attention_mask_256_256}
-        self.attention_masks[64] = {64: attention_mask_64_64, 96: attention_mask_64_96}
-
-        padding_shapes = [[2, 4000, 1024], [2, 928, 1536], [2, 160, 2560], [2, 32, 1280]]
-        self.padded_tensors = {}
-        for shape in padding_shapes:
-            padding = torch.zeros(shape)
-            padding = ttnn.from_torch(padding, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device)
-            self.padded_tensors[shape[-2]] = padding
         self.parameters.to_out[0].weight = weight_to_bfp8(self.parameters.to_out[0].weight)
         self.parameters.to_out[0].bias = weight_to_bfp8(self.parameters.to_out[0].bias)
 
-        self.grid_sizes = {8192: (5, 8), 2048: (5, 8), 512: (8, 8), 128: (8, 4)}
-        self.out_subblock_hs = {8192: 8, 2048: 8, 512: 2, 128: 1}
         self.dram_interleaved_memory_config = ttnn.experimental.tensor.MemoryConfig(
             memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
             buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
@@ -266,139 +230,209 @@ class cross_attention:
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
+        self.encoder_hidden_states_shape = (2, 96, 768)
+        if seq_len == 4096:
+            hidden_dim = 320
+        elif seq_len == 1024:
+            hidden_dim = 640
+        else:
+            hidden_dim = 1280
+        self.hidden_states_shape = (1, 1, 2 * seq_len, hidden_dim)
+        self.grid_sizes = {4096: (5, 8), 1024: (5, 8), 256: (8, 8), 64: (8, 4)}
+        if self.fused_qkv:
+            grid_size = self.grid_sizes[seq_len]
+            M = seq_len * 2
+            K, N = self.parameters.qkv.weight.shape[-2], self.parameters.qkv.weight.shape[-1]
+            in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w = determine_blocking(
+                M, K, N, grid_size
+            )
+            self.program_configs[
+                "qkv"
+            ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                in0_block_w=in0_block_w,
+                out_subblock_h=out_subblock_h,
+                out_subblock_w=out_subblock_w,
+                per_core_M=out_block_h,
+                per_core_N=out_block_w,
+                transpose_mcast=False,
+                fused_activation=None,
+            )
+        else:
+            grid_size = self.grid_sizes[seq_len]
+            M = seq_len * 2
+            K, N = self.parameters.to_q.weight.shape[-2], self.parameters.to_q.weight.shape[-1]
+            in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w = determine_blocking(
+                M, K, N, grid_size
+            )
+            self.program_configs["q"] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                in0_block_w=in0_block_w,
+                out_subblock_h=out_subblock_h,
+                out_subblock_w=out_subblock_w,
+                per_core_M=out_block_h,
+                per_core_N=out_block_w,
+                transpose_mcast=False,
+                fused_activation=None,
+            )
 
-        output_tensor = torch.zeros(2, 8, 4096, 64)
-        output_tensor = ttnn.from_torch(output_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-        output_tensor_4096 = ttnn.to_device(output_tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            M, K, N = (
+                self.encoder_hidden_states_shape[-2] * self.encoder_hidden_states_shape[-3],
+                self.encoder_hidden_states_shape[-1],
+                self.parameters.kv.weight.shape[-1],
+            )
+            grid_sizes = {4096: (8, 2), 1024: (8, 2), 256: (8, 2), 64: (4, 2)}
+            grid_size = grid_sizes[seq_len]
+            in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w = determine_blocking(
+                M, K, N, grid_size
+            )
+            self.program_configs[
+                "kv"
+            ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                in0_block_w=in0_block_w,
+                out_subblock_h=out_subblock_h,
+                out_subblock_w=out_subblock_w,
+                per_core_M=out_block_h,
+                per_core_N=out_block_w,
+                transpose_mcast=False,
+                fused_activation=None,
+            )
 
-        output_tensor = torch.zeros(2, 8, 1024, 96)
-        output_tensor = ttnn.from_torch(output_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-        output_tensor_1024 = ttnn.to_device(output_tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        have_time_sharded_attention = seq_len == 4096 or seq_len == 1024
+        if have_time_sharded_attention:
+            self.key_len = 64 if seq_len == 4096 else 96
+            self.num_slices = 16
+            self.tsa_grid_size = (8, 8)
+            num_cores = self.tsa_grid_size[0] * self.tsa_grid_size[1]
+            seq_len = self.seq_len
+            tiles_per_shard = math.ceil((((self.num_slices * seq_len) / num_cores) / self.num_slices) / 32)
+            self.tsa_mm_activations_height_shard_spec = [tiles_per_shard * 32, self.key_len]
+            mm_output_height_shard_spec = [tiles_per_shard * 32, seq_len]
 
-        self.output_tensors = {}
-        self.output_tensors[4096] = output_tensor_4096
-        self.output_tensors[1024] = output_tensor_1024
+            out_subblock_h = 1
+            out_subblock_w = 8
+            slow_mm = os.environ.get("SLOW_MATMULS", "0") == "1"
+            if slow_mm:
+                out_subblock_h = 1
+                out_subblock_w = 1
+            self.program_configs[
+                "tsa_qkt"
+            ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=self.tsa_grid_size,
+                in0_block_w=self.key_len // 32,
+                per_core_M=tiles_per_shard,
+                per_core_N=seq_len // 32,
+                out_subblock_h=out_subblock_h,
+                out_subblock_w=out_subblock_w,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=False,
+            )
 
-    def time_sharded_attention(self, query, t_key, value, head_size):
-        num_slices = 16
-        grid_size = (8, 8)
-        num_cores = grid_size[0] * grid_size[1]
-        seq_len = query.shape[-2]
-        key_len = t_key.shape[-1]
-        attention_mask = self.attention_masks[seq_len][key_len]
-        tiles_per_shard = math.ceil((((num_slices * seq_len) / num_cores) / num_slices) / 32)
-        mm_activations_height_shard_spec = [tiles_per_shard * 32, query.shape[-1]]
-        mm_output_height_shard_spec = [tiles_per_shard * 32, seq_len]
+            self.program_configs[
+                "tsa_softmax"
+            ] = ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=self.tsa_grid_size,
+                subblock_w=1,
+                block_h=mm_output_height_shard_spec[0] // 32,
+                block_w=mm_output_height_shard_spec[1] // 32,
+            )
+            out_subblock_h = tiles_per_shard
+            out_subblock_w = self.key_len // 32
+            if slow_mm:
+                out_subblock_h = 1
+                out_subblock_w = 1
+            self.program_configs[
+                "tsa_v"
+            ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=self.tsa_grid_size,
+                in0_block_w=seq_len // 32,
+                per_core_M=tiles_per_shard,
+                per_core_N=self.key_len // 32,
+                out_subblock_h=out_subblock_h,
+                out_subblock_w=out_subblock_w,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=False,
+            )
+            self.tsa_output_shape = (2, 8, seq_len, self.key_len)
+            output_tensor = torch.zeros(self.tsa_output_shape)
+            output_tensor = ttnn.from_torch(output_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            self.output_tensor = ttnn.to_device(output_tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            output_cores = 16
+            self.tsa_output_shard_shape = [
+                self.output_tensor.volume() // self.output_tensor.shape[-1] // output_cores,
+                self.output_tensor.shape[-1],
+            ]
+
+    def time_sharded_attention(self, query, t_key, value, head_size, attn_type):
+        attention_mask = self.attention_masks[attn_type]
         for j in range(2):
-            for i in range(num_slices // 2):
+            for i in range(self.num_slices // 2):
                 slice = ttnn.experimental.tensor.interleaved_to_sharded_partial(
                     query,
-                    grid_size,
-                    mm_activations_height_shard_spec,
-                    num_slices,
-                    j * num_slices // 2 + i,
+                    self.tsa_grid_size,
+                    self.tsa_mm_activations_height_shard_spec,
+                    self.num_slices,
+                    j * self.num_slices // 2 + i,
                     ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
                     ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
                 )
-                out_subblock_h = 1
-                out_subblock_w = 8
-                slow_mm = os.environ.get("SLOW_MATMULS", "0") == "1"
-                if slow_mm:
-                    out_subblock_h = 1
-                    out_subblock_w = 1
 
-                program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=grid_size,
-                    in0_block_w=t_key.shape[-2] // 32,
-                    per_core_M=tiles_per_shard,
-                    per_core_N=seq_len // 32,
-                    out_subblock_h=out_subblock_h,
-                    out_subblock_w=out_subblock_w,
-                    fuse_batch=True,
-                    fused_activation=None,
-                    mcast_in0=False,
-                )
                 k_slice = ttnn.experimental.tensor.unpad(
                     t_key,
                     (j, i, 0, 0),
-                    (j, i, t_key.shape[-2] - 1, seq_len - 1),
+                    (j, i, self.key_len - 1, self.seq_len - 1),
                     output_mem_config=self.l1_interleaved_memory_config,
                 )
 
-                height_sharded_memory_config = ttnn.experimental.tensor.MemoryConfig(
-                    memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                    buffer_type=ttnn.experimental.tensor.BufferType.L1,
-                )
                 mm_slice = ttnn.experimental.operations.primary.matmul(
                     slice,
                     k_slice,
-                    program_config=program_config,
-                    output_mem_config=height_sharded_memory_config,
+                    program_config=self.program_configs["tsa_qkt"],
+                    output_mem_config=self.height_sharded_memory_config,
                     output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                     compute_kernel_config=self.compute_kernel_config,
                 )
                 k_slice.deallocate()
                 slice.deallocate()
 
-                softmax_program_config = (
-                    ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
-                        compute_with_storage_grid_size=grid_size,
-                        subblock_w=1,
-                        block_h=mm_output_height_shard_spec[0] // 32,
-                        block_w=mm_output_height_shard_spec[1] // 32,
-                    )
-                )
                 use_mask = False
                 if use_mask:
                     mm_slice = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
                         mm_slice,
                         1 / math.sqrt(head_size),
                         attention_mask,
-                        program_config=softmax_program_config,
+                        program_config=self.program_configs["tsa_softmax"],
                         is_causal_mask=False,
                     )
                 else:
                     mm_slice = ttl.operations.primary.bcast(
                         mm_slice,
-                        self.scales[head_size],
+                        self.scale,
                         ttl.tensor.BcastOpMath.MUL,
                         ttl.tensor.BcastOpDim.HW,
-                        output_mem_config=mm_slice.memory_config(),
+                        output_mem_config=self.height_sharded_memory_config,
                         in_place=True,
                     )
                     mm_slice = ttnn.experimental.operations.primary.softmax_in_place(
                         mm_slice,
-                        program_config=softmax_program_config,
+                        program_config=self.program_configs["tsa_softmax"],
                     )
 
-                out_subblock_h = tiles_per_shard
-                out_subblock_w = t_key.shape[-2] // 32
-                slow_mm = os.environ.get("SLOW_MATMULS", "0") == "1"
-                if slow_mm:
-                    out_subblock_h = 1
-                    out_subblock_w = 1
-                program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=grid_size,
-                    in0_block_w=seq_len // 32,
-                    per_core_M=tiles_per_shard,
-                    per_core_N=t_key.shape[-2] // 32,
-                    out_subblock_h=out_subblock_h,
-                    out_subblock_w=out_subblock_w,
-                    fuse_batch=True,
-                    fused_activation=None,
-                    mcast_in0=False,
-                )
                 v_slice = ttnn.experimental.tensor.unpad(
                     value,
                     (j, i, 0, 0),
-                    (j, i, seq_len - 1, value.shape[-1] - 1),
+                    (j, i, self.seq_len - 1, self.key_len - 1),
                     output_mem_config=self.l1_interleaved_memory_config,
                 )
                 mm_slice = ttnn.experimental.operations.primary.matmul(
                     mm_slice,
                     v_slice,
-                    program_config=program_config,
-                    output_mem_config=height_sharded_memory_config,
+                    program_config=self.program_configs["tsa_v"],
+                    output_mem_config=self.height_sharded_memory_config,
                     output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                     compute_kernel_config=self.compute_kernel_config,
                 )
@@ -406,33 +440,28 @@ class cross_attention:
 
                 ttnn.experimental.tensor.sharded_to_interleaved_partial(
                     mm_slice,
-                    self.output_tensors[seq_len],
-                    num_slices,
-                    j * num_slices // 2 + i,
+                    self.output_tensor,
+                    self.num_slices,
+                    j * self.num_slices // 2 + i,
                     self.dram_interleaved_memory_config,
                 )
-        num_cores = 16
         output = ttnn.experimental.tensor.interleaved_to_sharded(
-            self.output_tensors[seq_len],
+            self.output_tensor,
             (8, 2),
-            [
-                self.output_tensors[seq_len].volume() // self.output_tensors[seq_len].shape[-1] // num_cores,
-                self.output_tensors[seq_len].shape[-1],
-            ],
+            self.tsa_output_shard_shape,
             ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         )
         return output
-        return self.output_tensors[seq_len]
 
-    def sharded_attention(self, query, key, value, original_seq_len, head_size, index):
+    def sharded_attention(self, query, key, value, head_size, attn_type):
         grid_size = (2, 8)
         num_cores = grid_size[0] * grid_size[1]
         num_heads = 16
         seq_len = query.shape[-2]
         inner = query.shape[-1]
         key_len = key.shape[-1]
-        attention_mask = self.attention_masks[seq_len][key_len]
+        attention_mask = self.attention_masks[attn_type]
 
         query, key, value = [
             ttnn.reshape(tensor, (1, tensor.shape[-3] * 2, tensor.shape[-2], tensor.shape[-1]))
@@ -520,7 +549,7 @@ class cross_attention:
         else:
             attention_scores = ttl.operations.primary.bcast(
                 attention_scores,
-                self.scales[head_size],
+                self.scale,
                 ttl.tensor.BcastOpMath.MUL,
                 ttl.tensor.BcastOpDim.HW,
                 output_mem_config=attention_scores.memory_config(),
@@ -549,7 +578,7 @@ class cross_attention:
             in0_block_w=key_len // 32,
             out_subblock_h=1,
             out_subblock_w=1,
-            per_core_M=num_heads * original_seq_len // num_cores // 32,
+            per_core_M=num_heads * seq_len // num_cores // 32,
             per_core_N=inner // 32,
         )
         attention_scores = ttnn.experimental.operations.primary.matmul(
@@ -566,13 +595,13 @@ class cross_attention:
         v_sharded.deallocate()
         return ttnn.reshape(attention_scores, (2, 8, attention_scores.shape[-2], attention_scores.shape[-1]))
 
-    def get_attention_scores_opt(self, query, t_key, value, original_seq_len, head_size, index=-1):
+    def get_attention_scores_opt(self, query, t_key, value, head_size, attn_type):
         if (query.shape[-2] == 4096 and t_key.shape[-1] == 4096) or (
             query.shape[-2] == 1024 and t_key.shape[-1] == 1024
         ):
-            return self.time_sharded_attention(query, t_key, value, head_size)
+            return self.time_sharded_attention(query, t_key, value, head_size, attn_type)
         else:
-            return self.sharded_attention(query, t_key, value, original_seq_len, head_size, index)
+            return self.sharded_attention(query, t_key, value, head_size, attn_type)
 
     def out(self, hidden_states):
         size = hidden_states.shape[-2] // 2  # 2 is the batch size
@@ -638,54 +667,6 @@ class cross_attention:
 
         return hidden_states
 
-    def reshard_to(self, tensor, grid_size, layout, col_major=False):
-        if layout == ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED:
-            logical_grid_size = list(grid_size)
-            if col_major:
-                logical_grid_size[0], logical_grid_size[1] = grid_size[1], grid_size[0]
-            shard_spec = [
-                tensor.volume() // tensor.shape[-1] // logical_grid_size[1],
-                tensor.shape[-1] // logical_grid_size[0],
-            ]
-        elif layout == ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED:
-            num_cores = grid_size[0] * grid_size[1]
-            shard_spec = [tensor.volume() // tensor.shape[-1] // num_cores, tensor.shape[-1]]
-        output_shard_grid = ttnn.experimental.tensor.CoreRangeSet(
-            {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
-                )
-            }
-        )
-        output_shard_spec = ttnn.experimental.tensor.ShardSpec(
-            output_shard_grid,
-            shard_spec,
-            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR
-            if col_major
-            else ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
-            False,
-        )
-        output_mem_config = ttnn.experimental.tensor.MemoryConfig(
-            layout,
-            ttnn.experimental.tensor.BufferType.L1,
-            output_shard_spec,
-        )
-        if tensor.is_sharded():
-            tensor = ttnn.experimental.tensor.reshard(
-                tensor,
-                output_mem_config,
-            )
-        else:
-            tensor = ttnn.experimental.tensor.interleaved_to_sharded(
-                tensor,
-                grid_size,
-                shard_spec,
-                layout,
-                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
-            )
-        return tensor
-
     def __call__(
         self,
         hidden_states,
@@ -700,43 +681,27 @@ class cross_attention:
         cross_attention_kwargs={},
         index=-1,
     ):
-        assert dim_head in self.scales
-        original_seq_len = hidden_states.shape[-2] // 2  # 2 is the batch size
+        assert dim_head == self.dim_head
 
         if not hidden_states.is_sharded():
-            grid_size = self.grid_sizes[hidden_states.shape[-2]]
+            grid_size = self.grid_sizes[self.seq_len]
             hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
                 hidden_states,
                 grid_size,
-                [hidden_states.shape[-2] // grid_size[1], hidden_states.shape[-1] // grid_size[0]],
+                [self.hidden_states_shape[-2] // grid_size[1], self.hidden_states_shape[-1] // grid_size[0]],
                 ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                 ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             )
         if encoder_hidden_states:
             encoder_hidden_states = ttnn.reshape(
-                encoder_hidden_states, (1, 1, encoder_hidden_states.shape[-2] * 2, encoder_hidden_states.shape[-1])
+                encoder_hidden_states,
+                (1, 1, self.encoder_hidden_states_shape[-2] * 2, self.encoder_hidden_states_shape[-1]),
             )
 
         if self.fused_qkv:
-            # TODO: Move into init
-            grid_size = self.grid_sizes[hidden_states.shape[-2]]
-            M, K = hidden_states.shape[-2], hidden_states.shape[-1]
-            N = self.parameters.qkv.weight.shape[-1]
-            in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w = determine_blocking(
-                M, K, N, grid_size
-            )
-            program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=grid_size,
-                in0_block_w=in0_block_w,
-                out_subblock_h=out_subblock_h,
-                out_subblock_w=out_subblock_w,
-                per_core_M=out_block_h,
-                per_core_N=out_block_w,
-                transpose_mcast=False,
-                fused_activation=None,
-            )
+            program_config = self.program_configs["qkv"]
             # TODO: Output sharded once https://github.com/tenstorrent/tt-metal/issues/6775 is fixed
-            interleaved_out = hidden_states.shape[-2] == 8192 or hidden_states.shape[-2] == 2048
+            interleaved_out = self.seq_len == 4096 or self.seq_len == 1024
             qkv_out = ttnn.experimental.operations.primary.matmul(
                 hidden_states,
                 self.parameters.qkv.weight,
@@ -748,11 +713,11 @@ class cross_attention:
                 compute_kernel_config=self.compute_kernel_config,
             )
             ttnn.deallocate(hidden_states)
-            qkv_out = ttnn.reshape(qkv_out, (2, qkv_out.shape[-2] // 2, qkv_out.shape[-1]))
+            qkv_out = ttnn.reshape(qkv_out, (2, self.seq_len, self.qkv_len))
             if interleaved_out:
                 query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
                     qkv_out,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG if hidden_states.shape[-2] == 8192 else ttnn.L1_MEMORY_CONFIG,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG if self.seq_len == 4096 else ttnn.L1_MEMORY_CONFIG,
                     num_heads=heads,
                 )
             else:
@@ -767,25 +732,10 @@ class cross_attention:
                 value = reshard_to(value, (2, 8), ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED)
             ttnn.deallocate(qkv_out)
         else:
-            if hidden_states.shape[-2] == 8192:
+            if self.seq_len == 4096:
                 hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
 
-            grid_size = self.grid_sizes[hidden_states.shape[-2]]
-            M, K = hidden_states.shape[-2], hidden_states.shape[-1]
-            N = self.parameters.to_q.weight.shape[-1]
-            in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w = determine_blocking(
-                M, K, N, grid_size
-            )
-            program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=grid_size,
-                in0_block_w=in0_block_w,
-                out_subblock_h=out_subblock_h,
-                out_subblock_w=out_subblock_w,
-                per_core_M=out_block_h,
-                per_core_N=out_block_w,
-                transpose_mcast=False,
-                fused_activation=None,
-            )
+            program_config = self.program_configs["q"]
             q_proj = ttnn.experimental.operations.primary.matmul(
                 hidden_states,
                 self.parameters.to_q.weight,
@@ -796,26 +746,7 @@ class cross_attention:
             )
             ttnn.deallocate(hidden_states)
 
-            M, K, N = (
-                encoder_hidden_states.shape[-2],
-                encoder_hidden_states.shape[-1],
-                self.parameters.kv.weight.shape[-1],
-            )
-            grid_sizes = {8192: (8, 2), 2048: (8, 2), 512: (8, 2), 128: (4, 2)}
-            grid_size = grid_size = grid_sizes[hidden_states.shape[-2]]
-            in0_block_h, in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w = determine_blocking(
-                M, K, N, grid_size
-            )
-            program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=grid_size,
-                in0_block_w=in0_block_w,
-                out_subblock_h=out_subblock_h,
-                out_subblock_w=out_subblock_w,
-                per_core_M=out_block_h,
-                per_core_N=out_block_w,
-                transpose_mcast=False,
-                fused_activation=None,
-            )
+            program_config = self.program_configs["kv"]
             kv_proj = ttnn.experimental.operations.primary.matmul(
                 encoder_hidden_states,
                 self.parameters.kv.weight,
@@ -824,20 +755,19 @@ class cross_attention:
                 output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                 compute_kernel_config=self.compute_kernel_config,
             )
-            # print(kv_proj.memory_config())
-            # print(kv_proj.shape)
             end_core = (
                 ttnn.experimental.tensor.CoreCoord(7, 1)
-                if hidden_states.shape[-2] != 128
+                if self.seq_len != 64
                 else ttnn.experimental.tensor.CoreCoord(3, 1)
             )
-            grid_size = (8, 2) if hidden_states.shape[-2] != 128 else (4, 2)
+            grid_size = (8, 2) if self.seq_len != 64 else (4, 2)
+            q_proj = reshard_to(q_proj, grid_size, ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED)
             output_shard_grid = ttnn.experimental.tensor.CoreRangeSet(
                 {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), end_core)}
             )
             output_shard_spec = ttnn.experimental.tensor.ShardSpec(
                 output_shard_grid,
-                [hidden_states.shape[-2] // 2, q_proj.shape[-1] // grid_size[0]],
+                [self.seq_len, self.q_len // grid_size[0]],
                 ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
                 False,
             )
@@ -856,7 +786,7 @@ class cross_attention:
             )
             output_shard_spec = ttnn.experimental.tensor.ShardSpec(
                 output_shard_grid,
-                [96, kv_proj.shape[-1] // grid_size[0]],
+                [96, self.kv_len // grid_size[0]],
                 ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
                 False,
             )
@@ -869,8 +799,8 @@ class cross_attention:
                 kv_proj,
                 output_mem_config,
             )
-            q_proj = ttnn.reshape(q_proj, (2, 1, q_proj.shape[-2] // 2, q_proj.shape[-1]))
-            kv_proj = ttnn.reshape(kv_proj, (2, 1, kv_proj.shape[-2] // 2, kv_proj.shape[-1]))
+            q_proj = ttnn.reshape(q_proj, (2, 1, self.seq_len, self.q_len))
+            kv_proj = ttnn.reshape(kv_proj, (2, 1, 96, self.kv_len))
             query, key, value = ttnn.experimental.tensor.create_qkv_heads_from_separate_tensors(
                 q_proj,
                 kv_proj,
@@ -886,12 +816,7 @@ class cross_attention:
             value = reshard_to(value, (2, 8), ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED)
 
         hidden_states = self.get_attention_scores_opt(
-            query,
-            key,
-            value,
-            original_seq_len,
-            dim_head,
-            index=index,
+            query, key, value, dim_head, attn_type="cross" if encoder_hidden_states else "self"
         )
 
         hidden_states = ttnn.transformer.concatenate_heads(
