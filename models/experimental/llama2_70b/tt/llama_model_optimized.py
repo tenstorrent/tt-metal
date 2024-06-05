@@ -60,7 +60,7 @@ class TtLlamaModel_optimized:
 
         self.cache_path = cache_path
         # Transformation matrix for rotary embeddings
-        transformation_mat_torch = get_rot_transformation_mat(self.head_dim)
+        transformation_mat_torch = get_rot_transformation_mat(32)  # 32 for tile size
         transformation_mats = ttnn.as_tensor(
             transformation_mat_torch,
             dtype=ttnn.bfloat16,
