@@ -1490,6 +1490,15 @@ class ResNet(nn.Module):
                     ),
                 }
             )
+            self.n_dram_cores = 8
+            self.dram_shard_grid = tt_lib.tensor.CoreRangeSet(
+                {
+                    tt_lib.tensor.CoreRange(
+                        tt_lib.tensor.CoreCoord(0, 0),
+                        tt_lib.tensor.CoreCoord(7, 0),
+                    )
+                }
+            )
 
             self.folded_conv1_params = [self.inplanes, 16, 4, 4, 1, 1, 0, 0, 1, groups]
             first_conv_output_padded_nhw_size = _nearest_y(112 * 112 * batch_size, 98 * 32)
@@ -2101,7 +2110,8 @@ class ResNet(nn.Module):
 
         return x
 
-    def forward(self, x: tt_lib.tensor, write_event=None, op_event=None) -> tt_lib.tensor:
+    def forward(self, x: tt_lib.tensor, write_event=None, op_event=None, final_out_mem_config=None) -> tt_lib.tensor:
+        x_in = None
         if not self.sharded:
             original_A_cl_host_shape = x.get_legacy_shape()
             x = x.reshape(
@@ -2135,13 +2145,18 @@ class ResNet(nn.Module):
             if x.storage_type() != tt_lib.tensor.StorageType.DEVICE:
                 x = x.to(self.device, mem_config)
             elif x.memory_config().is_sharded():
-                x = tt_lib.tensor.reshard(x, mem_config)
+                if x.memory_config() != mem_config:
+                    x = tt_lib.tensor.reshard(x, mem_config)
+                else:
+                    x_in = x
             else:
                 x = tt_lib.tensor.interleaved_to_sharded(x, mem_config)
             if op_event is not None:
                 tt_lib.device.RecordEvent(self.device, 0, op_event)
 
         x = self.conv1(x)
+        if x_in is not None:
+            x_in.deallocate()
         # Relu is fused with conv1
 
         if self.batch_size == 20:
@@ -2359,7 +2374,7 @@ class ResNet(nn.Module):
         x = tt_lib.tensor.untilize_with_unpadding(
             x,
             (x_shape[0] - 1, x_shape[1] - 1, x_shape[2] - 1, 1000 - 1),
-            self.memory_config,
+            self.memory_config if final_out_mem_config is None else final_out_mem_config,
         )
         x_shape = x.get_legacy_shape()
         x = x.reshape(

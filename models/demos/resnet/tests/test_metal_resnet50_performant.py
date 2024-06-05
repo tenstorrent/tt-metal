@@ -10,7 +10,7 @@ from models.utility_functions import skip_for_wormhole_b0
 
 
 @skip_for_wormhole_b0("This test is not supported on WHB0, please use the TTNN version.")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "num_hw_cqs": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("batch_size", [20], ids=["batch_20"])
 @pytest.mark.parametrize(
     "weights_dtype",
@@ -32,7 +32,6 @@ def test_run_resnet50_inference(
 ):
     run_resnet50_inference(
         device,
-        use_program_cache,
         batch_size,
         weights_dtype,
         activations_dtype,
@@ -43,7 +42,7 @@ def test_run_resnet50_inference(
 
 
 @skip_for_wormhole_b0("This test is not supported on WHB0, please use the TTNN version.")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "num_hw_cqs": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("batch_size", [20], ids=["batch_20"])
 @pytest.mark.parametrize(
     "weights_dtype",
@@ -75,7 +74,6 @@ def test_run_resnet50_trace_inference(
 
     run_resnet50_inference(
         device,
-        use_program_cache,
         batch_size,
         weights_dtype,
         activations_dtype,
