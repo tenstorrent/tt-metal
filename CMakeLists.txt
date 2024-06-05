@@ -210,3 +210,9 @@ install(FILES ${CMAKE_BINARY_DIR}/lib/_C.so
 install(DIRECTORY ${CMAKE_BINARY_DIR}/hw/toolchain
     DESTINATION ${CMAKE_SOURCE_DIR}/runtime/hw
 )
+
+# Custom clean target for `built` folder for when new kernel changes are pulled
+add_custom_target(clean-built
+   COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_SOURCE_DIR}/built
+   COMMENT "Cleaning `built` directory"
+)
