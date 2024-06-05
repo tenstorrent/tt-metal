@@ -174,7 +174,9 @@ void Binary::validate_with_output_tensors(const std::vector<Tensor> &input_tenso
     if (!output_tensors.empty()) {
         TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensors");
 
-        TT_FATAL(!this->program_config.in_place, "Operation is configured as in_place. First input is used as output. Provided output tensor is ignored");
+        if(output_tensors.at(0).has_value()) {
+            TT_FATAL(!this->program_config.in_place, "Operation is configured as in_place. First input is used as output. Provided output tensor is ignored");
+        }
     }
 }
 
