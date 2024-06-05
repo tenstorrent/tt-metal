@@ -52,7 +52,7 @@ void MorehSumBackward::validate_with_output_tensors(
     auto output_grad_shape_wo_padding = output_grad.get_legacy_shape().without_padding();
 
     // validate output_grad shape
-    if (this->keepdim) {
+    if (this->keep_batch_dim) {
         for (int i = 0; i < input_rank; ++i) {
             TT_FATAL(input_shape_wo_padding[i] >= output_grad_shape_wo_padding[i]);
         }
@@ -114,14 +114,14 @@ operation::ProgramWithCallbacks MorehSumBackward::create_program(
     auto &output_grad = inputs.at(0);
     auto &input_grad = outputs.at(0);
 
-    return moreh_sum_backward_impl(output_grad, input_grad, this->dims, this->keepdim, this->compute_kernel_config);
+    return moreh_sum_backward_impl(output_grad, input_grad, this->dims, this->keep_batch_dim, this->compute_kernel_config);
 }
 
 Tensor moreh_sum_backward(
     const Tensor &output_grad,
     const Tensor &input,
     std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
-    const bool keepdim,
+    const bool keep_batch_dim,
     const std::optional<const Tensor> input_grad,
     const MemoryConfig &input_grad_mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
@@ -132,12 +132,12 @@ Tensor moreh_sum_backward(
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({output_grad, input}))};
     auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
     operation::launch_op(
-        [dims, keepdim, input_grad_mem_config, kernel_config_val](
+        [dims, keep_batch_dim, input_grad_mem_config, kernel_config_val](
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &optional_input_tensors,
             const std::vector<std::optional<Tensor>> &optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(
-                MorehSumBackward{.dims = dims, .keepdim=keepdim, .input_grad_mem_config = input_grad_mem_config, .compute_kernel_config = kernel_config_val},
+                MorehSumBackward{.dims = dims, .keep_batch_dim=keep_batch_dim, .input_grad_mem_config = input_grad_mem_config, .compute_kernel_config = kernel_config_val},
                 input_tensors,
                 optional_input_tensors,
                 optional_output_tensors);

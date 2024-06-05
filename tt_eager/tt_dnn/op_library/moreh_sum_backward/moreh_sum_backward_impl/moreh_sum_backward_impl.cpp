@@ -38,8 +38,8 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
     }
 }
 
-Shape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keepdim) {
-    if (keepdim) {
+Shape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim) {
+    if (keep_batch_dim) {
         return output_grad.get_legacy_shape();
     }
 
@@ -61,7 +61,7 @@ Shape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad,
 }
 }
 
-operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keepdim, const DeviceComputeKernelConfig &compute_kernel_config) {
+operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim, const DeviceComputeKernelConfig &compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -81,7 +81,7 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
     std::vector<uint32_t> input_grad_dim(input_grad_rank, 1);
     log_debug(LogOp, "input_grad");
     get_tensor_dim(input_grad_dim, input_grad_shape);
-    const auto &output_grad_shape = get_output_grad_shape(output_grad, input_grad, dims, keepdim);
+    const auto &output_grad_shape = get_output_grad_shape(output_grad, input_grad, dims, keep_batch_dim);
     const auto &output_grad_shape_wo_padding = output_grad_shape.without_padding();
 
     std::vector<uint32_t> output_grad_dim(input_grad_rank, 1);
