@@ -769,6 +769,12 @@ def unary_div_trunc(x, *args, **kwargs):
     return result
 
 
+def unary_rdiv_trunc(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.trunc(value / x)
+    return result
+
+
 def div_no_nan(x, y, *args, **kwargs):
     result = torch.where(y == 0, 0, x / y)
     return result

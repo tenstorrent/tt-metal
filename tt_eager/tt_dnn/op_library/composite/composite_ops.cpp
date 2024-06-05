@@ -1029,6 +1029,21 @@ Tensor div_trunc(
     float value,
     const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _div_trunc_overload)(input, value, output_mem_config);
+}
+
+Tensor _unary_rdiv_trunc(
+    float value,
+    const Tensor& input,
+    const MemoryConfig& output_mem_config) {
+    Tensor result = div_unary(value, input);
+    return trunc(result);
+}
+Tensor unary_rdiv_trunc(
+    float value,
+    const Tensor& input,
+    const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _unary_rdiv_trunc)(value, input, output_mem_config);
+}
 
 Tensor is_odd(const Tensor& input, const MemoryConfig& output_mem_config) {
     Tensor result = ttnn::multiply(input, (1.0f/2.0f));

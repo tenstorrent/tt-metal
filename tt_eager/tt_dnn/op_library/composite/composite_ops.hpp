@@ -165,6 +165,11 @@ Tensor div_trunc(
     float value,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor unary_rdiv_trunc(
+    float value,
+    const Tensor& input,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 Tensor div_no_nan(
     const Tensor& input_a,
     const Tensor& input_b,
