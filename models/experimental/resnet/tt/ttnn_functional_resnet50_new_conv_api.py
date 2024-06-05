@@ -10,6 +10,7 @@ from models.utility_functions import (
     pad_and_fold_conv_activation_for_unity_stride,
 )
 from typing import List
+from loguru import logger
 
 hardcoded_matmul_config_linear = {
     8: ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -176,6 +177,7 @@ class resnet50Bottleneck:
                 ),
                 conv_op_cache=conv_op_cache,
             )
+            ds_out = ttnn.reallocate(ds_out)
         else:
             ds_out = x
         return ds_out
@@ -192,9 +194,12 @@ class resnet50Bottleneck:
         height_sharding=None,
         eltwise_binary_out_in_place=True,
     ):
+        breakpoint()
+
         # conv1 is 1x1 conv
         # print("Running conv1")
         module_input_height = input_height
+        ttnn.dump_device_memory_state(device, "before_conv1_")
         out, input_height, input_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.conv1_weight_tensor,
@@ -233,11 +238,11 @@ class resnet50Bottleneck:
                 act_block_h_override = 160
 
         self.run_downsample_before_conv2 = False
-        if not (input_height == 56 and self.conv1_input_channels == 64):
-            self.run_downsample_before_conv2 = True
+        # if not (input_height == 56 and self.conv1_input_channels == 64):
+        #     self.run_downsample_before_conv2 = True
 
         if self.run_downsample_before_conv2:
-            ttnn.dump_device_memory_state(device, "before_ds_layer2_m1_")
+            ttnn.dump_device_memory_state(device, "before_downsample_")
             ds_out = self.run_downsample_if_req(
                 x, device, batch_size, input_height, input_width, conv_op_cache, reshard_if_not_optimal, height_sharding
             )
@@ -550,6 +555,7 @@ class resnet50:
         x_height = 56
         x_width = 56
 
+        logger.debug(f"==== Running layer 1 module 1")
         layer1_module1_input_shape = [
             x.get_legacy_shape()[0],
             x.get_legacy_shape()[1],
@@ -577,7 +583,9 @@ class resnet50:
             x_memory_config.shard_spec.orientation,
             tile_layout=True,
         )
+        logger.debug(f"==== Running layer 1 module 2")
         x, x_height, x_width = self.layer1_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
+        logger.debug(f"==== Running layer 1 module 3")
         x, x_height, x_width = self.layer1_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
         if self.batch_size == 20 and is_wormhole_b0():
             x = ttnn.reallocate(x)
@@ -609,10 +617,14 @@ class resnet50:
             x_memory_config.shard_spec.orientation,
             tile_layout=True,
         )
+        logger.debug(f"==== Running layer 2 module 2")
         x, x_height, x_width = self.layer2_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
+        logger.debug(f"==== Running layer 2 module 3")
         x, x_height, x_width = self.layer2_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
+        logger.debug(f"==== Running layer 2 module 4")
         x, x_height, x_width = self.layer2_module4(x, device, batch_size, x_height, x_width, conv_op_cache)
 
+        logger.debug(f"==== Running layer 3 module 1")
         layer3_module1_input_shape = [
             x.get_legacy_shape()[0],
             x.get_legacy_shape()[1],
@@ -630,10 +642,15 @@ class resnet50:
             x_memory_config.shard_spec.orientation,
             tile_layout=True,
         )
+        logger.debug(f"==== Running layer 3 module 2")
         x, x_height, x_width = self.layer3_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
+        logger.debug(f"==== Running layer 3 module 3")
         x, x_height, x_width = self.layer3_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
+        logger.debug(f"==== Running layer 3 module 4")
         x, x_height, x_width = self.layer3_module4(x, device, batch_size, x_height, x_width, conv_op_cache)
+        logger.debug(f"==== Running layer 3 module 5")
         x, x_height, x_width = self.layer3_module5(x, device, batch_size, x_height, x_width, conv_op_cache)
+        logger.debug(f"==== Running layer 3 module 6")
         x, x_height, x_width = self.layer3_module6(
             x,
             device,
@@ -650,6 +667,7 @@ class resnet50:
             x.get_legacy_shape()[2],
             x.get_legacy_shape()[3],
         ]
+        logger.debug(f"==== Running layer 4 module 1")
         x, x_height, x_width = self.layer4_module1(
             x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True, height_sharding=False
         )
@@ -661,7 +679,9 @@ class resnet50:
             x_memory_config.shard_spec.orientation,
             tile_layout=True,
         )
+        logger.debug(f"==== Running layer 4 module 2")
         x, x_height, x_width = self.layer4_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
+        logger.debug(f"==== Running layer 4 module 3")
         x, x_height, x_width = self.layer4_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
 
         unpadded_shape = x.shape_without_padding()
