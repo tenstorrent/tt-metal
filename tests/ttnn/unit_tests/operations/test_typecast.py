@@ -20,13 +20,13 @@ def test_typecast_output_tensor(device):
     torch.manual_seed(0)
 
     h = w = 32
-    from_dtype = ttnn.DataType.BFLOAT16
-    to_dtype = ttnn.DataType.UINT32
+    from_dtype = ttnn.bfloat16
+    to_dtype = ttnn.uint32
     gold_tensor = ttnn.ones([h, w], to_dtype, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG)
     bfloat16_tensor = ttnn.ones([h, w], from_dtype, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG)
     uint32_preallocated = ttnn.empty([h, w], to_dtype, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG)
 
-    output_ttnn = ttnn.typecast(bfloat16_tensor, ttnn.DataType.UINT32, memory_config=ttnn.L1_MEMORY_CONFIG)
+    output_ttnn = ttnn.typecast(bfloat16_tensor, ttnn.uint32, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
     ttnn.typecast(bfloat16_tensor, to_dtype, memory_config=ttnn.L1_MEMORY_CONFIG, output_tensor=uint32_preallocated)

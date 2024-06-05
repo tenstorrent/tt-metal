@@ -74,9 +74,9 @@ def test_lgamma(device, h, w):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
-@pytest.mark.parametrize("output_dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.UINT16, ttnn.DataType.UINT32])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.uint16, ttnn.uint32])
 def test_eq(device, h, w, output_dtype):
-    if is_grayskull() and output_dtype in (ttnn.DataType.UINT32, ttnn.DataType.UINT16):
+    if is_grayskull() and output_dtype in (ttnn.uint16, ttnn.uint32):
         pytest.skip("GS does not support fp32/uint32/uint16 data types")
 
     torch.manual_seed(0)
@@ -110,11 +110,11 @@ def test_eq(device, h, w, output_dtype):
 
     # EQ with a preallocated output tensor
     output_tensor_preallocated_bfloat16 = ttnn.ones(
-        [h, w], ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+        [h, w], ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
     )
     output_tensor_preallocated = output_tensor_preallocated_bfloat16
     # There is no good way to create uint16 tensor in ttnn/torch, so we create bfloat16 and typecast to target
-    if output_dtype != ttnn.DataType.BFLOAT16:
+    if output_dtype != ttnn.bfloat16:
         output_tensor_preallocated = ttnn.typecast(
             output_tensor_preallocated_bfloat16, output_dtype, memory_config=ttnn.L1_MEMORY_CONFIG
         )
