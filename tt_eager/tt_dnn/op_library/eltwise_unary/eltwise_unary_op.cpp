@@ -69,6 +69,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::NEG: defines["SFPU_OP_NEG_INCLUDE"] = "1"; break;
         case UnaryOpType::SOFTPLUS: defines["SFPU_OP_SOFTPLUS_INCLUDE"] = "1"; break;
         case UnaryOpType::TYPECAST: defines["SFPU_OP_TYPECAST_INCLUDE"] = "1"; break;
+        case UnaryOpType::RIGHT_SHIFT: defines["SFPU_OP_RIGHT_SHIFT_INCLUDE"] = "1"; break;
         default: defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1"; break;
     };
 }
@@ -111,6 +112,11 @@ std::pair<string, string> get_op_init_and_func_parameterized(
         case UnaryOpType::HEAVISIDE:
             op_init_and_name = {
                 "heaviside_tile_init();", fmt::format("heaviside_tile({}, {}u);", idst, Converter::to_hex(param0))};
+            break;
+        case UnaryOpType::RIGHT_SHIFT:
+            op_init_and_name = {
+                "right_shift_tile_init();",
+                fmt::format("right_shift_tile({}, {}u);", idst, std::to_string((uint)param0))};
             break;
         case UnaryOpType::EXP:
             op_init_and_name = {
@@ -320,19 +326,26 @@ namespace tt {
 
 namespace tt_metal {
 
-void EltwiseUnary::validate(const std::vector<Tensor>& input_tensors) const {
+void EltwiseUnary::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &optional_output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
+    auto out_mem_config = (!optional_output_tensors.empty() && optional_output_tensors.at(0).has_value()) ? optional_output_tensors.at(0).value().memory_config() : this->output_mem_config;
+
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to eltwise unary need to be on device!");
     TT_FATAL(
         input_tensor_a.buffer() != nullptr, "Operands to eltwise unary need to be allocated in buffers on device!");
     TT_FATAL(
-        input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout,
+        input_tensor_a.memory_config().memory_layout == out_mem_config.memory_layout,
         "Input and output memory layout must match");
     if (!input_tensor_a.is_sharded()) {
         TT_FATAL((input_tensor_a.get_layout() == Layout::TILE), "Inputs to eltwise unary must be tilized");
         TT_FATAL(
             input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
             "Interleaved memory layout supported");
+    }
+    if(!optional_output_tensors.empty() && optional_output_tensors.at(0).has_value()){
+        const auto output_shape_required = this->compute_output_shapes(input_tensors);
+        const auto& out_tensor = optional_output_tensors.at(0).value();
+        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required.at(0), fmt::format("The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape()));
     }
 }
 
@@ -341,7 +354,11 @@ std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<Tensor>
     return {input_tensor.get_legacy_shape()};
 }
 
-std::vector<Tensor> EltwiseUnary::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+std::vector<Tensor> EltwiseUnary::create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    if(!output_tensors.empty() && output_tensors.at(0).has_value()){
+        return {output_tensors.at(0).value()};
+    }
+
     const auto& input_tensor = input_tensors.at(0);
     if (this->output_mem_config.is_sharded()) {
         Shape output_shape = compute_output_shapes(input_tensors).at(0);

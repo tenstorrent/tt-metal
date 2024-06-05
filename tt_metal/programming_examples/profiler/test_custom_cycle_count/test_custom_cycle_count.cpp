@@ -7,7 +7,7 @@
 
 using namespace tt;
 
-bool RunCustomCycle(tt_metal::Device *device, int loop_count, bool dumpProfile = false)
+bool RunCustomCycle(tt_metal::Device *device, int loop_count)
 {
     bool pass = true;
 

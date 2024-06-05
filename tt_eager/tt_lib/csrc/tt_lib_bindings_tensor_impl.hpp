@@ -117,7 +117,7 @@ void bind_op_with_mem_config(py::module_ &module, std::string op_name, Func &&f,
 template <bool fused_activations = true, bool mem_config_arg = true, bool dtype_arg = true, bool opt_output_arg = true, typename Func>
 void bind_binary_op(py::module_ &module, std::string op_name, Func &&f, std::string op_desc) {
     std::vector<std::string> arg_name = {"input_a", "input_b"};
-    op_desc = fmt::format(op_desc, arg_name[0], arg_name[1]);
+    op_desc = fmt::format(fmt::runtime(op_desc), arg_name[0], arg_name[1]);
 
     std::string docstring = fmt::format(R"doc(
         {0}
@@ -156,7 +156,7 @@ void bind_binary_op(py::module_ &module, std::string op_name, Func &&f, std::str
 template <bool mem_config_arg = true, bool dtype_arg = false, typename Func>
 void bind_unary_op(py::module_ &module, std::string op_name, Func &&f, std::string op_desc) {
     const std::string tensor_name = "input";
-    op_desc = fmt::format(op_desc, tensor_name);
+    op_desc = fmt::format(fmt::runtime(op_desc), tensor_name);
     std::string docstring = fmt::format(R"doc(
         {0}
 
@@ -178,7 +178,7 @@ template <bool mem_config_arg = true, bool dtype_arg = false, typename Func, typ
 void bind_unary_op_with_param(py::module_ &module, std::string op_name, Func &&f, PyArg param, std::string op_desc, std::string param_desc) {
     const std::string tensor_name = "input";
     std::string param_name = std::string(param.name);
-    op_desc = fmt::format(op_desc, tensor_name, param_name);
+    op_desc = fmt::format(fmt::runtime(op_desc), tensor_name, param_name);
     const std::string required_param = std::is_same_v<py::arg_v, PyArg> ? "No" : "Yes";
     std::string docstring = fmt::format(R"doc(
         {0}

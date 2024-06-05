@@ -78,7 +78,8 @@ enum class UnaryOpType {
     UNARY_GT,
     UNARY_LT,
     TILED_PROD,
-    TYPECAST
+    TYPECAST,
+    RIGHT_SHIFT
 };
 
 template <typename T>
@@ -105,7 +106,8 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::UNARY_NE:
         case UnaryOpType::UNARY_GT:
         case UnaryOpType::UNARY_LT:
-        case UnaryOpType::TYPECAST: return true;
+        case UnaryOpType::TYPECAST:
+        case UnaryOpType::RIGHT_SHIFT: return true;
         default: return false;
     }
     return false;
@@ -171,9 +173,9 @@ struct EltwiseUnary {
     bool fp32_dest_acc_en;
     DataType output_dtype;
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
+    void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &optional_output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
     UnaryOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const;
@@ -365,6 +367,7 @@ constexpr auto leaky_relu = make_eltwise_unary_with_param<UnaryOpType::LEAKY_REL
 constexpr auto prelu = leaky_relu;
 constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
+constexpr auto right_shift = make_eltwise_unary_with_param<UnaryOpType::RIGHT_SHIFT>{};
 constexpr auto unary_ne = make_eltwise_unary_with_param<UnaryOpType::UNARY_NE>{};
 constexpr auto rsub = make_eltwise_unary_with_param<UnaryOpType::RSUB>{};
 constexpr auto silu = make_eltwise_unary<UnaryOpType::SILU>{};
