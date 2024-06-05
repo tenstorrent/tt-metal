@@ -124,43 +124,14 @@ def get_backward_tensors(
     return tt_output_grad, tt_input_grad, torch_output_grad
 
 
-@pytest.mark.parametrize(
-    "input_shape",
-    (([3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1]),),
-    ids=[
-        "3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1",
-    ],
-)
-@pytest.mark.parametrize(
-    "dim",
-    (
-        None,
-        0,
-        1,
-        2,
-        3,
-        [],
-        [0, 1],
-        [0, 1, 2],
-        [0, 1, 2, 3],
-        [0, 1, 3],
-        [0, 2, 3],
-        [1, 2],
-        [1, 2, 3],
-        [1, 3],
-        [2, 3],
-    ),
-    ids=["None", "0", "1", "2", "3", "[]", "0,1", "0,1,2", "0,1,2,3", "0,1,3", "0,2,3", "1,2", "1,2,3", "1,3", "2,3"],
-)
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-@pytest.mark.parametrize("keep_batch_dim", (True, False), ids=["keep_batch_dim-true", "keep_batch_dim-flase"])
-def test_moreh_sum(input_shape, dim, keep_batch_dim, compute_kernel_options, device):
-    torch.manual_seed(2023)
-
+def moreh_sum(input_shape, dim, keep_batch_dim, use_provide_output, compute_kernel_options, device):
     (tt_input, tt_output, output_shape, _, torch_input) = get_tensors(
         input_shape, dim, device, keep_batch_dim=keep_batch_dim
     )
     torch_output = torch.sum(torch_input, dim, keep_batch_dim)
+
+    if not use_provide_output:
+        tt_output = None
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
@@ -193,6 +164,42 @@ def test_moreh_sum(input_shape, dim, keep_batch_dim, compute_kernel_options, dev
     logger.debug(f"Out passing={passing}")
     logger.debug(f"Output pcc={output_pcc}")
 
+    return passing
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (([3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1]),),
+    ids=[
+        "3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1",
+    ],
+)
+@pytest.mark.parametrize(
+    "dim",
+    (
+        None,
+        0,
+        1,
+        2,
+        3,
+        [],
+        [0, 1],
+        [0, 1, 2],
+        [0, 1, 2, 3],
+        [0, 1, 3],
+        [0, 2, 3],
+        [1, 2],
+        [1, 2, 3],
+        [1, 3],
+        [2, 3],
+    ),
+    ids=["None", "0", "1", "2", "3", "[]", "0,1", "0,1,2", "0,1,2,3", "0,1,3", "0,2,3", "1,2", "1,2,3", "1,3", "2,3"],
+)
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+@pytest.mark.parametrize("keep_batch_dim", (True, False), ids=["keep_batch_dim-true", "keep_batch_dim-flase"])
+def test_moreh_sum(input_shape, dim, keep_batch_dim, compute_kernel_options, device):
+    torch.manual_seed(2023)
+    passing = moreh_sum(input_shape, dim, keep_batch_dim, True, compute_kernel_options, device)
     assert passing
 
 
@@ -220,48 +227,36 @@ def test_moreh_sum(input_shape, dim, keep_batch_dim, compute_kernel_options, dev
 @pytest.mark.parametrize("keep_batch_dim", (True, False), ids=["keep_batch_dim-true", "keep_batch_dim-flase"])
 def test_moreh_sum_non_4d(input_shape, dim, keep_batch_dim, use_provide_output, device):
     torch.manual_seed(2023)
-
     input_rank = len(input_shape)
     if dim >= input_rank:
         pytest.skip(f"input dim {dim} exceeds the dims of input tensor {len(input_shape)}.")
 
-    (tt_input, tt_output, output_shape, _, torch_input) = get_tensors(
-        input_shape, dim, device, keep_batch_dim=keep_batch_dim
-    )
-    if not use_provide_output:
-        tt_output = None
-
-    compute_kernel_config = get_compute_kernel_options(False)
-
-    torch_output = torch.sum(torch_input, dim, keep_batch_dim)
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_output_cpu = (
-        ttl.operations.primary.moreh_sum(
-            tt_input,
-            dim=dim,
-            keep_batch_dim=keep_batch_dim,
-            output=tt_output,
-            compute_kernel_config=compute_kernel_config,
-        )
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(output_shape)
-        .to_torch()
-    )
-
-    rtol = atol = 0.12
-    passing, output_pcc = comp_allclose_and_pcc(
-        torch_output if keep_batch_dim else torch_output.reshape(-1),
-        tt_output_cpu if keep_batch_dim else tt_output_cpu.reshape(-1),
-        pcc=0.999,
-        rtol=rtol,
-        atol=atol,
-    )
-
-    logger.debug(f"Out passing={passing}")
-    logger.debug(f"Output pcc={output_pcc}")
-
+    passing = moreh_sum(input_shape, dim, keep_batch_dim, use_provide_output, False, device)
     assert passing
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [4, TILE_HEIGHT * 4, TILE_WIDTH * 4],
+    ],
+    ids=[
+        "4, TILE_HEIGHT * 4, TILE_WIDTH * 4",
+    ],
+)
+@pytest.mark.parametrize(
+    "dim",
+    (0, 1, 2),
+    ids=["0", "1", "2"],
+)
+def test_moreh_sum_enable_cache(input_shape, dim, device, use_program_cache):
+    torch.manual_seed(3072)
+    keep_batch_dim = [True, False]
+    use_provide_output = [True, False]
+    for i in range(2):
+        passing = moreh_sum(input_shape, dim, keep_batch_dim[i], use_provide_output[i], False, device)
+        assert passing
+    assert device.num_program_cache_entries() == 1
 
 
 @pytest.mark.parametrize(
@@ -314,36 +309,7 @@ def test_moreh_sum_fp32_dest_acc(input_shape, dim, compute_kernel_options, devic
     # assert passing
 
 
-@pytest.mark.parametrize(
-    "input_shape",
-    (([3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1]),),
-    ids=[
-        "3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1",
-    ],
-)
-@pytest.mark.parametrize(
-    "dim",
-    (
-        None,
-        0,
-        1,
-        2,
-        3,
-        [0, 1],
-        [0, 1, 2],
-        [0, 1, 2, 3],
-        [0, 1, 3],
-        [0, 2, 3],
-        [1, 2],
-        [1, 2, 3],
-        [1, 3],
-        [2, 3],
-    ),
-    ids=["None", "0", "1", "2", "3", "0,1", "0,1,2", "0,1,2,3", "0,1,3", "0,2,3", "1,2", "1,2,3", "1,3", "2,3"],
-)
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-@pytest.mark.parametrize("keep_batch_dim", (True, False), ids=["keep_batch_dim-true", "keep_batch_dim-flase"])
-def test_moreh_sum_backward(input_shape, dim, compute_kernel_options, keep_batch_dim, device):
+def moreh_sum_backward(input_shape, dim, keep_batch_dim, use_provide_output, compute_kernel_options, device):
     torch.manual_seed(2023)
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
@@ -354,6 +320,9 @@ def test_moreh_sum_backward(input_shape, dim, compute_kernel_options, keep_batch
     (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(
         tt_output_shape, torch_output_shape, input_shape, device
     )
+
+    if not use_provide_output:
+        tt_input_grad = None
 
     torch_output = torch.sum(torch_input, dim, keep_batch_dim)
     torch_output.backward(torch_output_grad)
@@ -381,6 +350,41 @@ def test_moreh_sum_backward(input_shape, dim, compute_kernel_options, keep_batch
     logger.debug(f"Out passing={passing}")
     logger.debug(f"Output pcc={output_pcc}")
 
+    return passing
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (([3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1]),),
+    ids=[
+        "3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1",
+    ],
+)
+@pytest.mark.parametrize(
+    "dim",
+    (
+        None,
+        0,
+        1,
+        2,
+        3,
+        [0, 1],
+        [0, 1, 2],
+        [0, 1, 2, 3],
+        [0, 1, 3],
+        [0, 2, 3],
+        [1, 2],
+        [1, 2, 3],
+        [1, 3],
+        [2, 3],
+    ),
+    ids=["None", "0", "1", "2", "3", "0,1", "0,1,2", "0,1,2,3", "0,1,3", "0,2,3", "1,2", "1,2,3", "1,3", "2,3"],
+)
+@pytest.mark.parametrize("keep_batch_dim", (True, False), ids=["keep_batch_dim-true", "keep_batch_dim-flase"])
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_moreh_sum_backward(input_shape, dim, keep_batch_dim, compute_kernel_options, device):
+    torch.manual_seed(2023)
+    passing = moreh_sum_backward(input_shape, dim, keep_batch_dim, True, compute_kernel_options, device)
     assert passing
 
 
@@ -405,38 +409,33 @@ def test_moreh_sum_backward(input_shape, dim, compute_kernel_options, keep_batch
 )
 def test_moreh_sum_backward_wo_input_grad(input_shape, dim, device):
     torch.manual_seed(2023)
-    compute_kernel_config = get_compute_kernel_options(False)
-
-    (tt_input, _, tt_output_shape, torch_output_shape, torch_input) = get_tensors(input_shape, dim, device)
-    (tt_output_grad, _, torch_output_grad) = get_backward_tensors(
-        tt_output_shape, torch_output_shape, input_shape, device
-    )
-
-    torch_output = torch.sum(torch_input, dim)
-    torch_output.backward(torch_output_grad)
-
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_input_grad_cpu = (
-        ttl.operations.primary.moreh_sum_backward(
-            tt_output_grad,
-            tt_input,
-            dim=dim,
-            compute_kernel_config=compute_kernel_config,
-        )
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(input_shape)
-        .to_torch()
-    )
-
-    # test for equivalance
-    rtol = atol = 0.1
-    passing, output_pcc = comp_allclose_and_pcc(torch_input.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
-
-    logger.debug(f"Out passing={passing}")
-    logger.debug(f"Output pcc={output_pcc}")
-
+    passing = moreh_sum_backward(input_shape, dim, True, False, False, device)
     assert passing
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [4, TILE_HEIGHT * 4, TILE_WIDTH * 4],
+    ],
+    ids=[
+        "4, TILE_HEIGHT * 4, TILE_WIDTH * 4",
+    ],
+)
+@pytest.mark.parametrize(
+    "dim",
+    (0, 1, 2),
+    ids=["0", "1", "2"],
+)
+def test_moreh_sum_backward_enable_cache(input_shape, dim, device, use_program_cache):
+    torch.manual_seed(3072)
+    keep_batch_dim = [True, False]
+    use_provide_output = [True, False]
+    num_cache_entires = [2, 1, 1]
+    for i in range(2):
+        passing = moreh_sum_backward(input_shape, dim, keep_batch_dim[i], use_provide_output[i], False, device)
+        assert passing
+    assert device.num_program_cache_entries() == num_cache_entires[dim]
 
 
 @pytest.mark.parametrize(
