@@ -213,7 +213,8 @@ struct operation_t {
 
     template <typename... args_t>
     auto operator()(args_t&&... args) const {
-        ZoneScopedN("ttnn::decorators::operation_t::operator()");
+        ZoneScoped;
+        ZoneName(this->cpp_fully_qualified_name, std::strlen(this->cpp_fully_qualified_name));
         tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", this->cpp_fully_qualified_name);
 
         // #8479: Fix and re-enable logging in cpp operation decorator
@@ -323,7 +324,8 @@ struct lambda_operation_t {
 
     template <typename... args_t>
     auto operator()(args_t&&... args) const {
-        ZoneScopedN("ttnn::decorators::lambda_operation_t::operator()");
+        ZoneScoped;
+        ZoneName(this->cpp_fully_qualified_name, std::strlen(this->cpp_fully_qualified_name));
         tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", this->cpp_fully_qualified_name);
         auto output = this->lambda(std::forward<decltype(args)>(args)...);
         tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", this->cpp_fully_qualified_name);
