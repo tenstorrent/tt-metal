@@ -42,7 +42,7 @@ inline Tensor execute_on_worker_thread(
     const Tensor& input_tensor,
     const std::vector<tt::tt_metal::UnaryWithParam>& op_chain,
     const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    DataType output_dtype = (op_chain[0].op_type == UnaryOpType::TYPECAST) ? (DataType)op_chain[0].params[0] : input_tensor.get_dtype();
+    DataType output_dtype = (op_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(op_chain[0].params[0]) : input_tensor.get_dtype();
     bool fp32_dest_acc_en = output_dtype == DataType::UINT32 or
                             input_tensor.get_dtype() == DataType::UINT32 or
                             input_tensor.get_dtype() == DataType::INT32;  // MT: Currently only uint32/int32 is moved to
