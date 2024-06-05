@@ -267,7 +267,7 @@ class Buffer {
     std::optional<ShardSpecBuffer> shard_parameters_;
 };
 
-BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer);
+BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer, std::optional<std::array <std::array<uint32_t, 2>, 2> > tensor2d_shape_page_shape_override = std::nullopt);
 
 namespace detail {
 using PageAddress = uint32_t;

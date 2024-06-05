@@ -584,10 +584,49 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
-    Buffer* input_buffer, Buffer* output_buffer) {
-    auto output_buffer_page_mapping = generate_buffer_page_mapping(*output_buffer);
-    auto input_buffer_page_mapping = generate_buffer_page_mapping(*input_buffer);
+inline uint32_t get_greatest_common_factor(uint32_t n1, uint32_t n2) {
+   if ( n2 > n1) {
+     int temp = n2;
+     n2 = n1;
+     n1 = temp;
+   }
+   uint32_t hcf = 1;
+   for (int i = 1; i <=  n2; ++i) {
+     if (n1 % i == 0 && n2 % i ==0) {
+       hcf = i;
+     }
+   }
+   return hcf;
+ }
+
+inline std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
+    const Tensor& input, Tensor& output) {
+
+    auto input_buffer = input.buffer();
+    auto output_buffer = output.buffer();
+    std::optional<std::array<std::array<uint32_t, 2>, 2 > > tensor2d_shape_page_shape_override = std::nullopt;
+    uint32_t page_width = TILE_WIDTH;
+    auto input_shard_spec = input_buffer->shard_spec();
+    auto output_shard_spec = output_buffer->shard_spec();
+    uint32_t input_num_host_pages_multiplier = 1;
+    if(input.get_layout() == Layout::ROW_MAJOR) {
+        page_width = get_greatest_common_factor(input_buffer->shard_spec().page_shape[1], output_buffer->shard_spec().page_shape[1]);
+        std::array<uint32_t, 2> page_shape = {1, page_width};
+
+        auto shape = input.get_legacy_shape();
+        auto width = shape[-1];
+        auto other_dims = 1;
+        for (int i = 0; i < shape.rank() - 1; i++) {
+            other_dims *= shape[i];
+        }
+        std::array<uint32_t,2> tensor2d_size = {other_dims/page_shape[0], width/page_shape[1]};
+        tensor2d_shape_page_shape_override = {tensor2d_size, page_shape};
+        input_shard_spec = ShardSpecBuffer(input_shard_spec.tensor_shard_spec, tensor2d_shape_page_shape_override.value()[1], tensor2d_shape_page_shape_override.value()[0]);
+        output_shard_spec = ShardSpecBuffer(output_shard_spec.tensor_shard_spec, tensor2d_shape_page_shape_override.value()[1], tensor2d_shape_page_shape_override.value()[0]);
+        input_num_host_pages_multiplier = input_buffer->shard_spec().page_shape[1] / page_width;
+    }
+    auto output_buffer_page_mapping = generate_buffer_page_mapping(*output_buffer, tensor2d_shape_page_shape_override);
+    auto input_buffer_page_mapping = generate_buffer_page_mapping(*input_buffer, tensor2d_shape_page_shape_override);
 
     const auto& output_shard_to_host_mapping = output_buffer_page_mapping.dev_page_to_host_page_mapping_;
     const auto& input_page_to_local_page_mapping = input_buffer_page_mapping.host_page_to_local_shard_page_mapping_;
@@ -986,7 +1025,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
 
 operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, Tensor& output) {
     auto device = input.device();
-    auto output_core_to_page_range_pair = get_core_page_ranges(input.buffer(), output.buffer());
+    auto output_core_to_page_range_pair = get_core_page_ranges(input, output);
 
     tt_metal::Program program{};
 

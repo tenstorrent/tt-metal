@@ -86,10 +86,7 @@ void Reshard::validate_with_output_tensors(const std::vector<Tensor>& input_tens
     const auto& out_mem_config = has_output_tensor ? output_tensors[0].value().memory_config() : this->output_mem_config;
     TT_FATAL(out_mem_config.is_sharded(), "output must be sharded");
     TT_FATAL(out_mem_config.buffer_type == BufferType::L1);
-    if(input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        bool same_row_size = input_tensor.memory_config().shard_spec.value().shape[1] == out_mem_config.shard_spec.value().shape[1];
-        TT_FATAL(same_row_size, "row major must have shard_spec[1] be the same on both input and output");
-    }
+
 }
 
 std::vector<Shape> Reshard::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
