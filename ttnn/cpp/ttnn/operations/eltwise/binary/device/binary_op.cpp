@@ -184,7 +184,7 @@ inline BinaryProgramType get_program_type(const Binary& operation, const std::ve
         width_a == width_b) {
         return BinaryProgramType::ElementWiseMultiCore;
     } else if (height_b == 1 or width_b == 1) {
-        if (operation.program_config.dtype != input_tensor_a.get_dtype()) {
+        if (operation.dtype != input_tensor_a.get_dtype()) {
             TT_THROW("ttnn::operations::binary::Binary: cannot change dtype when broadcasting");
         }
         if (height_b == 1 and width_b == 1) {
@@ -244,10 +244,10 @@ void Binary::validate_with_output_tensors(const std::vector<Tensor> &input_tenso
     TT_FATAL(
         (input_tensor_a.get_layout() == Layout::TILE && input_tensor_b.get_layout() == Layout::TILE),
         "Inputs to eltwise binary must be tilized");
-    if (this->program_config.in_place) {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == this->program_config.memory_config.memory_layout);
-        TT_FATAL(input_tensor_a.memory_config().buffer_type == this->program_config.memory_config.buffer_type);
-        TT_FATAL(input_tensor_a.get_dtype() == this->program_config.dtype);
+    if (this->in_place) {
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == this->memory_config.memory_layout);
+        TT_FATAL(input_tensor_a.memory_config().buffer_type == this->memory_config.buffer_type);
+        TT_FATAL(input_tensor_a.get_dtype() == this->dtype);
     }
     if (input_tensor_a.memory_config().is_sharded()) {
         if (input_tensor_a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -260,43 +260,43 @@ void Binary::validate_with_output_tensors(const std::vector<Tensor> &input_tenso
             TT_FATAL(input_tensor_a.memory_config().memory_layout == input_tensor_b.memory_config().memory_layout);
             TT_FATAL(input_tensor_a.shard_spec().value() == input_tensor_b.shard_spec().value());
         }
-        if (this->program_config.memory_config.is_sharded()) {
-            TT_FATAL(input_tensor_a.memory_config().memory_layout == this->program_config.memory_config.memory_layout);
+        if (this->memory_config.is_sharded()) {
+            TT_FATAL(input_tensor_a.memory_config().memory_layout == this->memory_config.memory_layout);
         } else {
-            TT_FATAL(this->program_config.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+            TT_FATAL(this->memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
         }
     } else if (input_tensor_b.memory_config().is_sharded()) {
         TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
-        if (this->program_config.memory_config.is_sharded()) {
-            TT_FATAL(input_tensor_b.memory_config().memory_layout == this->program_config.memory_config.memory_layout);
+        if (this->memory_config.is_sharded()) {
+            TT_FATAL(input_tensor_b.memory_config().memory_layout == this->memory_config.memory_layout);
         } else {
-            TT_FATAL(this->program_config.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+            TT_FATAL(this->memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
         }
     } else {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
         TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
-        if (this->program_config.memory_config.is_sharded()) {
-            TT_FATAL(this->program_config.memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        if (this->memory_config.is_sharded()) {
+            TT_FATAL(this->memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
             uint32_t num_blocks = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / TILE_HEIGHT;
             auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
             uint32_t num_cores = core_grid.x * core_grid.y;
             TT_FATAL(num_blocks < num_cores or num_blocks % num_cores == 0);
 
         } else {
-            TT_FATAL(this->program_config.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+            TT_FATAL(this->memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
         }
     }
 
     if (program_type != BinaryProgramType::ElementWiseMultiCore) {
-        TT_FATAL(not this->program_config.activations.has_value());
+        TT_FATAL(not this->activations.has_value());
     }
 
     if (!output_tensors.empty()) {
         TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensors");
 
         if(output_tensors.at(0).has_value()) {
-            TT_FATAL(!this->program_config.in_place, "Operation is configured as in_place. First input is used as output. Provided output tensor is ignored");
+            TT_FATAL(!this->in_place, "Operation is configured as in_place. First input is used as output. Provided output tensor is ignored");
         }
     }
 }
@@ -313,7 +313,7 @@ std::vector<tt::tt_metal::Shape> Binary::compute_output_shapes(const std::vector
 std::vector<Tensor> Binary::create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    if (this->program_config.in_place) {
+    if (this->in_place) {
         return {input_tensor_a};
     } else {
         if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
@@ -323,7 +323,7 @@ std::vector<Tensor> Binary::create_output_tensors(const std::vector<Tensor>& inp
         auto program_type = get_program_type(*this, input_tensors);
 
         if (program_type == BinaryProgramType::ElementWiseMultiCore) {
-            if (this->program_config.memory_config.is_sharded()) {
+            if (this->memory_config.is_sharded()) {
                 ShardSpec shard_spec{CoreRangeSet({}), {0, 0}};
                 if (input_tensor_a.memory_config().is_sharded()) {
                     shard_spec = input_tensor_a.shard_spec().value();
@@ -339,34 +339,34 @@ std::vector<Tensor> Binary::create_output_tensors(const std::vector<Tensor>& inp
                         num_blocks / target_num_cores * TILE_HEIGHT, input_tensor_a.get_legacy_shape()[-1]};
                     shard_spec.orientation = ShardOrientation::ROW_MAJOR;
                 }
-                auto memory_config = this->program_config.memory_config;
+                auto memory_config = this->memory_config;
                 memory_config.shard_spec = shard_spec;
                 return {create_device_tensor(
                     this->compute_output_shapes(input_tensors).at(0),
-                    this->program_config.dtype,
+                    this->dtype,
                     Layout::TILE,
                     input_tensor_a.device(),
                     memory_config)};
             }
         } else {
-            if (this->program_config.memory_config.is_sharded()) {
+            if (this->memory_config.is_sharded()) {
                 ShardSpec shard_spec{CoreRangeSet({}), {0, 0}};
                 if (input_tensor_a.memory_config().is_sharded()) {
                     // Derive output shard_spec based on input
                     shard_spec = input_tensor_a.shard_spec().value();
                 }
-                auto memory_config = this->program_config.memory_config;
+                auto memory_config = this->memory_config;
                 memory_config.shard_spec = shard_spec;
                 return {create_device_tensor(
                     this->compute_output_shapes(input_tensors).at(0),
-                    this->program_config.dtype,
+                    this->dtype,
                     Layout::TILE,
                     input_tensor_a.device(),
                     memory_config)};
             }
         }
         return operation::generic_create_output_tensors(
-            *this, input_tensors, this->program_config.dtype, Layout::TILE, this->program_config.memory_config);
+            *this, input_tensors, this->dtype, Layout::TILE, this->memory_config);
     }
 }
 
@@ -391,12 +391,12 @@ operation::ProgramWithCallbacks Binary::create_program(
     }
 
     auto program_type = get_program_type(*this, input_tensors);
-    auto bcast_op_math = binary_op_type_to_bcast_op_math(this->program_config.binary_op_type);
+    auto bcast_op_math = binary_op_type_to_bcast_op_math(this->binary_op_type);
     if (bcast_op_math.has_value()) {
         switch (program_type) {
             case BinaryProgramType::ElementWiseMultiCore:
                 return eltwise_binary_multi_core(
-                    input_tensor_a, input_tensor_b, output_tensor, this->program_config.binary_op_type, activations);
+                    input_tensor_a, input_tensor_b, output_tensor, this->binary_op_type, activations);
             case BinaryProgramType::BroadcastHeightAndWidthMultiCore:
                 return bcast_multi_core_hw(
                     input_tensor_a, input_tensor_b, output_tensor, bcast_op_math.value(), false /* in-place */);
@@ -410,7 +410,7 @@ operation::ProgramWithCallbacks Binary::create_program(
         switch (program_type) {
             case BinaryProgramType::ElementWiseMultiCore:
                 return eltwise_binary_multi_core(
-                    input_tensor_a, input_tensor_b, output_tensor, this->program_config.binary_op_type, activations);
+                    input_tensor_a, input_tensor_b, output_tensor, this->binary_op_type, activations);
             default: TT_THROW("Invalid program type");
         }
     }

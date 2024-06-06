@@ -53,23 +53,12 @@ std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<D
 
 constexpr uint8_t DefaultQueueId = 0;
 
-struct BinaryProgramConfig {
+struct Binary {
     BinaryOpType binary_op_type;
     bool in_place;
-    const std::optional<FusedActivations> activations;
+    const std::optional<std::vector<std::string>> activations;
     const MemoryConfig memory_config;
     const DataType dtype;
-
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("binary_op_type", "in_place", "activations", "memory_config", "dtype");
-    const auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->binary_op_type, this->in_place, this->activations, this->memory_config, this->dtype);
-    }
-};
-
-struct Binary {
-    const BinaryProgramConfig program_config;
     std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
     void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
@@ -85,9 +74,16 @@ struct Binary {
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors) const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("program_config", "compute_kernel_config");
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "binary_op_type", "in_place", "activations", "memory_config", "dtype", "compute_kernel_config");
     const auto attribute_values() const {
-        return std::forward_as_tuple(this->program_config, this->compute_kernel_config);
+        return std::forward_as_tuple(
+            this->binary_op_type,
+            this->in_place,
+            this->activations,
+            this->memory_config,
+            this->dtype,
+            this->compute_kernel_config);
     }
 };
 
