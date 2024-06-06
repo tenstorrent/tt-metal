@@ -37,10 +37,7 @@ std::vector<ValueType> generate_strided_vector(
 template <typename ValueType>
 std::vector<ValueType> generate_constant_vector(
     const ValueType& constant, const size_t& numel) {
-    std::vector<ValueType> results(numel);
-    for (unsigned int index = 0; index < numel; index+=1) {
-        results.at(index) = constant;
-    }
+    std::vector<ValueType> results(numel, constant);
     return results;
 }
 
@@ -115,7 +112,7 @@ std::vector<PackType> generate_packed_strided_vector(
 
 template <typename PackType, typename ValueType>
 std::vector<PackType> generate_packed_constant_vector(
-     const ValueType& constant, const size_t& numel) {
+    const ValueType& constant, const size_t& numel) {
     return pack_vector<PackType, ValueType>(generate_constant_vector(constant, numel));
 }
 

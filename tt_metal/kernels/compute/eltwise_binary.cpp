@@ -13,12 +13,15 @@ namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
+    uint32_t acc_to_dst = get_arg_val<uint32_t>(2);
 
     constexpr auto cb_in0 = tt::CB::c_in0;
     constexpr auto cb_in1 = tt::CB::c_in1;
     constexpr auto cb_inp0 = cb_in0;
     constexpr auto cb_inp1 = cb_in1;
     constexpr auto cb_out0 = tt::CB::c_out0;
+
+    constexpr auto cb_in2 = tt::CB::c_in2;
 
     binary_op_init_common(cb_inp0, cb_inp1, cb_out0);
 
@@ -38,17 +41,26 @@ void MAIN {
 
         tile_regs_acquire();
 
-#ifdef ELTWISE_DEST_REUSE_TYPE
+#if defined(DST_ACCUM_MODE) || defined(ELTWISE_DEST_REUSE_TYPE)
+        cb_wait_front(cb_in2, per_core_block_size);
         copy_tile_to_dst_init_short();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            copy_tile(cb_inp0, i, i);  // copy from c_in[0] to DST[0]
+            copy_tile(cb_in2, i, i);  // copy from c_in[0] to DST[0]
         }
-        binary_dest_reuse_tiles_init<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(cb_inp1);
+        cb_pop_front(cb_in2, per_core_block_size);
+#endif
+
+#ifdef DST_ACCUM_MODE
+        ELTWISE_OP_INIT(cb_inp0, cb_inp1, true);
+#endif
+
+#ifdef ELTWISE_DEST_REUSE_TYPE
+        binary_dest_reuse_tiles_init<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(cb_inp0);
 #endif
 
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
 #ifdef ELTWISE_DEST_REUSE_TYPE
-            binary_dest_reuse_tiles<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(cb_inp1, i, i);
+            binary_dest_reuse_tiles<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(cb_inp0, i, i);
 #else
             ELTWISE_OP(cb_inp0, cb_inp1, i, i, i);
 #endif
