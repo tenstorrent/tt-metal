@@ -103,6 +103,9 @@ def main(output_directory, output_csv):
 
     logger.info(f"Total ops profiled {len(all_ops)}")
 
+    # Sort output
+    final_df = final_df.sort_values("op")
+
     # Write the final dataframe to a csv file
     final_df.to_csv(output_csv, index=False)
 

@@ -15,13 +15,13 @@ from tracy import signpost
 
 
 test_sweep_args = [
-    (
-        (1, 2, 1024, 1024),
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-    ),
+    # (
+    #     (1, 2, 1024, 1024),
+    #     tt_lib.tensor.DataType.BFLOAT16,
+    #     tt_lib.tensor.Layout.TILE,
+    #     tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
+    #     tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
+    # ),
     (
         (1, 4, 1024, 1024),
         tt_lib.tensor.DataType.BFLOAT16,
@@ -35,7 +35,10 @@ all_num_call_to_stack = [1, 3]  # For 10 and more test  execution spills to disp
 num_repeats = 10
 
 
-def measure_host_overhead(op_func, device, num_call_to_stack):
+def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup):
+    if not is_warmup:
+        signpost(header=f"start {op_name}")
+
     start_time = time.time()
     for _ in range(num_call_to_stack):
         op_func()
@@ -58,8 +61,15 @@ def measure_host_overhead(op_func, device, num_call_to_stack):
     tt_lib.device.Synchronize(device)
     duration = 1000 * (time.time() - start_time)
     duration_per_call = duration / num_call_to_stack
-
     logger.info(f"Synchronize {duration:.2f}ms ({duration_per_call:.2f}ms per call)")
+
+    if not is_warmup:
+        signpost(header=f"end {op_name}")
+
+    # Dumping profile info
+    logger.info(f"Dumping device profiler data")
+    tt_lib.device.DumpDeviceProfiler(device)
+
     return overhead_ms, total_op_time
 
 
@@ -74,6 +84,7 @@ def measure_host_overhead_binary(
     num_call_to_stack,
     num_repeats,
     shape_func=None,
+    is_warmup=False,
 ):
     input_shape_0 = input_shape
     input_shape_1 = input_shape
@@ -88,13 +99,13 @@ def measure_host_overhead_binary(
     y = torch2tt_tensor(y, device, dlayout, in_mem_config, dtype)
 
     def op_func():
-        op(x, y)
+        op["op"](x, y)
 
     result_overhead = []
     result_op = []
 
     for _ in range(num_repeats):
-        overhead_ms, total_op_time = measure_host_overhead(op_func, device, num_call_to_stack)
+        overhead_ms, total_op_time = measure_host_overhead(op_func, op["name"], device, num_call_to_stack, is_warmup)
         result_overhead.append(overhead_ms)
         result_op.append(total_op_time)
 
@@ -111,19 +122,20 @@ def measure_host_overhead_unary(
     op,
     num_call_to_stack,
     num_repeats,
-    **kwargs,
+    shape_func=None,
+    is_warmup=False,
 ):
     x = torch.Tensor(size=input_shape).uniform_(-100, 100)
     x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
 
     def op_func():
-        op(x)
+        op["op"](x)
 
     result_overhead = []
     result_op = []
 
     for _ in range(num_repeats):
-        overhead_ms, total_op_time = measure_host_overhead(op_func, device, num_call_to_stack)
+        overhead_ms, total_op_time = measure_host_overhead(op_func, op["name"], device, num_call_to_stack, is_warmup)
         result_overhead.append(overhead_ms)
         result_op.append(total_op_time)
 
@@ -141,6 +153,7 @@ def measure_host_overhead_ternary(
     num_call_to_stack,
     num_repeats,
     shape_func=None,
+    is_warmup=False,
 ):
     input_shape_0 = input_shape
     input_shape_1 = input_shape
@@ -158,13 +171,13 @@ def measure_host_overhead_ternary(
     z = torch2tt_tensor(z, device, dlayout, in_mem_config, dtype)
 
     def op_func():
-        op(x, y, z)
+        op["op"](x, y, z)
 
     result_overhead = []
     result_op = []
 
     for _ in range(num_repeats):
-        overhead_ms, total_op_time = measure_host_overhead(op_func, device, num_call_to_stack)
+        overhead_ms, total_op_time = measure_host_overhead(op_func, op["name"], device, num_call_to_stack, is_warmup)
         result_overhead.append(overhead_ms)
         result_op.append(total_op_time)
 
@@ -193,13 +206,12 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
             in_mem_config,
             out_mem_config,
             device,
-            op["op"],
-            1,
-            1,
+            op,
+            num_call_to_stack=1,
+            num_repeats=1,
             shape_func=shape_func,
+            is_warmup=True,
         )
-
-        signpost(header=f"start {op['name']}")
 
         for num_call_to_stack in all_num_call_to_stack:
             overhead_ms, op_ms = measuring_func(
@@ -209,7 +221,7 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
                 in_mem_config,
                 out_mem_config,
                 device,
-                op["op"],
+                op,
                 num_call_to_stack,
                 num_repeats,
                 shape_func=shape_func,
@@ -218,8 +230,6 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
             op_count += len(overhead_ms) * num_call_to_stack * 2
             results_overhead += overhead_ms
             results_op += op_ms
-
-        signpost(header=f"end {op['name']}")
 
     min_val = round(min(results_overhead), 2)
     mean_val = round(statistics.mean(results_overhead), 2)
@@ -238,6 +248,9 @@ def test_host_overhead(device, user_input):
 
     Run with tracy:
     python -m tracy -v -r -p -o host_overhead_profile -m "pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile"
+
+    Run only for one op:
+    python -m tracy -v -r -p -o host_overhead_profile -m "pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile::tt_lib.tensor.atan2"
     """
 
     if "::" in user_input[0]:
