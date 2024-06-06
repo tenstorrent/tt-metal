@@ -146,11 +146,8 @@ def run_test_matmul_in1_dram_sharded(
 
     program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=in0_block_w // 4,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
         per_core_M=out_block_h,
         per_core_N=out_block_w,
-        fuse_batch=True,
         fused_activation=None,
     )
 
@@ -358,11 +355,8 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
 
     program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=in0_block_w // 4,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
         per_core_M=out_block_h,
         per_core_N=out_block_w,
-        fuse_batch=True,
         fused_activation=None,
     )
 
