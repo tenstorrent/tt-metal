@@ -196,7 +196,29 @@ class resnet50Bottleneck:
         height_sharding=None,
         eltwise_binary_out_in_place=True,
     ):
+        logger.debug(
+            f"==== Running {batch_size}, {input_height}, {input_width}, {self.conv1_input_channels}, {self.conv1_output_channels}"
+        )
         # breakpoint()
+        if (
+            is_wormhole_b0()
+            and batch_size == 20
+            and input_height == 56
+            and self.conv1_input_channels == 256
+            and self.conv1_output_channels == 128
+        ):
+            # TODO: fix the need to do the reshard here
+            ## TensorMemoryLayout::HEIGHT_SHARDED;(grid={[(x=0;y=0) - (x=7;y=5)]; [(x=0;y=6) - (x=0;y=6)]}; shape={1280; 256}; orientation=ShardOrientation::ROW_MAJOR; halo=false
+            mem_config = ttnn.create_sharded_memory_config_(
+                ttnn.Shape([batch_size * input_height * input_width, 256]),
+                (ttnn.CoreGrid(x=8, y=6), ttnn.CoreGrid(x=1, y=7)),
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                tile_layout=True,
+            )
+            x_resharded = ttnn.to_memory_config(x, mem_config)
+            ttnn.deallocate(x)
+            x = ttnn.reallocate(x_resharded)
 
         # conv1 is 1x1 conv
         # print("Running conv1")
@@ -240,16 +262,23 @@ class resnet50Bottleneck:
                 act_block_h_override = 160
 
         run_downsample_before_conv2 = False
-        if not (input_height == 56 and self.conv1_input_channels == 64):
+        if (not (input_height == 56 and self.conv1_input_channels == 64)) and (
+            not is_wormhole_b0() and input_height == 56 and self.conv1_input_channels == 256
+        ):
             run_downsample_before_conv2 = True
 
         if run_downsample_before_conv2:
-            # breakpoint()
-
             ttnn.dump_device_memory_state(device, "before_reallocate_")
-            if input_height == 56 and self.conv1_input_channels == 256 and self.downsample:
+            if (
+                input_height == 56
+                and self.conv1_input_channels == 256
+                and self.conv1_output_channels != 128
+                and self.downsample
+            ):
                 x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
                 ttnn.deallocate(x)
+                if is_wormhole_b0():
+                    out = ttnn.reallocate(out)
                 x = ttnn.reallocate(x_rm)
             ttnn.dump_device_memory_state(device, "before_downsample_")
             ds_out = self.run_downsample_if_req(
@@ -290,6 +319,17 @@ class resnet50Bottleneck:
             conv_op_cache=conv_op_cache,
         )
 
+        logger.info(f"{batch_size} and {input_height} and {self.conv1_input_channels} and {self.conv1_output_channels}")
+        if (
+            is_wormhole_b0()
+            and batch_size == 20
+            and input_height == 28
+            and self.conv1_input_channels == 256
+            and self.conv1_output_channels == 128
+        ):
+            logger.info(f"==== Reallocating conv2 output")
+            out = ttnn.reallocate(out)
+
         # conv3 is 1x1 conv
         # print("Running conv3")
         out, _, _, self.conv3_weight_tensor, self.conv3_bias_tensor = ttnn.conv2d(
@@ -329,7 +369,7 @@ class resnet50Bottleneck:
                 out, ds_out, activations=["relu"], memory_config=ttnn.L1_MEMORY_CONFIG
             )  ## TODO: check why not out mem config???
         ttnn.deallocate(ds_out)
-        if batch_size == 20 and module_input_height == 56 and self.conv1_input_channels == 64:
+        if batch_size == 20 and (is_wormhole_b0() or (module_input_height == 56 and self.conv1_input_channels == 64)):
             out = ttnn.reallocate(out)
         return out, input_height, input_width
 
@@ -553,16 +593,25 @@ class resnet50:
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             x = ttnn.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
         x = self.max_pool(x)
+        x_height = 56
+        x_width = 56
+        x = ttnn.reshape(x, (1, 1, x_height * x_width * self.batch_size, 64))
 
-        x = ttnn.reshape(x, (1, 1, 56 * 56 * self.batch_size, 64))
-
+        if is_wormhole_b0():
+            # TODO: fix the need to do the reshard here
+            # (memory_layout=TensorMemoryLayout::HEIGHT_SHARDED;buffer_type=BufferType::L1;shard_spec=tt::tt_metal::ShardSpec(grid={[(x=0;y=0) - (x=7;y=6)]}; shape={1120; 64}; orientation=ShardOrientation::ROW_MAJOR; halo=false))'}
+            mem_config = ttnn.create_sharded_memory_config_(
+                ttnn.Shape([self.batch_size * x_height * x_width, 64]),
+                ttnn.CoreGrid(x=8, y=7),
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                tile_layout=True,
+            )
+            x = ttnn.to_memory_config(x, mem_config)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, dtype=self.model_config["ACTIVATIONS_DTYPE"])
 
         if self.batch_size == 20 and not is_wormhole_b0():
             x = ttnn.reallocate(x)
-
-        x_height = 56
-        x_width = 56
 
         logger.debug(f"==== Running layer 1 module 1")
         layer1_module1_input_shape = [
@@ -614,7 +663,7 @@ class resnet50:
                 x_height,
                 x_width,
                 conv_op_cache,
-                reshard_if_not_optimal=True,
+                reshard_if_not_optimal=True if not is_wormhole_b0() else False,
                 height_sharding=True,
             )
         else:
