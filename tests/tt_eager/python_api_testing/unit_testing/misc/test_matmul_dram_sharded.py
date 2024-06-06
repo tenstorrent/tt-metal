@@ -469,7 +469,6 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
     )
 
 
-@pytest.mark.skipif(is_grayskull(), reason="not tested for GS")
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 @pytest.mark.parametrize(
     "fp32_acc_mode",
@@ -600,12 +599,18 @@ def test_matmul_2d_in1_dram_sharded(
         fused_activation=activation,
     )
 
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=fidelity,
-        math_approx_mode=True,
-        fp32_dest_acc_en=fp32_acc_mode,
-        packer_l1_acc=packer_l1_acc,
-    )
+    if is_grayskull():
+        compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(
+            math_fidelity=fidelity,
+            math_approx_mode=True,
+        )
+    else:
+        compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+            math_fidelity=fidelity,
+            math_approx_mode=True,
+            fp32_dest_acc_en=fp32_acc_mode,
+            packer_l1_acc=packer_l1_acc,
+        )
     if has_bias:
         output_t = ttl.operations.primary.matmul(
             in0_t,

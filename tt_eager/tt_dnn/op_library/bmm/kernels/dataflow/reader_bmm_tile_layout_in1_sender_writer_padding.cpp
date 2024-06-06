@@ -96,10 +96,11 @@ void kernel_main() {
 
     // RT and COMPILE TIME ARGS for DRAM sharded weights
     #ifdef IN1_DRAM_SHARDED
-    const uint32_t num_dram_shards_to_read                          = get_arg_val<uint32_t>(18);
-    const uint32_t dram_tensor_start_offset                         = get_arg_val<uint32_t>(19);
-    volatile tt_l1_ptr uint32_t * in1_block_w_dram_stride_bytes     = (volatile tt_l1_ptr uint32_t*)get_arg_addr(20);
-    volatile tt_l1_ptr uint32_t * current_dram_bank_id              = (volatile tt_l1_ptr uint32_t*)get_arg_addr(21);
+    const uint32_t vc                                               = get_arg_val<uint32_t>(18);
+    const uint32_t num_dram_shards_to_read                          = get_arg_val<uint32_t>(19);
+    const uint32_t dram_tensor_start_offset                         = get_arg_val<uint32_t>(20);
+    volatile tt_l1_ptr uint32_t * in1_block_w_dram_stride_bytes     = (volatile tt_l1_ptr uint32_t*)get_arg_addr(21);
+    volatile tt_l1_ptr uint32_t * current_dram_bank_id              = (volatile tt_l1_ptr uint32_t*)get_arg_addr(22);
 
     constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(26);
     constexpr uint32_t in1_block_w_dram_bytes= get_compile_time_arg_val(27);
@@ -180,7 +181,7 @@ void kernel_main() {
                 uint32_t next_bank_id_and_dram_stride_index = 0;
 
                 for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
-                    uint32_t in1_base_addr = noc_async_read_tile_dram_sharded_set_state<in1_single_tile_size_bytes, false>(in1_tensor_addr, current_dram_bank_id[next_bank_id_and_dram_stride_index]);
+                    uint32_t in1_base_addr = noc_async_read_tile_dram_sharded_set_state<in1_single_tile_size_bytes, true>(in1_tensor_addr, current_dram_bank_id[next_bank_id_and_dram_stride_index], vc);
 
                     if (i == 0) {
                         in1_base_addr += dram_tensor_start_offset;
@@ -274,7 +275,7 @@ void kernel_main() {
                 uint32_t next_bank_id_and_dram_stride_index = 0;
 
                 for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
-                    uint32_t in3_base_addr = noc_async_read_tile_dram_sharded_set_state<bias_single_tile_size_bytes, false>(in3_tensor_addr, current_dram_bank_id[next_bank_id_and_dram_stride_index]);
+                    uint32_t in3_base_addr = noc_async_read_tile_dram_sharded_set_state<bias_single_tile_size_bytes, true>(in3_tensor_addr, current_dram_bank_id[next_bank_id_and_dram_stride_index], vc);
 
                     if (i == 0) {
                         in3_base_addr += dram_tensor_start_offset;
