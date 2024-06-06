@@ -203,7 +203,6 @@ void Device::initialize_and_launch_firmware() {
     CoreCoord grid_size = this->logical_grid_size();
     std::unordered_set<CoreCoord> not_done_cores;
 
-
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
@@ -213,6 +212,22 @@ void Device::initialize_and_launch_firmware() {
                 not_done_cores.insert(worker_core);
             }
         }
+    }
+
+    // Clear idle erisc mailbox
+    for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
+        CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
+        std::vector<uint32_t> zero_vec_mailbox(128 / sizeof(uint32_t), 0);
+        llrt::write_hex_vec_to_core(this->id(), physical_core, zero_vec_mailbox, MEM_IERISC_MAILBOX_BASE);
+    }
+
+    // Clear erisc sync info
+    std::vector<uint32_t> zero_vec_erisc_init(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_SIZE / sizeof(uint32_t), 0);
+    for (const auto &eth_core : this->get_active_ethernet_cores()) {
+        CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
+
+        llrt::write_hex_vec_to_core(
+            this->id(), physical_core, zero_vec_erisc_init, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
     }
 
     // Load erisc app base FW to eth cores
@@ -242,6 +257,8 @@ void Device::initialize_and_launch_firmware() {
 }
 
 void Device::clear_l1_state() {
+    log_debug(tt::LogMetal, "Clearing L1 for device {}", this->id_);
+    // Clear all clearable Tensix and Eth L1
     CoreCoord logical_grid_size = this->logical_grid_size();
     TT_ASSERT(this->l1_size_per_core() % sizeof(uint32_t) == 0);
     std::vector<uint32_t> zero_vec(this->l1_size_per_core() / sizeof(uint32_t), 0);
@@ -259,15 +276,15 @@ void Device::clear_l1_state() {
         llrt::write_hex_vec_to_core(this->id(), physical_core, zero_vec_mailbox, MEM_IERISC_MAILBOX_BASE);
     }
 
-    // Clear erisc sync info
+    // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
+    // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
+    std::vector<uint32_t> zero_vec_above_tile_header_buffer(
+        (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) /
+            sizeof(uint32_t),
+        0);
+
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
-        // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
-        // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
-        std::vector<uint32_t> zero_vec_above_tile_header_buffer(
-            (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) /
-                sizeof(uint32_t),
-            0);
 
         llrt::write_hex_vec_to_core(
             this->id(),
