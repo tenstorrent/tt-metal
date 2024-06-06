@@ -1,5 +1,5 @@
 
-set(HW_OUTPUT_DIR ${CMAKE_BINARY_DIR}/hw/toolchain)
+set(HW_OUTPUT_DIR ${PROJECT_BINARY_DIR}/hw/toolchain)
 set(CORES
     brisc
     ncrisc
@@ -10,11 +10,11 @@ set(CORES
 )
 
 if("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
-    set(DEV_MEM_MAP "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/wormhole/dev_mem_map.h")
-    set(HW_INCLUDES "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/wormhole")
+    set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/dev_mem_map.h")
+    set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole")
 else()
-    set(DEV_MEM_MAP "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/$ENV{ARCH_NAME}/dev_mem_map.h")
-    set(HW_INCLUDES "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/$ENV{ARCH_NAME}")
+    set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/$ENV{ARCH_NAME}/dev_mem_map.h")
+    set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/$ENV{ARCH_NAME}")
 endif()
 
 foreach(CORE IN LISTS CORES)

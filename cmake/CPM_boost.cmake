@@ -1,7 +1,7 @@
 
-set(ENV{CPM_SOURCE_CACHE} "${CMAKE_SOURCE_DIR}/.cpmcache")
+set(ENV{CPM_SOURCE_CACHE} "${PROJECT_SOURCE_DIR}/.cpmcache")
 
-include(${CMAKE_SOURCE_DIR}/cmake/CPM.cmake)
+include(${PROJECT_SOURCE_DIR}/cmake/CPM.cmake)
 set(BoostPackages
     Align
     Config

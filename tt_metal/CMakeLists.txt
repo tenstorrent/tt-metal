@@ -26,17 +26,17 @@ else()
 endif()
 
 target_link_libraries(tt_metal PUBLIC compiler_flags linker_flags metal_header_directories yaml-cpp $<$<BOOL:$ENV{ENABLE_TRACY}>:TracyClient>)  # linker_flags = -rdynamic if tracy enabled
-target_link_directories(tt_metal PUBLIC ${CMAKE_BINARY_DIR}/lib)    # required so tt_metal can find device library
+target_link_directories(tt_metal PUBLIC ${PROJECT_BINARY_DIR}/lib)    # required so tt_metal can find device library
 target_include_directories(tt_metal PUBLIC
     ${UMD_HOME}
-    ${CMAKE_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/fmt
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt
 )
 target_compile_options(tt_metal PUBLIC -Wno-int-to-pointer-cast)
 add_dependencies(tt_metal hw_toolchain)
 
 set_target_properties(tt_metal PROPERTIES
-    INSTALL_RPATH "${CMAKE_BINARY_DIR}/lib"
-    ADDITIONAL_CLEAN_FILES "${CMAKE_BINARY_DIR}/lib;${CMAKE_BINARY_DIR}/obj"
+    INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib"
+    ADDITIONAL_CLEAN_FILES "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/obj"
 )

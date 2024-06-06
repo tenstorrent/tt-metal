@@ -43,7 +43,7 @@ set(TT_EAGER_TESTS_INTEGRATION
 )
 
 set(EAGER_TEST_TARGETS "")  # list of all eager test targets, used in CREATE_EAGER_TEST_EXE
-include(${CMAKE_SOURCE_DIR}/cmake/helper_functions.cmake)
+include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)
 
 CREATE_EAGER_TEST_EXE("${TT_EAGER_TESTS_OPS}")
 CREATE_EAGER_TEST_EXE("${TT_EAGER_TESTS_TENSORS}")
