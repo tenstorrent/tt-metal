@@ -1047,7 +1047,7 @@ def eltwise_addalpha_optional(
     cq_id = 0
 
     if queue_id:
-        ttl.tensor.addalpha(cq_id, t0, t1, alpha, output_tensor=t2)
+        ttl.tensor.addalpha(t0, t1, alpha, output_tensor=t2, queue_id=cq_id)
     else:
         ttl.tensor.addalpha(t0, t1, alpha, output_tensor=t2)
 
@@ -1643,7 +1643,8 @@ def where_optional(x, y, z, out, device, dtype, layout, input_mem_config, output
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
     t3 = setup_tt_tensor(out, device, layout[3], input_mem_config[3], dtype[3])
-    ttl.tensor.where(t0, t1, t2, output_mem_config=output_mem_config, output_tensor=t3)
+    cq_id = 0
+    ttl.tensor.where(t0, t1, t2, output_tensor=t3, queue_id=cq_id)
 
     return tt2torch_tensor(t3)
 
@@ -1654,7 +1655,8 @@ def where_scalar_optional(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t3 = setup_tt_tensor(out, device, layout[1], input_mem_config[1], dtype[1])
-    ttl.tensor.where(t0, scalar_true, scalar_false, output_mem_config=output_mem_config, output_tensor=t3)
+    cq_id = 0
+    ttl.tensor.where(t0, scalar_true, scalar_false, output_tensor=t3, queue_id=cq_id)
 
     return tt2torch_tensor(t3)
 
@@ -2582,7 +2584,9 @@ def make_binary_op_optional_output(ttl_tensor_binop):
         t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
         t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
 
-        ttl_tensor_binop(t0, t1, output_tensor=t2)
+        cq_id = 0
+
+        ttl_tensor_binop(t0, t1, output_tensor=t2, queue_id=cq_id)
 
         return tt2torch_tensor(t2)
 
@@ -2595,6 +2599,7 @@ eltwise_mul_optional = make_binary_op_optional_output(ttnn.mul)
 eltwise_bias_gelu_optional = make_binary_op_optional_output(ttnn.bias_gelu)
 eltwise_squared_difference_optional = make_binary_op_optional_output(ttnn.squared_difference)
 eltwise_ne_optional = make_binary_op_optional_output(ttnn.ne)
+eltwise_eq_optional = make_binary_op_optional_output(ttnn.eq)
 eltwise_gt_optional = make_binary_op_optional_output(ttnn.gt)
 eltwise_lt_optional = make_binary_op_optional_output(ttnn.lt)
 eltwise_gte_optional = make_binary_op_optional_output(ttnn.ge)
@@ -2604,31 +2609,6 @@ eltwise_logaddexp_optional = make_binary_op_optional_output(ttnn.logaddexp)
 eltwise_logaddexp2_optional = make_binary_op_optional_output(ttnn.logaddexp2)
 eltwise_logical_and_optional = make_binary_op_optional_output(ttnn.logical_and)
 eltwise_logical_or_optional = make_binary_op_optional_output(ttnn.logical_or)
-
-
-def eltwise_eq_optional(
-    x,
-    y,
-    z,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    queue_id,
-    **kwargs,
-):
-    cq_id = 0
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
-
-    if queue_id == True:
-        ttnn.eq(t0, t1, output_tensor=t2, queue_id=cq_id)
-    else:
-        ttnn.eq(t0, t1, output_tensor=t2)
-
-    return tt2torch_tensor(t2)
 
 
 ################################################
