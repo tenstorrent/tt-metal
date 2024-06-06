@@ -125,14 +125,12 @@ void BankManager::deallocate_buffer(uint64_t address) {
     this->allocator_->deallocate(address);
 }
 
-void BankManager::deallocate_all(){
-    detail::BUFFER_MAP.clear();
+void BankManager::deallocate_all() {
     for (uint64_t addr : this->allocated_buffers_)
     {
         this->allocator_->deallocate(addr);
     }
 }
-
 
 void BankManager::clear() {
     if (this->allocator_)
