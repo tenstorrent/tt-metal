@@ -43,7 +43,8 @@ jobs:
         shell: bash
         run: |
           source tests/end_to_end_tests/env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type eager_host_side
+          cd tests/end_to_end_tests
+          pytest -c conftest.py . -m eager_host_side
   test-eager-package-silicon:
     needs: build-eager-package
     strategy:
@@ -70,4 +71,5 @@ jobs:
         shell: bash
         run: |
           source tests/end_to_end_tests/env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.runner-hw-info.arch }} --pipeline-type eager_package_silicon
+          cd tests/end_to_end_tests
+          pytest -c conftest.py . -m eager_package_silicon
