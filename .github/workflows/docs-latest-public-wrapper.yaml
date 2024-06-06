@@ -2,16 +2,21 @@ name: "[post-commit] Docs build and deploy to GitHub pages on main"
 
 on:
   workflow_dispatch:
-
 jobs:
-  build-docker-artifact:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
+  # build-docker-artifact:
+  #   uses: ./.github/workflows/build-docker-artifact.yaml
+  #   secrets: inherit
   build-artifact:
-    needs: build-docker-artifact
+  #  needs: build-docker-artifact
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-  build-docs:
+  # build-docs:
+  #   needs: build-artifact
+  #   uses: ./.github/workflows/docs-latest-public.yaml
+  #   secrets: inherit
+  release-docs:
     needs: build-artifact
-    uses: ./.github/workflows/docs-latest-public.yaml
+    uses: ./.github/workflows/docs-release.yaml
+    with:
+      version: v0.52.0
     secrets: inherit
