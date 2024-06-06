@@ -5,8 +5,9 @@
 import torch
 import ttnn
 
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_resnetblock2d import resnetBlock2D
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upsample_2d import upsample2d
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_upsample_2d_new_conv import upsample2d
+from loguru import logger
 
 
 class upblock_2d:
@@ -33,6 +34,7 @@ class upblock_2d:
 
         self.output_height = self.upsample_2d.output_height
         self.output_width = self.upsample_2d.output_width
+        logger.info(f"Upblock Input = {input_height}x{input_width} Output = {self.output_height}x{self.output_width}")
 
     def __call__(
         self,
@@ -69,26 +71,20 @@ class upblock_2d:
                     res_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
                 )
 
-            if ttnn.is_sharded(hidden_states) and hidden_states.layout == ttnn.ROW_MAJOR_LAYOUT:
-                hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-            elif ttnn.is_sharded(hidden_states):
-                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
-            if ttnn.is_sharded(on_dev_res_hidden_states) and on_dev_res_hidden_states.layout == ttnn.ROW_MAJOR_LAYOUT:
-                on_dev_res_hidden_states = ttnn.to_layout(
-                    on_dev_res_hidden_states,
-                    ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+            if hidden_states.is_sharded():
+                hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
+                    hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
                 )
-            elif ttnn.is_sharded(on_dev_res_hidden_states):
-                on_dev_res_hidden_states = ttnn.to_memory_config(on_dev_res_hidden_states, ttnn.L1_MEMORY_CONFIG)
-            if hidden_states.dtype != ttnn.bfloat8_b:
-                hidden_states = ttnn.clone(
-                    hidden_states, memory_config=ttnn.get_memory_config(hidden_states), dtype=ttnn.bfloat8_b
+
+            if on_dev_res_hidden_states.is_sharded():
+                on_dev_res_hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
+                    on_dev_res_hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
                 )
+
             hidden_states = ttnn.concat(
                 [hidden_states, on_dev_res_hidden_states], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG
             )
-            hidden_states = resnet(
+            old_out = resnet(
                 hidden_states,
                 temb=temb,
                 temb_channels=temb_channels,
@@ -99,7 +95,19 @@ class upblock_2d:
                 groups=resnet_groups,
                 output_scale_factor=output_scale_factor,
             )
-
+            # new_out = self.new_resnets[i](
+            #     hidden_states,
+            #     temb=temb,
+            #     temb_channels=temb_channels,
+            #     time_embedding_norm=resnet_time_scale_shift,
+            #     in_channels=resnet_in_channels + res_skip_channels,
+            #     out_channels=out_channels,
+            #     use_in_shortcut=None,
+            #     groups=resnet_groups,
+            #     output_scale_factor=output_scale_factor,
+            # )
+            # breakpoint()
+            hidden_states = old_out
         if add_upsample:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
             hidden_states = self.upsample_2d(

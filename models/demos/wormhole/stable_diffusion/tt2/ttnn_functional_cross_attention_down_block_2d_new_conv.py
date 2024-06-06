@@ -3,9 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_resnetblock2d import resnetBlock2D
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_transformer_2d import transformer_2d_model
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_downsample_2d import downsample_2d
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_transformer_2d_new_conv import (
+    transformer_2d_model,
+)
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_downsample_2d_new_conv import downsample_2d
+from loguru import logger
 
 
 class cross_attention_down_block_2d:
@@ -38,6 +41,9 @@ class cross_attention_down_block_2d:
 
         self.output_height = self.downsample_2d.output_height
         self.output_width = self.downsample_2d.output_width
+        logger.info(
+            f"Cross Attention Down Block Input = {input_height}x{input_width} Output = {self.output_height}x{self.output_width}"
+        )
 
     def __call__(
         self,
