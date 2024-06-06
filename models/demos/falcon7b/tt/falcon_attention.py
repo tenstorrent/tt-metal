@@ -704,6 +704,7 @@ class TtFalconAttentionDecode(nn.Module):
         for i in range(self.num_devices):
             # Update kv_cache in place
             ttnn.experimental.tensor.update_cache(layer_past[i][0], key_layer[i], layer_past_len)
+            key_layer[i].deallocate(True)
         for i in range(self.num_devices):
             # key and value layers will have kv_seq_len padded to nearest 32
             key_layer[i] = ttnn.experimental.tensor.unpad(
@@ -779,8 +780,8 @@ class TtFalconAttentionDecode(nn.Module):
             for i, device in enumerate(self.devices):
                 attn_weights.append(
                     ttnn.experimental.operations.primary.matmul(
-                        query_layer[i],
-                        key_layer_transposed[i],
+                        query_layer[i],  # [batch, 1, padded_local_heads, head_dim]
+                        key_layer_transposed[i],  # [batch, 1, head_dim, padded_layer_past_len]
                         program_config=self.model_config["ATTN_BATCHED_MM_PROGCFG"](
                             self.head_dim // 32, self.padded_local_heads // 32, padded_layer_past_len // 32
                         ),
@@ -788,7 +789,7 @@ class TtFalconAttentionDecode(nn.Module):
                             self.padded_local_heads, padded_layer_past_len
                         ),
                         output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
-                        compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+                        compute_kernel_config=self.model_config["PRE_SOFTMAX_MM_COMPUTE_KERNEL_CONFIG"],
                     )
                 )
                 query_layer[i].deallocate()
@@ -894,8 +895,8 @@ class TtFalconAttentionDecode(nn.Module):
             for i in range(self.num_devices):
                 attn_output.append(
                     ttnn.experimental.operations.primary.matmul(
-                        attn_weights[i],
-                        value_layer[i],
+                        attn_weights[i],  # [batch, 1, padded_local_heads, padded_layer_past_len]
+                        value_layer[i],  # [batch, 1, padded_layer_past_len, head_dim]
                         program_config=self.model_config["ATTN_BATCHED_MM_PROGCFG"](
                             padded_layer_past_len // 32,
                             self.padded_local_heads // 32,
@@ -906,7 +907,7 @@ class TtFalconAttentionDecode(nn.Module):
                             self.head_dim,
                         ),
                         output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],
-                        compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+                        compute_kernel_config=self.model_config["POST_SOFTMAX_MM_COMPUTE_KERNEL_CONFIG"],
                     )
                 )
                 attn_weights[i].deallocate(True)
