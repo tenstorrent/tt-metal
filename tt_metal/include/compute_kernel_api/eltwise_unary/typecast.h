@@ -21,8 +21,9 @@ namespace ckernel {
 /**
  * Performs an elementwise typecast operation on the input.
  * Supports following typecasts:
- *  fp32/fp16b -> uint32
- *  fp32/fp16b -> uint16
+ *  fp16b -> uint32
+ *  fp16b -> uint16
+ *  uint16 -> fp16b
  * For output to be uint32, Dest must be in 32 bit mode.
  *
  * Return value: None
