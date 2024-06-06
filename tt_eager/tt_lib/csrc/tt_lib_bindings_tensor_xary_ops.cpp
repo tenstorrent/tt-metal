@@ -113,7 +113,7 @@ namespace tt::tt_metal::detail {
         detail::bind_unary_op_with_param(
             m_tensor, "eltwise_typecast", eltwise_typecast,
             py::arg("tt_output_dtype"),
-            R"doc(Returns tensor with all of the elements of the input tensor ``{0}`` typecasted from fp16b to uint32, fp16b to uint16, or uint16 to fp16b.)doc",
+            R"doc(Returns tensor with all of the elements of the input tensor ``{0}`` typecasted from bfloat16 to uint32, bfloat16 to uint16, or uint16 to bfloat16.)doc",
             R"doc("Indicates output dtype of typecast", "ttl.tensor.DataType", "")doc"
         );
 
@@ -219,7 +219,7 @@ namespace tt::tt_metal::detail {
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
 
         )doc");
-        
+
         detail::bind_unary_op_with_param(
             m_tensor, "unary_ne", unary_ne,
             py::arg("value"),
