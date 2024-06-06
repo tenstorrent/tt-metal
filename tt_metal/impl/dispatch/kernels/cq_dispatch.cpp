@@ -37,8 +37,12 @@ constexpr uint32_t downstream_cb_size = get_compile_time_arg_val(11);
 constexpr uint32_t my_downstream_cb_sem_id = get_compile_time_arg_val(12);
 constexpr uint32_t downstream_cb_sem_id = get_compile_time_arg_val(13);
 constexpr uint32_t split_dispatch_page_preamble_size = get_compile_time_arg_val(14);
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(15);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(16);
+constexpr uint32_t split_prefetch = get_compile_time_arg_val(15);
+constexpr uint32_t prefetch_h_noc_xy = get_compile_time_arg_val(16);
+constexpr uint32_t prefetch_h_local_downstream_sem_addr = get_compile_time_arg_val(17);
+constexpr uint32_t prefetch_h_max_credits = get_compile_time_arg_val(18);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(19);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(20);
 
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
@@ -193,7 +197,7 @@ void process_write_host_h() {
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
             uint32_t n_pages = cb_acquire_pages<my_noc_xy, my_dispatch_cb_sem_id, dispatch_cb_log_page_size>(
                 cb_fence, block_next_start_addr, rd_block_idx);
-            ;
+
             cb_fence += n_pages * dispatch_cb_page_size;
 
             // Release pages for prefetcher
@@ -235,6 +239,17 @@ void process_write_host_h() {
         data_ptr += xfer_size;
     }
     cmd_ptr = data_ptr;
+}
+
+void process_exec_buf_end_h() {
+    if (split_prefetch) {
+        volatile tt_l1_ptr uint32_t* sem_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(prefetch_h_local_downstream_sem_addr));
+
+        noc_semaphore_inc(get_noc_addr_helper(prefetch_h_noc_xy, (uint32_t)sem_addr), prefetch_h_max_credits);
+    }
+
+    cmd_ptr += sizeof(CQDispatchCmd);
 }
 
 // Relay, potentially through the mux/dmux/tunneller path
@@ -354,6 +369,10 @@ void relay_write_h() {
     uint32_t data_ptr = cmd_ptr;
 
     relay_to_next_cb<split_dispatch_page_preamble_size>(data_ptr, length);
+}
+
+void process_exec_buf_end_d() {
+    relay_to_next_cb<split_dispatch_page_preamble_size>(cmd_ptr, sizeof(CQDispatchCmd));
 }
 
 // Note that for non-paged writes, the number of writes per page is always 1
@@ -778,6 +797,15 @@ re_run_command:
             process_delay_cmd();
             break;
 
+        case CQ_DISPATCH_CMD_EXEC_BUF_END:
+            DPRINT << "cmd_exec_buf_end\n";
+            if (is_h_variant) {
+                process_exec_buf_end_h();
+            } else {
+                process_exec_buf_end_d();
+            }
+            break;
+
         case CQ_DISPATCH_CMD_TERMINATE:
             DPRINT << "dispatch terminate\n";
             if (is_d_variant && !is_h_variant) {
@@ -816,6 +844,11 @@ static inline bool process_cmd_h(uint32_t &cmd_ptr) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST:
             DPRINT << "dispatch_h linear_h_host\n";
             process_write_host_h();
+            break;
+
+        case CQ_DISPATCH_CMD_EXEC_BUF_END:
+            DPRINT << "dispatch_h exec_buf_end\n";
+            process_exec_buf_end_h();
             break;
 
         case CQ_DISPATCH_CMD_TERMINATE:

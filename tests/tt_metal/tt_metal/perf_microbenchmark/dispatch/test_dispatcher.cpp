@@ -449,6 +449,10 @@ int main(int argc, char **argv) {
              0,    // my_downstream_cb_sem_id
              0,    // downstream_cb_sem_id
              0,    // split_dispatch_page_preamble_size
+             false,// split_prefetcher
+             0,    // prefetch noc_xy
+             0,    // prefetch_local_downstream_sem_addr
+             0,    // prefetch_downstream_buffer_pages
              true, // is_dram_variant
              true, // is_host_variant
             };
