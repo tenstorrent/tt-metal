@@ -2,10 +2,9 @@
 //
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
+import { CSSProperties } from 'react';
 
-import { CSSProperties } from "react";
-
-function TenstorrentLogo({style}: {style?: CSSProperties}) {
+function TenstorrentLogo({ style }: { style?: CSSProperties }) {
     // from the web site
     return (
         <svg
@@ -25,8 +24,8 @@ function TenstorrentLogo({style}: {style?: CSSProperties}) {
                 d='M21.4063 48.0411V24.4041L42.5241 36.3904L63.6418 24.4041L42.5241 11.9863L21.4063 0L0 12.0822V36.0548L21.4063 48.0411Z'
                 fill='#FFD10A'
             />
-            <path d='M85.0001 12.0821L63.6418 0.0478516V24.404V47.9931L85.0001 36.0547V12.0821Z' fill='#F04F5E'/>
-            <path d='M63.6412 48.0405V47.9932L63.5938 48.0405H63.6412Z' fill='white'/>
+            <path d='M85.0001 12.0821L63.6418 0.0478516V24.404V47.9931L85.0001 36.0547V12.0821Z' fill='#F04F5E' />
+            <path d='M63.6412 48.0405V47.9932L63.5938 48.0405H63.6412Z' fill='white' />
             <path
                 d='M305.221 38.8795H302.512C298.312 38.8795 294.885 42.2958 294.885 46.4836V50.3958C294.885 54.5836 298.312 57.9999 302.512 57.9999H312.903V54.5836H302.512C300.191 54.5836 298.312 52.7101 298.312 50.3958V50.1203H312.903V46.4836C312.848 42.2958 309.421 38.8795 305.221 38.8795ZM309.421 46.7591H298.256V46.4836C298.256 44.1693 300.136 42.2958 302.457 42.2958H305.165C307.487 42.2958 309.366 44.1693 309.366 46.4836V46.7591H309.421Z'
                 fill='#FFFEF6'

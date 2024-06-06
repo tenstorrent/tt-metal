@@ -13,69 +13,11 @@ interface FilterableComponentProps {
 const FilterableComponent: FC<FilterableComponentProps> = ({ filterableString, filterQuery, component }) => {
     const includes = filterableString.toLowerCase().includes(filterQuery.toLowerCase());
 
-    getStuff();
-    stuffGet();
-
-    foo();
-
-    const x = [1, 2, 3, 4, 5, 6, 7, 8];
-
-    const y = {
-        a: 'woof',
-        b: 'test',
-    };
-
     if (!includes && filterQuery !== '') {
         return null;
     }
 
-    return (
-        component || (
-            <>
-                <img src='/' title='//' />
-                <input type='text' />
-            </>
-        )
-    );
+    return component;
 };
-
-async function getStuff() {
-    getStuff();
-
-    return await fetch('').then((res) => res.json());
-}
-
-async function stuffGet() {
-    return true;
-}
-
-async function foo() {
-    doSomething();
-}
-
-bar(async () => {
-    doSomething();
-});
-
-function doSomething() {}
-async function noop() {}
-
-const a = 3;
-function b() {
-    const a = 10;
-}
-
-const c = function () {
-    const a = 10;
-};
-
-function d(a) {
-    a = 10;
-}
-d(a);
-
-if (true) {
-    const a = 5;
-}
 
 export default FilterableComponent;

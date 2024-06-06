@@ -1,4 +1,4 @@
-@use 'scss/variables';
+@use 'scss/variables' as *;
 @use 'scss/common';
 
 body {
@@ -110,7 +110,7 @@ a:hover {
         gap: 5px;
 
         &::marker {
-            color: variables.$tt-yellow;
+            color: $tt-yellow;
         }
     }
 }
@@ -136,7 +136,7 @@ a:hover {
                 margin-right: 5px;
 
                 svg {
-                    fill: variables.$tt-dark-gray;
+                    fill: $tt-dark-gray;
                 }
             }
         }

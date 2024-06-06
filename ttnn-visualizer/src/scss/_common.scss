@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 @use 'sass:color';
+@use 'variables' as *;
 
 :root {
     color-scheme: dark;
@@ -154,7 +155,7 @@ button,
             background-color 100ms linear;
 
         &:hover {
-            background-color: color.adjust($tt-medium-blue, $alpha: -90%);
+            background-color: color.adjust($tt-medium-blue, $alpha: -0.9);
         }
     }
 }
