@@ -21,6 +21,6 @@ set(IMPL_SRC
 add_library(impl OBJECT ${IMPL_SRC})
 target_link_libraries(impl PUBLIC common)
 
-target_include_directories(impl PUBLIC ${CMAKE_SOURCE_DIR}/tt_metal ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(impl PUBLIC ${PROJECT_SOURCE_DIR}/tt_metal ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast)
