@@ -67,5 +67,17 @@ inline void calculate_typecast_fp16b_to_uint16()
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_typecast_uint16_to_fp16b()
+{
+    #pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        TTI_SFPLOAD(0,6,3,0);
+        TTI_SFPCAST(0,1,0);
+        TTI_SFPSTORE(1,2,3,0);
+        dst_reg++;
+    }
+}
+
 }  // namespace sfpu
 }  // namespace ckernel
