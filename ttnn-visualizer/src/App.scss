@@ -1,41 +1,37 @@
+@use 'scss/variables';
+@use 'scss/common';
+
 body {
     position: relative;
-    color: white;
+    color: #fff;
     height: 100vh;
-    background: linear-gradient(
-            200.96deg,
-            #fedc2a -29.09%,
-            #dd5789 51.77%,
-            #7a2c9e 129.35%
-    );
+    background: linear-gradient(200.96deg, #fedc2a -29.09%, #dd5789 51.77%, #7a2c9e 129.35%);
     margin-top: 10px;
 }
 
-@import "scss/variables";
-@import "scss/common";
-
-.App {
-    padding: 20px;
+.app {
+    padding: 0;
 }
 
 button {
-    background-color: white;
+    background-color: rgb(0 0 0);
     padding: 10px 20px;
     border-radius: 10px;
     border: none;
     appearance: none;
     font-size: 1.3rem;
-    box-shadow: 0px 8px 28px -6px rgba(24, 39, 75, 0.12),
-    0px 18px 88px -4px rgba(24, 39, 75, 0.14);
+    box-shadow:
+        0 8px 28px -6px rgb(24 39 75 / 12%),
+        0 18px 88px -4px rgb(24 39 75 / 14%);
     transition: all ease-in 0.1s;
     cursor: pointer;
     opacity: 0.9;
 }
 
-//button:hover {
+// button:hover {
 //    transform: scale(1.05);
 //    opacity: 1;
-//}
+// }
 
 li {
     list-style: none;
@@ -53,7 +49,7 @@ a:hover {
     text-decoration: none;
 }
 
-.Hello {
+.hello {
     display: flex;
     justify-content: center;
     align-items: center;
@@ -62,7 +58,6 @@ a:hover {
 
 .ops {
     margin-top: 10px;
-
 }
 
 .operations-wrap {
@@ -82,14 +77,12 @@ a:hover {
         color: #fefef6;
     }
 
-    .collapsible-content{
+    .collapsible-content {
         display: flex;
         flex-direction: column;
         gap: 10px;
     }
 }
-
-
 
 .op {
     display: flex;
@@ -103,23 +96,21 @@ a:hover {
     margin-bottom: 15px;
 
     .collapsible-component {
-
         .bp5-button-text {
             display: flex;
             align-items: center;
             gap: 10px;
         }
-
     }
 }
 
 .op-params {
-    li{
+    li {
         display: flex;
         gap: 5px;
 
-        &::marker{
-            color: $tt-yellow;
+        &::marker {
+            color: variables.$tt-yellow;
         }
     }
 }
@@ -127,7 +118,6 @@ a:hover {
 .search-field {
     display: flex;
     min-width: 250px;
-
     margin-bottom: 30px;
 
     .bp5-input-group .bp5-input:not(:last-child) {
@@ -139,7 +129,6 @@ a:hover {
         align-items: center;
         min-width: 270px;
 
-
         .bp5-input-action {
             top: unset;
 
@@ -147,7 +136,7 @@ a:hover {
                 margin-right: 5px;
 
                 svg {
-                    fill: $tt-dark-gray
+                    fill: variables.$tt-dark-gray;
                 }
             }
         }

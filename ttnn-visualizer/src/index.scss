@@ -1,14 +1,19 @@
+// @import '~normalize.css';
+@import '@blueprintjs/core/lib/css/blueprint.css';
+
+// @import '@blueprintjs/popover2/lib/css/blueprint-popover2.css';
+// @import '@blueprintjs/table/lib/css/table.css';
+@import '@blueprintjs/icons/lib/css/blueprint-icons.css';
+
 :root {
     font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
     line-height: 1.5;
     font-weight: 400;
-
     color-scheme: light dark;
-    color: rgba(255, 255, 255, 0.87);
+    color: rgb(255 255 255 / 87%);
     background-color: #242424;
-
     font-synthesis: none;
-    text-rendering: optimizeLegibility;
+    text-rendering: optimizelegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 }
@@ -26,7 +31,8 @@ a:hover {
 body {
     margin: 0;
     display: flex;
-    //place-items: center;
+
+    // place-items: center;
     min-width: 320px;
     min-height: 100vh;
 }
@@ -60,18 +66,14 @@ button:focus-visible {
 @media (prefers-color-scheme: light) {
     :root {
         color: #213547;
-        background-color: #ffffff;
+        background-color: #fff;
     }
+
     a:hover {
         color: #747bff;
     }
+
     button {
         background-color: #f9f9f9;
     }
 }
-
-//@import '~normalize.css';
-@import '@blueprintjs/core/lib/css/blueprint.css';
-//@import '@blueprintjs/popover2/lib/css/blueprint-popover2.css';
-//@import '@blueprintjs/table/lib/css/table.css';
-@import '@blueprintjs/icons/lib/css/blueprint-icons.css';

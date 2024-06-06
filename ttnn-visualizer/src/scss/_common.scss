@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+@use 'sass:color';
 
 :root {
     color-scheme: dark;
@@ -11,23 +11,23 @@
     pointer-events: none;
 }
 
-::-webkit-scrollbar-button {
-}
-
 body {
     margin: 0;
     background: $tt-background;
     color: $tt-white-text;
     font-family: 'Arial Nova', Arial, sans-serif;
-    //font-family: 'Helvetica Neue', Helvetica, sans-serif;
 
-    //overflow-y: hidden;
-    //overflow-x: hidden;
-    //height: 100vh;
-    //display: flex;
+    // font-family: 'Helvetica Neue', Helvetica, sans-serif;
+
+    // overflow-y: hidden;
+    // overflow-x: hidden;
+    // height: 100vh;
+    // display: flex;
 }
 
-*, *::before, *::after {
+*,
+*::before,
+*::after {
     box-sizing: border-box;
 }
 
@@ -35,29 +35,20 @@ a {
     color: $tt-light-blue;
 }
 
-
-:focus {
-    outline-offset: 0px;
-}
-
-.bp4-control input:focus ~ .bp4-control-indicator {
-    outline-offset: 0;
-}
-
-:focus {
-    outline: $focus-ring solid 2px;
-    outline-offset: 0px;
-}
-
 .bp4-control input:focus ~ .bp4-control-indicator {
     outline: $focus-ring solid 2px;
     outline-offset: 0;
 }
 
+:focus {
+    outline: $focus-ring solid 2px;
+    outline-offset: 0;
+}
 
 .node-item:focus {
     outline: none;
-    //outline-offset: -2px;
+
+    // outline-offset: -2px;
 }
 
 .tt-keyboard-focus {
@@ -70,17 +61,18 @@ a {
 $top-nav-height: 70px;
 $footer-height: 20px;
 
-// Ful app layout, which is side bar, top nav, main content, and footer
-.App {
+// Full app layout, which is side bar, top nav, main content, and footer
+.app {
     color: $tt-white-text;
-    //display: grid;
+
+    // display: grid;
     grid-template-columns: 50px 1fr;
     grid-template-rows: $top-nav-height 1fr;
 }
 
-.Footer {
+.footer {
     position: absolute;
-    bottom: 0px;
+    bottom: 0;
     min-width: 100vw;
     background: $tt-purple;
     min-height: #{$footer-height};
@@ -118,13 +110,13 @@ $footer-height: 20px;
     width: 100vw;
     height: calc(100vh - 50px);
     grid-template-columns: 1fr;
-    justify-content: center;
+    place-content: center center;
     align-items: center;
-    align-content: center;
     gap: 40px;
 }
 
-button, .button {
+button,
+.button {
     background-color: $tt-medium-blue;
     border: none;
     border-radius: 2px;
@@ -140,29 +132,37 @@ button, .button {
     padding: 5px 36px;
     text-align: center;
     text-decoration: none;
-    transition: color 250ms linear, background-color 250ms linear;
+    transition:
+        color 250ms linear,
+        background-color 250ms linear;
 
     &:not(.node-item) {
         &:hover {
-            background-color: lighten($tt-medium-blue, 20%);
+            background-color: color.adjust($tt-medium-blue, $lightness: 20%);
         }
 
-        //&:focus {
+        // &:focus {
         //    outline: none;
-        //}
+        // }
     }
 
     &.node-item {
         background-color: inherit;
         cursor: default;
-        transition: color 100ms linear, background-color 100ms linear;
+        transition:
+            color 100ms linear,
+            background-color 100ms linear;
 
         &:hover {
-            background-color: transparentize($tt-medium-blue, 0.9);
+            background-color: color.adjust($tt-medium-blue, $alpha: -90%);
         }
     }
 }
 
-h1, h2, h3, h4, h5 {
+h1,
+h2,
+h3,
+h4,
+h5 {
     margin: 0;
 }

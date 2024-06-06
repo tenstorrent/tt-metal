@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-//
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 /* Tenstorrent powerpoint theme */
@@ -10,7 +9,7 @@ $tt-background: #33333d;
 $tt-off-background: #44444d;
 $tt-slight-off-background: #383840;
 $tt-very-dark-gray: #1c2127;
-$tt-black: #000000;
+$tt-black: #000;
 $tt-white-text: #fefef6;
 $tt-extra-light-gray: #f5f5f5;
 $tt-light-gray: #eeeee6;
@@ -21,12 +20,11 @@ $hr: #676767;
 $tt-light-blue: #72deff;
 $tt-medium-blue: #008cab;
 $tt-dark-blue: #004c9b;
-
-$bright-highlight: #99ff00;
+$bright-highlight: #9f0;
 $node-select: #ffd500;
 $node-select-focus: #99c4ff;
 $core-highlight-inout: #ff3c00;
-$core-highlight-output: #0077ff;
+$core-highlight-output: #07f;
 $pipe-select: #fff58a;
 $c-dram: #7abdcc;
 $hc-core: #f996ff;
@@ -34,28 +32,20 @@ $c-core: #a5cc7a;
 $c-router: #d0c079;
 $c-eth: #a794ee;
 $c-pcix: #ee9794;
-
 $progress-bar-track: #262626;
 $progress-bar-fill: #7abdcc;
-
 $link-saturation-track: #2d72d2;
-$link-saturation-fill: rgba(95, 107, 124, 0.2);
-
+$link-saturation-fill: rgb(95 107 124 / 20%);
 $detailed-vew-component: #a6bce5;
 $detailed-vew-light-text: #99c4ff;
-
 $sort-header: #d8e4f6;
-
-$focus-ring: rgba(142, 243, 47, 0.9);
-
+$focus-ring: rgb(142 243 47 / 90%);
 $alert-color: #FF6C0A;
-
 $queue-color: #5F6B7C;
 
 /* Layout sizes */
 $top-bar-height: 50px;
 $initial-dock-height: 340px;
-
 $sidebar-width: 30px;
 $controls-panel-width: 230px;
 $compute-node-width: 260px;
