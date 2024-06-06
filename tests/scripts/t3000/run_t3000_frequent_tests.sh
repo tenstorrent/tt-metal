@@ -86,6 +86,20 @@ run_t3000_tteager_tests() {
   echo "LOG_METAL: run_t3000_tteager_tests $duration seconds to complete"
 }
 
+run_t3000_trace_stress_tests() {
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_trace_stress_tests"
+
+  NUM_TRACE_LOOPS=30 pytest tests/ttnn/unit_tests/test_multi_device_trace.py
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_trace_stress_tests $duration seconds to complete"
+}
+
+
 run_t3000_falcon40b_tests() {
   # Record the start time
   start_time=$(date +%s)
@@ -109,6 +123,9 @@ run_t3000_tests() {
 
   # Run tteager tests
   #run_t3000_tteager_tests
+
+  # Run trace tests
+  run_t3000_trace_stress_tests
 
   # Run llama2-70b experimental tests
   run_t3000_llama2_70b_experimental_tests

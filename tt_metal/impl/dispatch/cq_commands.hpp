@@ -21,7 +21,7 @@ enum CQPrefetchCmdId : uint8_t {
     CQ_PREFETCH_CMD_RELAY_INLINE = 3,         // relay (inline) data from CmdDatQ to dispatcher
     CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH = 4, // same as above, but doesn't flush the page to dispatcher
     CQ_PREFETCH_CMD_EXEC_BUF = 5,             // execute commands from a buffer
-    CQ_PREFETCH_CMD_EXEC_BUF_END = 6,         // finish executing commands from a buffer (return)
+    CQ_PREFETCH_CMD_EXEC_BUF_END = 6,         // finish executing commands from a buffer (return), payload like relay_inline
     CQ_PREFETCH_CMD_STALL = 7,                // drain pipe through dispatcher
     CQ_PREFETCH_CMD_DEBUG = 8,                // log waypoint data to watcher, checksum
     CQ_PREFETCH_CMD_TERMINATE = 9,            // quit
@@ -40,7 +40,8 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_SINK = 8,               // act as a data sink (for testing)
     CQ_DISPATCH_CMD_DEBUG = 9,              // log waypoint data to watcher, checksum
     CQ_DISPATCH_CMD_DELAY = 10,             // insert delay (for testing)
-    CQ_DISPATCH_CMD_TERMINATE = 11,         // quit
+    CQ_DISPATCH_CMD_EXEC_BUF_END = 11,      // dispatch_d notify prefetch_h that exec_buf has completed
+    CQ_DISPATCH_CMD_TERMINATE = 12,         // quit
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -137,7 +138,6 @@ struct CQDispatchWritePagedCmd {
     uint32_t page_size;
     uint32_t pages;
 } __attribute__((packed));
-
 
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE      = 0x00;
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST     = 0x01;
