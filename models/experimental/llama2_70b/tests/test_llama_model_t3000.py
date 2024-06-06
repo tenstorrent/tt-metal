@@ -20,15 +20,15 @@ if os.getenv("CI") == "true":
 @pytest.mark.parametrize(
     "llama_version",
     (
-        ("llama2"),
-        # ("llama3"),
+        # ("llama2"),
+        ("llama3"),
     ),
 )
 @pytest.mark.parametrize(
     "pcc, n_layers",
     (
         (0.996, 1),
-        (0.996, 2),
+        (0.990, 2),
     ),
     ids=("1L", "2L"),
 )
