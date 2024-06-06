@@ -334,10 +334,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t M,
     uint32_t N,
     uint32_t K,
-    bool bcast_batch,
     uint32_t in0_block_w,
-    uint32_t out_subblock_h_storage,
-    uint32_t out_subblock_w_storage,
     uint32_t per_core_M,
     uint32_t per_core_N_storage,
     std::optional<UnaryWithParam> fused_activation,
@@ -1117,14 +1114,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     const Tensor& b,
     const std::optional<const Tensor> bias,
     Tensor& output,
-    bool bcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     uint32_t in0_block_w,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
     uint32_t per_core_M,
     uint32_t per_core_N,
-    bool fuse_batch,
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out,
     bool skip_compute,
@@ -1159,26 +1152,22 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
-    if (bcast_batch)
+    TT_FATAL(ashape.rank() == bshape.rank() && ashape.rank() >= 2 && "bmm (non-bcast matmul) expects input tensors of the same rank and must have rank >= 2");
+    for (auto i = 0; i < ashape.rank() - 2; i++) {
         TT_FATAL(
-            bshape[0] * bshape[1] == 1 &&
-            "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
-    else {
-        // same condition as above, different message
-        TT_FATAL(
-            ashape[1] == bshape[1] && ashape[0] == bshape[0] &&
-            "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
+            ashape[i] == bshape[i] &&
+            "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN or equivalent");
     }
     TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0);
     TT_FATAL(in1_buffer->size() % in1_single_tile_size == 0);
 
     TT_FATAL(
-        ashape[3] == bshape[2] &&
-        "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op");  // A.K == B.K
-    TT_FATAL(ashape[2] % TILE_HEIGHT == 0);
-    TT_FATAL(ashape[3] % TILE_WIDTH == 0);
-    TT_FATAL(bshape[2] % TILE_HEIGHT == 0);
-    TT_FATAL(bshape[3] % TILE_WIDTH == 0);
+        ashape[-1] == bshape[-2] &&
+        "Dimension K (A.shape[-1] and B.shape[-2]) must match for A and B in bmm_op");  // A.K == B.K
+    TT_FATAL(ashape[-2] % TILE_HEIGHT == 0);
+    TT_FATAL(ashape[-1] % TILE_WIDTH == 0);
+    TT_FATAL(bshape[-2] % TILE_HEIGHT == 0);
+    TT_FATAL(bshape[-1] % TILE_WIDTH == 0);
 
     MathFidelity math_fidelity;
     bool math_approx_mode;
@@ -1211,15 +1200,11 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    uint32_t B = ashape[0] * ashape[1];
-    uint32_t Mt = ashape[2] / TILE_HEIGHT;
-    uint32_t Kt = ashape[3] / TILE_WIDTH;
-    uint32_t Nt = bshape[3] / TILE_WIDTH;
+    uint32_t B = 1;
+    uint32_t Mt = get_batch_size(ashape) * ashape[-2] / TILE_HEIGHT;
+    uint32_t Kt = ashape[-1] / TILE_WIDTH;
+    uint32_t Nt = bshape[-1] / TILE_WIDTH;
 
-    if (fuse_batch) {
-        Mt = B * Mt;
-        B = 1;
-    }
     TT_FATAL(Kt % in0_block_w == 0);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -1242,10 +1227,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
         Mt,
         Nt,
         Kt,
-        bcast_batch,
         in0_block_w,
-        out_subblock_h,
-        out_subblock_w,
         per_core_M,
         per_core_N,
         fused_activation,
@@ -1268,14 +1250,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
     const Tensor& b,
     const std::optional<const Tensor> bias,
     Tensor& output_tensor,
-    bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     uint32_t in0_block_w,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
     uint32_t per_core_M,
     uint32_t per_core_N,
-    bool fuse_batch,
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out,
     bool skip_compute,
@@ -1286,14 +1264,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
         b,
         bias,
         output_tensor,
-        broadcast_batch,
         compute_kernel_config,
         in0_block_w,
-        out_subblock_h,
-        out_subblock_w,
         per_core_M,
         per_core_N,
-        fuse_batch,
         fused_activation,
         untilize_out,
         skip_compute,
