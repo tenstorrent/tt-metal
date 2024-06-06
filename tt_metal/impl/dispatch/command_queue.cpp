@@ -1658,6 +1658,12 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     // Snapshot of expected workers from previous programs, used for dispatch_wait cmd generation.
     uint32_t expected_workers_completed = this->manager.get_bypass_mode() ? this->trace_ctx->num_completion_worker_cores
                                                                           : this->expected_num_workers_completed;
+    if (this->manager.get_bypass_mode()) {
+        this->trace_ctx->num_completion_worker_cores += program.program_transfer_info.num_active_cores;
+    } else {
+        this->expected_num_workers_completed += program.program_transfer_info.num_active_cores;
+    }
+
     auto command = EnqueueProgramCommand(this->id, this->device, this->noc_index, program, this->manager, expected_workers_completed);
     this->enqueue_command(command, blocking);
 
@@ -1667,12 +1673,6 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         program.program_transfer_info.num_active_cores,
         this->manager.get_bypass_mode(),
         expected_workers_completed);
-
-    if (this->manager.get_bypass_mode()) {
-        this->trace_ctx->num_completion_worker_cores += program.program_transfer_info.num_active_cores;
-    } else {
-        this->expected_num_workers_completed += program.program_transfer_info.num_active_cores;
-    }
 }
 
 void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event, bool clear_count) {
