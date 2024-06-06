@@ -164,9 +164,8 @@ OutputTensors run_device_operation(
                                     OutputTensors& output_tensors,
                                     const OptionalTensors& optional_output_tensors) -> std::reference_wrapper<Program> {
             program_hash = operation.compute_program_hash(input_tensors, optional_input_tensors);
-            auto program_ptr = program_cache.find(program_hash);
+            auto cache_hit = program_cache.contains(program_hash);
 
-            bool cache_hit = program_ptr.has_value();
             log_debug(tt::LogOp, "Program Hash: {} ({})", program_hash, cache_hit ? "HIT" : "MISS");
 
             if (not cache_hit or operation.uses_custom_program_hash()) {
@@ -174,12 +173,10 @@ OutputTensors run_device_operation(
             }
 
             if (not cache_hit) {
-                program_ptr = std::make_shared<operation::CacheableProgram<OutputTensors>>(
-                    operation.create_program(input_tensors, optional_input_tensors, output_tensors));
-                program_cache.insert(program_hash, program_ptr.value());
+                program_cache.insert(
+                    program_hash, operation.create_program(input_tensors, optional_input_tensors, output_tensors));
             }
-            auto& program_with_callbacks =
-                *(reinterpret_cast<operation::CacheableProgram<OutputTensors>*>(program_ptr.value().get()));
+            auto& program_with_callbacks = program_cache.get<operation::CacheableProgram<OutputTensors>>(program_hash);
             TT_ASSERT(program_with_callbacks.supports_program_cache());
 
             if (cache_hit) {
