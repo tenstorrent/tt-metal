@@ -57,13 +57,16 @@ def test_bw_add_with_opt_output(input_shapes, device, are_required_outputs):
     if are_required_outputs[1]:
         _, other_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
+    cq_id = 0
+
     tt_output_tensor_on_device = tt_lib.tensor.add_bw(
         grad_tensor,
         input_tensor,
         other_tensor,
         are_required_outputs=are_required_outputs,
-        input_grad=input_grad,
-        other_grad=other_grad,
+        input_a_grad=input_grad,
+        input_b_grad=other_grad,
+        queue_id=cq_id,
     )
 
     in_data.retain_grad()

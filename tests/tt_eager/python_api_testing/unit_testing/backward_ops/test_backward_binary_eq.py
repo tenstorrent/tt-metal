@@ -85,21 +85,22 @@ def test_bw_binary_eq_opt_output_qid(input_shapes, device, are_required_outputs)
     _, grad_tensor = data_gen_with_range(input_shapes, -20, 40, device)
     input_grad = None
     other_grad = None
+
     if are_required_outputs[0]:
         _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
     if are_required_outputs[1]:
         _, other_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
-    queue_id = 0
+    cq_id = 0
 
     tt_output_tensor_on_device = tt_lib.tensor.binary_eq_bw(
-        queue_id,
         grad_tensor,
         input_tensor,
         other_tensor,
         are_required_outputs=are_required_outputs,
         input_grad=input_grad,
         other_grad=other_grad,
+        queue_id=cq_id,
     )
 
     in_grad = torch.zeros_like(in_data)

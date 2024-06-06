@@ -26,20 +26,34 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor mk_zero_tensor_like(const Tensor& reference_tensor, const MemoryConfig& output_mem_config) {
+Tensor mk_zero_tensor_like(uint8_t queue_id, const Tensor& reference_tensor, const MemoryConfig& output_mem_config,  std::optional<Tensor> output_tensor = std::nullopt) {
     // Tensor zero_like = bcast(reference_tensor, , BcastOpMath::MUL, BcastOpDim::HW);
     Tensor zero = mk_tiled_scalar(0.0f, reference_tensor.get_dtype());
-    Tensor zero_like = bcast(reference_tensor, zero, BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
-    return zero_like;
+    if(output_tensor.has_value()){
+        bcast(queue_id, reference_tensor, zero, BcastOpMath::MUL, BcastOpDim::HW, output_mem_config, output_tensor);
+    }
+    else{
+        output_tensor = bcast(queue_id, reference_tensor, zero, BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
+    }
+    return output_tensor.value();
+}
+Tensor mk_zero_tensor_like(const Tensor& reference_tensor, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor = std::nullopt) {
+    uint8_t default_queue_id = 0;
+    return mk_zero_tensor_like(default_queue_id, reference_tensor, output_mem_config, output_tensor);
 }
 
 // TODO: enable zeroes(), ones() and eye() type functions on-device using this type of logic
 template <typename T>
-Tensor mk_filled_tensor_like(const Tensor& reference_tensor, T val, const MemoryConfig& output_mem_config) {
+Tensor mk_filled_tensor_like(const Tensor& reference_tensor, T val, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor = std::nullopt,  uint8_t queue_id = 0) {
     Tensor k = mk_tiled_scalar(val, reference_tensor.get_dtype());
     Tensor zero_like = mk_zero_tensor_like(reference_tensor, output_mem_config);
-    Tensor result = bcast(zero_like, k, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
-    return result;
+    if(output_tensor.has_value()){
+        bcast(queue_id, zero_like, k, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config, output_tensor);
+    }
+    else{
+        output_tensor = bcast(queue_id, zero_like, k, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
+    }
+    return output_tensor.value();
 }
 
 // Function: softshrink
@@ -704,50 +718,39 @@ Tensor subalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const
 
 // addalpha(input, other, alpha) = input + (alpha * other)
 Tensor _addalpha(
+    uint8_t cq_id,
     const Tensor& input_a,
     const Tensor& input_b,
     float alpha,
     const MemoryConfig& output_mem_config,
     std::optional<Tensor> output_tensor) {
     if (output_tensor.has_value()) {
-        ttnn::add(mul_unary(input_b, alpha, output_mem_config), input_a, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
+        ttnn::add(cq_id, mul_unary(cq_id, input_b, alpha, output_mem_config), input_a, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
         return output_tensor.value();
     }
 
-    return ttnn::add(mul_unary(input_b, alpha, output_mem_config), input_a, std::nullopt, output_mem_config);
+    return ttnn::add(cq_id, mul_unary(cq_id, input_b, alpha, output_mem_config), input_a, std::nullopt, output_mem_config);
 }
+
 Tensor addalpha(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    float alpha,
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+        uint8_t default_queue_id = 0;
+        return operation::decorate_as_composite(__func__, _addalpha)(
+        default_queue_id, input_a, input_b, alpha, output_mem_config, output_tensor);
+}
+
+Tensor addalpha(
+    uint8_t cq_id,
     const Tensor& input_a,
     const Tensor& input_b,
     float alpha,
     const MemoryConfig& output_mem_config,
     std::optional<Tensor> output_tensor) {
     return operation::decorate_as_composite(__func__, _addalpha)(
-        input_a, input_b, alpha, output_mem_config, output_tensor);
-}
-
-Tensor _addalpha_overload(
-    uint8_t cq_id,
-    const Tensor& input_a,
-    const Tensor& input_b,
-    float alpha,
-    const MemoryConfig& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    if (output_tensor.has_value()) {
-        ttnn::add(mul_unary(input_b, alpha, output_mem_config), input_a, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
-        return output_tensor.value();
-    }
-
-    return ttnn::add(mul_unary(input_b, alpha, output_mem_config), input_a, std::nullopt, output_mem_config);
-}
-Tensor addalpha(
-    uint8_t cq_id,
-    const Tensor& input_a,
-    const Tensor& input_b,
-    float alpha,
-    const MemoryConfig& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    return operation::decorate_as_composite(__func__, _addalpha_overload)(
         cq_id, input_a, input_b, alpha, output_mem_config, output_tensor);
 }
 
@@ -1373,92 +1376,127 @@ Tensor cbrt(const Tensor& input_a, const MemoryConfig& output_mem_config) {
 // where - ternary operator y = (predicate) ? value_true : value_false; elementwise
 //            y = (predicate >= 0)*value_true + (predicate < 0)*value_false
 Tensor _where(
+    uint8_t queue_id,
     const Tensor& predicate,
     const Tensor& value_true,
     const Tensor& value_false,
     const MemoryConfig& output_mem_config,
     std::optional<Tensor> output_tensor) {
 
-    Tensor t2 = ttnn::multiply(gtz(predicate, output_mem_config), value_true, std::nullopt, output_mem_config);
+    Tensor t2 = ttnn::multiply(queue_id, gtz(predicate, output_mem_config), value_true, std::nullopt, output_mem_config);
     if(output_tensor.has_value())
     {
-        ttnn::multiply(lez(predicate, output_mem_config), value_false, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
-        ttnn::add(t2, output_tensor.value(), std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
+        ttnn::multiply(queue_id, lez(predicate, output_mem_config), value_false, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
+        ttnn::add(queue_id, t2, output_tensor.value(), std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
     }
     else
     {
-        Tensor t1 = ttnn::multiply(lez(predicate, output_mem_config), value_false, std::nullopt, output_mem_config);
-        output_tensor = ttnn::add(t2, t1, std::nullopt, output_mem_config);
+        Tensor t1 = ttnn::multiply(queue_id, lez(predicate, output_mem_config), value_false, std::nullopt, output_mem_config);
+        output_tensor = ttnn::add(queue_id, t2, t1, std::nullopt, output_mem_config);
     }
     return output_tensor.value();
 }
 Tensor _where_v1(
-    const Tensor& predicate, const float value_true, const Tensor& value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    uint8_t queue_id, const Tensor& predicate, const float value_true, const Tensor& value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
 
-    Tensor t2 = mul_unary(gtz(predicate, output_mem_config), value_true, output_mem_config);
+    Tensor t2 = mul_unary(queue_id, gtz(predicate, output_mem_config), value_true, output_mem_config);
 
     if(output_tensor.has_value()){
-        ttnn::multiply(lez(predicate, output_mem_config), value_false, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
-        ttnn::add(t2, output_tensor.value(), std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
+        ttnn::multiply(queue_id, lez(predicate, output_mem_config), value_false, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
+        ttnn::add(queue_id, t2, output_tensor.value(), std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
     }
     else
     {
-        Tensor t1 = ttnn::multiply(lez(predicate, output_mem_config), value_false, std::nullopt, output_mem_config);
-        output_tensor = ttnn::add(t2, t1, std::nullopt, output_mem_config);
+        Tensor t1 = ttnn::multiply(queue_id, lez(predicate, output_mem_config), value_false, std::nullopt, output_mem_config);
+        output_tensor = ttnn::add(queue_id, t2, t1, std::nullopt, output_mem_config);
     }
     return output_tensor.value();
 }
 Tensor _where_v2(
-    const Tensor& predicate, const Tensor& value_true, float value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    uint8_t queue_id, const Tensor& predicate, const Tensor& value_true, float value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
 
-    Tensor t1 = mul_unary(lez(predicate, output_mem_config), value_false, output_mem_config);
+    Tensor t1 = mul_unary(queue_id, lez(predicate, output_mem_config), value_false, output_mem_config);
 
     if(output_tensor.has_value()){
-        ttnn::multiply(gtz(predicate, output_mem_config), value_true, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
-        ttnn::add(output_tensor.value(), t1, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
+        ttnn::multiply(queue_id, gtz(predicate, output_mem_config), value_true, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
+        ttnn::add(queue_id, output_tensor.value(), t1, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
     }
     else
     {
-        Tensor t2 = ttnn::multiply(gtz(predicate, output_mem_config), value_true, std::nullopt, output_mem_config);
-        output_tensor = ttnn::add(t2, t1, std::nullopt, output_mem_config);
+        Tensor t2 = ttnn::multiply(queue_id, gtz(predicate, output_mem_config), value_true, std::nullopt, output_mem_config);
+        output_tensor = ttnn::add(queue_id, t2, t1, std::nullopt, output_mem_config);
     }
     return output_tensor.value();
 }
 Tensor _where_v3(
-    const Tensor& predicate, const float value_true, const float value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
-    Tensor t2 = mul_unary(gtz(predicate, output_mem_config), value_true, output_mem_config);
-    Tensor t1 = mul_unary(lez(predicate, output_mem_config), value_false, output_mem_config);
+    uint8_t queue_id, const Tensor& predicate, const float value_true, const float value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    Tensor t2 = mul_unary(queue_id, gtz(predicate, output_mem_config), value_true, output_mem_config);
+    Tensor t1 = mul_unary(queue_id, lez(predicate, output_mem_config), value_false, output_mem_config);
     if(output_tensor.has_value()){
-        ttnn::add(t2, t1, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
+        ttnn::add(queue_id, t2, t1, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
     } else {
-        output_tensor = ttnn::add(t2, t1, std::nullopt, output_mem_config);
+        output_tensor = ttnn::add(queue_id, t2, t1, std::nullopt, output_mem_config);
     }
     return output_tensor.value();
 }
+
 Tensor where(
     const Tensor& predicate,
     const Tensor& value_true,
     const Tensor& value_false,
     const MemoryConfig& output_mem_config,
     std::optional<Tensor> output_tensor) {
-    return operation::decorate_as_composite(__func__, _where)(predicate, value_true, value_false, output_mem_config, output_tensor);
+    uint8_t default_queue_id = 0;
+    return operation::decorate_as_composite(__func__, _where)(default_queue_id, predicate, value_true, value_false, output_mem_config, output_tensor);
 }
 Tensor where(
     const Tensor& predicate, const float value_true, const Tensor& value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
-    return operation::decorate_as_composite(__func__, _where_v1)(predicate, value_true, value_false, output_mem_config, output_tensor);
+    uint8_t default_queue_id = 0;
+    return operation::decorate_as_composite(__func__, _where_v1)(default_queue_id, predicate, value_true, value_false, output_mem_config, output_tensor);
 }
 Tensor where(
     const Tensor& predicate, const Tensor& value_true, const float value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
-    return operation::decorate_as_composite(__func__, _where_v2)(predicate, value_true, value_false, output_mem_config, output_tensor);
+    uint8_t default_queue_id = 0;
+    return operation::decorate_as_composite(__func__, _where_v2)(default_queue_id, predicate, value_true, value_false, output_mem_config, output_tensor);
 }
 Tensor where(
     const Tensor& predicate, const float value_true, const float value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
-    return operation::decorate_as_composite(__func__, _where_v3)(predicate, value_true, value_false, output_mem_config, output_tensor);
+    uint8_t default_queue_id = 0;
+    return operation::decorate_as_composite(__func__, _where_v3)(default_queue_id, predicate, value_true, value_false, output_mem_config, output_tensor);
+}
+
+Tensor where(
+    uint8_t queue_id,
+    const Tensor& predicate,
+    const Tensor& value_true,
+    const Tensor& value_false,
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    return operation::decorate_as_composite(__func__, _where)(queue_id, predicate, value_true, value_false, output_mem_config, output_tensor);
+}
+Tensor where(
+    uint8_t queue_id,
+    const Tensor& predicate, const float value_true, const Tensor& value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return operation::decorate_as_composite(__func__, _where_v1)(queue_id, predicate, value_true, value_false, output_mem_config, output_tensor);
+}
+Tensor where(
+    uint8_t queue_id,
+    const Tensor& predicate, const Tensor& value_true, const float value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return operation::decorate_as_composite(__func__, _where_v2)(queue_id, predicate, value_true, value_false, output_mem_config, output_tensor);
+}
+Tensor where(
+    uint8_t queue_id,
+    const Tensor& predicate, const float value_true, const float value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return operation::decorate_as_composite(__func__, _where_v3)(queue_id, predicate, value_true, value_false, output_mem_config, output_tensor);
 }
 
 // on-device tensor creation 0s like @reference_tensor
-Tensor zeros_like(const Tensor& reference_tensor, const MemoryConfig& output_mem_config) {
-    return mk_zero_tensor_like(reference_tensor, output_mem_config);
+Tensor zeros_like(uint8_t queue_id, const Tensor& reference_tensor, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return mk_zero_tensor_like(reference_tensor, output_mem_config, output_tensor);
+}
+Tensor zeros_like(const Tensor& reference_tensor, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    uint8_t default_queue_id = 0;
+    return mk_zero_tensor_like(default_queue_id, reference_tensor, output_mem_config, output_tensor);
 }
 
 // on-device tensor creation 1s like @reference_tensor
@@ -1467,8 +1505,12 @@ Tensor ones_like(const Tensor& reference_tensor, const MemoryConfig& output_mem_
 }
 
 // on-device tensor creation with value like @reference_tensor
-Tensor full_like(const Tensor& reference_tensor, float value, const MemoryConfig& output_mem_config) {
-    return mk_filled_tensor_like(reference_tensor, value, output_mem_config);
+Tensor full_like(const Tensor& reference_tensor, float value, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    uint8_t default_queue_id = 0;
+    return mk_filled_tensor_like(reference_tensor, value, output_mem_config, output_tensor, default_queue_id);
+}
+Tensor full_like(uint8_t queue_id, const Tensor& reference_tensor, float value, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return mk_filled_tensor_like(reference_tensor, value, output_mem_config, output_tensor, queue_id);
 }
 
 // hardtanh

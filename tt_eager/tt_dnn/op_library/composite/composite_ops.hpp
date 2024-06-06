@@ -361,10 +361,45 @@ Tensor where(
     const float value_false,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<Tensor> output_tensor = std::nullopt);
+Tensor where(
+    uint8_t queue_id,
+    const Tensor& predicate,
+    const Tensor& value_true,
+    const Tensor& value_false,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+Tensor where(
+    uint8_t queue_id,
+    const Tensor& predicate,
+    const float value_true,
+    const Tensor& value_false,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+Tensor where(
+    uint8_t queue_id,
+    const Tensor& predicate,
+    const Tensor& value_true,
+    const float value_false,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+Tensor where(
+    uint8_t queue_id,
+    const Tensor& predicate,
+    const float value_true,
+    const float value_false,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 
 // on-device tensor creation 0s like @reference_tensor
 Tensor zeros_like(
-    const Tensor& reference_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    uint8_t queue_id,
+    const Tensor& reference_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor= std::nullopt);
+Tensor zeros_like(
+    const Tensor& reference_tensor,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor= std::nullopt);
 
 // on-device tensor creation 1s like @reference_tensor
 Tensor ones_like(
@@ -372,9 +407,16 @@ Tensor ones_like(
 
 // on-device tensor creation with value like @reference_tensor
 Tensor full_like(
+    uint8_t queue_id,
     const Tensor& reference_tensor,
     float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor= std::nullopt);
+Tensor full_like(
+    const Tensor& reference_tensor,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor= std::nullopt);
 
 // on-device tensor creation 0s with shape
 Tensor empty(
