@@ -44,6 +44,21 @@ def test_add_2D_tensors(device, h, w):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
+def test_add_2D_tensors_with_program_cache(device, h, w, use_program_cache):
+    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.add(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output, 0.9999)
+
+
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("scalar", [0.42])
 def test_add_scalar(device, h, w, scalar):
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
