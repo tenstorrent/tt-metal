@@ -47,7 +47,7 @@ constexpr uint32_t DRAM_DATA_ALIGNMENT = 32;
 
 constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
 
-constexpr uint32_t dev_hugepage_base_g = 128; // HOST_CQ uses some at the start address
+constexpr uint32_t dev_hugepage_base_g = 2 * (CQ_START * sizeof(uint32_t)); // HOST_CQ uses some at the start address
 
 constexpr uint32_t host_data_dirty_pattern = 0xbaadf00d;
 
@@ -1698,7 +1698,7 @@ void configure_for_single_chip(Device *device,
          split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem, // overridden below for dispatch_h
          dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS,
          prefetch_sync_sem,
-         dev_hugepage_base_g,
+         0, // true base of hugepage
          dev_hugepage_completion_buffer_base,
          DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
          dispatch_buffer_base,
@@ -2369,7 +2369,7 @@ void configure_for_multi_chip(Device *device,
          split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem,
          dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS,
          prefetch_sync_sem,
-         dev_hugepage_base_g,
+         0, // true base of hugepage
          dev_hugepage_completion_buffer_base,
          DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
          dispatch_buffer_base,
