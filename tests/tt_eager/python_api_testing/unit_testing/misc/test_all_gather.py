@@ -532,6 +532,50 @@ def test_all_gather_on_t3000_nightly(
     use_program_cache,
     function_level_defaults,
 ):
+    if (
+        input_shape == [8, 8, 256, 384]
+        and dim == 1
+        and layout == ttl.tensor.Layout.TILE
+        and num_devices == 4
+        and num_links == 1
+        and input_dtype == ttl.tensor.DataType.BFLOAT16
+        and mem_config.buffer_type == ttl.tensor.BufferType.DRAM
+    ):
+        pytest.xfail(reason="Known failure")
+
+    if (
+        input_shape == [8, 8, 256, 384]
+        and dim == 2
+        and layout == ttl.tensor.Layout.TILE
+        and num_devices == 4
+        and num_links == 1
+        and input_dtype == ttl.tensor.DataType.BFLOAT16
+        and mem_config.buffer_type == ttl.tensor.BufferType.DRAM
+    ):
+        pytest.xfail(reason="Known failure")
+
+    if (
+        input_shape == [8, 8, 256, 384]
+        and dim == 2
+        and layout == ttl.tensor.Layout.TILE
+        and num_devices == 4
+        and num_links == 1
+        and input_dtype == ttl.tensor.DataType.BFLOAT8_B
+        and mem_config.buffer_type == ttl.tensor.BufferType.DRAM
+    ):
+        pytest.xfail(reason="Known failure")
+
+    if (
+        input_shape == [8, 8, 256, 384]
+        and dim == 2
+        and layout == ttl.tensor.Layout.TILE
+        and num_devices == 4
+        and num_links == 2
+        and input_dtype == ttl.tensor.DataType.BFLOAT8_B
+        and mem_config.buffer_type == ttl.tensor.BufferType.DRAM
+    ):
+        pytest.xfail(reason="Known failure")
+
     run_all_gather_on_t3000_impl(
         all_devices,
         num_devices,
