@@ -199,12 +199,20 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
     # Keep track of generated outputs to print out every iteration
     all_outputs = [[] for _ in range(batch_size)]
 
+    # Keep track of users that are done generating and stop printing their outputs
+    finished_generation = [False] * batch_size
+
     # TODO Debug (only device 0 is doing argmax, otherwise it throws an error)
     # Alternatively, send the output back to device: tt_lib.tensor.Tensor.to()
     ttl.device.SetDefaultDevice(device_mesh.get_device(0))
 
     # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
     for iteration in range(max_generated_tokens):
+        # Check if all users have finished generating (reached EoS token). If so, stop decoding.
+        if all(finished_generation):
+            logger.info("All users have finished generating tokens")
+            break
+
         iteration_time_start = time()
         start_pos = generation_start_pos + iteration
         current_pos = start_pos % model_args.sliding_window
@@ -263,7 +271,9 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
         # Get the generated tokens for each user for printing in the log
         for user in range(batch_size):
             user_tok = int(tt_token_batch[user].item())
-            if user_tok != tokenizer.eos_id:  # Stop saving the ouput after hitting the EOS token
+            if user_tok == tokenizer.eos_id:  # Stop saving the ouput after hitting the EOS token
+                finished_generation[user] = True
+            if finished_generation[user] == False:
                 all_outputs[user].append(user_tok)
 
         iteration_time = time() - iteration_time_start
