@@ -689,6 +689,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t storage_core_stride = 0; // stride in the dram bank
     uint32_t curr_worker_core = 0; // current worker core
     uint32_t curr_storage_core = 0; // current read dram bank
+    uint32_t vc = 0;
 
     const auto& cores = grid_to_cores(all_cores.start, all_cores.end, true);
     const auto& in0_sender_cores = grid_to_cores(in0_sender.start, in0_sender.end, true);
@@ -855,6 +856,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.push_back(0);
                 }
 
+                vc = vc == 3 ? 0 : vc+1;
+                mm_in1_sender_writer_args.push_back(vc);
+
                 uint32_t num_iter = 0; // iterate how many banks, till fill the current worker block
 
                 if (curr_storage_core < num_dram_banks) {
@@ -912,7 +916,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                         worker_core_stride = stride;
                     }
                 }
-                mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 18, num_iter);
+                mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 19, num_iter);
             }
             tt_metal::SetRuntimeArgs(
                 program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_1_default
