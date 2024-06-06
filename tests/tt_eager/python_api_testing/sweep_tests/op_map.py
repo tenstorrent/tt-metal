@@ -648,6 +648,10 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_unary_floor_div,
         "pytorch_op": pytorch_ops.unary_floor_div,
     },
+    "eltwise-_rfloor_div": {
+        "tt_op": tt_lib_ops.eltwise_rfloor_div,
+        "pytorch_op": pytorch_ops.rfloor_div,
+    },
     "eltwise-round": {
         "tt_op": tt_lib_ops.eltwise_round,
         "pytorch_op": pytorch_ops.round,

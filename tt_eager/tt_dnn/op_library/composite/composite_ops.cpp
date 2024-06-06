@@ -1119,6 +1119,14 @@ Tensor floor_div(const Tensor& input_a, float value, const MemoryConfig& output_
     return operation::decorate_as_composite(__func__, _floor_div_overload)(input_a, value, output_mem_config);
 }
 
+Tensor _rfloor_div(float value, const Tensor& input, const MemoryConfig& output_mem_config) {
+    Tensor result = div_unary(value, input);
+    return floor(result, output_mem_config);
+}
+Tensor rfloor_div(float value, const Tensor& input, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _rfloor_div)(value, input, output_mem_config);
+}
+
 Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     Tensor div_result = div(input_a, input_b);
     return where(ttnn::eqz(input_b, output_mem_config), 0, div_result);

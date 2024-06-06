@@ -671,6 +671,12 @@ def unary_floor_div(x, *args, **kwargs):
     return result
 
 
+def rfloor_div(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.floor_divide(value, x)
+    return result
+
+
 def round(x, *args, **kwargs):
     decimals = kwargs.pop("decimals")
     result = torch.round(x, decimals=decimals)
