@@ -47,14 +47,14 @@ foreach (TEST ${PERF_MICROBENCH_TESTS_SRCS})
     target_link_libraries(${TEST_TARGET} PUBLIC test_metal_common_libs)
     target_include_directories(${TEST_TARGET} PRIVATE
         ${UMD_HOME}
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/tt_metal
-        ${CMAKE_SOURCE_DIR}/tt_eager
-        ${CMAKE_SOURCE_DIR}/tt_metal/common
-        ${CMAKE_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${PROJECT_SOURCE_DIR}/tt_eager
+        ${PROJECT_SOURCE_DIR}/tt_metal/common
+        ${PROJECT_SOURCE_DIR}/tests
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
-    set_target_properties(${TEST_TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/test/tt_metal/perf_microbenchmark/${TEST_DIR})
+    set_target_properties(${TEST_TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/tt_metal/perf_microbenchmark/${TEST_DIR})
     target_compile_options(${TEST_TARGET} PUBLIC ${COMPILE_OPTIONS})
     list(APPEND PERF_MICROBENCH_TEST_TARGETS ${TEST_TARGET})
 endforeach()

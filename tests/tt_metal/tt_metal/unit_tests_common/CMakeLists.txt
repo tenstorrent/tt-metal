@@ -30,10 +30,10 @@ add_library(unit_tests_common_o OBJECT ${UNIT_TESTS_COMMON_SRC})
 target_link_libraries(unit_tests_common_o PUBLIC compiler_flags metal_header_directories)
 target_include_directories(unit_tests_common_o PUBLIC
     ${UMD_HOME}
-    ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/tt_metal
-    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/fmt
-    ${CMAKE_SOURCE_DIR}/tt_metal/common
-    ${CMAKE_SOURCE_DIR}/tests
+    ${PROJECT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/tt_metal
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt
+    ${PROJECT_SOURCE_DIR}/tt_metal/common
+    ${PROJECT_SOURCE_DIR}/tests
     ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
