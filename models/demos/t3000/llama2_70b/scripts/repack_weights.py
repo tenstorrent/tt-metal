@@ -66,6 +66,10 @@ def repack(in_dir, out_dir, chunk_size):
         chunk_id = chunk_key(key, chunk_size)
         chunks[chunk_id][key] = val
 
+    # save chunks
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     # copy params.json from input to output directory
     params_file = Path(in_dir) / "params.json"
     if params_file.exists():
@@ -74,9 +78,6 @@ def repack(in_dir, out_dir, chunk_size):
     else:
         print("No params.json file found in input directory.")
 
-    # save chunks
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
     for i, chunk in enumerate(chunks):
         # each chunk file name should tell which layers are in it
         start_layer = i * chunk_size
