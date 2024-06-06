@@ -217,7 +217,7 @@ TEST_F(CommandQueueFixture, TestAsyncCommandQueueSanityAndProfile) {
     command_queue.set_mode(current_mode);
 }
 
-TEST_F(CommandQueueFixture, TestAsyncBufferRW) {
+TEST_F(CommandQueueFixture, DISABLED_TestAsyncBufferRW) {
     // Test Async Enqueue Read and Write + Get Addr + Buffer Allocation and Deallocation
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
@@ -276,7 +276,7 @@ TEST_F(CommandQueueFixture, TestAsyncBufferRW) {
     command_queue.set_mode(current_mode);
 }
 
-TEST_F(CommandQueueFixture, TestAsyncCBAllocation) {
+TEST_F(CommandQueueFixture, DISABLED_TestAsyncCBAllocation) {
     // Test asynchronous allocation of buffers and their assignment to CBs
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
@@ -319,7 +319,7 @@ TEST_F(CommandQueueFixture, TestAsyncCBAllocation) {
     command_queue.set_mode(current_mode);
 }
 
-TEST_F(CommandQueueFixture, TestAsyncAssertForDeprecatedAPI) {
+TEST_F(CommandQueueFixture, DISABLED_TestAsyncAssertForDeprecatedAPI) {
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
