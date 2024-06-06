@@ -3,6 +3,9 @@
 Using ttnn
 ##########
 
+.. note::
+   These basic snippets currently work on Grayskull only. We are working on
+   updating the API for other architectures, like Wormhole.
 
 Basic Examples
 **************
