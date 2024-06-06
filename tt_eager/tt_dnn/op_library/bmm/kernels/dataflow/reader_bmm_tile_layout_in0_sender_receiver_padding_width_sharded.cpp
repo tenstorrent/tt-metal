@@ -67,7 +67,7 @@ void kernel_main() {
     in0_mcast_sender_semaphore_valid_addr_ptr[0] =
         VALID;  // Load const 1 to be used as semaphore valid value sent from sender to receivers
 
-    constexpr uint32_t num_remote_senders = num_blocks / num_blocks_per_shard;
+    constexpr uint32_t num_remote_senders = (num_blocks + num_blocks_per_shard - 1) / num_blocks_per_shard;
     uint64_t remote_sender_noc_addrs[num_remote_senders];
     if constexpr (transpose_mcast) {
         uint32_t x = 0, y = 0;
