@@ -388,12 +388,25 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     auto out_subblock_h = std::get<0>(subblock_hw);
     auto out_subblock_w = std::get<1>(subblock_hw);
 
-    if ((out_subblock_w == 1 and out_subblock_h == 1) and
-        (per_core_M == 1 and per_core_N != 1)) {  // it is bad for compute, pad per_core_N
-        per_core_N += 1;
-        subblock_hw = bmm_op_utils::get_matmul_subblock_params(per_core_M, per_core_N, false, false, fp32_dest_acc_en);
-        out_subblock_h = std::get<0>(subblock_hw);
-        out_subblock_w = std::get<1>(subblock_hw);
+    uint32_t max_subblock_w = fp32_dest_acc_en ? 4 : 8;
+    // it is bad for compute, pad per_core_N
+    if (out_subblock_h == 1 and out_subblock_w < max_subblock_w) {
+        uint32_t num_subblock_w_per_core_N = per_core_N / out_subblock_w;
+        uint32_t num_iter = max_subblock_w - out_subblock_w;
+        uint32_t new_out_subblock_w = out_subblock_w;
+        uint32_t preferred_out_subblock_w = out_subblock_w;
+
+        for (uint32_t i=0; i < num_iter; ++i) {
+            new_out_subblock_w += 1;
+            uint32_t new_num_subblock_w_per_core_N = (per_core_N + new_out_subblock_w - 1) / new_out_subblock_w;
+
+            if (new_num_subblock_w_per_core_N < num_subblock_w_per_core_N) {
+                num_subblock_w_per_core_N = new_num_subblock_w_per_core_N;
+                preferred_out_subblock_w = new_out_subblock_w;
+            }
+        }
+        out_subblock_w = preferred_out_subblock_w;
+        per_core_N = out_subblock_w * num_subblock_w_per_core_N;
     }
 
     log_debug("per_core_M: {}, per_core_N: {}", per_core_M, per_core_N);
