@@ -1429,6 +1429,12 @@ bool Device::close() {
 
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
+    // After device close, no buffers on this device should be used
+    for (const auto &[dev_addr, buf] : detail::BUFFER_MAP.value()) {
+        if (std::get<0>(dev_addr) == this->id()) {
+            DeallocateBuffer(*buf);
+        }
+    }
 
     this->active_devices_.deactivate_device(this->id_);
     this->disable_and_clear_program_cache();
