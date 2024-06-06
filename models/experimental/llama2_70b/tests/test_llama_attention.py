@@ -133,7 +133,7 @@ def run_test_LlamaAttention_inference(
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, UNIT_TEST_LAYER_NUM)
     # TT model -------------------------------------------------------------------------
-    transformation_mat_torch = get_rot_transformation_mat(head_dim)
+    transformation_mat_torch = get_rot_transformation_mat(32)  # 32 for tile size
 
     transformation_mats = ttnn.as_tensor(
         transformation_mat_torch,
