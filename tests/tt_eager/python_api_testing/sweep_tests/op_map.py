@@ -92,6 +92,10 @@ op_map = {
         "tt_op": tt_lib_ops.tril,
         "pytorch_op": pytorch_ops.tril,
     },
+    "eltwise-tril-optional": {
+        "tt_op": tt_lib_ops.eltwise_tril_optional,
+        "pytorch_op": pytorch_ops.tril,
+    },
     "eltwise-triu": {
         "tt_op": tt_lib_ops.triu,
         "pytorch_op": pytorch_ops.triu,

@@ -44,6 +44,23 @@ std::vector<Tensor> addcmul_bw(
     float value,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+std::vector<std::optional<Tensor>> tril_bw(
+    const Tensor& grad,
+    const Tensor& input,
+    int32_t diag,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
+
+std::vector<std::optional<Tensor>> tril_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    int32_t diag,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
+
 std::vector<Tensor> unary_mul_bw(
     const Tensor& grad,
     const Tensor& input,

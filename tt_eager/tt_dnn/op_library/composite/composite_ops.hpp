@@ -603,7 +603,16 @@ Tensor sfpu_eps(const Shape shape, Layout layout, Device* device, const MemoryCo
 Tensor tril(
     const Tensor& input_a,
     int32_t diag = 0,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+
+// tril : select lower triangular region of input matrix
+Tensor tril(
+    uint8_t queue_id,
+    const Tensor& input_a,
+    int32_t diag = 0,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 
 // triu : select upper triangular region of input matrix
 Tensor triu(

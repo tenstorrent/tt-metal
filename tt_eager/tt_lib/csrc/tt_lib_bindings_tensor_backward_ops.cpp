@@ -83,6 +83,42 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
+    m_tensor.def("tril_bw",
+            [](const Tensor& grad,
+                const Tensor& input,
+                const float diag,
+                const MemoryConfig& output_mem_config,
+                const std::vector<bool>& are_required_outputs,
+                std::optional<Tensor> input_grad,
+                uint8_t queue_id) {
+                    return tril_bw(queue_id, grad, input, diag, output_mem_config, are_required_outputs, input_grad);
+                },
+            py::arg("grad").noconvert(),
+            py::arg("input").noconvert(),
+            py::arg("diag") = 0,
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("are_required_outputs").noconvert() = std::vector<bool>{true},
+            py::arg("input_grad").noconvert() = std::nullopt,
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
+            Performs backward operations for multiplication with given ``grad`` and ``scalar``.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensors will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input", "Tensor tril_bw is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "diag", "diagonal to be chosen", "int32_t", "+dim (default to 0)", "No"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "are_required_outputs", "Boolean values for the required outputs: input_a_grad, input_b_grad ", "List of bool", "Default value is [True, True]", "No"
+                "input_grad", "Optional Output Tensor for input_grad", "Tensor", "Default value is None", "No"
+                "queue_id", "queue_id", "uint8_t", "Default is 0", "No"
+            )doc");
+
     m_tensor.def("unary_mul_bw", &tt::tt_metal::unary_mul_bw,
             py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("scalar") = 1.0f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
                 Performs backward operations for multiplication with given ``grad`` and ``scalar``
