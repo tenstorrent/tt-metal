@@ -106,13 +106,13 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
 DevicePool* DevicePool::_inst = nullptr;
 
 void DevicePool::initialize_device(Device* dev) const {
-    DprintServerAttach(dev);
-    watcher_init(dev);
-
     // TODO: as optimization, investigate removing all thisi call for already initialized devivces
     dev->initialize_and_launch_firmware();
 
+    DprintServerAttach(dev);
+    watcher_init(dev);
     watcher_attach(dev);
+
     // Create system memory writer for this device to have an associated interface to hardware command queue (i.e.
     // hugepage)
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {

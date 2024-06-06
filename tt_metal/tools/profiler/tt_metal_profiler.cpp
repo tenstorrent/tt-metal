@@ -215,10 +215,27 @@ void InitDeviceProfiler(Device *device){
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
+    auto device_id = device->id();
+    CoreCoord logical_grid_size = device->logical_grid_size();
+    auto ethCores = tt::Cluster::instance().get_soc_desc(device_id).get_physical_ethernet_cores() ;
+   /*
+    std::vector<uint32_t> zero_vec((PROFILER_L1_END_ADDRESS - PROFILER_L1_BUFFER_BR) / sizeof(uint32_t), 0);
+    constexpr uint32_t start_address = 0;
+    for (uint32_t x = 0; x < logical_grid_size.x; x++) {
+       for (uint32_t y = 0; y < logical_grid_size.y; y++) {
+             CoreCoord logical_core(x, y);
+             detail::WriteToDeviceL1(device, logical_core, PROFILER_L1_BUFFER_BR, zero_vec);
+         }
+    }
+
+    std::vector<uint32_t> zero_vec_eth((eth_l1_mem::address_map::PROFILER_L1_BUFFER_CONTROL - eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER) / sizeof(uint32_t), 0);
+    for (const auto& physical_eth_core: ethCores) {
+        llrt::write_hex_vec_to_core(device_id, physical_eth_core, zero_vec_eth, eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER);
+    }
+*/
     TracySetCpuTime (TracyGetCpuTime());
 
     bool doSync = false;
-    auto device_id = device->id();
     if (getDeviceProfilerState())
     {
         static std::atomic<bool> firstInit = true;
@@ -262,7 +279,6 @@ void InitDeviceProfiler(Device *device){
 
 
         const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
-        auto ethCores = soc_d.get_physical_ethernet_cores() ;
 
         for (auto &core : tt::Cluster::instance().get_soc_desc(device_id).physical_routing_to_profiler_flat_id)
         {
