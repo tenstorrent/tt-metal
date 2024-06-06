@@ -104,7 +104,6 @@ bool perf_test_g = false;
 uint32_t max_xfer_size_bytes_g = dispatch_buffer_page_size_g;
 uint32_t min_xfer_size_bytes_g = 4;
 uint32_t l1_buf_base_g;
-uint32_t prefetch_h_exec_buf_sem_addr_g;
 uint32_t test_device_id_g = 0;
 
 void init(int argc, char **argv) {
@@ -350,6 +349,7 @@ void add_prefetcher_cmd(vector<uint32_t>& cmds,
 
     case CQ_PREFETCH_CMD_RELAY_INLINE:
     case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
+    case CQ_PREFETCH_CMD_EXEC_BUF_END:
         cmd.relay_inline.length = payload_length_bytes;
         cmd.relay_inline.stride = round_cmd_size_up(payload_length_bytes + sizeof(CQPrefetchCmd));
         break;
@@ -821,50 +821,32 @@ void gen_rnd_test(Device *device,
 
 void gen_prefetcher_exec_buf_cmd_and_write_to_dram(Device *device,
                                                    vector<uint32_t>& prefetch_cmds,
-                                                   vector<uint32_t> buf_cmds,
+                                                   vector<uint32_t> exec_buf_cmds,
                                                    vector<uint32_t>& cmd_sizes) {
 
     vector<uint32_t> empty_payload; // don't give me grief, it is just a test
 
-    CQPrefetchCmd cmd;
+    // Add the semaphore release for prefetch_h
+    CQDispatchCmd dcmd;
+    memset(&dcmd, 0, sizeof(CQDispatchCmd));
 
-    if (split_prefetcher_g) {
-        // Add the semaphore release for prefetch_h
+    // cmddat_q in prefetch_d is re-used for exec_buf
+    // prefetch_h stalls at start of exec_buf by removing its downstream credits
+    // This command releases prefetch_h from the stall by restoring credits
+    dcmd.base.cmd_id = CQ_DISPATCH_CMD_EXEC_BUF_END;
 
-        CQDispatchCmd dcmd;
-        memset(&dcmd, 0, sizeof(CQDispatchCmd));
+    vector<uint32_t> dispatch_cmds;
+    vector<uint32_t> empty_sizes; // unused for the exec_buf but call below needs it
+    add_bare_dispatcher_cmd(dispatch_cmds, dcmd);
 
-        dcmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H;
-        dcmd.write_linear.noc_xy_addr = NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y);
-        dcmd.write_linear.addr = prefetch_h_exec_buf_sem_addr_g;
-        dcmd.write_linear.length = 16;
-
-        vector<uint32_t> dispatch_cmds;
-        vector<uint32_t> empty_sizes;
-        add_bare_dispatcher_cmd(dispatch_cmds, dcmd);
-        dispatch_cmds.push_back(1);
-        dispatch_cmds.push_back(0);
-        dispatch_cmds.push_back(0);
-        dispatch_cmds.push_back(0);
-
-        // Put the new commands at the front of the set of commands
-        // This tests that back-pressure stall in prefetch_d works
-        vector<uint32_t> tmp_cmds;
-        add_prefetcher_cmd(tmp_cmds, empty_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
-        auto iter = buf_cmds.begin();
-        buf_cmds.insert(iter, tmp_cmds.begin(), tmp_cmds.end());
-    }
-
-    // Add an end to the list of cmds to run from the buf
-    cmd.base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF_END;
-    add_bare_prefetcher_cmd(buf_cmds, cmd);
+    add_prefetcher_cmd(exec_buf_cmds, empty_sizes, CQ_PREFETCH_CMD_EXEC_BUF_END, dispatch_cmds);
 
     // writes cmds to dram
     num_dram_banks_g = device->num_banks(BufferType::DRAM);;
 
     uint32_t page_size = 1 << exec_buf_log_page_size_g;
 
-    uint32_t length = buf_cmds.size() * sizeof(uint32_t);
+    uint32_t length = exec_buf_cmds.size() * sizeof(uint32_t);
     length +=
         (page_size - (length & (page_size - 1))) &
         (page_size - 1); // rounded up to full pages
@@ -877,13 +859,14 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(Device *device,
         auto dram_channel = device->dram_channel_from_bank_id(bank_id);
         auto bank_core = device->dram_core_from_dram_channel(dram_channel);
 
-        tt::Cluster::instance().write_core(static_cast<const void*>(&buf_cmds[index / sizeof(uint32_t)]),
+        tt::Cluster::instance().write_core(static_cast<const void*>(&exec_buf_cmds[index / sizeof(uint32_t)]),
             page_size, tt_cxy_pair(device->id(), bank_core), DRAM_EXEC_BUF_DEFAULT_BASE_ADDR + offset + (page_id / num_dram_banks_g) * page_size);
 
         index += page_size;
     }
     tt::Cluster::instance().dram_barrier(device->id());
 
+    CQPrefetchCmd cmd;
     cmd.base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF;
     cmd.exec_buf.pad1 = 0;
     cmd.exec_buf.pad2 = 0;
@@ -1246,9 +1229,9 @@ void write_prefetcher_cmds(uint32_t iterations,
     if (!is_control_only && use_dram_exec_buf_g) {
         // Write cmds to DRAM, generate a new command to execute those commands
         cmd_sizes.resize(0);
-        vector<uint32_t> buf_cmds = prefetch_cmds;
+        vector<uint32_t> exec_buf_cmds = prefetch_cmds;
         prefetch_cmds.resize(0);
-        gen_prefetcher_exec_buf_cmd_and_write_to_dram(device, prefetch_cmds, buf_cmds, cmd_sizes);
+        gen_prefetcher_exec_buf_cmd_and_write_to_dram(device, prefetch_cmds, exec_buf_cmds, cmd_sizes);
     }
 
     if (initialize_device_g) {
@@ -1421,19 +1404,14 @@ void configure_for_single_chip(Device *device,
         tt_metal::CreateSemaphore(program, {prefetch_relay_demux_core}, 0); // unused
     }
     constexpr uint32_t prefetch_downstream_cb_sem = 1;
-    if (split_prefetcher_g) {
-        tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_d_buffer_pages);
-        if (packetized_path_en_g) {
-            // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
-            // value only to update the rptr:
-            tt_metal::CreateSemaphore(program, {prefetch_relay_demux_core}, 0);
-        }
-    } else {
-        tt_metal::CreateSemaphore(program, {prefetch_core}, dispatch_buffer_pages);
+    uint32_t prefetch_downstream_buffer_pages = split_prefetcher_g ? prefetch_d_buffer_pages : dispatch_buffer_pages;
+    tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_downstream_buffer_pages);
+    tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_d_buffer_pages);
+    if (packetized_path_en_g) {
+        // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
+        // value only to update the rptr:
+        tt_metal::CreateSemaphore(program, {prefetch_relay_demux_core}, 0);
     }
-
-    uint32_t prefetch_h_exec_buf_sem = 2;
-    prefetch_h_exec_buf_sem_addr_g = tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
 
     constexpr uint32_t prefetch_d_upstream_cb_sem = 1;
     constexpr uint32_t prefetch_d_downstream_cb_sem = 2;
@@ -1480,7 +1458,6 @@ void configure_for_single_chip(Device *device,
         prefetch_downstream_cb_sem, // prefetch_d only
         dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
         dispatch_constants::PREFETCH_D_BUFFER_BLOCKS, // prefetch_d only
-        prefetch_h_exec_buf_sem,
     };
 
     if (split_prefetcher_g) {
@@ -1706,6 +1683,10 @@ void configure_for_single_chip(Device *device,
          0, // unused on hd, filled in below for h and d
          0, // unused on hd, filled in below for h and d
          0, // unused unless tunneler is between h and d
+         split_prefetcher_g,
+         NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
+         prefetch_downstream_cb_sem,
+         prefetch_downstream_buffer_pages,
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
@@ -2007,19 +1988,14 @@ void configure_for_multi_chip(Device *device,
         tt_metal::CreateSemaphore(program_r, {prefetch_relay_demux_core}, 0); // unused
     }
     constexpr uint32_t prefetch_downstream_cb_sem = 1;
-    if (split_prefetcher_g) {
-        tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_d_buffer_pages);
-        if (packetized_path_en_g) {
-            // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
-            // value only to update the rptr:
-            tt_metal::CreateSemaphore(program_r, {prefetch_relay_demux_core}, 0);
-        }
-    } else {
-        tt_metal::CreateSemaphore(program, {prefetch_core}, dispatch_buffer_pages);
+    uint32_t prefetch_downstream_buffer_pages = split_prefetcher_g ? prefetch_d_buffer_pages : dispatch_buffer_pages;
+    tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_downstream_buffer_pages);
+    tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_d_buffer_pages);
+    if (packetized_path_en_g) {
+        // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
+        // value only to update the rptr:
+        tt_metal::CreateSemaphore(program_r, {prefetch_relay_demux_core}, 0);
     }
-
-    uint32_t prefetch_h_exec_buf_sem = 2;
-    prefetch_h_exec_buf_sem_addr_g = tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
 
     constexpr uint32_t prefetch_d_upstream_cb_sem = 1;
     constexpr uint32_t prefetch_d_downstream_cb_sem = 2;
@@ -2066,7 +2042,6 @@ void configure_for_multi_chip(Device *device,
         prefetch_downstream_cb_sem, // prefetch_d only
         dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
         dispatch_constants::PREFETCH_D_BUFFER_BLOCKS, // prefetch_d only
-        prefetch_h_exec_buf_sem,
     };
 
     if (split_prefetcher_g) {
@@ -2377,6 +2352,10 @@ void configure_for_multi_chip(Device *device,
          0, // unused on hd, filled in below for h and d
          0, // unused on hd, filled in below for h and d
          0, // unused unless tunneler is between h and d
+         split_prefetcher_g,
+         NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
+         prefetch_downstream_cb_sem,
+         prefetch_downstream_buffer_pages,
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;

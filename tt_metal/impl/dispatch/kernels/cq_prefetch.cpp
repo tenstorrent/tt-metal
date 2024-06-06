@@ -44,10 +44,8 @@ constexpr uint32_t upstream_cb_sem_id = get_compile_time_arg_val(17);
 constexpr uint32_t cmddat_q_log_page_size = get_compile_time_arg_val(18);
 constexpr uint32_t cmddat_q_blocks = get_compile_time_arg_val(19);
 
-constexpr uint32_t dispatch_h_exec_buf_sem_id = get_compile_time_arg_val(20);
-
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(21);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(22);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(20);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(21);
 
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -605,7 +603,7 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr,
     uint32_t read_addr = cmd->relay_linear.addr;
     uint32_t length = cmd->relay_linear.length;
     uint32_t read_length = length;
-    DPRINT << "relay_linear: " << length << " " << read_addr << " " << noc_xy_addr << ENDL();
+    DPRINT << "relay_linear: " << cmd_ptr << " " << length << " " << read_addr << " " << noc_xy_addr << ENDL();
 
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
@@ -711,6 +709,8 @@ void paged_read_into_cmddat_q(uint32_t read_ptr) {
     exec_buf_state.length += read_length;
 }
 
+// processes the relay_inline cmd from an exec_buf
+// ie, reads the data from dram and relays it on
 static uint32_t process_relay_inline_exec_buf_cmd(uint32_t& cmd_ptr,
                                                   uint32_t& downstream_data_ptr) {
 
@@ -719,6 +719,7 @@ static uint32_t process_relay_inline_exec_buf_cmd(uint32_t& cmd_ptr,
     uint32_t length = cmd->relay_inline.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
 
+    DPRINT << "relay_inline_exec_buf_cmd:" << length << ENDL();
     uint32_t npages = (length + downstream_cb_page_size - 1) >> downstream_cb_log_page_size;
 
     // Assume the downstream buffer is big relative to cmddat command size that we can
@@ -763,11 +764,6 @@ uint32_t process_exec_buf_cmd(uint32_t cmd_ptr_outer,
     // dispatch on eth cores is memory constrained, so exec_buf re-uses the cmddat_q
     // prefetch_h stalls upon issuing an exec_buf to prevent conflicting use of the cmddat_q,
     // the exec_buf contains the release commands
-    // this takes away all credits from prefetch_h so prefetch_h doesn't begin until this cmd is done
-    if (!is_h_variant) {
-        cb_release_pages<upstream_noc_xy, upstream_cb_sem_id>(-(cmddat_q_pages - 1));
-    }
-
     volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr_outer;
 
     exec_buf_state.page_id = 0;
@@ -796,11 +792,6 @@ uint32_t process_exec_buf_cmd(uint32_t cmd_ptr_outer,
             exec_buf_state.length -= stride;
             cmd_ptr += stride;
         }
-    }
-
-    // release the pages acquired above to free up prefetch_h
-    if (!is_h_variant) {
-        cb_release_pages<upstream_noc_xy, upstream_cb_sem_id>(cmddat_q_pages - 1);
     }
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
@@ -865,6 +856,7 @@ bool process_cmd(uint32_t& cmd_ptr,
     case CQ_PREFETCH_CMD_EXEC_BUF_END:
         DPRINT << "exec buf end: " << cmd_ptr << ENDL();
         ASSERT(exec_buf);
+        stride = process_relay_inline_exec_buf_cmd(cmd_ptr, downstream_data_ptr);
         done = true;
         break;
 
@@ -902,7 +894,7 @@ bool process_cmd(uint32_t& cmd_ptr,
     return done;
 }
 
-static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence) {
+static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool is_exec_buf) {
 
     uint32_t length = fence - data_ptr;
 
@@ -917,6 +909,18 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence) {
     // Assume the dispatch buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
     cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages);
+    if (is_exec_buf) {
+        // swipe all the downstream page credits from ourselves...
+        // prefetch_h stalls sending commands to prefetch_d until notified by dispatch_d that the exec_buf is done
+        // exec_buf completing on dispatch_h will free the pages and allow sending again
+        volatile tt_l1_ptr uint32_t* sem_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(my_downstream_cb_sem_id));
+        noc_semaphore_inc(get_noc_addr_helper(my_noc_xy, (uint32_t)sem_addr), -downstream_cb_pages);
+
+        // OK to continue prefetching once the page credits are returned
+        stall_state = NOT_STALLED;
+    }
+
     uint32_t downstream_pages_left = (downstream_cb_end - downstream_data_ptr) >> downstream_cb_log_page_size;
     if (downstream_pages_left >= npages) {
         noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
@@ -994,20 +998,6 @@ inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr) {
     return length - sizeof(CQPrefetchHToPrefetchDHeader);
 }
 
-// prefetch_h stalls sending commands to prefetch_d until notified by dispatch_d that the exec_buf is done
-// future optimization: this routine could pull from fetch_q while stalled. to do so we'd need to parse
-// commands in kernel_main_h
-void process_exec_buf_cmd_h() {
-
-    volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(dispatch_h_exec_buf_sem_id));
-
-    DEBUG_STATUS("EBCW");
-    while (*sem_addr == 0);
-    DEBUG_STATUS("EBCD");
-    *sem_addr = 0;
-}
-
 void kernel_main_h() {
 
     uint32_t cmd_ptr = cmddat_q_base;
@@ -1019,15 +1009,14 @@ void kernel_main_h() {
 
         volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
         uint32_t cmd_id = cmd->base.cmd_id;
-        cmd_ptr = process_relay_inline_all(cmd_ptr, fence);
+
+        bool is_exec_buf = (cmd_id == CQ_PREFETCH_CMD_EXEC_BUF);
+        cmd_ptr = process_relay_inline_all(cmd_ptr, fence, is_exec_buf);
+
         // Note: one fetch_q entry can contain multiple commands
         // The code below assumes these commands arrive individually, packing them would require parsing all cmds
-        if (cmd_id == CQ_PREFETCH_CMD_EXEC_BUF) {
-            DPRINT << "exec buf\n";
-            process_exec_buf_cmd_h();
-            stall_state = NOT_STALLED; // Stall is no longer required after ExecBuf finished
-        } else if (cmd_id == CQ_PREFETCH_CMD_TERMINATE) {
-            DPRINT << "prefetch terminating_" << is_h_variant << is_d_variant << ENDL();;
+        if (cmd_id == CQ_PREFETCH_CMD_TERMINATE) {
+            DPRINT << "prefetch terminating_10" << ENDL();
             done = true;
         }
 #if defined(COMPILE_FOR_IDLE_ERISC)
@@ -1122,6 +1111,9 @@ void kernel_main_hd() {
 
 void kernel_main() {
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
+
+    volatile tt_l1_ptr uint32_t* sem_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(my_downstream_cb_sem_id));
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();
