@@ -271,15 +271,12 @@ class buffer_map_t {
         this->map.erase(buf_attr);
     }
 
-    void clear() {
-        std::scoped_lock<std::mutex> lock(this->map_mutex);
-        this->map.clear();
-    }
-
     std::map<std::tuple<Deviceid, PageAddress>, Buffer *> value() {
         std::scoped_lock<std::mutex> lock(this->map_mutex);
         return this->map;
     }
+
+    ~buffer_map_t() { TT_ASSERT(this->map.empty(), "Not all buffers deallocated by runtime!"); }
 
    private:
     std::mutex map_mutex;
