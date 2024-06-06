@@ -189,8 +189,10 @@ inline void _llk_pack_mop_config_(const std::uint32_t pack_dst_format, const std
         //     tmp.set_loop_op1(TT_OP_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_1, p_pacr::ADDR_CNT_CTXT_0, ZERO_OUTPUT_FLAG, p_pacr::ALL_INTF_ACTIVE, 0, MEGAROW, 0, 0, 1)); // Close the tile
         // }
         // Write header to l1
-        tmp.set_end_op(TT_OP_STOREIND(
-            1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
+        if constexpr (write_tile_header) {
+            tmp.set_end_op(TT_OP_STOREIND(
+                1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
+        }
 
         tmp.program(instrn_buffer);
     }
