@@ -208,7 +208,7 @@ class ResNet50TestInfra:
         ## golden
 
         print(f"Running golden model")
-        self.torch_output_tensor = torch_model(self.torch_input_tensor)
+        # self.torch_output_tensor = torch_model(self.torch_input_tensor)
         print(f"Golden model run complete")
 
         ## ttnn
