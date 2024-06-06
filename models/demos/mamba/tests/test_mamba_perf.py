@@ -19,7 +19,6 @@ from models.utility_functions import profiler, enable_persistent_kernel_cache, s
 from tt_metal.tools.profiler.process_model_log import get_samples_per_s
 
 
-@skip_for_wormhole_b0("Non-deterministic hang on CI (#8606)")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
