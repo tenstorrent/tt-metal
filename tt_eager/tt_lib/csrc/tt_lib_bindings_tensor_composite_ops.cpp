@@ -91,8 +91,22 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("where", py::overload_cast<const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, std::optional<Tensor> >(&where),
-            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_tensor").noconvert() = std::nullopt, R"doc(
+        m_tensor.def("where",
+        [](const Tensor& predicate,
+           const Tensor& value_true,
+           const Tensor& value_false,
+           const MemoryConfig& output_mem_config,
+           std::optional<Tensor> output_tensor,
+           uint8_t queue_id) {
+            return where(queue_id, predicate, value_true, value_false, output_mem_config, output_tensor);
+        },
+            py::arg("predicate"),
+            py::arg("true_value"),
+            py::arg("false_value"),
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("output_tensor").noconvert() = std::nullopt,
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
             Perform an ternary where operation on two tensors based on third @predicate.
 
             where(predicate, true_value, false_value) implements (predicate) ? true_value : false_value.
@@ -109,9 +123,24 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                 "false_value", "False Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
+                "queue_id", "queue_id", "uint8_t", "Default is 0", "No"
         )doc");
-        m_tensor.def("where", py::overload_cast<const Tensor&, float, const Tensor&, const MemoryConfig&, std::optional<Tensor> >(&where),
-            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_tensor").noconvert() = std::nullopt, R"doc(
+        m_tensor.def("where",
+        [](const Tensor& predicate,
+           const float value_true,
+           const Tensor& value_false,
+           const MemoryConfig& output_mem_config,
+           std::optional<Tensor> output_tensor,
+           uint8_t queue_id) {
+            return where(queue_id, predicate, value_true, value_false, output_mem_config, output_tensor);
+        },
+            py::arg("predicate"),
+            py::arg("true_value"),
+            py::arg("false_value"),
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("output_tensor").noconvert() = std::nullopt,
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
             Perform an ternary where operation on two tensors based on third @predicate.
 
             where(predicate, true_value, false_value) implements (predicate) ? true_value : false_value.
@@ -128,9 +157,24 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                 "false_value", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
+                "queue_id", "queue_id", "uint8_t", "Default is 0", "No"
         )doc");
-        m_tensor.def("where", py::overload_cast<const Tensor&, const Tensor&, const float, const MemoryConfig&, std::optional<Tensor> >(&where),
-            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_tensor").noconvert() = std::nullopt, R"doc(
+        m_tensor.def("where",
+        [](const Tensor& predicate,
+           const Tensor& value_true,
+           const float value_false,
+           const MemoryConfig& output_mem_config,
+           std::optional<Tensor> output_tensor,
+           uint8_t queue_id) {
+            return where(queue_id, predicate, value_true, value_false, output_mem_config, output_tensor);
+        },
+            py::arg("predicate"),
+            py::arg("true_value"),
+            py::arg("false_value"),
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("output_tensor").noconvert() = std::nullopt,
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
             Perform an ternary where operation on two tensors based on third @predicate.
 
             where(predicate, true_value, false_value) implements (predicate) ? true_value : false_value.
@@ -147,9 +191,24 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                 "false_value", "float", "float", "float scalar", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
+                "queue_id", "queue_id", "uint8_t", "Default is 0", "No"
         )doc");
-        m_tensor.def("where", py::overload_cast<const Tensor&, const float, const float, const MemoryConfig&, std::optional<Tensor> >(&where),
-            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_tensor").noconvert() = std::nullopt, R"doc(
+        m_tensor.def("where",
+        [](const Tensor& predicate,
+           const float value_true,
+           const float value_false,
+           const MemoryConfig& output_mem_config,
+           std::optional<Tensor> output_tensor,
+           uint8_t queue_id) {
+            return where(queue_id, predicate, value_true, value_false, output_mem_config, output_tensor);
+        },
+            py::arg("predicate"),
+            py::arg("true_value"),
+            py::arg("false_value"),
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("output_tensor").noconvert() = std::nullopt,
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
             Perform an ternary where operation on two tensors based on third @predicate.
 
             where(predicate, true_value, false_value) implements (predicate) ? true_value : false_value.
@@ -166,68 +225,21 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                 "false_value", "float", "float", "float scalar", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
+                "queue_id", "queue_id", "uint8_t", "Default is 0", "No"
         )doc");
-    // *** composite unary ops ***
-    detail::bind_unary_op(
-        m_tensor,
-        "normalize_hw",
-        tt::tt_metal::normalize_hw,
-        R"doc(Returns a new tensor with the Gaussian normalize of the elements of the input tensor ``{0}`` on H,W axes.)doc");
-    detail::bind_unary_op(
-        m_tensor,
-        "normalize_global",
-        tt::tt_metal::normalize_global,
-        R"doc(Returns a new tensor with the Gaussian normalize of the elements of the input tensor ``{0}`` on N,C,H,W axes.)doc");
-    detail::bind_unary_op(
-        m_tensor,
-        "var_hw",
-        tt::tt_metal::var_hw,
-        R"doc(  Returns a new tensor with the variance of the input tensor ``{0}`` on H,W axes.)doc");
-    detail::bind_unary_op(
-        m_tensor,
-        "std_hw",
-        tt::tt_metal::std_hw,
-        R"doc(Returns a new tensor with the standard deviation of the input tensor ``{0}`` on H,W axes.)doc");
-    detail::bind_unary_op(
-        m_tensor,
-        "sinh",
-        &tt::tt_metal::sinh,
-        R"doc(Returns tensor with the hyperbolic sine of elements of the input tensor ``{0}`` in range [-9,9] with high accuracy.)doc");
-    detail::bind_unary_op(
-        m_tensor,
-        "cosh",
-        &tt::tt_metal::cosh,
-        R"doc(Returns tensor with the hyperbolic cosine of elements of the input tensor ``{0}`` in range [-9,9] with high accuracy.)doc");
-    detail::bind_unary_op(
-        m_tensor,
-        "softsign",
-        &softsign,
-        R"doc(Applies the softsign function to the elements of the input tensor ``{0}``.)doc");
-    detail::bind_unary_op(
-        m_tensor,
-        "log1p",
-        &log1p,
-        R"doc(Returns tensor with the natural log of 1 added to all of elements of the input tensor ``{0}``.)doc");
-    detail::bind_unary_op(
-        m_tensor,
-        "swish",
-        swish,
-        R"doc(Returns tensor with the swish all of elements of the input tensor ``{0}``.)doc");
-    detail::bind_unary_op(
-        m_tensor,
-        "mish",
-        &mish,
-        R"doc(Returns tensor with the mish activation of elements of the input tensor ``{0}``.)doc");
-    detail::bind_unary_op(
-        m_tensor,
-        "cbrt",
-        &cbrt,
-        R"doc(Returns tensor with the cbrt activation of elements of the input tensor ``{0}``.)doc");
-    detail::bind_unary_op(
-        m_tensor,
-        "asinh",
-        &asinh,
-        R"doc(Returns tensor with the inverse hyperbolic sine of elements of the input tensor ``{0}`` in range [-1e-6, 1e6].
+        // *** composite unary ops ***
+        detail::bind_unary_op(m_tensor, "normalize_hw", tt::tt_metal::normalize_hw, R"doc(Returns a new tensor with the Gaussian normalize of the elements of the input tensor ``{0}`` on H,W axes.)doc");
+        detail::bind_unary_op(m_tensor, "normalize_global", tt::tt_metal::normalize_global, R"doc(Returns a new tensor with the Gaussian normalize of the elements of the input tensor ``{0}`` on N,C,H,W axes.)doc");
+        detail::bind_unary_op(m_tensor, "var_hw", tt::tt_metal::var_hw, R"doc(  Returns a new tensor with the variance of the input tensor ``{0}`` on H,W axes.)doc");
+        detail::bind_unary_op(m_tensor, "std_hw", tt::tt_metal::std_hw, R"doc(Returns a new tensor with the standard deviation of the input tensor ``{0}`` on H,W axes.)doc");
+        detail::bind_unary_op(m_tensor, "sinh", &tt::tt_metal::sinh, R"doc(Returns tensor with the hyperbolic sine of elements of the input tensor ``{0}`` in range [-9,9] with high accuracy.)doc");
+        detail::bind_unary_op(m_tensor, "cosh", &tt::tt_metal::cosh, R"doc(Returns tensor with the hyperbolic cosine of elements of the input tensor ``{0}`` in range [-9,9] with high accuracy.)doc");
+        detail::bind_unary_op(m_tensor, "softsign", &softsign, R"doc(Applies the softsign function to the elements of the input tensor ``{0}``.)doc");
+        detail::bind_unary_op(m_tensor, "log1p", &log1p, R"doc(Returns tensor with the natural log of 1 added to all of elements of the input tensor ``{0}``.)doc");
+        detail::bind_unary_op(m_tensor, "swish", swish, R"doc(Returns tensor with the swish all of elements of the input tensor ``{0}``.)doc");
+        detail::bind_unary_op(m_tensor, "mish", &mish, R"doc(Returns tensor with the mish activation of elements of the input tensor ``{0}``.)doc");
+        detail::bind_unary_op(m_tensor, "cbrt", &cbrt, R"doc(Returns tensor with the cbrt activation of elements of the input tensor ``{0}``.)doc");
+        detail::bind_unary_op(m_tensor, "asinh", &asinh, R"doc(Returns tensor with the inverse hyperbolic sine of elements of the input tensor ``{0}`` in range [-1e-6, 1e6].
             for +input , output = asinh(input)
             for -input , output = -asinh(input))doc");
     detail::bind_unary_op(
@@ -641,12 +653,20 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 
     m_tensor.def(
         "addalpha",
-        py::overload_cast<const Tensor&, const Tensor&, float, const MemoryConfig&, std::optional<Tensor> >(&addalpha),
+        [](const Tensor& input_a,
+           const Tensor& input_b,
+           const float alpha,
+           const MemoryConfig& output_mem_config,
+           std::optional<Tensor> output_tensor,
+           uint8_t queue_id) {
+            return addalpha(queue_id, input_a, input_b, alpha, output_mem_config, output_tensor);
+        },
         py::arg("input_a").noconvert(),
         py::arg("input_b").noconvert(),
         py::arg("alpha") = 1.0f,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_tensor").noconvert() = std::nullopt,
+        py::arg("queue_id").noconvert() = 0,
         R"doc(
             Add ``input_b``, scaled by ``alpha``, from ``input_a``.
 
@@ -662,33 +682,7 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                 "alpha", "Alpha value", "float", "default to 1.0f", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
-        )doc");
-
-    m_tensor.def(
-        "addalpha",
-        py::overload_cast<uint8_t, const Tensor&, const Tensor&, float, const MemoryConfig&, std::optional<Tensor> >(&addalpha),
-        py::arg("cq_id") = 0,
-        py::arg("input_a").noconvert(),
-        py::arg("input_b").noconvert(),
-        py::arg("alpha") = 1.0f,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("output_tensor").noconvert() = std::nullopt,
-        R"doc(
-            Add ``input_b``, scaled by ``alpha``, from ``input_a``.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "cq_id", "Command queue id", "integer", "default to 0", "No"
-                "input_a", "Tensor addalpha is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "input_b", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "alpha", "Alpha value", "float", "default to 1.0f", "No"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
+                "queue_id", "Command queue id", "integer", "default to 0", "No"
         )doc");
 
     m_tensor.def(
@@ -716,10 +710,18 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 
     m_tensor.def(
         "full_like",
-        &full_like,
+        [](const Tensor& reference_tensor,
+           float value,
+           const MemoryConfig& output_mem_config,
+           std::optional<Tensor> output_tensor,
+           uint8_t queue_id) {
+            return full_like(queue_id, reference_tensor, value, output_mem_config, output_tensor);
+        },
         py::arg("input").noconvert(),
         py::arg("fill_value"),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("output_tensor").noconvert() = std::nullopt,
+        py::arg("queue_id").noconvert() = 0,
         R"doc(
             Returns a new tensor filled with the scalar value shaped like reference tensor ``arg0``.
 
@@ -733,13 +735,22 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                 "input", "Reference Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "fill_value", "Fill value", "float", "", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
+                "queue_id", "Command queue id", "integer", "default to 0", "No"
         )doc");
 
     m_tensor.def(
         "zeros_like",
-        &zeros_like,
+        [](const Tensor& reference_tensor,
+           const MemoryConfig& output_mem_config,
+           std::optional<Tensor> output_tensor,
+           uint8_t queue_id) {
+            return zeros_like(queue_id, reference_tensor, output_mem_config, output_tensor);
+        },
         py::arg("input").noconvert(),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("output_tensor").noconvert() = std::nullopt,
+        py::arg("queue_id").noconvert() = 0,
         R"doc(
             Returns a new tensor filled with zeros shaped like reference tensor ``input``.
 
@@ -752,6 +763,8 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 
                 "input", "Reference Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
+                "queue_id", "Command queue id", "integer", "default to 0", "No"
         )doc");
 
     m_tensor.def(

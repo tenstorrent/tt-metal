@@ -25,6 +25,7 @@ namespace tt {
 namespace tt_metal {
 
 std::vector<std::optional<Tensor>> _addalpha_bw(
+    uint8_t queue_id,
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -37,26 +38,39 @@ std::vector<std::optional<Tensor>> _addalpha_bw(
 
     if (are_required_outputs.at(0)) {
         if(input_grad.has_value()){
-            assign(grad, input_grad.value());
+            assign(queue_id, grad, input_grad.value());
         } else {
             input_grad = grad;
         }
-        result.push_back(input_grad.value());
+        result.emplace_back(input_grad);
     } else {
-        result.push_back(std::nullopt);
+        result.emplace_back(std::nullopt);
     }
     if (are_required_outputs.at(1)) {
         if(other_grad.has_value()){
-            ttnn::multiply(grad, full_like(grad, alpha, output_mem_config), std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, other_grad.value());
+            ttnn::multiply(queue_id, grad, full_like(grad, alpha, output_mem_config), std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, other_grad);
         } else {
-            other_grad = mul_unary(grad, alpha, output_mem_config);
+            other_grad = mul_unary(queue_id, grad, alpha, output_mem_config);
         }
-        result.push_back(other_grad.value());
+        result.emplace_back(other_grad);
     } else {
-        result.push_back(std::nullopt);
+        result.emplace_back(std::nullopt);
     }
 
     return std::move(result);
+}
+std::vector<std::optional<Tensor>> addalpha_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    float alpha,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    return operation::decorate_as_composite(__func__, _addalpha_bw)(
+        queue_id, grad, input, other, alpha, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 std::vector<std::optional<Tensor>> addalpha_bw(
     const Tensor& grad,
@@ -67,8 +81,9 @@ std::vector<std::optional<Tensor>> addalpha_bw(
     const std::vector<bool>& are_required_outputs,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
+        uint8_t default_queue_id = 0;
     return operation::decorate_as_composite(__func__, _addalpha_bw)(
-        grad, input, other, alpha, output_mem_config, are_required_outputs, input_grad, other_grad);
+        default_queue_id, grad, input, other, alpha, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 
 std::vector<std::optional<Tensor>> add_bw(
@@ -79,8 +94,21 @@ std::vector<std::optional<Tensor>> add_bw(
     const std::vector<bool>& are_required_outputs,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
+    uint8_t default_queue_id = 0;
     return operation::decorate_as_composite(__func__, _addalpha_bw)(
-        grad, input, other, 1, output_mem_config, are_required_outputs, input_grad, other_grad);
+        default_queue_id, grad, input, other, 1, output_mem_config, are_required_outputs, input_grad, other_grad);
+}
+std::vector<std::optional<Tensor>> add_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    return operation::decorate_as_composite(__func__, _addalpha_bw)(
+        queue_id, grad, input, other, 1, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 
 std::vector<Tensor> _unary_mul_bw(
@@ -143,6 +171,7 @@ std::vector<Tensor> unary_add_bw(
 }
 
 std::vector<std::optional<Tensor>> _mul_bw(
+    uint8_t cq_id,
     const Tensor& grad,
     const Tensor& input_a,
     const Tensor& input_b,
@@ -154,26 +183,38 @@ std::vector<std::optional<Tensor>> _mul_bw(
 
     if (are_required_outputs.at(0)) {
         if(input_a_grad.has_value()) {
-            ttnn::multiply(grad, input_b, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, input_a_grad.value(), std::nullopt);
+            ttnn::multiply(cq_id, grad, input_b, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, input_a_grad, std::nullopt);
         } else {
-            input_a_grad = ttnn::multiply(grad, input_b, std::nullopt, output_mem_config);
+            input_a_grad = ttnn::multiply(cq_id, grad, input_b, std::nullopt, output_mem_config);
         }
-        result.push_back(input_a_grad.value());
+        result.emplace_back(input_a_grad);
     } else {
-        result.push_back(std::nullopt);
+        result.emplace_back(std::nullopt);
     }
     if (are_required_outputs.at(1)) {
         if(input_b_grad.has_value()) {
-            ttnn::multiply(grad, input_a, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, input_b_grad.value(), std::nullopt);
+            ttnn::multiply(cq_id, grad, input_a, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, input_b_grad, std::nullopt);
         } else {
-            input_b_grad = ttnn::multiply(grad, input_a, std::nullopt, output_mem_config);
+            input_b_grad = ttnn::multiply(cq_id, grad, input_a, std::nullopt, output_mem_config);
         }
-        result.push_back(input_b_grad.value());
+        result.emplace_back(input_b_grad);
     } else {
-        result.push_back(std::nullopt);
+        result.emplace_back(std::nullopt);
     }
 
     return std::move(result);
+}
+std::vector<std::optional<Tensor>> mul_bw(
+    uint8_t cq_id,
+    const Tensor& grad,
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_a_grad,
+    std::optional<Tensor> input_b_grad) {
+    return operation::decorate_as_composite(__func__, _mul_bw)(
+        cq_id, grad, input_a, input_b, output_mem_config, are_required_outputs, input_a_grad, input_b_grad);
 }
 std::vector<std::optional<Tensor>> mul_bw(
     const Tensor& grad,
@@ -183,8 +224,9 @@ std::vector<std::optional<Tensor>> mul_bw(
     const std::vector<bool>& are_required_outputs,
     std::optional<Tensor> input_a_grad,
     std::optional<Tensor> input_b_grad) {
+        uint8_t default_queue_id = 0;
     return operation::decorate_as_composite(__func__, _mul_bw)(
-        grad, input_a, input_b, output_mem_config, are_required_outputs, input_a_grad, input_b_grad);
+        default_queue_id, grad, input_a, input_b, output_mem_config, are_required_outputs, input_a_grad, input_b_grad);
 }
 
 std::vector<Tensor> _exp_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
@@ -503,27 +545,65 @@ std::vector<Tensor> addcdiv_bw(
         grad, input, tensor1, tensor2, value, output_mem_config);
 }
 
-std::vector<Tensor> _where_bw(
-    const Tensor& grad,
-    const Tensor& condition,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_a = where(condition, grad, 0.0f, output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    Tensor grad_b = where(condition, 0.0f, grad, output_mem_config);
-    grad_tensor.emplace_back(grad_b);
 
-    return grad_tensor;
-}
-std::vector<Tensor> where_bw(
+std::vector<std::optional<Tensor>> _where_bw(
+    uint8_t queue_id,
     const Tensor& grad,
     const Tensor& condition,
     const Tensor& input,
     const Tensor& other,
-    const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _where_bw)(grad, condition, input, other, output_mem_config);
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    std::vector<std::optional<Tensor>> result;
+    if (are_required_outputs.at(0)) {
+        if(input_grad.has_value()){
+            where(queue_id, condition, grad, 0.0f, output_mem_config, input_grad);
+        } else {
+            input_grad = where(queue_id, condition, grad, 0.0f, output_mem_config);
+        }
+        result.emplace_back(input_grad);
+    } else {
+        result.emplace_back(std::nullopt);
+    }
+    if (are_required_outputs.at(1)) {
+        if(other_grad.has_value()){
+            where(queue_id, condition, 0.0f, grad, output_mem_config, other_grad);
+        } else {
+            other_grad = where(queue_id, condition, 0.0f, grad, output_mem_config);
+        }
+        result.emplace_back(other_grad);
+    } else {
+        result.emplace_back(std::nullopt);
+    }
+    return std::move(result);
+}
+
+std::vector<std::optional<Tensor>> where_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& condition,
+    const Tensor& input,
+    const Tensor& other,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    return operation::decorate_as_composite(__func__, _where_bw)(queue_id, grad, condition, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
+}
+
+std::vector<std::optional<Tensor>> where_bw(
+    const Tensor& grad,
+    const Tensor& condition,
+    const Tensor& input,
+    const Tensor& other,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    uint8_t default_queue_id = 0;
+    return operation::decorate_as_composite(__func__, _where_bw)(default_queue_id, grad, condition, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 
 // template parameter min_or_max = TRUE for MAX, FALSE for MIN
@@ -1976,10 +2056,9 @@ std::vector<Tensor> binary_ge_bw(const Tensor& grad, const Tensor& input, const 
     return operation::decorate_as_composite(__func__, _binary_ge_bw)(grad, input, output_mem_config);
 }
 
-// name: eq_.Tensor(Tensor(a!) self, Tensor other) -> Tensor(a!)
-// self: zeros_like(self)
-// other: zeros_like(other)
+
 std::vector<std::optional<Tensor>> _binary_eq_bw(
+    uint8_t cq_id,
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -1991,27 +2070,28 @@ std::vector<std::optional<Tensor>> _binary_eq_bw(
 
     if (are_required_outputs.at(0)) {
         if(input_grad.has_value()){
-            assign(zeros_like(input, output_mem_config), input_grad.value());
+            zeros_like(cq_id, input, output_mem_config, input_grad);
         } else {
-            input_grad = zeros_like(input, output_mem_config);
+            input_grad = zeros_like(cq_id, input, output_mem_config);
         }
-        result.push_back(input_grad.value());
+        result.emplace_back(input_grad);
     } else {
-        result.push_back(std::nullopt);
+        result.emplace_back(std::nullopt);
     }
     if (are_required_outputs.at(1)) {
         if(other_grad.has_value()){
-            assign(zeros_like(other, output_mem_config), other_grad.value());
+            zeros_like(cq_id, input, output_mem_config, other_grad);
         } else {
-            other_grad = zeros_like(other, output_mem_config);
+            other_grad = zeros_like(cq_id, input, output_mem_config);
         }
-        result.push_back(other_grad.value());
+        result.emplace_back(other_grad);
     } else {
-        result.push_back(std::nullopt);
+        result.emplace_back(std::nullopt);
     }
     return std::move(result);
 }
 std::vector<std::optional<Tensor>> binary_eq_bw(
+    uint8_t cq_id,
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -2020,44 +2100,9 @@ std::vector<std::optional<Tensor>> binary_eq_bw(
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     return operation::decorate_as_composite(__func__, _binary_eq_bw)(
-        grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
-}
-
-std::vector<std::optional<Tensor>> _binary_eq_bw_overload(
-    uint8_t queue_id,
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    std::vector<std::optional<Tensor>> result;
-
-    if (are_required_outputs.at(0)) {
-        if(input_grad.has_value()){
-            assign(queue_id, zeros_like(input, output_mem_config), input_grad.value());
-        } else {
-            input_grad = zeros_like(input, output_mem_config);
-        }
-        result.push_back(input_grad.value());
-    } else {
-        result.push_back(std::nullopt);
-    }
-    if (are_required_outputs.at(1)) {
-        if(other_grad.has_value()){
-            assign(queue_id, zeros_like(other, output_mem_config), other_grad.value());
-        } else {
-            other_grad = zeros_like(other, output_mem_config);
-        }
-        result.push_back(other_grad.value());
-    } else {
-        result.push_back(std::nullopt);
-    }
-    return std::move(result);
+        cq_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 std::vector<std::optional<Tensor>> binary_eq_bw(
-    uint8_t queue_id,
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -2065,8 +2110,9 @@ std::vector<std::optional<Tensor>> binary_eq_bw(
     const std::vector<bool>& are_required_outputs,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-    return operation::decorate_as_composite(__func__, _binary_eq_bw_overload)(
-        queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
+    uint8_t default_queue_id = 0;
+    return operation::decorate_as_composite(__func__, _binary_eq_bw)(
+        default_queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 
 std::vector<Tensor> _binary_gt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
