@@ -20,6 +20,7 @@ namespace tt {
 namespace tt_metal {
 
 void DumpDeviceProfileResults(Device* device, const Program& program) {
+#if defined(TRACY_ENABLE)
     auto const& worker_cores_in_program =
         device->worker_cores_from_logical_cores(program.logical_cores().at(CoreType::WORKER));
     auto const& eth_cores_in_program =
@@ -31,6 +32,7 @@ void DumpDeviceProfileResults(Device* device, const Program& program) {
     std::copy(eth_cores_in_program.begin(), eth_cores_in_program.end(), std::back_inserter(cores_in_program));
 
     detail::DumpDeviceProfileResults(device, cores_in_program);
+#endif
 }
 
 namespace detail {
@@ -40,8 +42,37 @@ std::map <uint32_t, DeviceProfiler> tt_metal_device_profiler_map;
 std::unordered_map <uint32_t, std::vector <std::pair<uint64_t,uint64_t>>> deviceHostTimePair;
 std::unordered_map <uint32_t, uint64_t> smallestHostime;
 
-
 constexpr CoreCoord SYNC_CORE = {0,0};
+
+void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer)
+{
+#if defined(TRACY_ENABLE)
+    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
+
+    auto ethCores = soc_d.get_physical_ethernet_cores() ;
+    for (auto &core : soc_d.physical_routing_to_profiler_flat_id)
+    {
+        if (std::find(ethCores.begin(), ethCores.end(), core.first) == ethCores.end())
+        {
+            //Tensix
+            tt::llrt::write_hex_vec_to_core(
+                    device_id,
+                    core.first,
+                    control_buffer,
+                    PROFILER_L1_BUFFER_CONTROL);
+        }
+        else
+        {
+            //ETH
+            tt::llrt::write_hex_vec_to_core(
+                    device_id,
+                    core.first,
+                    control_buffer,
+                    eth_l1_mem::address_map::PROFILER_L1_BUFFER_CONTROL);
+        }
+    }
+#endif
+}
 
 void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_metal::Program> &sync_program, bool doHeader)
 {
@@ -211,14 +242,22 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
 }
 
 
+void ClearProfilerControlBuffer(Device *device){
+    auto device_id = device->id();
+    std::vector<uint32_t> control_buffer(PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
+    setControlBuffer (device_id, control_buffer);
+}
+
+
 void InitDeviceProfiler(Device *device){
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
+    auto device_id = device->id();
+    CoreCoord logical_grid_size = device->logical_grid_size();
     TracySetCpuTime (TracyGetCpuTime());
 
     bool doSync = false;
-    auto device_id = device->id();
     if (getDeviceProfilerState())
     {
         static std::atomic<bool> firstInit = true;
@@ -259,30 +298,7 @@ void InitDeviceProfiler(Device *device){
 
         std::vector<uint32_t> control_buffer(PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = tt_metal_device_profiler_map.at(device_id).output_dram_buffer->address();
-
-
-        const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
-        auto ethCores = soc_d.get_physical_ethernet_cores() ;
-
-        for (auto &core : tt::Cluster::instance().get_soc_desc(device_id).physical_routing_to_profiler_flat_id)
-        {
-            if (std::find(ethCores.begin(), ethCores.end(), core.first) == ethCores.end())
-            {
-                tt::llrt::write_hex_vec_to_core(
-                        device_id,
-                        core.first,
-                        control_buffer,
-                        PROFILER_L1_BUFFER_CONTROL);
-            }
-            else
-            {
-                tt::llrt::write_hex_vec_to_core(
-                        device_id,
-                        core.first,
-                        control_buffer,
-                        eth_l1_mem::address_map::PROFILER_L1_BUFFER_CONTROL);
-            }
-        }
+        setControlBuffer (device_id, control_buffer);
 
         std::vector<uint32_t> inputs_DRAM(tt_metal_device_profiler_map.at(device_id).output_dram_buffer->size()/sizeof(uint32_t), 0);
         tt_metal::detail::WriteToBuffer(tt_metal_device_profiler_map.at(device_id).output_dram_buffer, inputs_DRAM);
