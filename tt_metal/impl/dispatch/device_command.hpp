@@ -321,18 +321,29 @@ class DeviceCommand {
     }
 
     void add_prefetch_exec_buf_end() {
-        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
-        auto initialize_exec_buf_end_cmd = [&](CQPrefetchCmd *exec_buf_end_cmd) {
+        auto initialize_prefetch_exec_buf_end_cmd = [&](CQPrefetchCmd *exec_buf_end_cmd) {
+            // prefetch exec_buf_end behaves as a relay_inline
             exec_buf_end_cmd->base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF_END;
+            exec_buf_end_cmd->relay_inline.length = sizeof(CQDispatchCmd);
+            exec_buf_end_cmd->relay_inline.stride = sizeof(CQDispatchCmd) + sizeof(CQPrefetchCmd);
         };
-        CQPrefetchCmd *exec_buf_end_cmd_dst = this->reserve_space<CQPrefetchCmd *>(increment_sizeB);
+        auto initialize_dispatch_exec_buf_end_cmd = [&](CQDispatchCmd *exec_buf_end_cmd) {
+            exec_buf_end_cmd->base.cmd_id = CQ_DISPATCH_CMD_EXEC_BUF_END;
+        };
+
+        CQPrefetchCmd *prefetch_exec_buf_end_cmd_dst = this->reserve_space<CQPrefetchCmd *>(sizeof(CQPrefetchCmd));
+        CQDispatchCmd *dispatch_exec_buf_end_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
 
         if constexpr (hugepage_write) {
-            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd exec_buf_end_cmd;
-            initialize_exec_buf_end_cmd(&exec_buf_end_cmd);
-            this->memcpy(exec_buf_end_cmd_dst, &exec_buf_end_cmd, sizeof(CQPrefetchCmd));
+            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd prefetch_exec_buf_end_cmd;
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd dispatch_exec_buf_end_cmd;
+            initialize_prefetch_exec_buf_end_cmd(&prefetch_exec_buf_end_cmd);
+            initialize_dispatch_exec_buf_end_cmd(&dispatch_exec_buf_end_cmd);
+            this->memcpy(prefetch_exec_buf_end_cmd_dst, &prefetch_exec_buf_end_cmd, sizeof(CQPrefetchCmd));
+            this->memcpy(dispatch_exec_buf_end_cmd_dst, &dispatch_exec_buf_end_cmd, sizeof(CQDispatchCmd));
         } else {
-            initialize_exec_buf_end_cmd(exec_buf_end_cmd_dst);
+            initialize_prefetch_exec_buf_end_cmd(prefetch_exec_buf_end_cmd_dst);
+            initialize_dispatch_exec_buf_end_cmd(dispatch_exec_buf_end_cmd_dst);
         }
     }
 

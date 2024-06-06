@@ -26,6 +26,16 @@ uint32_t wrap_ge(uint32_t a, uint32_t b) {
     return diff >= 0;
 }
 
+FORCE_INLINE
+uint32_t wrap_gt(uint32_t a, uint32_t b) {
+
+    // Careful below: have to take the signed diff for 2s complement to handle the wrap
+    // Below relies on taking the diff first then the compare to move the wrap
+    // to 2^31 away
+    int32_t diff = a - b;
+    return diff > 0;
+}
+
 // The fast CQ noc commands write a subset of the NOC registers for each transaction
 // leveraging the fact that many transactions re-use certain values (eg, length)
 // Since there are a variety of dispatch paradigms, which values get reused
@@ -145,7 +155,9 @@ void cb_acquire_pages(uint32_t n) {
     noc_async_atomic_barrier();
 
     DEBUG_STATUS("DAPW");
-    while (*sem_addr < n);
+    // Use a wrapping compare here to compare distance
+    // Required for trace which steals downstream credits and may make the value negative
+    while (wrap_gt(n, *sem_addr));
     DEBUG_STATUS("DAPD");
     noc_semaphore_inc(get_noc_addr_helper(noc_xy, (uint32_t)sem_addr), -n);
 }
