@@ -137,6 +137,17 @@ namespace tt::tt_metal{
 
 
         /**
+         * Clear profiler control buffer
+         *
+         * Return value: void
+         *
+         * | Argument      | Description                                                        | Type            | Valid Range               | Required |
+         * |---------------|--------------------------------------------------------------------|-----------------|---------------------------|----------|
+         * | device        | Clear profiler control buffer before any core attempts to profler  | Device *        |                           | True     |
+         * */
+	    void ClearProfilerControlBuffer(Device *device);
+
+        /**
          * Initialize device profiling data buffers
          *
          * Return value: void
