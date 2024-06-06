@@ -12,6 +12,16 @@ Download the weights tarfile directly from Mistral-AI:
 
 Both the above tarfiles consolidate the weights into a single file `consolidated.00.pth`. They also contain the tokenizer `tokenizer.model`.
 
+We also include a script to download and untar the weight files inside `models/demos/wormhole/mistral7b/scripts/get_mistral_weights.py`.
+
+```
+# Download general weights
+python models/demos/wormhole/mistral7b/scripts/get_mistral_weights.py --weights_path=<FOLDER_TO_SAVE_WEIGHTS>
+
+# To download instruct weights add --instruct flag
+
+python models/demos/wormhole/mistral7b/scripts/get_mistral_weights.py --weights_path=<FOLDER_TO_SAVE_WEIGHTS> --instruct
+```
 
 ### Set up environment
 
