@@ -30,6 +30,10 @@ run_t3000_falcon7b_tests(){
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/t3000/falcon7b/input_data_t3000.json' models/demos/t3000/falcon7b/demo_t3000.py::test_demo_multichip[user_input0-8-True-perf_mode_stochastic_verify]
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/t3000/falcon7b/input_data_t3000.json' models/demos/t3000/falcon7b/demo_t3000.py::test_demo_multichip[user_input0-8-True-default_mode_greedy_verify]
 
+  # Falcon7B perplexity test (prefill and decode)
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon7b/tests/test_perplexity_falcon.py::test_perplexity[1-True-prefill_seq1024_dram]
+  # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon7b/tests/test_perplexity_falcon.py::test_perplexity[1-True-decode_1024_l1_sharded]  # Disabled due to Issue #9268
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
