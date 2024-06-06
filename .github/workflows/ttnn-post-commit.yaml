@@ -25,8 +25,7 @@ jobs:
             cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 2 --group 2 -m "not disable_fast_runtime_mode"
           - name: ttnn group 3
             cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
-            env:
-              TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false}'
+            fast_runtime_mode_off: true
           - name: ttnn cpp tests
             cmd: ./build/test/ttnn/unit_tests_ttnn
     name: ${{ matrix.test-group.name }} ${{ matrix.runner-info.arch }} ${{ matrix.runner-info.name }}
@@ -47,6 +46,10 @@ jobs:
       - name: Extract files
         run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
       - uses: ./.github/actions/install-python-deps
+      - name: Set ttnn fast runtime if exists in config
+        if: ${{ matrix.test-group.fast_runtime_mode_off }}
+        run: |
+          echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: 45
         run: |

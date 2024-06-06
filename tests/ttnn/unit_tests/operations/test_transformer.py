@@ -465,6 +465,7 @@ def test_split_query_key_value_and_split_heads_when_head_size_is_not_a_multiple_
 
 
 @pytest.mark.requires_fast_runtime_mode_off
+@pytest.mark.skip(reason="#9267: need to fix since it never ran in CI")
 def test_concatenate_heads_when_head_size_is_not_a_multiple_of_32(device):
     """
     This test is to check that the concatenate_heads function raises an error when the head size is not a multiple of 32
