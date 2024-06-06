@@ -42,6 +42,24 @@ Tensor mk_tiled_scalar(T value) {
     return scalar;
 }
 
+template <typename T>
+Tensor mk_tiled_scalar(T value, DataType dtype) {
+    assert(std::is_scalar<T>::value && "T should be scalar");
+    std::array<unsigned int, 4> shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    if(dtype == DataType::BFLOAT8_B)
+    {
+        std::vector<float> buffer_vec(TILE_HW, float(0));
+        buffer_vec[0] = float(value);
+        auto output_packed_data = pack_fp32_vec_as_bfp8_tiles(buffer_vec, /*row_major_input=*/false, /*is_exp_a=*/false);
+        auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+        return Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), shape, DataType::BFLOAT8_B, Layout::TILE);
+    }
+    std::vector<bfloat16> buffer_vec(TILE_HW, bfloat16(0));
+    buffer_vec[0] = bfloat16(value);
+    auto buffer = owned_buffer::create(std::move(buffer_vec));
+    Tensor scalar = Tensor(OwnedStorage{buffer}, shape, DataType::BFLOAT16, Layout::TILE);
+    return scalar;
+}
 // Function: softshrink
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softshrink.html
 Tensor softshrink(
@@ -80,10 +98,6 @@ Tensor mac(
 // log1p 1
 // use transformation y = log(1.0 + x) by broadcast
 Tensor log1p(const Tensor& x, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// softplus[x] = log[1 + exp[x]]
-// use transformation y = log[1+exp[x]] by broadcast
-Tensor softplus(const Tensor& x, float beta=1.0, float threshold=20.0, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // mish[x] = x*tanh[softplus[x]]
 // use transformation y = x*tanh[softplus[x]] by broadcast
@@ -302,22 +316,26 @@ Tensor where(
     const Tensor& predicate,
     const Tensor& value_true,
     const Tensor& value_false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 Tensor where(
     const Tensor& predicate,
     const float value_true,
     const Tensor& value_false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 Tensor where(
     const Tensor& predicate,
     const Tensor& value_true,
     const float value_false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 Tensor where(
     const Tensor& predicate,
     const float value_true,
     const float value_false,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 
 // on-device tensor creation 0s like @reference_tensor
 Tensor zeros_like(

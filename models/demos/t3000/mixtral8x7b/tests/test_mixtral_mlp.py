@@ -11,6 +11,7 @@ if os.getenv("CI") == "true":
     os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
+    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
@@ -33,7 +34,7 @@ def test_mixtral_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     }
 
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
-    state_dict = torch.load(model_args.state_dict_path)
+    state_dict = model_args.load_state_dict()
 
     tt_model = TtMixtralMLP(
         device_mesh=t3k_device_mesh,
@@ -68,7 +69,6 @@ def test_mixtral_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds):
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
     )
-    tt_input = ttnn.to_device(tt_input, t3k_device_mesh)
 
     tt_output = tt_model(tt_input)
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]

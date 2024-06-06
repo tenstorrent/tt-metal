@@ -1,3 +1,5 @@
+.. _Using ttnn:
+
 Using ttnn
 ##########
 

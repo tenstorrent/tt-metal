@@ -8,6 +8,7 @@ import json
 import os
 import pathlib
 import pprint
+import subprocess
 from typing import Optional
 
 from loguru import logger
@@ -24,7 +25,7 @@ class Config:
     model_cache_path: pathlib.Path = cache_path / "models"
     tmp_dir: pathlib.Path = pathlib.Path("/") / "tmp" / "ttnn"
     enable_model_cache: bool = False
-    enable_fast_runtime_mode: bool = False
+    enable_fast_runtime_mode: bool = True
     throw_exception_on_fallback: bool = False
     enable_logging: bool = False
     enable_graph_report: bool = False
@@ -56,7 +57,7 @@ class Config:
             if self.enable_fast_runtime_mode:
                 if self.enable_logging:
                     logger.warning(
-                        "Running in fast runtime mode without logging. Please disable fast runtime mode if you want to enable logging."
+                        "Logging cannot be enabled in fast runtime mode. Please disable fast runtime mode if you want to enable logging."
                     )
 
         if name in {
@@ -125,11 +126,15 @@ if CONFIG_PATH is not None:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         save_config_to_json_file(CONFIG_PATH)
 
-
 if CONFIG_OVERRIDES is not None:
     logger.debug(f"Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES")
     load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
 
+
+import tt_lib as _tt_lib
+
+_tt_lib._check_so_rpath("_ttnn", pathlib.Path(__file__).parent.parent / "tt_lib" / "build" / "lib")
+import ttnn._ttnn
 
 logger.debug(f"Initial ttnn.CONFIG:\n{pprint.pformat(dataclasses.asdict(CONFIG))}")
 
@@ -223,6 +228,7 @@ from ttnn.core import (
     is_sharded,
     get_memory_config,
     create_sharded_memory_config,
+    create_sharded_memory_config_,
     dump_memory_config,
     load_memory_config,
     dump_stack_trace_on_segfault,
@@ -282,6 +288,7 @@ from ttnn.operations.comparison import (
 from ttnn.operations.creation import (
     arange,
     empty,
+    empty_like,
     full,
     full_like,
     ones,
@@ -308,7 +315,6 @@ from ttnn.operations.data_movement import (
     concat,
     pad,
     permute,
-    split,
     repeat_interleave,
     repeat,
     upsample,
@@ -464,8 +470,9 @@ from ttnn.operations.ccl import all_gather
 
 from ttnn.operations import transformer
 from ttnn.operations import kv_cache
-from ttnn.operations.conv2d import Conv2d
+from ttnn.operations.conv2d import Conv2d, conv2d, Conv2dConfig
 from ttnn.operations.pool import (
     MaxPool2d,
     global_avg_pool2d,
 )
+from ttnn.operations.copy import typecast

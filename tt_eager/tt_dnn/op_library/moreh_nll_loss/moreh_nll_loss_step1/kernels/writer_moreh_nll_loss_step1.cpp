@@ -6,7 +6,7 @@
 
 void kernel_main() {
     uint32_t output_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles_per_core = get_arg_val<uint32_t>(1);
+    uint32_t num_units_per_core = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_output = tt::CB::c_out0;
@@ -17,14 +17,12 @@ void kernel_main() {
     constexpr bool output_is_dram = get_compile_time_arg_val(0) == 1;
 
     const InterleavedAddrGenFast<output_is_dram> output_addrg = {
-        .bank_base_address = output_addr,
-        .page_size = output_tile_bytes,
-        .data_format = output_data_format};
+        .bank_base_address = output_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
 
     constexpr uint32_t onetile = 1;
 
-    uint32_t end_id = start_id + num_tiles_per_core;
-    for (uint32_t i = start_id; i < end_id; ++ i) {
+    uint32_t end_id = start_id + num_units_per_core;
+    for (uint32_t i = start_id; i < end_id; ++i) {
         cb_wait_front(cb_output, onetile);
         uint32_t output_l1_write_addr = get_read_ptr(cb_output);
         noc_async_write_tile(i, output_addrg, output_l1_write_addr);

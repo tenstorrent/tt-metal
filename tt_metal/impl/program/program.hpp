@@ -29,6 +29,7 @@ namespace detail{
     KernelHandle AddKernel ( Program & program, std::shared_ptr<Kernel> kernel, const CoreType &core_type);
     std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id);
     std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
+    void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
 }
 
 struct KernelGroup {
@@ -53,19 +54,16 @@ struct KernelGroup {
 };
 
 template <typename CoreRangeContainer>
-vector<pair<uint32_t, uint32_t>> extract_dst_noc_multicast_info(Device* device, const CoreRangeContainer& ranges, const CoreType core_type) {
+vector<pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(Device* device, const CoreRangeContainer& ranges, const CoreType core_type) {
     // This API extracts all the pairs of noc multicast encodings given a set of core ranges
-    vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info;
+    vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info;
     dst_noc_multicast_info.reserve(ranges.size());
     for (const CoreRange& core_range : ranges) {
         CoreCoord physical_start = device->physical_core_from_logical_core(core_range.start, core_type);
         CoreCoord physical_end = device->physical_core_from_logical_core(core_range.end, core_type);
 
-        uint32_t dst_noc_multicast_encoding =
-            NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
-
         uint32_t num_receivers = core_range.size();
-        dst_noc_multicast_info.push_back(std::make_pair(dst_noc_multicast_encoding, num_receivers));
+        dst_noc_multicast_info.push_back(std::make_pair(CoreRange(physical_start, physical_end), num_receivers));
     }
     return dst_noc_multicast_info;
 }
@@ -196,6 +194,8 @@ class Program {
     std::unordered_map<CoreType, std::vector<KernelGroup>> kernel_groups_;
     std::unordered_map<CoreType, std::vector<uint8_t>> core_to_kernel_group_index_table_;
 
+    std::vector<std::shared_ptr<Buffer>> config_buffers_;
+
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
@@ -211,6 +211,9 @@ class Program {
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value, CoreType core_type=CoreType::WORKER);
+
+    friend void detail::AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
+    void add_config_buffer(std::shared_ptr<Buffer> config_buffer);
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const Device *device) const;

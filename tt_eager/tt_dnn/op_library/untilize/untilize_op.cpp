@@ -180,7 +180,10 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
             }
             if (output_mem_config.is_sharded()) {
                 TT_FATAL(this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout);
-                TT_FATAL(input_tensor_a.get_legacy_shape()[-1] == output_shape[-1]);
+                TT_FATAL(
+                    input_tensor_a.get_legacy_shape()[-1] == output_shape[-1] ||
+                    (div_up(output_shape[-1], input_tensor_a.shard_spec().value().shape[1]) ==
+                     input_tensor_a.shard_spec().value().grid.num_cores()));
             } else {
                 TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
                 TT_FATAL(
@@ -223,7 +226,7 @@ std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(const std::vect
         if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
             shard_shape = {div_up(fused_height, num_cores), output_shape[-1]};
         } else {
-            shard_shape = {fused_height, output_shape[-1] / num_cores};
+            shard_shape = {fused_height, shard_spec.shape[1]};
         }
         shard_spec.shape = shard_shape;
         auto mem_config = this->output_mem_config;
@@ -269,13 +272,13 @@ Tensor untilize_with_unpadding(
     const Tensor& input_tensor_a,
     const Shape& output_tensor_end,
     const MemoryConfig& output_mem_config,
-    bool use_pack_untilize,
-    bool use_multicore) {
+    bool use_multicore,
+    bool use_pack_untilize) {
     // No-op (Will do a tensor copy)
     // TODO: We need to run asserts before this
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
     operation::launch_op(
-        [output_tensor_end, output_mem_config, use_pack_untilize](
+        [output_tensor_end, output_mem_config, use_multicore, use_pack_untilize](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -298,7 +301,8 @@ Tensor untilize_with_unpadding(
             // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
             bool fp32_dest_acc_en = input_tensor_a.get_dtype() == DataType::UINT32;
             return operation::run_without_autoformat(
-                UntilizeWithUnpadding{output_tensor_end, output_mem_config, use_pack_untilize, fp32_dest_acc_en},
+                UntilizeWithUnpadding{
+                    output_tensor_end, output_mem_config, use_multicore, use_pack_untilize, fp32_dest_acc_en},
                 {input_tensor_a});
         },
         {input_tensor_a},

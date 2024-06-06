@@ -17,59 +17,36 @@ Quick Start Guide
 Metalium provides developers to do more than running models, facilitating a
 transition from running models effortlessly out of the box, engaging in
 lightweight optimizations, and progressing into more sophisticated, heavyweight
-optimizations. This series of five steps serves as an illustrative example,
+optimizations. This series of steps serves as an illustrative example,
 showcasing the available tools for optimizing performance on Tenstorrent
 hardware.
 
 1. Install and Build
 ^^^^^^^^^^^^^^^^^^^^
 
-Install tt-metal and build the project by following the instructions in the
+Install and build the project by following the instructions in the
 `installation guide
-<https://github.com/tenstorrent/tt-metal#installing>`_.
+<../installing.html>`_.
 
-2. Explore the Falcon 7B Demo
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2. Beginner Metalium Usage: Single-core Matrix Multiplication Kernel
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Get started with the Falcon 7B demo to experience the capabilities of tt-metal.
-Navigate to the `Falcon 7B demo folder
-<https://github.com/tenstorrent/tt-metal/tree/main/models/demos/falcon7b>`_
-for details.
+Use TT-Metalium to define your own matrix multiplication kernels. Refer to our
+simpler :ref:`single-core <MatMul_Single_Core example>` example as a starting
+point.
 
-You can also check our demos for
-`ResNet <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/resnet>`_,
-`BERT <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/metal_BERT_large_11>`_,
-`Mistral 7B <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/mistral7b>`_,
-and
-`Llama2-70B <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama2_70b>`_.
+3. Advanced Metalium Usage: Multi-core Matrix Multiplication Kernel
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-3. ttnn Tutorial: Multi-Head Attention (Simple)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Learn the basics of multi-head attention operations in tt-metal's ttnn module
-with a simple example: `ttnn simple module <../../ttnn/ttnn/tutorials/ttnn_tutorials/003.html#Write-Multi-Head-Attention-using-ttnn>`_.
-
-4. ttnn Tutorial: Multi-Head Attention (Optimized)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Dive deeper into multi-head attention operations in ttnn, optimizing
-performance: `optimizing performance <../../ttnn/ttnn/tutorials/ttnn_tutorials/003.html#Write-optimized-version-of-Multi-Head-Attention>`_.
-
-5. Advanced Metalium Usage: Matrix Multiplication Kernels
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Explore expert-level usage by working with Metalium to define your own matrix
-multiplication kernels. Choose between :ref:`single-core
-<MatMul_Single_Core example>`
-and :ref:`multi-core<MatMul_Multi_Core example>`
-implementations.
+Explore expert-level usage by building on the previous example to create a
+:ref:`multi-core<MatMul_Multi_Core example>` implementation.
 
 Where to go from here
----------------------
+^^^^^^^^^^^^^^^^^^^^^
 
-If you're an ML developer and looking for further docs for using the Python
-library APIs to build models, please now go to `getting started for models <../../ttnn/tt_metal_models/get_started.html>`_.
+If you're an ML developer and looking for a simpler Python API to build models,
+take a look at our higher-level API `TT-NN <../../ttnn>`_.
 
-If you're an internal TT-Metalium developer, please now read please review the
+If you're an internal TT-Metalium developer, please now read and review the
 `contribution standards
 <https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md>`_.

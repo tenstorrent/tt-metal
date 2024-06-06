@@ -198,11 +198,11 @@ struct ToDtype {
 
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor& tensor_arg, Args&&... args) {
-        return std::make_tuple(tensor_arg);
+        return std::forward_as_tuple(tensor_arg);
     }
 
     // TODO: Move to cpp once we merge with tt_eager
-    static Tensor execute(const ttnn::Tensor& input_tensor, const ttnn::DataType& dtype) {
+    static Tensor execute_on_worker_thread(const ttnn::Tensor& input_tensor, const ttnn::DataType& dtype) {
         auto input_layout = input_tensor.get_layout();
         auto input_dtype = input_tensor.get_dtype();
 

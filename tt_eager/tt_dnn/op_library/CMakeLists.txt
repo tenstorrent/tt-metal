@@ -6,17 +6,21 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/layout_conversion/layout_conversion_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather/all_gather_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather/multi_core/all_gather_op_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/reduce_scatter/reduce_scatter_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/reduce_scatter/host/reduce_scatter_full_worker_grid.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl/ccl_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded/sharded_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded/multi_core/sharded_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded_partial/sharded_op_partial.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded_partial/multi_core/sharded_op_partial_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sliding_window_op_infra/sliding_window.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/copy/copy_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/copy/multi_core/copy_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/move_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core_overlap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core_sharded.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sliding_window_op_infra/halo_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_binary/eltwise_binary_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_binary/multi_core/eltwise_binary_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_unary/eltwise_unary_op.cpp
@@ -56,6 +60,7 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse_padding/bmm_op_multi_core_reuse_padding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse_mcast_1d_optimized/bmm_op_multi_core_reuse_mcast_1d_optimized.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse_mcast_2d_optimized/bmm_op_multi_core_reuse_mcast_2d_optimized.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse_mcast_dram_sharded_optimized/bmm_op_multi_core_reuse_dram_sharded_optimized.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bmm/multi_core_reuse_optimized/bmm_op_multi_core_reuse_optimized.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/downsample/downsample_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/conv/conv_op.cpp
@@ -188,6 +193,8 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/rotate_half/rotate_half_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/multi_core/rotary_embedding_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/rotary_embedding_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/multi_core/rotary_embedding_llama_op_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/rotary_embedding_llama_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/embeddings/embeddings_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/multi_core/update_cache_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/update_cache_op.cpp
@@ -203,6 +210,8 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/scan/scan_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/topk/topk_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/topk/single_core/single_core_topk.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/risc_v/risc_v_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/risc_v/argmax_op.cpp
 )
 
 add_library(tt_dnn OBJECT ${TT_DNN_SRCS})

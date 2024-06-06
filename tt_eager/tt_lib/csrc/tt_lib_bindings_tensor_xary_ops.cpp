@@ -23,13 +23,32 @@ namespace tt::tt_metal::detail {
         detail::bind_binary_op(m_tensor, "lt", lt, R"doc(Perform an eltwise-binary less-than (``{0} < {1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "lte", lte, R"doc(Perform an eltwise-binary less-than-or-equal (``{0} <= {1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "gte", gte, R"doc(Perform an eltwise-binary greater-than-or-equal (``{0} >= {1}``) on two tensors.)doc");
-        detail::bind_binary_op(m_tensor, "eq", eq, R"doc(Perform an eltwise-binary equal (``{0} == {1}``) on two tensors.)doc");
+        detail::bind_binary_op(m_tensor, "eq", py::overload_cast<const Tensor&, const Tensor&, std::optional<std::vector<UnaryWithParam>>, const MemoryConfig&, std::optional<const DataType>, std::optional<Tensor> >(&eq), R"doc(Perform an eltwise-binary equal (``{0} == {1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "ne", ne, R"doc(Perform an eltwise-binary not-equal (``{0} != {1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "ldexp", ldexp, R"doc(Performs eltwise-binary ldexp (``{0} * 2**{1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "logaddexp", logaddexp, R"doc(Perform an eltwise-binary logaddexp (``log(exp({0}) + exp({1}))``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "logaddexp2", logaddexp2, R"doc(Perform an eltwise-binary logaddexp2 (``log2(2^({0}) + 2^({1}))``) on two tensors for input range [-64,64].)doc");
         detail::bind_binary_op(m_tensor, "logical_or", logical_or, R"doc(Perform an eltwise-binary logical OR (``{0} || {1}``) on two tensors.)doc");
 
+        m_tensor.def("eq", py::overload_cast<uint8_t, const Tensor&, const Tensor&, std::optional<std::vector<UnaryWithParam>>, const MemoryConfig&, std::optional<const DataType>, std::optional<Tensor> >(&eq),
+            py::arg("queue_id").noconvert() = 0, py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("fused_activations").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert()= std::nullopt, py::arg("output_tensor").noconvert()= std::nullopt, R"doc(
+            Perform an eltwise-binary equal (``input_a`` == ``input_b``) on two tensors.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensors will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "queue_id", "queue_id", "uint8_t", "Default is 0", "No"
+                "input_a", "Tensor add is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_b", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "fused_activations", "Fused activations after binary computation", "List of FusibleActivation with optional param", "Default is None", "No"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_dtype", "Output tensor data type", "DataType", "Default is None (Use input dtype)", "No"
+                "output_tensor", "Optional output tensor", "Tensor", "Default is None", "No"
+        )doc");
         // *** eltwise unary ***
         detail::bind_unary_op(m_tensor, "identity", identity, R"doc(Returns a copy of same tensor ``input``; useful for profiling the SFPU.
         this shouldn't normally be used; users should normally use clone operation instead for same functionality as this would be lower performance.
@@ -85,6 +104,13 @@ namespace tt::tt_metal::detail {
         detail::bind_unary_op(m_tensor, "i0", i0, R"doc(Computes the zeroth order modified Bessel function of the first kind applied on the elements of the input tensor ``{0}``, for the input range -10 to 10.)doc");
         detail::bind_unary_op(m_tensor, "silu", silu, R"doc(Returns tensor with the silu all of elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "neg", neg, R"doc(Returns tensor with the negate all of elements of the input tensor ``{0}``.)doc");
+
+        detail::bind_unary_op_with_param(
+            m_tensor, "eltwise_typecast", eltwise_typecast,
+            py::arg("tt_output_dtype"),
+            R"doc(Returns tensor with all of the elements of the input tensor ``{0}`` typecasted from fp32 to uint32 or uint16.)doc",
+            R"doc("Indicates output dtype of typecast", "ttl.tensor.DataType", "")doc"
+        );
 
         detail::bind_unary_op_with_param(
             m_tensor, "exp", py::overload_cast<const Tensor&, bool, const MemoryConfig&>(&exp),
@@ -151,6 +177,22 @@ namespace tt::tt_metal::detail {
             R"doc("value", "float", "")doc"
 
         );
+        m_tensor.def("right_shift",right_shift,
+            py::arg("input").noconvert(),py::arg("shift_amt"),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
+            Computes right shift of input tensor ``input`` by ``shift_amt`` bits. ``shift_amt`` range must be [0, 31]. Support provided only for Wormhole_B0.
+
+            Input tensor must have INT32 data type.
+
+            Output tensor will have INT32 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Input Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "shift_amt", "Number of shift bits", "int", "[0, 31]", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+
+        )doc");
         detail::bind_unary_op_with_param(
             m_tensor, "unary_ne", unary_ne,
             py::arg("value"),

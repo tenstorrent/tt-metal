@@ -5,9 +5,9 @@
 import pytest
 import torch
 from loguru import logger
-from models.demos.falcon7b.reference.hf_modeling_falcon import FalconForCausalLM
 from models.demos.falcon7b.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
 from models.demos.falcon7b.tt.model_config import get_model_config
+from models.demos.falcon7b.tests.test_utils import load_hf_model
 from models.utility_functions import get_devices_for_t3000, torch2tt_tensor, tt2torch_tensor
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
@@ -38,12 +38,9 @@ def run_test_FalconMLP_inference(
     max_seq_len=2048,
 ):
     num_devices = len(devices)
-    model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
-    hugging_face_reference_model.eval()
+    hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
     configuration = hugging_face_reference_model.config
-    state_dict = hugging_face_reference_model.state_dict()
 
     # Prepare input
     torch.manual_seed(0)

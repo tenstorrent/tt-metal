@@ -165,9 +165,9 @@ namespace tt::tt_metal{
          * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
          * | device        | The device holding the program being profiled.    | Device *                                                     |                           | True     |
          * | core_coords   | The logical core coordinates being profiled.      | const std::unordered_map<CoreType, std::vector<CoreCoord>> & |                           | True     |
-         * | free_buffers  | Free up the profiler buffer spaces for the device | bool                                                         |                           | False    |
+         * | last_dump     | Last dump before process dies                     | bool                                                         |                           | False    |
          * */
-        void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cores, bool free_buffers = false);
+        void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cores, bool last_dump = false);
 
         /**
          * Traverse all cores and read device side profiler data and dump results into device side CSV log
@@ -177,9 +177,9 @@ namespace tt::tt_metal{
          * | Argument      | Description                                       | Type                                                         | Valid Range               | Required |
          * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
          * | device        | The device holding the program being profiled.    | Device *                                                     |                           | True     |
-         * | free_buffers  | Free up the profiler buffer spaces for the device | bool                                                         |                           | False    |
+         * | last_dump     | Last dump before process dies                     | bool                                                         |                           | False    |
          * */
-        void DumpDeviceProfileResults(Device *device, bool free_buffers = false);
+        void DumpDeviceProfileResults(Device *device, bool last_dump = false);
 
         /**
          * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module
@@ -272,7 +272,7 @@ namespace tt::tt_metal{
          * | Argument      | Description                                     | Data type             | Valid range                                         | required |
          * |---------------|-------------------------------------------------|-----------------------|-----------------------------------------------------|----------|
          * | device        | The device whose DRAM to write data into        | Device *              |                                                     | Yes      |
-         * | logical_core  | Logical coordinate of core whose L1 to write to | CoreCoord            | On Grayskull, any valid logical worker coordinate   | Yes      |
+         * | logical_core  | Logical coordinate of core whose L1 to write to | CoreCoord             | On Grayskull, any valid logical worker coordinate   | Yes      |
          * | address       | Starting address in L1 to write into            | uint32_t              | Any non-reserved address in L1 that fits for buffer | Yes      |
          * | host_buffer   | Buffer on host whose data to copy from          | std::vector<uint32_t> | Buffer must fit into L1                             | Yes      |
          */
@@ -333,9 +333,9 @@ namespace tt::tt_metal{
             DispatchStateCheck(true);
             LAZY_COMMAND_QUEUE_MODE = lazy;
         }
-        inline void DumpDeviceProfiler(Device * device, bool free_buffers)
+        inline void DumpDeviceProfiler(Device * device, bool last_dump)
         {
-            tt::tt_metal::detail::DumpDeviceProfileResults(device, free_buffers);
+            tt::tt_metal::detail::DumpDeviceProfileResults(device, last_dump);
         }
 
         void AllocateBuffer(Buffer* buffer, bool bottom_up);
@@ -362,7 +362,7 @@ namespace tt::tt_metal{
             std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
             std::vector<int32_t> dram_offsets_per_bank(num_dram_banks);
             for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-                dram_noc_coord_per_bank[bank_id] = device->core_from_dram_channel(device->dram_channel_from_bank_id(bank_id));
+                dram_noc_coord_per_bank[bank_id] = device->dram_core_from_dram_channel(device->dram_channel_from_bank_id(bank_id));
                 dram_offsets_per_bank[bank_id] = device->bank_offset(BufferType::DRAM, bank_id);
             }
             const size_t num_l1_banks = device->num_banks(BufferType::L1); // 128
@@ -492,6 +492,18 @@ namespace tt::tt_metal{
                 },
                 specified_core_spec
             );
+        }
+
+        inline void SynchronizeWorkerThreads(const std::vector<Device*>& workers) {
+            // Push empty work to threads and ensure its been picked up
+            static auto empty_work = std::make_shared<std::function<void()>>([](){});
+            for (auto target_device : workers) {
+                target_device->work_executor.push_work(empty_work);
+            }
+            // Block until work has been picked up, to flush the queue
+            for (auto target_device : workers) {
+                while(not target_device->work_executor.worker_queue.empty());
+            }
         }
     }
 }

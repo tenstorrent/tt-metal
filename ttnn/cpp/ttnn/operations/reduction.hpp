@@ -35,10 +35,10 @@ struct Reduce {
 
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-        return std::make_tuple(input_tensor);
+        return std::forward_as_tuple(input_tensor);
     }
 
-    static Tensor execute(
+    static Tensor execute_on_worker_thread(
         const Tensor& input_tensor_arg,
         const std::optional<std::variant<int, std::vector<int>>>& dim_arg,
         const bool keepdim,

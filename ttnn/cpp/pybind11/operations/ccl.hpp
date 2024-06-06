@@ -58,7 +58,7 @@ void py_module(py::module& module) {
             * :attr:`num_links` (int): Number of links to use for the all-gather operation.
             * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
 
-        Example::
+        Example:
 
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
             >>> output = ttnn.all_gather(tensor, dim=0)

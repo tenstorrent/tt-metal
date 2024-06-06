@@ -477,6 +477,7 @@ class TTPyCompositeConv(TTPyOp):
             filter_height == filter_width
             and filter_height == 1
             and stride_h == stride_w
+            and stride_h == 1
             and pad_h == pad_w
             and pad_h == 0
         ):
@@ -784,14 +785,19 @@ class TTPyCompositeConv(TTPyOp):
             weight_on_device = weight
             bias_on_device = bias
 
-        def downsample_if_needed(activation):
+        def downsample_if_needed(activation, deallocate_activation):
             use_downsample = False
             for kernel_size, stride in zip(self.kernel_size, self.strides):
                 if kernel_size == 1 and stride > 1:
                     use_downsample = True
             if use_downsample:
-                activation = ttl.tensor.downsample(activation, [*self.input_tensor_shape[:-1], *self.strides])
-            return activation
+                ttl.device.DumpDeviceMemoryState(device, "before_ds_")
+                ds_out = ttl.tensor.downsample(activation, [*self.input_tensor_shape[:-1], *self.strides])
+                if deallocate_activation:
+                    activation.deallocate()
+            else:
+                ds_out = activation
+            return ds_out
 
         def conv_(activation):
             return ttl.tensor.optimized_conv(
@@ -844,7 +850,7 @@ class TTPyCompositeConv(TTPyOp):
             return conv_(move_output)
 
         def conv1x1_as_matmul(activation):
-            activation = downsample_if_needed(activation)
+            activation = downsample_if_needed(activation, self.deallocate_activation)
             output = ttl.operations.primary.matmul(
                 activation,
                 weight_on_device,
@@ -855,6 +861,8 @@ class TTPyCompositeConv(TTPyOp):
                 compute_kernel_config=compute_kernel_config,
                 # untilize_out=True if fuse_relu else False,
             )
+            if self.deallocate_activation:
+                activation.deallocate()
             return output
 
         if self.use_matmul_for_1x1_conv:

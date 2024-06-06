@@ -22,9 +22,6 @@ using namespace tt::constants;
 namespace tt {
 namespace tt_metal {
 
-using range_t = std::array<int32_t, 2>;
-const int32_t NEIGHBORHOOD_DIST = 2;    // => ncores to left and ncores to right
-
 namespace untilize_with_halo_v2_helpers {
 
 int32_t my_max(const std::vector<int32_t>& in) {
@@ -38,6 +35,7 @@ int32_t my_max(const std::vector<int32_t>& in) {
 } // namespace untilize_with_halo_v2_helpers
 
 operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
+    Program& program,
     const Tensor& input_tensor,
     const uint32_t pad_val,
     const uint32_t ncores_nhw,
@@ -48,7 +46,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor) {
-    Program program = CreateProgram();
 
     Device *device = input_tensor.device();
     Buffer *src_buffer = input_tensor.buffer();
@@ -233,16 +230,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
             auto src_buffer = input_tensors.at(0).buffer();
-            auto padding_config_buffer = input_tensors.at(1).buffer();
-            auto local_config_buffer = input_tensors.at(2).buffer();
-            auto remote_config_buffer = input_tensors.at(3).buffer();
             auto dst_buffer = output_tensors.at(0).buffer();
 
             UpdateDynamicCircularBufferAddress(program, src_cb, *src_buffer);
             UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
-            UpdateDynamicCircularBufferAddress(program, padding_config_cb, *padding_config_buffer);
-            UpdateDynamicCircularBufferAddress(program, local_config_cb, *local_config_buffer);
-            UpdateDynamicCircularBufferAddress(program, remote_config_cb, *remote_config_buffer);
         };
 
     return {
@@ -324,7 +315,10 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(const std::ve
     const auto& remote_config = inputs.at(3);
     auto& output_tensor = outputs.at(0);
 
+    Program program = CreateProgram();
+
     return {untilize_with_halo_multi_core_v2(
+        program,
         input_tensor,
         pad_val_,
         ncores_nhw_,

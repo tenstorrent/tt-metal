@@ -55,6 +55,7 @@ void test_multi_queue_api() {
     auto device = tt::tt_metal::CreateDevice(device_id, num_command_queues);
 
     auto& command_queue_0 = device->command_queue(0);
+    uint8_t cq_id_0 = 0;
     // auto& command_queue_1 = device->command_queue(1);
 
     auto host_input_tensor =
@@ -89,7 +90,7 @@ void test_multi_queue_api() {
     auto cq0_output_tensor = tt::tt_metal::sqrt(input_tensor);  // Default CQ (CQ0)
 
     // Can't use command_queue_1 for now. So, use command_queue_0 for both
-    auto cq1_output_tensor = tt::tt_metal::sqrt(command_queue_0, input_tensor);  // CQ1
+    auto cq1_output_tensor = tt::tt_metal::sqrt(cq_id_0, input_tensor);  // CQ1
     // OP API END
 
     auto blocking = true;

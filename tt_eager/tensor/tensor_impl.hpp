@@ -10,7 +10,6 @@
 #include "common/bfloat8.hpp"
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/tensor.hpp"
-#include "tensor/tensor_impl_wrapper.hpp"
 #include "tensor/tensor_utils.hpp"
 #include "tensor/types.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -143,10 +142,7 @@ std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t>& data_to_unpack) {
     }
 }
 
-template <typename T>
-constexpr inline uint32_t element_size_bytes() {
-    return sizeof(T);
-}
+uint32_t element_size_bytes(DataType dtype);
 
 template <typename T>
 constexpr inline uint32_t packed_buffer_size_bytes(uint32_t volume_unpacked_data) {
@@ -159,6 +155,16 @@ template <>
 constexpr inline uint32_t packed_buffer_size_bytes<float>(uint32_t volume_unpacked_data) {
     auto num_type_in_u32 = sizeof(uint32_t) / sizeof(float);
     return (volume_unpacked_data / num_type_in_u32) * sizeof(uint32_t);
+}
+
+template <>
+constexpr inline uint32_t packed_buffer_size_bytes<bfloat8_b>(uint32_t volume_unpacked_data) {
+    return packed_buffer_size_bytes<uint32_t>(volume_unpacked_data);
+}
+
+template <>
+constexpr inline uint32_t packed_buffer_size_bytes<bfloat4_b>(uint32_t volume_unpacked_data) {
+    return packed_buffer_size_bytes<uint32_t>(volume_unpacked_data);
 }
 
 // ======================================================================================
@@ -208,7 +214,8 @@ inline std::vector<T> convert_layout_tile_to_row_major(const Shape& shape, const
 //                                      Validators
 // ======================================================================================
 void validate_on_device_dtype_and_layout(Device* device, const Shape& shape, DataType dtype, Layout layout);
-void validate_sharded_buffer_allocation(const Shape& shape, Layout layout, std::optional<ShardSpecBuffer> shard_params, const MemoryConfig& memory_config);
+void validate_sharded_buffer_allocation(
+    const Shape& shape, Layout layout, DataType data_type, const ShardSpecBuffer& shard_params, const MemoryConfig& memory_config);
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              High Level APIs
@@ -228,7 +235,7 @@ DeviceBuffer allocate_buffer_on_device(
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
-    std::optional<ShardSpecBuffer> shard_spec = std::nullopt);
+    const std::optional<ShardSpecBuffer>& shard_spec = std::nullopt);
 
 template <typename T>
 inline void read_data_from_device_buffer(
@@ -286,7 +293,7 @@ inline DeviceBuffer initialize_data_on_device(
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
-    std::optional<ShardSpecBuffer> shard_spec,
+    const std::optional<ShardSpecBuffer>& shard_spec,
     std::optional<std::reference_wrapper<CommandQueue>> queue = std::nullopt) {
     ZoneScoped;
     TT_ASSERT(device != nullptr);
@@ -312,7 +319,7 @@ inline DeviceBuffer to_device_buffer(
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
-    std::optional<ShardSpecBuffer> shard_spec,
+    const std::optional<ShardSpecBuffer>& shard_spec,
     std::optional<std::reference_wrapper<CommandQueue>> queue) {
     return std::visit(
         [&device, &shape, &data_type, &layout, memory_config, shard_spec](auto&& storage) -> DeviceBuffer {
@@ -385,12 +392,21 @@ inline Tensor to_host(const Tensor& tensor, bool blocking = true) {
             host_tensor.set_dtype(tensor.get_dtype());
             host_tensor.set_layout(tensor.get_layout());
             insert_buffer_and_shape_for_device(device, shard, host_tensor, device_index);
-            host_tensor.set_populated(device);
         }
         return host_tensor;
     } else {
         return tensor;
     }
+}
+
+template <>
+inline Tensor to_host<bfloat4_b>(const Tensor& tensor, bool blocking) {
+    return to_host<uint32_t>(tensor, blocking);
+}
+
+template <>
+inline Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking) {
+    return to_host<uint32_t>(tensor, blocking);
 }
 
 template <typename T>
@@ -409,6 +425,16 @@ inline Tensor to_host_sharded(const Tensor& tensor) {
     auto data_vec = unpack_uint32_vec<T>(device_data);
     auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
     return Tensor(OwnedStorage{output_buffer}, tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout());
+}
+
+template <>
+inline Tensor to_host_sharded<bfloat4_b>(const Tensor& tensor) {
+    return to_host_sharded<uint32_t>(tensor);
+}
+
+template <>
+inline Tensor to_host_sharded<bfloat8_b>(const Tensor& tensor) {
+    return to_host_sharded<uint32_t>(tensor);
 }
 
 template <typename T>
@@ -445,6 +471,24 @@ inline Tensor to_device(
     auto device_buffer = tensor_impl::to_device_buffer<T>(
         tensor.get_storage(), target_device, shape, data_type, layout, memory_config, shard_spec_buffer_opt, queue);
     return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
+}
+
+template <>
+inline Tensor to_device<bfloat4_b>(
+    const Tensor& tensor,
+    Device* target_device,
+    const MemoryConfig& memory_config,
+    std::optional<std::reference_wrapper<CommandQueue>> queue) {
+    return to_device<uint32_t>(tensor, target_device, memory_config, queue);
+}
+
+template <>
+inline Tensor to_device<bfloat8_b>(
+    const Tensor& tensor,
+    Device* target_device,
+    const MemoryConfig& memory_config,
+    std::optional<std::reference_wrapper<CommandQueue>> queue) {
+    return to_device<uint32_t>(tensor, target_device, memory_config, queue);
 }
 
 template <typename T>
@@ -489,8 +533,8 @@ inline Tensor to_layout(const Tensor& tensor, Layout target_layout) {
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 std::vector<OwnedBuffer> output_buffers;
                 std::vector<Shape> output_shapes;
-                for (int i = 0; i < storage.buffers.size(); i++) {
-                    const auto input_data = owned_buffer::get_as<T>(storage.buffers[i]);
+                for (int i = 0; i < storage.num_buffers(); i++) {
+                    const auto input_data = owned_buffer::get_as<T>(storage.get_buffer(i));
                     auto output_buffer = owned_buffer::create<T>(std::move(convert(input_data)));
                     output_buffers.push_back(output_buffer);
                     output_shapes.push_back(storage.shapes[i]);
@@ -527,8 +571,7 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
 //                                  .pad() and .unpad()
 // ======================================================================================
 template <typename T>
-inline Tensor pad(
-    const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value) {
+inline Tensor pad(const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value) {
     if (is_multi_device_tensor(tensor)) {
         return transform(tensor, [&](const Tensor& device_tensor) {
             return pad<T>(device_tensor, output_shape, input_tensor_start, pad_value);
@@ -540,13 +583,8 @@ inline Tensor pad(
     const auto input_strides = tensor.strides();
     const auto input_data_type = tensor.get_dtype();
 
-    auto pad = [&input_shape,
-                &input_strides,
-                &input_data_type,
-                &output_shape,
-                &input_tensor_start,
-                &pad_value_](const auto& input_buffer) {
-
+    auto pad = [&input_shape, &input_strides, &input_data_type, &output_shape, &input_tensor_start, &pad_value_](
+                   const auto& input_buffer) {
         auto compute_stride = [](const Shape& shape, uint32_t index) {
             uint32_t stride = 1;
             for (auto i = index + 1; i < shape.rank(); i++) {
@@ -563,13 +601,11 @@ inline Tensor pad(
         for (auto index = 0; index < output_shape.rank(); index++) {
             // Check if input tensor fits in output tensor given the input tensor start indices
             TT_ASSERT(
-                input_shape[index] + input_tensor_start[index] <= output_shape[index],
-                "Input tensor is out of bounds");
+                input_shape[index] + input_tensor_start[index] <= output_shape[index], "Input tensor is out of bounds");
 
             // Figure out pad size on each dim
             pad_size.push_back(
-                {input_tensor_start[index],
-                 output_shape[index] - input_shape[index] - input_tensor_start[index]});
+                {input_tensor_start[index], output_shape[index] - input_shape[index] - input_tensor_start[index]});
 
             input_strides.push_back(compute_stride(input_shape, index));
             output_strides.push_back(compute_stride(output_shape, index));
@@ -624,10 +660,20 @@ inline Tensor pad(
     return Tensor(OwnedStorage{output_buffer}, output_shape, tensor.get_dtype(), tensor.get_layout());
 }
 
-Tensor pad_bfloat8_b(
-    const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value);
-Tensor pad_bfloat4_b(
-    const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value);
+Tensor pad_bfloat8_b(const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value);
+Tensor pad_bfloat4_b(const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value);
+
+template <>
+inline Tensor pad<bfloat8_b>(
+    const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value) {
+    return pad_bfloat8_b(tensor, output_shape, input_tensor_start, pad_value);
+}
+
+template <>
+inline Tensor pad<bfloat4_b>(
+    const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value) {
+    return pad_bfloat4_b(tensor, output_shape, input_tensor_start, pad_value);
+}
 
 template <typename T>
 inline Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
@@ -695,6 +741,16 @@ inline Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, cons
 Tensor unpad_bfloat8_b(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
 Tensor unpad_bfloat4_b(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
 
+template <>
+inline Tensor unpad<bfloat8_b>(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
+    return unpad_bfloat8_b(tensor, output_tensor_start, output_tensor_end);
+}
+
+template <>
+inline Tensor unpad<bfloat4_b>(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
+    return unpad_bfloat4_b(tensor, output_tensor_start, output_tensor_end);
+}
+
 // ======================================================================================
 //                                         Print
 // ======================================================================================
@@ -707,7 +763,7 @@ enum class TensorPrintProfile {
     Full,
 };
 
-inline TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE = TensorPrintProfile::Short;
+extern TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE;
 
 namespace detail {
 
@@ -743,9 +799,9 @@ inline void print_trailing_comma(std::ostream& ss, std::size_t index, std::size_
 template <typename T>
 inline void print_datum(std::ostream& ss, T datum) {
     if (std::is_integral<T>::value) {
-        ss << fmt::format("{:5}", datum);
+        ss << std::setw(5) << datum;
     } else {
-        ss << fmt::format("{:8.5f}", datum);
+        ss << std::fixed << std::setw(8) << std::setprecision(5) << datum;
     }
 }
 
@@ -885,7 +941,7 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
     }
 
     if (is_tensor_on_device(tensor)) {
-        return to_string<T>(to_host<T>(tensor));
+        return to_string<T>(tensor.cpu());
     }
 
     return std::visit(
@@ -895,22 +951,28 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
                 if (dtype == DataType::BFLOAT8_B and original_dtype == std::nullopt) {
                     // Convert to FLOAT32 tensor before printing
                     auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
-                    auto input_float_data =
-                        unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+                    auto input_float_data = unpack_bfp8_tiles_into_float_vec(
+                        input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
                     auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-                    auto float_tensor =
-                        Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout());
+                    auto float_tensor = Tensor(
+                        OwnedStorage{input_float_buffer},
+                        tensor.get_legacy_shape(),
+                        DataType::FLOAT32,
+                        tensor.get_layout());
                     return to_string<float>(float_tensor, tensor.get_dtype());
                 }
 
                 if (dtype == DataType::BFLOAT4_B and original_dtype == std::nullopt) {
                     // Convert to FLOAT32 tensor before printing
                     auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
-                    auto input_float_data =
-                        unpack_bfp4_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+                    auto input_float_data = unpack_bfp4_tiles_into_float_vec(
+                        input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
                     auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-                    auto float_tensor =
-                        Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout());
+                    auto float_tensor = Tensor(
+                        OwnedStorage{input_float_buffer},
+                        tensor.get_legacy_shape(),
+                        DataType::FLOAT32,
+                        tensor.get_layout());
                     return to_string<float>(float_tensor, tensor.get_dtype());
                 }
                 const auto buffer = owned_buffer::get_as<T>(storage.buffer);
@@ -922,7 +984,7 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
                 TT_THROW("Cannot print a device tensor!");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
                 auto devices = get_devices(tensor);
-                auto host_tensor = to_host<T>(tensor);
+                auto host_tensor = tensor.cpu();
                 auto device_index = 0;
                 std::stringstream ss;
                 apply(host_tensor, [&](const Tensor& device_tensor) {
@@ -941,6 +1003,16 @@ inline std::string to_string(const Tensor& tensor, std::optional<DataType> origi
         tensor.get_storage());
 }
 
+template <>
+inline std::string to_string<bfloat8_b>(const Tensor& tensor, std::optional<DataType> original_dtype) {
+    return to_string<uint32_t>(tensor, original_dtype);
+}
+
+template <>
+inline std::string to_string<bfloat4_b>(const Tensor& tensor, std::optional<DataType> original_dtype) {
+    return to_string<uint32_t>(tensor, original_dtype);
+}
+
 template <typename T>
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
     auto buffer = tensor.buffer();
@@ -953,6 +1025,16 @@ Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
     auto unpacked_data = tensor_impl::unpack_uint32_vec<T>(device_data);
     auto output_buffer = owned_buffer::create<T>(std::move(unpacked_data));
     return Tensor(OwnedStorage{output_buffer}, shard_shape, tensor.get_dtype(), tensor.get_layout());
+}
+
+template <>
+inline Tensor extract_shard<bfloat8_b>(const Tensor& tensor, const uint32_t& core_id) {
+    return extract_shard<uint32_t>(tensor, core_id);
+}
+
+template <>
+inline Tensor extract_shard<bfloat4_b>(const Tensor& tensor, const uint32_t& core_id) {
+    return extract_shard<uint32_t>(tensor, core_id);
 }
 
 template <typename DataType>
@@ -987,21 +1069,21 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
 }
 
 // Template Specialization for unpack_bfloat_tiles_into_float {bfp4,bfp8}
-template<typename... Args>
+template <typename... Args>
 inline std::vector<float> unpack_bfloat_tiles_into_float_vec(const bfloat8_b&, Args&&... args) {
     return unpack_bfp8_tiles_into_float_vec(std::forward<Args>(args)...);
 }
-template<typename... Args>
+template <typename... Args>
 inline std::vector<float> unpack_bfloat_tiles_into_float_vec(const bfloat4_b&, Args&&... args) {
     return unpack_bfp4_tiles_into_float_vec(std::forward<Args>(args)...);
 }
 
 // Template Specialization for pack_fp32_vec_as_bfp4_tiles {bfp4,bfp8}
-template<typename... Args>
+template <typename... Args>
 inline std::vector<uint32_t> pack_fp32_vec_as_bfloat_tiles(const bfloat8_b&, Args&&... args) {
     return pack_fp32_vec_as_bfp8_tiles(std::forward<Args>(args)...);
 }
-template<typename... Args>
+template <typename... Args>
 inline std::vector<uint32_t> pack_fp32_vec_as_bfloat_tiles(const bfloat4_b&, Args&&... args) {
     return pack_fp32_vec_as_bfp4_tiles(std::forward<Args>(args)...);
 }
@@ -1020,14 +1102,13 @@ struct bfloat_enum<bfloat4_b> {
     static constexpr DataType value = DataType::BFLOAT4_B;
 };
 
-
 template <typename T>
-Tensor to_layout_bfloat(const Tensor &tensor, Layout target_layout) {
+Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout) {
     static_assert(std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b>, "Invalid type T");
 
     // TODO(arakhmati): do not convert to FLOA32
 
-    if(tensor.get_layout() == target_layout) {
+    if (tensor.get_layout() == target_layout) {
         return tensor;
     }
     return std::visit(
@@ -1035,16 +1116,23 @@ Tensor to_layout_bfloat(const Tensor &tensor, Layout target_layout) {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 std::vector<OwnedBuffer> output_buffers;
-                for (int i = 0; i < storage.buffers.size(); i++) {
+                for (int i = 0; i < storage.num_buffers(); i++) {
                     // Convert to FLOAT32 tensor and change layout
-                    auto input_packed_data = owned_buffer::get_as<uint32_t>(storage.buffers[i]).get();
-                    auto input_float_data = unpack_bfloat_tiles_into_float_vec(T{}, input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+                    auto input_packed_data = owned_buffer::get_as<uint32_t>(storage.get_buffer(i)).get();
+                    auto input_float_data = unpack_bfloat_tiles_into_float_vec(
+                        T{}, input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
                     auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-                    auto float_tensor = Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout()).to(target_layout);
+                    auto float_tensor = Tensor(
+                                            OwnedStorage{input_float_buffer},
+                                            tensor.get_legacy_shape(),
+                                            DataType::FLOAT32,
+                                            tensor.get_layout())
+                                            .to(target_layout);
 
                     // Convert back to BFLOAT8_B
                     auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
-                    auto output_packed_data = pack_fp32_vec_as_bfloat_tiles(T{}, output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                    auto output_packed_data = pack_fp32_vec_as_bfloat_tiles(
+                        T{}, output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
                     auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
                     output_buffers.push_back(output_uint32_buffer);
                 }
@@ -1052,23 +1140,44 @@ Tensor to_layout_bfloat(const Tensor &tensor, Layout target_layout) {
                     std::move(MultiDeviceHostStorage{storage.strategy, output_buffers, storage.shapes}),
                     tensor.get_legacy_shape(),
                     bfloat_enum<T>::value,
-                    target_layout
-                );
+                    target_layout);
 
             } else {
                 // Convert to FLOAT32 tensor and change layout
                 auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
-                auto input_float_data = unpack_bfloat_tiles_into_float_vec(T{}, input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+                auto input_float_data = unpack_bfloat_tiles_into_float_vec(
+                    T{}, input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
                 auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-                auto float_tensor = Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout()).to(target_layout);
+                auto float_tensor = Tensor(
+                                        OwnedStorage{input_float_buffer},
+                                        tensor.get_legacy_shape(),
+                                        DataType::FLOAT32,
+                                        tensor.get_layout())
+                                        .to(target_layout);
 
                 // Convert back to BFLOAT
                 auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
-                auto output_packed_data = pack_fp32_vec_as_bfloat_tiles(T{}, output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                auto output_packed_data = pack_fp32_vec_as_bfloat_tiles(
+                    T{}, output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
                 auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                return Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), tensor.get_legacy_shape(), bfloat_enum<T>::value, target_layout);
+                return Tensor(
+                    std::move(OwnedStorage{std::move(output_uint32_buffer)}),
+                    tensor.get_legacy_shape(),
+                    bfloat_enum<T>::value,
+                    target_layout);
             }
-        }, tensor.get_storage());
+        },
+        tensor.get_storage());
+}
+
+template <>
+inline Tensor to_layout<bfloat8_b>(const Tensor& tensor, Layout target_layout) {
+    return to_layout_bfloat<bfloat8_b>(tensor, target_layout);
+}
+
+template <>
+inline Tensor to_layout<bfloat4_b>(const Tensor& tensor, Layout target_layout) {
+    return to_layout_bfloat<bfloat4_b>(tensor, target_layout);
 }
 
 }  // namespace tensor_impl

@@ -39,17 +39,17 @@ struct ToLayout {
 
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor& tensor_arg, Args&&... args) {
-        return std::make_tuple(tensor_arg);
+        return std::forward_as_tuple(tensor_arg);
     }
 
-    static Tensor execute(
+    static Tensor execute_on_worker_thread(
         const ttnn::Tensor& tensor_arg,
         const ttnn::Layout layout,
         const std::optional<ttnn::DataType>& dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         Device* device = nullptr);
 
-    static Tensor execute(
+    static Tensor execute_on_worker_thread(
         const ttnn::Tensor& tensor_arg,
         const ttnn::Layout layout,
         const std::optional<ttnn::DataType>& dtype = std::nullopt,

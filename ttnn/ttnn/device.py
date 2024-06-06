@@ -6,6 +6,9 @@ import contextlib
 
 import tt_lib as ttl
 import ttnn
+import os
+
+from tt_lib.device import Arch
 
 
 def get_device_core_grid(device):
@@ -70,6 +73,14 @@ def manage_device(device_id: int):
 
 def dump_device_memory_state(device, prefix=""):
     ttl.device.DumpDeviceMemoryState(device, prefix)
+
+
+def is_wormhole_b0(device):
+    return device.arch() == Arch.WORMHOLE_B0
+
+
+def is_grayskull(device):
+    return device.arch() == Arch.GRAYSKULL
 
 
 __all__ = []

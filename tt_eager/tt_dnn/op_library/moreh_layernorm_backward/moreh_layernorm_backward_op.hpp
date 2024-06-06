@@ -76,7 +76,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const std::optional<std::reference_wrapper<const Tensor>> gamma_grad = std::nullopt,
     const std::optional<std::reference_wrapper<const Tensor>> beta_grad = std::nullopt);
 
-[[maybe_unused]] Tensor moreh_layernorm_backward_input_grad(
+Tensor moreh_layernorm_backward_input_grad(
     const Tensor &output_grad,
     const Tensor &input,
     const Tensor &mean,
@@ -86,7 +86,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const std::optional<std::reference_wrapper<const Tensor>> gamma = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-[[maybe_unused]] std::vector<std::variant<Tensor, char *>> moreh_layernorm_backward_gamma_beta_grad(
+std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
     const Tensor &output_grad,
     const Tensor &input,
     const Tensor &mean,
@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const std::optional<std::reference_wrapper<const Tensor>> beta_grad = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-[[maybe_unused]] std::vector<std::variant<Tensor, char *>> moreh_layernorm_backward(
+std::vector<std::optional<Tensor>> moreh_layernorm_backward(
     const Tensor &output_grad,
     const Tensor &input,
     const Tensor &mean,

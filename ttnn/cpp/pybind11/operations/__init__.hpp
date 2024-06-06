@@ -7,18 +7,23 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ccl.hpp"
-#include "core.hpp"
-#include "data_movement.hpp"
-#include "embedding.hpp"
-#include "kv_cache.hpp"
-#include "matmul.hpp"
-#include "normalization.hpp"
-#include "pool.hpp"
 #include "pybind11/operations/binary.hpp"
-#include "reduction.hpp"
-#include "transformer.hpp"
-#include "unary.hpp"
+#include "pybind11/operations/ccl.hpp"
+#include "pybind11/operations/conv2d.hpp"
+#include "pybind11/operations/core.hpp"
+#include "pybind11/operations/creation.hpp"
+#include "pybind11/operations/data_movement.hpp"
+#include "pybind11/operations/embedding.hpp"
+#include "pybind11/operations/kv_cache.hpp"
+#include "pybind11/operations/matmul.hpp"
+#include "pybind11/operations/maxpool2d.hpp"
+#include "pybind11/operations/normalization.hpp"
+#include "pybind11/operations/pool.hpp"
+#include "pybind11/operations/copy.hpp"
+#include "pybind11/operations/reduction.hpp"
+#include "pybind11/operations/ternary.hpp"
+#include "pybind11/operations/transformer.hpp"
+#include "pybind11/operations/unary.hpp"
 
 namespace py = pybind11;
 
@@ -33,8 +38,14 @@ void py_module(py::module& module) {
     auto m_binary = module.def_submodule("binary", "binary operations");
     binary::py_module(m_binary);
 
+    auto m_ternary = module.def_submodule("ternary", "ternary operations");
+    ternary::py_module(m_ternary);
+
     auto m_core = module.def_submodule("core", "core operations");
     core::py_module(m_core);
+
+    auto m_creation = module.def_submodule("creation", "creation operations");
+    creation::py_module(m_creation);
 
     auto m_embedding = module.def_submodule("embedding", "embedding operations");
     embedding::py_module(m_embedding);
@@ -44,6 +55,12 @@ void py_module(py::module& module) {
 
     auto m_data_movement = module.def_submodule("data_movement", "data_movement operations");
     data_movement::py_module(m_data_movement);
+
+    auto m_conv2d = module.def_submodule("conv2d", "conv2d operation");
+    conv2d::py_module(m_conv2d);
+
+    auto m_maxpool2d = module.def_submodule("maxpool2d", "maxpool 2d operation");
+    maxpool2d::py_module(m_maxpool2d);
 
     auto m_transformer = module.def_submodule("transformer", "transformer operations");
     transformer::py_module(m_transformer);
@@ -62,6 +79,9 @@ void py_module(py::module& module) {
 
     auto m_pool = module.def_submodule("pool", "pool operations");
     pool::py_module(m_pool);
+
+    auto m_copy = module.def_submodule("copy", "copy operations");
+    copy::py_module(m_copy);
 }
 
 }  // namespace operations

@@ -37,18 +37,26 @@ namespace hash {
 constexpr bool DEBUG_HASH_OBJECT_FUNCTION = false;
 
 using hash_t = std::uint64_t;
+constexpr hash_t DEFAULT_SEED = 1234;
+
+namespace detail {
 
 template <typename T, std::size_t N>
-inline hash_t hash_object(const std::array<T, N>& array) noexcept;
+inline hash_t hash_object(const std::array<T, N>&) noexcept;
 
 template <typename... Ts>
-inline hash_t hash_object(const std::variant<Ts...>& variant) noexcept;
+inline hash_t hash_object(const std::variant<Ts...>&) noexcept;
+
+template <typename... Ts>
+inline hash_t hash_object(const std::reference_wrapper<Ts...>&) noexcept;
 
 template <typename T>
-inline hash_t hash_object(const T& object) noexcept;
+inline hash_t hash_object(const T&) noexcept;
 
 template <typename... Types>
-inline hash_t hash_objects(hash_t seed, const Types&... objects) noexcept;
+inline hash_t hash_objects(hash_t, const Types&...) noexcept;
+
+}  // namespace detail
 
 }  // namespace hash
 
@@ -89,7 +97,7 @@ struct Attribute final {
             },
             .to_hash_impl_ = [](const storage_t& storage) -> const std::size_t {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
-                return hash::hash_object(object);
+                return hash::detail::hash_object(object);
             }} {
         static_assert(sizeof(BaseType) <= sizeof(storage_t));
         static_assert(ALIGNMENT % alignof(BaseType) == 0);
@@ -186,7 +194,7 @@ template <typename T>
 constexpr bool supports_runtime_time_attributes_v = std::experimental::is_detected_v<has_attributes_t, T>;
 
 template <typename T>
-inline constexpr std::size_t get_num_attributes() {
+static constexpr std::size_t get_num_attributes() {
     static_assert(
         std::tuple_size_v<decltype(T::attribute_names)> ==
             std::tuple_size_v<decltype(std::declval<T>().attribute_values())>,
@@ -215,16 +223,16 @@ Attributes get_attributes(const T& object) {
         constexpr auto num_attributes = tt::stl::reflection::detail::get_num_attributes<std::decay_t<T>>();
         tt::stl::reflection::Attributes attributes;
         const auto attribute_values = object.attribute_values();
-            [&object, &attributes, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
-                (
-                    [&object, &attributes, &attribute_values] {
-                        const auto& attribute_name = std::get<Ns>(object.attribute_names);
-                        const auto& attribute = std::get<Ns>(attribute_values);
-                        attributes.push_back({attribute_name, attribute});
-                    }(),
-                    ...);
-            }(std::make_index_sequence<num_attributes>{});
-            return attributes;
+        [&object, &attributes, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
+            (
+                [&object, &attributes, &attribute_values] {
+                    const auto& attribute_name = std::get<Ns>(object.attribute_names);
+                    const auto& attribute = std::get<Ns>(attribute_values);
+                    attributes.push_back({attribute_name, attribute});
+                }(),
+                ...);
+        }(std::make_index_sequence<num_attributes>{});
+        return attributes;
     } else if constexpr (tt::stl::reflection::detail::supports_runtime_time_attributes_v<std::decay_t<T>>) {
         return object.attributes();
     } else {
@@ -316,6 +324,12 @@ std::ostream& operator<<(std::ostream& os, const std::variant<Ts...>& variant) {
     return os;
 }
 
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const std::reference_wrapper<T> reference_wrapper) {
+    os << reference_wrapper.get();
+    return os;
+}
+
 template <typename... Ts>
 std::ostream& operator<<(std::ostream& os, const std::tuple<Ts...>& tuple) {
     [&os, &tuple]<std::size_t... Ns>(std::index_sequence<Ns...>) {
@@ -398,9 +412,7 @@ struct fmt::formatter<T, char, std::enable_if_t<tt::stl::reflection::detail::sup
 
 template <typename T>
 struct fmt::formatter<T, char, std::enable_if_t<std::is_enum<T>::value>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
-        return ctx.end();
-    }
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const T& value, format_context& ctx) const -> format_context::iterator {
         using tt::stl::reflection::operator<<;
@@ -410,12 +422,9 @@ struct fmt::formatter<T, char, std::enable_if_t<std::is_enum<T>::value>> {
     }
 };
 
-
 template <typename T>
 struct fmt::formatter<std::optional<T>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
-        return ctx.end();
-    }
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const std::optional<T>& optional, format_context& ctx) const -> format_context::iterator {
         using tt::stl::reflection::operator<<;
@@ -425,17 +434,26 @@ struct fmt::formatter<std::optional<T>> {
     }
 };
 
-
-template <typename ... Ts>
+template <typename... Ts>
 struct fmt::formatter<std::variant<Ts...>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
-        return ctx.end();
-    }
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const std::variant<Ts...>& variant, format_context& ctx) const -> format_context::iterator {
         using tt::stl::reflection::operator<<;
         std::stringstream ss;
         ss << variant;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
+template <typename T>
+struct fmt::formatter<std::reference_wrapper<T>> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const std::reference_wrapper<T> reference, format_context& ctx) const -> format_context::iterator {
+        using tt::stl::reflection::operator<<;
+        std::stringstream ss;
+        ss << reference;
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };
@@ -454,9 +472,7 @@ struct fmt::formatter<std::tuple<Ts...>> {
 
 template <typename T, std::size_t N>
 struct fmt::formatter<std::array<T, N>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
-        return ctx.end();
-    }
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const std::array<T, N>& array, format_context& ctx) const -> format_context::iterator {
         using tt::stl::reflection::operator<<;
@@ -466,12 +482,9 @@ struct fmt::formatter<std::array<T, N>> {
     }
 };
 
-
 template <typename T>
 struct fmt::formatter<std::vector<T>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
-        return ctx.end();
-    }
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const std::vector<T>& vector, format_context& ctx) const -> format_context::iterator {
         using tt::stl::reflection::operator<<;
@@ -516,8 +529,6 @@ struct is_specialization<Ref<Args...>, Ref> : std::true_type {};
 template <typename Test, template <typename...> class Ref>
 constexpr bool is_specialization_v = is_specialization<Test, Ref>::value;
 
-}  // namespace detail
-
 template <typename T, std::size_t N>
 inline hash_t hash_object(const std::array<T, N>& array) noexcept {
     if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
@@ -541,6 +552,14 @@ inline hash_t hash_object(const std::variant<Ts...>& variant) noexcept {
         fmt::print("Hashing std::variant: {}\n", variant);
     }
     return std::visit([](const auto& value) { return hash_object(value); }, variant);
+}
+
+template <typename... Ts>
+inline hash_t hash_object(const std::reference_wrapper<Ts...>& reference) noexcept {
+    if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+        fmt::print("Hashing std::reference_wrapper: {}\n", reference.get());
+    }
+    return hash_object(reference.get());
 }
 
 template <typename T>
@@ -574,7 +593,7 @@ inline hash_t hash_object(const T& object) noexcept {
             fmt::print("Hashing struct {} using compile-time attributes: {}\n", get_type_name<T>(), object);
         }
         constexpr auto num_attributes = reflection::detail::get_num_attributes<T>();
-        std::size_t hash = hash_objects(0, typeid(T).hash_code());
+        std::size_t hash = 0;
         const auto attribute_values = object.attribute_values();
         [&object, &hash, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
             (
@@ -589,7 +608,7 @@ inline hash_t hash_object(const T& object) noexcept {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing struct {} using run-time attributes: {}\n", get_type_name<T>(), object);
         }
-        return hash_objects(typeid(T).hash_code(), object.attributes());
+        return hash_objects(0, object.attributes());
     } else if constexpr (detail::is_specialization_v<T, std::vector>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::vector of type {}: {}\n", get_type_name<T>(), object);
@@ -622,21 +641,22 @@ inline hash_t hash_object(const T& object) noexcept {
     }
 }
 
-namespace detail {
-
-template <typename Type, typename... Types>
-inline hash_t hash_objects(hash_t seed, const Type& object, const Types&... objects) noexcept {
-    seed = hash_object(object) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    if constexpr (sizeof...(objects) > 0) {
-        seed = hash_objects(seed, objects...);
-    }
+template <typename... Types>
+inline hash_t hash_objects(hash_t seed, const Types&... args) noexcept {
+    ([&seed](const auto& arg) { seed ^= hash_object(arg) + 0x9e3779b9 + (seed << 6) + (seed >> 2); }(args), ...);
     return seed;
 }
+
 }  // namespace detail
 
 template <typename... Types>
-inline hash_t hash_objects(hash_t seed, const Types&... objects) noexcept {
-    return detail::hash_objects(seed, objects...);
+inline hash_t hash_objects(hash_t seed, const Types&... args) noexcept {
+    return detail::hash_objects(seed, args...);
+}
+
+template <typename... Types>
+inline hash_t hash_objects_with_default_seed(const Types&... args) noexcept {
+    return detail::hash_objects(DEFAULT_SEED, args...);
 }
 
 }  // namespace hash

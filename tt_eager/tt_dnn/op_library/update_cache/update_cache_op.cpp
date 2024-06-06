@@ -99,15 +99,6 @@ UpdateCacheOpParallelizationStrategy UpdateCache::get_parallelization_strategy(c
     return UpdateCacheOpParallelizationStrategy::MULTI_CORE;
 }
 
-tt::stl::reflection::Attributes UpdateCache::attributes() const {
-    return {
-        {"batch_idx", this->batch_idx},
-        {"update_idx", this->update_idx},
-        {"op_type", this->op_type},
-        {"batch_offset", this->batch_offset},
-    };
-}
-
 const operation::Hash UpdateCache::compute_program_hash(
     const std::vector<Tensor> &input_tensors) const {
     return operation::hash_operation<UpdateCache>(this->op_type, input_tensors);

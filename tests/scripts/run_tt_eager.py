@@ -21,6 +21,7 @@ from tests.scripts.common import (
     get_git_home_dir_str,
     filter_empty,
     void_for_whb0,
+    void_for_gs,
 )
 from tests.scripts.cmdline_args import (
     get_tt_metal_arguments_from_cmdline_args,
@@ -28,11 +29,14 @@ from tests.scripts.cmdline_args import (
 )
 
 TT_EAGER_COMMON_TEST_ENTRIES = (
-    TestEntry("tt_eager/tests/ops/ccl/test_all_gather_utils", "ops/ccl/test_all_gather_utils"),
-    TestEntry(
-        "tt_eager/tests/ops/ccl/test_all_gather_sharded_indexing_helpers",
-        "ops/ccl/test_all_gather_sharded_indexing_helpers",
+    void_for_gs(TestEntry("tt_eager/tests/ops/ccl/test_all_gather_utils", "ops/ccl/test_all_gather_utils")),
+    void_for_gs(
+        TestEntry(
+            "tt_eager/tests/ops/ccl/test_all_gather_sharded_indexing_helpers",
+            "ops/ccl/test_all_gather_sharded_indexing_helpers",
+        )
     ),
+    void_for_gs(TestEntry("tt_eager/tests/ops/ccl/test_ccl_helpers", "ops/ccl/test_ccl_helpers")),
     TestEntry("tt_eager/tests/ops/test_eltwise_binary_op", "ops/test_eltwise_binary_op"),
     TestEntry("tt_eager/tests/ops/test_bcast_op", "ops/test_bcast_op"),
     TestEntry("tt_eager/tests/ops/test_reduce_op", "ops/test_reduce_op"),

@@ -96,6 +96,12 @@ def where(x, y, z, *args, **kwargs):
     return torch.where(x > 0, y, z)
 
 
+def where_scalar(x, *args, **kwargs):
+    y = kwargs.pop("scalar_true")
+    z = kwargs.pop("scalar_false")
+    return torch.where(x > 0, y, z)
+
+
 def where_bw(x, y, z, w, *args, **kwargs):
     grad_data = x
     in_data = y
@@ -518,6 +524,12 @@ def log_sigmoid(x, *args, **kwargs):
 def heaviside(x, *args, **kwargs):
     value = kwargs.pop("scalar")
     result = torch.heaviside(x, torch.tensor(value, dtype=x.dtype))
+    return result
+
+
+def right_shift(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.bitwise_right_shift(x, value)
     return result
 
 
@@ -1329,6 +1341,15 @@ def eltwise_rsub(x, *args, **kwargs):
 
 def eltwise_identity(x, *args, **kwargs):
     return x
+
+
+def eltwise_typecast(x, *args, tt_output_dtype, **kwargs):
+    if tt_output_dtype[0] == ttl.tensor.DataType.UINT16:
+        return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
+    elif tt_output_dtype[0] == ttl.tensor.DataType.UINT32:
+        return torch.relu(x.to(torch.int32))  # due to no uint32 support
+    else:
+        return x
 
 
 def eltwise_rdiv(x, *args, **kwargs):

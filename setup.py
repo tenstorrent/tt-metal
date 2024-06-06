@@ -34,15 +34,6 @@ def get_is_srcdir_build():
     return git_dir.exists()
 
 
-def get_is_dev_build():
-    try:
-        is_dev_build = attempt_get_env_var("TT_METAL_ENV") == "dev"
-    except EnvVarNotFoundException as e:
-        is_dev_build = False
-
-    return is_dev_build
-
-
 def get_arch_name():
     return attempt_get_env_var("ARCH_NAME")
 
@@ -87,7 +78,6 @@ def get_version(metal_build_config):
 
 @dataclass(frozen=True)
 class MetalliumBuildConfig:
-    is_dev_build = get_is_dev_build()
     is_srcdir_build = get_is_srcdir_build()
     arch_name = get_arch_name()
 
@@ -106,7 +96,20 @@ class CMakeBuild(build_ext):
         return {
             **os.environ.copy(),
             "TT_METAL_HOME": Path(__file__).parent,
-            "TT_METAL_ENV": "production",
+            "CXX": "clang++-17",
+            # Currently, the ttnn (ttnn/_ttnn.so) and tt_lib (tt_lib/_C.so)
+            # both link to the tt_metal runtime. The specific thing in
+            # ttnn linking to tt_metal is likely the implementation of
+            # ttnn.manage_device.
+            # However, because of the singleton design of
+            # tt_cluster in tt_metal, both tt_lib and ttnn will have a
+            # copy of the cluster object, causing a hang during
+            # device operations in ttnn, such as calling
+            # output = ttnn.to_torch(output).
+            # Ultimately, we will not statically build tt_metal, and
+            # opt to dynamically set rpath of the bindings to the
+            # packaged libs for now.
+            "TT_METAL_CREATE_STATIC_LIB": "0",
         }
 
     # This should only run when building the wheel. Should not be running for any dev flow
@@ -122,14 +125,13 @@ class CMakeBuild(build_ext):
             ), f"Editable install detected in a non-srcdir environment, aborting"
             return
 
-        ext = self.extensions[0]
         build_env = CMakeBuild.get_build_env()
         source_dir = Path(os.environ.get("TT_METAL_HOME"))
         build_dir = Path(os.environ.get("TT_METAL_HOME") + "/build")
         if not build_dir.exists():
             build_dir.mkdir(parents=True)
 
-        cmake_args = [f"."]
+        cmake_args = []
 
         nproc = subprocess.check_output(["nproc"]).decode().strip()
         build_args = [f"-j{nproc}"]
@@ -141,6 +143,14 @@ class CMakeBuild(build_ext):
 
         subprocess.check_call(["ls", "-hal"], cwd=source_dir, env=build_env)
         subprocess.check_call(["ls", "-hal", "build/lib"], cwd=source_dir, env=build_env)
+        subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
+
+        tt_build_dir = self.build_lib + "/tt_lib/build"
+        os.makedirs(tt_build_dir, exist_ok=True)
+        self.copy_tree(source_dir / "build/lib", tt_build_dir + "/lib")
+        self.copy_tree(source_dir / "runtime", self.build_lib + "/runtime")
+        arch_name_file = self.build_lib + "/tt_lib/.ARCH_NAME"
+        subprocess.check_call(f"echo {metal_build_config.arch_name} > {arch_name_file}", shell=True)
 
         # Move built SOs into appropriate locations
         for ext in self.extensions:

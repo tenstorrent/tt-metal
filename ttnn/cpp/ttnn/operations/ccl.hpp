@@ -11,7 +11,7 @@ namespace ttnn {
 namespace operations {
 namespace ccl {
 
-struct AllGather {
+struct ExecuteAllGather {
     static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
         return {ttnn::TensorSchema{
             2,
@@ -26,10 +26,10 @@ struct AllGather {
 
     template <typename... Args>
     static auto input_tensors_to_validate(const ttnn::Tensor& input_tensor, Args&&... args) {
-        return std::make_tuple(input_tensor);
+        return std::forward_as_tuple(input_tensor);
     }
 
-    static ttnn::Tensor execute_async(
+    static ttnn::Tensor execute_on_main_thread(
         const ttnn::Tensor& input_tensor,
         const uint32_t dim,
         const uint32_t num_links = 1,
@@ -41,6 +41,6 @@ struct AllGather {
 }  // namespace ccl
 }  // namespace operations
 
-constexpr auto all_gather = ttnn::register_operation<ttnn::operations::ccl::AllGather>("ttnn::all_gather");
+constexpr auto all_gather = ttnn::register_operation<ttnn::operations::ccl::ExecuteAllGather>("ttnn::all_gather");
 
 }  // namespace ttnn

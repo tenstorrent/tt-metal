@@ -4,11 +4,11 @@
 
 #pragma once
 
+#include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_eager/tt_dnn/op_library/run_operation.hpp"
-#include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
-#include "ttnn/operations/core.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/operations/core.hpp"
 #include "ttnn/validation.hpp"
 
 namespace ttnn {
@@ -35,40 +35,44 @@ inline const std::array<ttnn::TensorSchema, 1> input_tensor_schemas() {
 
 template <typename... Args>
 inline auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-    return std::make_tuple(input_tensor);
+    return std::forward_as_tuple(input_tensor);
 }
 
-inline Tensor execute(
+inline Tensor execute_on_worker_thread(
     const Tensor& input_tensor,
     const std::vector<tt::tt_metal::UnaryWithParam>& op_chain,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    bool fp32_dest_acc_en = input_tensor.get_dtype() == DataType::UINT32 or
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+    DataType output_dtype = (op_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(op_chain[0].params[0]) : input_tensor.get_dtype();
+    bool fp32_dest_acc_en = output_dtype == DataType::UINT32 or
+                            input_tensor.get_dtype() == DataType::UINT32 or
                             input_tensor.get_dtype() == DataType::INT32;  // MT: Currently only uint32/int32 is moved to
                                                                           // DST directly, fp32 is converted to fp16b
     return operation::run(
-               EltwiseUnary{op_chain, memory_config.value_or(input_tensor.memory_config()), fp32_dest_acc_en},
-               {input_tensor})
+               EltwiseUnary{op_chain, memory_config.value_or(input_tensor.memory_config()), fp32_dest_acc_en, output_dtype},
+               {input_tensor}, {}, {optional_output_tensor})
         .at(0);
 }
+
 }  // namespace detail
 
-template <UnaryOpType unary_op_type>
-struct Unary {
+template <UnaryOpType... unary_op_types>
+struct ExecuteUnary {
     static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
 
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
     }
-
-    static Tensor execute(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return detail::execute(
-            input_tensor, {UnaryWithParam{unary_op_type}}, memory_config);
+    static Tensor execute_on_worker_thread(
+        const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        return detail::execute_on_worker_thread(input_tensor, {UnaryWithParam{unary_op_types}...}, memory_config, optional_output_tensor);
     }
 };
 
 template <UnaryOpType unary_op_type>
-struct UnaryWithFastAndApproximateMode {
+struct ExecuteUnaryWithFastAndApproximateMode {
     static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
 
     template <typename... Args>
@@ -76,17 +80,18 @@ struct UnaryWithFastAndApproximateMode {
         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
     }
 
-    static Tensor execute(
+    static Tensor execute_on_worker_thread(
         const Tensor& input_tensor,
         const bool parameter = false,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return detail::execute(
-            input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        return detail::execute_on_worker_thread(
+            input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config, optional_output_tensor);
     }
 };
 
 template <UnaryOpType unary_op_type>
-struct UnaryWithFloatParameter : public EltwiseUnary {
+struct ExecuteUnaryWithFloatParameter {
     static const std::array<TensorSchema, 1> input_tensor_schemas() { return detail::input_tensor_schemas(); }
 
     template <typename... Args>
@@ -94,12 +99,13 @@ struct UnaryWithFloatParameter : public EltwiseUnary {
         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
     }
 
-    static Tensor execute(
+    static Tensor execute_on_worker_thread(
         const Tensor& input_tensor,
         const float parameter,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return detail::execute(
-            input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        return detail::execute_on_worker_thread(
+            input_tensor, {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}}, memory_config, optional_output_tensor);
     }
 };
 
@@ -111,34 +117,33 @@ struct Softplus {
         return detail::input_tensors_to_validate(input_tensor, std::forward<Args>(args)...);
     }
 
-    static Tensor execute(const Tensor& input, const float beta, const float threshold, const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
-        auto original_input_shape = input.get_shape();
-        auto input_4D = ttnn::unsqueeze_to_4D(input);
-
-        auto memory_config = memory_config_arg.value_or(input_4D.memory_config());
-        auto result = tt::tt_metal::softplus(input_4D, beta, threshold, memory_config);
-
-        result = ttnn::reshape(result, original_input_shape);
-
-        return result;
+    static Tensor execute_on_worker_thread(
+        const Tensor& input,
+        const float beta,
+        const float threshold,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        TT_ASSERT(input.device()->arch() != tt::ARCH::GRAYSKULL, "Softplus is not currently supported on Grayskull");
+        return detail::execute_on_worker_thread(
+            input, {UnaryWithParam{ttnn::operations::unary::UnaryOpType::SOFTPLUS, {beta, threshold}}}, memory_config, optional_output_tensor);
     }
 };
 }  // namespace unary
 }  // namespace operations
 
-#define REGISTER_UNARY_OPERATION(operation_name, operation_type)                               \
-    constexpr auto operation_name = ttnn::register_operation<                                  \
-        ttnn::operations::unary::Unary<ttnn::operations::unary::UnaryOpType::operation_type>>( \
+#define REGISTER_UNARY_OPERATION(operation_name, operation_type)                                      \
+    constexpr auto operation_name = ttnn::register_operation<                                         \
+        ttnn::operations::unary::ExecuteUnary<ttnn::operations::unary::UnaryOpType::operation_type>>( \
         "ttnn::" #operation_name);
 
-#define REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(operation_name, operation_type)                        \
-    constexpr auto operation_name = ttnn::register_operation<ttnn::operations::unary::UnaryWithFastAndApproximateMode< \
+#define REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(operation_name, operation_type)   \
+    constexpr auto operation_name =                                                               \
+        ttnn::register_operation<ttnn::operations::unary::ExecuteUnaryWithFastAndApproximateMode< \
+            ttnn::operations::unary::UnaryOpType::operation_type>>("ttnn::" #operation_name);
+
+#define REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(operation_name, operation_type)                                 \
+    constexpr auto operation_name = ttnn::register_operation<ttnn::operations::unary::ExecuteUnaryWithFloatParameter< \
         ttnn::operations::unary::UnaryOpType::operation_type>>("ttnn::" #operation_name);
-
-#define REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(operation_name, operation_type)                            \
-    constexpr auto operation_name = ttnn::register_operation<                                                    \
-        ttnn::operations::unary::UnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::operation_type>>( \
-        "ttnn::" #operation_name);
 
 REGISTER_UNARY_OPERATION(abs, ABS);
 REGISTER_UNARY_OPERATION(acos, ACOS);
@@ -178,6 +183,10 @@ REGISTER_UNARY_OPERATION(square, SQUARE);
 REGISTER_UNARY_OPERATION(tan, TAN);
 REGISTER_UNARY_OPERATION(tanh, TANH);
 
+constexpr auto log_sigmoid = ttnn::register_operation<ttnn::operations::unary::ExecuteUnary<
+    ttnn::operations::unary::UnaryOpType::SIGMOID,
+    ttnn::operations::unary::UnaryOpType::LOG>>("ttnn::log_sigmoid");
+
 // Unaries with fast_and_approximate_mode
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erf, ERF);
@@ -191,7 +200,7 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(heaviside, HEAVISIDE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(leaky_relu, LEAKY_RELU);
 auto prelu = leaky_relu;  // Alias for leaky_relu. TODO(#8544): implement PReLU properly
 
-// Other unaries (composite operations)
+// Other unaries
 constexpr auto softplus = ttnn::register_operation<ttnn::operations::unary::Softplus>("ttnn::softplus");
 
-} // namespace ttnn
+}  // namespace ttnn

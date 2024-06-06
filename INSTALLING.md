@@ -4,6 +4,8 @@ These instructions will guide you through the installation of Tenstorrent system
 
 ---
 
+## Installation Steps
+
 ### Step 1. Driver & Firmware
 
 Follow the Software Setup instructions for your specific board or system provided on our [general docs](https://docs.tenstorrent.com/tenstorrent).
@@ -25,6 +27,11 @@ Note the current compatability matrix:
 ```sh
 sudo apt update
 sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.9 libgoogle-glog-dev=0.4.0-1build1 libyaml-cpp-dev=0.6.2-4ubuntu1 libboost-all-dev=1.71.0.0ubuntu2 libsndfile1=1.0.28-7ubuntu0.2 libhwloc-dev graphviz
+
+# Install Clang-17 for C++20 support!!
+wget https://apt.llvm.org/llvm.sh
+chmod u+x llvm.sh
+sudo ./llvm.sh 17
 ```
 
 ---
@@ -37,7 +44,7 @@ sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu
 wget https://raw.githubusercontent.com/tenstorrent/tt-metal/main/infra/machine_setup/scripts/setup_hugepages.py
 ```
 
-3. Run first setup script.
+2. Run first setup script.
 
 ```sh
 sudo -E python3 setup_hugepages.py first_pass
@@ -64,7 +71,7 @@ sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py 
 sudo apt install git git-lfs
 ```
 
-3. Clone the repo.
+2. Clone the repo.
 
 ```sh
 git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
@@ -78,7 +85,6 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
 export ARCH_NAME=grayskull
 export TT_METAL_HOME=$(pwd)
 export PYTHONPATH=$(pwd)
-export TT_METAL_ENV=dev
 ```
 
 For Wormhole boards, use:
@@ -87,39 +93,38 @@ For Wormhole boards, use:
 export ARCH_NAME=wormhole_b0
 export TT_METAL_HOME=$(pwd)
 export PYTHONPATH=$(pwd)
-export TT_METAL_ENV=dev
 ```
 
-4. Build & activate
+4. Build & activate.
 
-NEW!! CMake Support
+We use CMake for our build flows.
+
 ```sh
 ./build_metal.sh
 
+# If you would like an out-of-the-box virtual environment to use,
+./create_venv.sh
 source python_env/bin/activate
 ```
 
-Old Makefile Flow
-```sh
-make build
-
-source build/python_env/bin/activate
-```
+Note about Python environments: You do not have to use `create_venv.sh`. If you
+are less familiar with Python and its various environment tools, just use
+`create_venv.sh` as shown above.
 
 5. Start coding
 
-You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent.github.io/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://github.com/tenstorrent/tt-metal/blob/main/README.md)
+You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent.github.io/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://tenstorrent.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
 
 ---
 
 ### Step 5. Software dependencies for codebase contributions
 
-Please follow the next additional steps if you want to contribute to the codebase
+Please follow the next additional steps if you want to contribute to the codebase.
 
 1. Install dependencies
 
 ```sh
-sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc libtbb-dev libcapstone-dev pkg-config ninja-build
+sudo apt install git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc libtbb-dev libcapstone-dev pkg-config ninja-build patchelf
 ```
 
 2. Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)

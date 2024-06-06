@@ -100,6 +100,7 @@ def test_falcon_attention(
         configuration.max_position_embeddings,
         model_config,
         parameters=parameters,
+        core_grid=device.core_grid,
     )
 
     tt_out, tt_layer_present = tt_FalconAttention_model(

@@ -31,6 +31,17 @@ CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_channel(int dram_
     return this->preferred_eth_dram_core.at(dram_chan);
 };
 
+CoreCoord metal_SocDescriptor::get_logical_core_for_dram_channel(int dram_chan) const {
+    const uint32_t num_dram_channels = this->get_num_dram_channels();
+    TT_FATAL(
+        dram_chan < num_dram_channels,
+        "dram_chan={} must be within range of num_dram_channels={}",
+        dram_chan,
+        num_dram_channels
+    );
+    return CoreCoord(dram_chan, 0);
+}
+
 size_t metal_SocDescriptor::get_address_offset(int dram_chan) const {
     TT_ASSERT(
         dram_chan < this->dram_address_offsets.size(),
@@ -72,6 +83,18 @@ const std::vector<CoreCoord>& metal_SocDescriptor::get_logical_ethernet_cores() 
     return this->logical_ethernet_cores;
 }
 
+int metal_SocDescriptor::get_dram_channel_from_logical_core(const CoreCoord &logical_coord) const {
+    const uint32_t num_dram_channels = this->get_num_dram_channels();
+    TT_FATAL(
+        (logical_coord.x < num_dram_channels) and
+        (logical_coord.y == 0),
+        "Bounds-Error -- Logical_core={} is outside of logical_grid_size={}",
+        logical_coord.str(),
+        CoreCoord(num_dram_channels, 1)
+    );
+    return logical_coord.x;
+}
+
 CoreCoord metal_SocDescriptor::get_physical_ethernet_core_from_logical(const CoreCoord &logical_coord) const {
     const auto &eth_chan_map = this->logical_eth_core_to_chan_map;
     TT_FATAL(
@@ -109,12 +132,21 @@ CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreC
     return physical_tensix_core;
 }
 
+CoreCoord metal_SocDescriptor::get_physical_dram_core_from_logical(const CoreCoord &logical_coord) const {
+    return this->get_preferred_worker_core_for_dram_channel(this->get_dram_channel_from_logical_core(logical_coord));
+}
+
 CoreCoord metal_SocDescriptor::get_physical_core_from_logical_core(const CoreCoord &logical_coord, const CoreType &core_type) const {
     switch (core_type) {
         case CoreType::ETH: return this->get_physical_ethernet_core_from_logical(logical_coord);
         case CoreType::WORKER: return this->get_physical_tensix_core_from_logical(logical_coord);
+        case CoreType::DRAM: return this->get_physical_dram_core_from_logical(logical_coord);
         default: TT_THROW("Undefined conversion for core type.");
     }
+}
+
+CoreCoord metal_SocDescriptor::get_dram_grid_size() const {
+    return CoreCoord(this->get_num_dram_channels(), 1);
 }
 
 void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {

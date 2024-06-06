@@ -12,6 +12,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
+#include "tt_dnn/op_library/ccl/ccl_common.hpp"
 
 #include "tt_dnn/op_library/run_operation.hpp"
 
@@ -46,7 +47,7 @@ class AllGatherConfig {
 
         erisc_handshake_address(round_up(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, 16)),
         topology(topology),
-        enable_bidirectional(/*false*/topology == all_gather_op::Topology::Ring && dim != 0 && dim != 1),
+        enable_bidirectional(topology == all_gather_op::Topology::Ring),
 
         input_is_dram(input_tensor.buffer()->buffer_type() == BufferType::DRAM),
         output_is_dram(output_tensor.buffer()->buffer_type() == BufferType::DRAM),
@@ -217,7 +218,21 @@ struct AllGather {
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "dim",
+        "num_links",
+        "ring_size",
+        "ring_index",
+        "receiver_device_id",
+        "sender_device_id",
+        "output_mem_config",
+        "topology");
+
+    const auto attribute_values() const {
+        return std::forward_as_tuple(
+            dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, output_mem_config, topology);
+    }
 };
 
 // All Gather Variants
@@ -318,93 +333,8 @@ struct ShardedAllGatherConfig {
 };
 
 
-class AllGatherOpTensorConfig {
-   public:
-    static std::unique_ptr<AllGatherOpTensorConfig> build_all_gather_tensor_config(Tensor const& tensor);
-    // static AllGatherOpTensorConfig *build_all_gather_tensor_config(Tensor const& tensor);
-
-    AllGatherOpTensorConfig(
-        Tensor const& tensor
-    ) :
-        buffer_start_address(tensor.buffer()->address()),
-        df(tt_metal::datatype_to_dataformat_converter(tensor.get_dtype()))
-    {}
-
-    virtual uint32_t get_page_size() const = 0;
-    virtual uint32_t get_unit_size() const = 0;
-
-    uint32_t get_buffer_start_address() const {
-        return this->buffer_start_address;
-    }
-
-    virtual ~AllGatherOpTensorConfig() {};
-
-   protected:
-    uint32_t buffer_start_address;
-    DataFormat df;
-};
-
-class AllGatherOpInterleavedTensorConfig final : public virtual AllGatherOpTensorConfig {
-   public:
-    AllGatherOpInterleavedTensorConfig(Tensor const& input_tensor) :
-        AllGatherOpTensorConfig(input_tensor) {
-        if (input_tensor.get_layout() == Layout::TILE) {
-            this->page_size = tt_metal::detail::TileSize(this->df);
-        } else {
-            this->page_size = input_tensor.buffer()->page_size();
-        }
-    }
-    virtual uint32_t get_page_size() const override {
-        return this->page_size;
-    }
-    virtual uint32_t get_unit_size() const override {
-        return this->page_size;
-    }
-
-
-   private:
-    uint32_t page_size;
-
-};
-
-class AllGatherOpShardedTensorConfig final : public virtual AllGatherOpTensorConfig {
-   public:
-    AllGatherOpShardedTensorConfig(Tensor const& tensor) :
-        AllGatherOpTensorConfig(tensor),
-        shard_spec(tensor.shard_spec().value()) {
-        if (tensor.get_layout() == Layout::TILE) {
-            this->page_size = tt_metal::detail::TileSize(this->df);
-            TT_ASSERT(this->shard_spec.shape.at(0) * this->shard_spec.shape.at(1) % (TILE_HEIGHT * TILE_WIDTH) == 0);
-            this->unit_size = (this->shard_spec.shape.at(0) * this->shard_spec.shape.at(1) / (TILE_HEIGHT * TILE_WIDTH)) * this->page_size;
-        } else {
-            this->page_size = tensor.get_legacy_shape()[-1] * tensor.element_size();
-            this->unit_size = (this->page_size * this->shard_spec.shape.at(0) * this->shard_spec.shape.at(1)) / tensor.shard_spec()->num_cores();
-        }
-    }
-
-    virtual uint32_t get_page_size() const override {
-        return this->page_size;
-    }
-    virtual uint32_t get_unit_size() const override {
-        return this->unit_size;
-    }
-
-    uint32_t get_shard_size_in_bytes() const {
-        return this->get_unit_size();
-    }
-
-    ShardSpec const& get_shard_spec() const {
-        return this->shard_spec;
-    }
-
-   private:
-    uint32_t page_size;
-    uint32_t unit_size;
-    ShardSpec const shard_spec;
-};
 
 struct ShardAddrGenArgGenerator {
-
     using shard_cores_t = CoreRangeSet;
 
     ShardAddrGenArgGenerator(ccl::ShardAddrGenArgs<true> const& args_struct) :
@@ -497,7 +427,7 @@ struct InputTensorShardAddrGenArgGenerator final : public ShardAddrGenArgGenerat
     }
     InputTensorShardAddrGenArgGenerator(
         Device const* device,
-        AllGatherOpShardedTensorConfig *input_tensor_config,
+        ccl::CclOpShardedTensorConfig *input_tensor_config,
         uint32_t ring_index,
         uint32_t ring_size,
         uint32_t num_workers,
@@ -693,8 +623,8 @@ struct OutputTensorShardAddrGenArgGenerator final : ShardAddrGenArgGenerator {
     OutputTensorShardAddrGenArgGenerator(
         AllGatherConfig const& all_gather_config,
         Device const* device,
-        AllGatherOpShardedTensorConfig *input_tensor_config,
-        AllGatherOpShardedTensorConfig *output_tensor_config,
+        ccl::CclOpShardedTensorConfig *input_tensor_config,
+        ccl::CclOpShardedTensorConfig *output_tensor_config,
         uint32_t ring_index,
         uint32_t ring_size,
         uint32_t num_workers,

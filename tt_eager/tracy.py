@@ -29,6 +29,8 @@ from tt_metal.tools.profiler.common import (
 
 import tracy_state
 
+DEFAULT_CHILD_CALLS = ["CompileProgram", "HWCommandQueue_write_buffer"]
+
 
 def signpost(header, message=None):
     from tracy_tt_lib import tracy_message
@@ -118,7 +120,7 @@ def run_report_setup(verbose, port):
     return toolsReady, captureProcess
 
 
-def generate_report(outFolder, nameAppend):
+def generate_report(outFolder, nameAppend, childCalls):
     tracyOutFile = PROFILER_LOGS_DIR / TRACY_FILE_NAME
     timeOut = 15
     timeCount = 0
@@ -134,8 +136,14 @@ def generate_report(outFolder, nameAppend):
         timeCount += 1
         time.sleep(1)
     with open(PROFILER_LOGS_DIR / TRACY_OPS_TIMES_FILE_NAME, "w") as csvFile:
+        childCallStr = ""
+        childCallsList = DEFAULT_CHILD_CALLS
+        if childCalls:
+            childCallsList = list(set(childCalls + DEFAULT_CHILD_CALLS))
+        if childCallsList:
+            childCallStr = f"-x {','.join(childCallsList)}"
         subprocess.run(
-            f"{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -u -f TT_DNN {PROFILER_LOGS_DIR / TRACY_FILE_NAME}",
+            f"{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -u -p TT_DNN {childCallStr} {PROFILER_LOGS_DIR / TRACY_FILE_NAME}",
             shell=True,
             check=True,
             stdout=csvFile,
@@ -173,6 +181,10 @@ def get_available_port():
     return None
 
 
+def split_comma_list(option, opt, value, parser):
+    setattr(parser.values, option.dest, value.split(","))
+
+
 def main():
     from optparse import OptionParser
 
@@ -207,6 +219,13 @@ def main():
         action="store_false",
         help="Show full op info for cached ops as well",
         default=True,
+    )
+    parser.add_option(
+        "--child-functions",
+        type="string",
+        help="Comma separated list of child function to have their duration included for parent OPs",
+        action="callback",
+        callback=split_comma_list,
     )
 
     if not sys.argv[1:]:
@@ -281,6 +300,8 @@ def main():
             testCommand = f"python -m tracy {osCmd}"
 
             envVars = dict(os.environ)
+            # No Dispatch cores for op_report
+            envVars["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "0"
             if options.device:
                 envVars["TT_METAL_DEVICE_PROFILER"] = "1"
             else:
@@ -306,7 +327,7 @@ def main():
 
             try:
                 captureProcess.communicate(timeout=15)
-                generate_report(options.output_folder, options.name_append)
+                generate_report(options.output_folder, options.name_append, options.child_functions)
             except subprocess.TimeoutExpired as e:
                 captureProcess.terminate()
                 captureProcess.communicate()

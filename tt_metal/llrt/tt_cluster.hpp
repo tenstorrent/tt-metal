@@ -94,6 +94,22 @@ class Cluster {
         return device->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
     }
 
+    // Returns a writer object which holds a pointer to a static tlb
+    // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack traversals
+    tt::Writer get_static_tlb_writer(tt_cxy_pair target) const {
+        chip_id_t mmio_device_id = device_to_mmio_device_.at(target.chip);
+        tt_SiliconDevice* device = dynamic_cast<tt_SiliconDevice*>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
+        const metal_SocDescriptor &soc_desc = this->get_soc_desc(target.chip);
+        tt_cxy_pair virtual_target = soc_desc.convert_to_umd_coordinates(target);
+        return device->get_static_tlb_writer(virtual_target);
+    }
+
+    std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
+        uint32_t associated_mmio_device_id = this->get_associated_mmio_device(device_id);
+        tt_SiliconDevice* driver = dynamic_cast<tt_SiliconDevice*>(this->mmio_device_id_to_driver_.at(associated_mmio_device_id).get());
+        return driver->get_numa_node_for_pcie_device(associated_mmio_device_id);
+    }
+
     void write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
     void read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
 

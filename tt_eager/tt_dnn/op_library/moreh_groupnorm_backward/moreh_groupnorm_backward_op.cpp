@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.hpp"
-
 #include <cmath>
 #include <optional>
 #include <utility>
 #include <vector>
+
+#include "tt_eager/tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.hpp"
 
 namespace tt {
 
@@ -123,13 +123,27 @@ Tensor moreh_groupnorm_backward_input_grad(
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> input_grad,
     const MemoryConfig &input_grad_mem_config) {
-    return operation::run(
-               MorehGroupNormBackwardInputGrad{
-                   .num_groups = num_groups, .input_grad_mem_config = std::move(input_grad_mem_config)},
-               {output_grad, input, mean, rstd},
-               {gamma},
-               {input_grad})
-        .at(0);
+    std::vector<Tensor> output_tensors = {
+        Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma}))};
+
+    operation::launch_op(
+        [num_groups, input_grad_mem_config](
+            const std::vector<Tensor> &input_tensors,
+            const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+            const std::vector<std::optional<Tensor>> &optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehGroupNormBackwardInputGrad{
+                    .num_groups = num_groups, .input_grad_mem_config = std::move(input_grad_mem_config)},
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
+        {output_grad, input, mean, rstd},
+        output_tensors,
+        {gamma},
+        {input_grad});
+
+    return output_tensors.at(0);
 }
 
 void MorehGroupNormBackwardGammaBetaGrad::validate_with_output_tensors(
@@ -269,13 +283,37 @@ std::vector<std::optional<Tensor>> moreh_groupnorm_backward_gamma_beta_grad(
 
     TT_ASSERT(gamma_requires_grad || beta_requires_grad, "At least one of gamma or beta must require grad.");
 
-    const auto &dgamma_dbeta = operation::run(
-        MorehGroupNormBackwardGammaBetaGrad{
-            .num_groups = num_groups,
-            .are_required_outputs = std::move(are_required_outputs),
-            .gamma_grad_mem_config = std::move(gamma_grad_mem_config),
-            .beta_grad_mem_config = std::move(beta_grad_mem_config)},
+    std::vector<Tensor> dgamma_dbeta = {};
+
+    uint32_t num_outputs = 0;
+    if (gamma_grad.has_value() || gamma_requires_grad) {
+        num_outputs++;
+    }
+    if (beta_grad.has_value() || beta_requires_grad) {
+        num_outputs++;
+    }
+    num_outputs = num_outputs == 0 ? 1 : num_outputs;
+    for (int i = 0; i < num_outputs; ++i) {
+        dgamma_dbeta.push_back(Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd})));
+    }
+
+    operation::launch_op(
+        [num_groups, are_required_outputs, gamma_grad_mem_config, beta_grad_mem_config](
+            const std::vector<Tensor> &input_tensors,
+            const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+            const std::vector<std::optional<Tensor>> &optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehGroupNormBackwardGammaBetaGrad{
+                    .num_groups = num_groups,
+                    .are_required_outputs = std::move(are_required_outputs),
+                    .gamma_grad_mem_config = std::move(gamma_grad_mem_config),
+                    .beta_grad_mem_config = std::move(beta_grad_mem_config)},
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
         {output_grad, input, mean, rstd},
+        dgamma_dbeta,
         {},
         {gamma_grad, beta_grad});
 

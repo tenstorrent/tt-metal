@@ -16,9 +16,11 @@ struct transfer_info {
     bool linked;
 };
 
+using transfer_info_cores = std::variant<CoreCoord, CoreRange>;
+
 struct transfer_info_2 {
     std::uint32_t dst_base_addr;
-    vector<pair<uint32_t, uint32_t>> dst_noc_info;  // noc_encoding, num_mcast_dests
+    vector<pair<transfer_info_cores, uint32_t>> dst_noc_info;  // noc_encoding, num_mcast_dests
     bool linked;
     vector<std::uint32_t> data;
 };
@@ -26,7 +28,7 @@ struct kernel_bins_transfer_info {
     vector<std::uint32_t> dst_base_addrs;           // BRISC, NCRISC, TRISC etc..
     vector<std::uint32_t> page_offsets;             // offsets into paged buffer in DRAM
     vector<std::uint32_t> lengths;                  // WriteLinear lengths
-    vector<pair<uint32_t, uint32_t>> dst_noc_info;  // noc_encoding, num_mcast_dests
+    vector<pair<transfer_info_cores, uint32_t>> dst_noc_info;  // noc_encoding, num_mcast_dests
     bool linked;
     vector<std::uint32_t> data;                     // all binaries' data for kernel group
 };

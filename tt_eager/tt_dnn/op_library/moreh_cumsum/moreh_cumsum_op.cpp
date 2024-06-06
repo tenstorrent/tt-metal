@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/moreh_cumsum/moreh_cumsum_op.hpp"
-
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -55,7 +54,18 @@ operation::ProgramWithCallbacks MorehCumSum::create_program(
 }
 
 Tensor moreh_cumsum_(const Tensor& input, const Tensor& output, const int64_t& dim, const bool flip = false) {
-    operation::run(MorehCumSum{.dim = dim, .flip = flip}, {input, output});
+    std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({input, output}))};
+
+    operation::launch_op(
+        [dim, flip](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehCumSum{.dim = dim, .flip = flip}, input_tensors, optional_input_tensors, optional_output_tensors);
+        },
+        {input, output},
+        dummy_output_tensors);
     return output;
 }
 

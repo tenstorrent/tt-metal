@@ -6,7 +6,7 @@ import torch
 import pytest
 from loguru import logger
 
-import tt_lib
+import ttnn
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
@@ -18,6 +18,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
+from models.demos.t3000.falcon40b.tt.model_utils import generate_layernorm_persistent_tensors
 
 
 class PytorchFalconDecoderModel(torch.nn.Module):
@@ -72,6 +73,7 @@ def run_test_FalconDecoder_inference(
     use_cache = True
     user_id = 0
 
+    ln_output_tensors_dict = {"final_layernorm": dict(), "mlp_layernorm": dict(), "attn_layernorm": dict()}
     # Generate input, attention_mask, and kv_cache --------------------------------------
     # TODO: Generate attention_mask on device
     if llm_mode == "prefill":
@@ -91,7 +93,7 @@ def run_test_FalconDecoder_inference(
                 torch2tt_tensor(
                     tt_decoder_input_host[i],
                     devices[i],
-                    tt_layout=tt_lib.tensor.Layout.TILE,
+                    tt_layout=ttnn.experimental.tensor.Layout.TILE,
                     tt_memory_config=model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
                     tt_dtype=model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
                 )
@@ -130,7 +132,7 @@ def run_test_FalconDecoder_inference(
                 torch2tt_tensor(
                     tt_k_cache_host[j],
                     devices[j],
-                    tt_lib.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.Layout.TILE,
                     model_config["KV_CACHE_MEMCFG"],
                     model_config["KV_CACHE_DTYPE"],
                 )
@@ -139,12 +141,22 @@ def run_test_FalconDecoder_inference(
                 torch2tt_tensor(
                     tt_v_cache_host[j],
                     devices[j],
-                    tt_lib.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.Layout.TILE,
                     model_config["KV_CACHE_MEMCFG"],
                     model_config["KV_CACHE_DTYPE"],
                 )
             )
         tt_layer_past = (tt_k_cache, tt_v_cache)
+
+        if seq_len > model_config["layernorm_params"]["slice_size"]:
+            generate_layernorm_persistent_tensors(
+                seq_len,
+                model_config["layernorm_params"]["slice_size"],
+                ln_output_tensors_dict,
+                devices,
+                configuration.hidden_size,
+                model_config["LN_MLP_OUTPUT_DTYPE"],
+            )
 
     elif llm_mode == "decode":
         q_len, kv_len = seq_len, kv_cache_len + 1
@@ -171,7 +183,7 @@ def run_test_FalconDecoder_inference(
                 torch2tt_tensor(
                     tt_decoder_input_host[i],
                     devices[i],
-                    tt_layout=tt_lib.tensor.Layout.TILE,
+                    tt_layout=ttnn.experimental.tensor.Layout.TILE,
                     tt_memory_config=model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
                     tt_dtype=model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
                 )
@@ -221,7 +233,7 @@ def run_test_FalconDecoder_inference(
                 torch2tt_tensor(
                     tt_k_cache_host[j],
                     devices[j],
-                    tt_lib.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.Layout.TILE,
                     model_config["KV_CACHE_MEMCFG"],
                     model_config["KV_CACHE_DTYPE"],
                 )
@@ -230,7 +242,7 @@ def run_test_FalconDecoder_inference(
                 torch2tt_tensor(
                     tt_v_cache_host[j],
                     devices[j],
-                    tt_lib.tensor.Layout.TILE,
+                    ttnn.experimental.tensor.Layout.TILE,
                     model_config["KV_CACHE_MEMCFG"],
                     model_config["KV_CACHE_DTYPE"],
                 )
@@ -261,6 +273,7 @@ def run_test_FalconDecoder_inference(
         model_config,
         tt_cache_path,
         None,
+        ln_output_tensors_dict,
     )
 
     tt_out, tt_layer_present = tt_FalconDecoder_model(

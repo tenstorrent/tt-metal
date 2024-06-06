@@ -8,7 +8,7 @@ from torch import nn
 from diffusers import StableDiffusionPipeline
 import ttnn
 
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attention_down_block_2d import (
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_cross_attention_down_block_2d import (
     cross_attention_down_block_2d,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -16,8 +16,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
     skip_for_grayskull,
 )
-from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
     run_ttnn_conv_with_pre_and_post_tensor_formatting,
     pre_process_input,
     post_process_output,
@@ -121,7 +121,7 @@ def test_cross_attn_down_block_2d_256x256(device, model_name, N, C, H, W, index,
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index, in_channels",

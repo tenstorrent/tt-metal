@@ -91,7 +91,7 @@ void test_raw_host_memory_pointer() {
             on_destruction_callback},
         shape,
         DataType::BFLOAT16,
-        Layout::ROW_MAJOR);
+        Layout::TILE);
     /* Borrow Data from Numpy End */
 
     /* Sanity Check Start */
@@ -162,7 +162,7 @@ void test_raw_host_memory_pointer() {
             on_destruction_callback},
         shape,
         DataType::BFLOAT16,
-        Layout::ROW_MAJOR);
+        Layout::TILE);
 
     bfloat16 d_value = 8.0f;
     for (auto& element : borrowed_buffer::get_as<bfloat16>(d_cpu)) {

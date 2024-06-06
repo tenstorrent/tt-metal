@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch
 from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
-from models.demos.t3000.mixtral8x7b.tt.mixtral_rms_norm import TtRMSNormSharded
+from models.demos.t3000.mixtral8x7b.tt.mixtral_rms_norm import TtRMSNormSharded, TtRMSNorm
 from ttnn import ReplicateTensorToMesh
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule
 
 
-class TtTransformer(torch.nn.Module):
+class TtTransformer(LightweightModule):
     def __init__(
         self,
         device_mesh,
@@ -26,19 +26,17 @@ class TtTransformer(torch.nn.Module):
         self.model_config = args.get_model_config()
         assert self.vocab_size > 0
 
-        self.layers = torch.nn.ModuleList(
-            [
-                TtTransformerBlock(
-                    device_mesh=device_mesh,
-                    state_dict=state_dict,
-                    args=args,
-                    dtype=dtype,
-                    layer_num=i,
-                )
-                for i in layers
-            ]
-        )
-        self.norm = TtRMSNormSharded(
+        self.layers = [
+            TtTransformerBlock(
+                device_mesh=device_mesh,
+                state_dict=state_dict,
+                args=args,
+                dtype=dtype,
+                layer_num=i,
+            )
+            for i in layers
+        ]
+        self.norm = TtRMSNorm(
             device_mesh=device_mesh,
             state_dict=state_dict,
             args=args,
@@ -49,13 +47,18 @@ class TtTransformer(torch.nn.Module):
 
         self.state_dict = state_dict
 
+        if args.dummy_weights:
+            output_cache_name = None
+        else:
+            output_cache_name = args.weight_cache_path(dtype) / "output_multidevice_4d.weight"
+
         self.output_weight = ttnn.as_tensor(
-            self.state_dict["output.weight"].permute(1, 0),
+            self.state_dict["output.weight"].permute(1, 0).unsqueeze(0).unsqueeze(0),
             device=device_mesh,
             layout=self.model_config["OUTPUT_W_LAYOUT_TILE"],
             dtype=dtype,
             memory_config=self.model_config["OUTPUT_WEIGHTS_MEMCFG"],
-            cache_file_name=args.weight_cache_path(dtype) / "output_multidevice.weight",
+            cache_file_name=output_cache_name,
             mesh_mapper=ReplicateTensorToMesh(device_mesh),
         )
 
@@ -66,18 +69,20 @@ class TtTransformer(torch.nn.Module):
         x,
         start_pos,
         current_pos,
+        attn_masks,
         rot_mats,
     ):
         for i, layer in enumerate(self.layers):
-            x = layer(x, start_pos, current_pos, rot_mats)
+            x = layer(x, start_pos, current_pos, attn_masks, rot_mats)
+        attn_masks.deallocate(True)
 
         x_norm = self.norm(x)
-        outputs = ttnn.linear(
+        outputs = ttnn.experimental.operations.primary.matmul(
             x_norm,
             self.output_weight,
-            core_grid=self.args.max_grid_size,
-            use_1d_systolic_array=True,
-            memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
+            # compute_with_storage_grid_size=(8, 8),
+            program_config=self.model_config["OUTPUT_MM_PROGCFG"],
+            output_mem_config=self.model_config["OUTPUT_MM_MEMCFG"],
             compute_kernel_config=self.compute_kernel,
         )
 

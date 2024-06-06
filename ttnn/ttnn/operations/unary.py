@@ -47,6 +47,7 @@ def register_ttnn_cpp_unary_function(unary_function):
         "log": torch.log,
         "log10": torch.log10,
         "log2": torch.log2,
+        "log_sigmoid": torch.nn.functional.logsigmoid,
         "logical_not": torch.logical_not,
         "ltz": lambda x: torch.lt(x, 0),
         "neg": torch.neg,
@@ -141,6 +142,7 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn._ttnn.operations.unary.leaky_relu,
     # ttnn._ttnn.operations.unary.prelu,  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
     # Other unaries (composite operations)
+    ttnn._ttnn.operations.unary.log_sigmoid,
     ttnn._ttnn.operations.unary.softplus,
 ]
 for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
@@ -185,7 +187,6 @@ def register_ttl_unary_function(name, ttl_unary_function):
         "hardtanh": torch.nn.functional.hardtanh,
         "lgamma": torch.lgamma,
         "log1p": torch.log1p,
-        "log_sigmoid": torch.nn.functional.logsigmoid,
         "mish": lambda _x: torch.nn.functional.mish(_x.to(torch.float)),
         "multigammaln": torch_multigammaln,
         "rad2deg": torch.rad2deg,
@@ -275,7 +276,6 @@ TTL_UNARY_FUNCTIONS = [
     ("hardtanh", ttl.tensor.hardtanh),  # composite
     ("lgamma", ttl.tensor.lgamma),  # composite
     ("log1p", ttl.tensor.log1p),  # composite
-    ("log_sigmoid", ttl.tensor.log_sigmoid),  # composite
     ("mish", ttl.tensor.mish),  # composite
     ("multigammaln", ttl.tensor.multigammaln),  # composite
     ("rad2deg", ttl.tensor.rad2deg),  # composite

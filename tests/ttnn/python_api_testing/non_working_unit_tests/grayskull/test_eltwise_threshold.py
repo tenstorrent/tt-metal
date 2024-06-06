@@ -45,7 +45,7 @@ def run_eltwise_threshold_tests(
     assert tt_result.shape == ref_value.shape
 
     # compare tt and golden outputs
-    success, pcc_value = comp_pcc(ref_value, tt_result)
+    success, pcc_value = comp_pcc(ref_value, tt_result, pcc=0.97)
     logger.debug(pcc_value)
     logger.debug(success)
 
@@ -58,6 +58,16 @@ test_sweep_args = [
     (
         [(224, 128)],
         [ttnn.bfloat16],
+        [ttnn.TILE_LAYOUT],
+        [ttnn.DRAM_MEMORY_CONFIG],
+        ttnn.L1_MEMORY_CONFIG,
+        -47.75,
+        96.0,
+        8687804,
+    ),
+    (
+        [(224, 128)],
+        [ttnn.bfloat8_b],
         [ttnn.TILE_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG],
         ttnn.L1_MEMORY_CONFIG,

@@ -42,11 +42,11 @@ struct ToMemoryConfig {
 
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor& tensor_arg, Args&&... args) {
-        return std::make_tuple(tensor_arg);
+        return std::forward_as_tuple(tensor_arg);
     }
 
     // TODO: Move to cpp once we merge with tt_eager
-    static Tensor execute(
+    static Tensor execute_on_worker_thread(
         const ttnn::Tensor& tensor, const ttnn::MemoryConfig& memory_config, std::optional<ttnn::DataType> dtype) {
         // Temporary until we see why buffer data not being populated
         const auto original_shape = tensor.get_shape();
@@ -69,8 +69,6 @@ struct ToMemoryConfig {
                         throw runtime_error(
                             "dtype cannot be specified when converting sharded tensor to sharded tensor");
                     }
-                    TT_FATAL(tensor.shard_spec().has_value());
-                    TT_FATAL(memory_config.is_sharded());
                     return operation::run(
                                Reshard{
                                    .output_mem_config = memory_config,
@@ -84,7 +82,6 @@ struct ToMemoryConfig {
                     Tensor temp = operation::run(
                                       Sharded{
                                           .grid_size = tensor.device()->compute_with_storage_grid_size(),
-                                          .shard_spec = input_shard_spec,
                                           .sharded_op_type = ShardedOpType::ShardedToInterleaved,
                                           .output_mem_config = ttnn::DRAM_MEMORY_CONFIG,
                                           .output_dtype = dtype.value_or(tensor.get_dtype())},
@@ -93,7 +90,6 @@ struct ToMemoryConfig {
                     return operation::run(
                                Sharded{
                                    .grid_size = temp.device()->compute_with_storage_grid_size(),
-                                   .shard_spec = output_shard_spec,
                                    .sharded_op_type = ShardedOpType::InterleavedToSharded,
                                    .output_mem_config = memory_config,
                                    .output_dtype = dtype.value_or(temp.get_dtype())},
@@ -101,13 +97,11 @@ struct ToMemoryConfig {
                         .at(0);
                 }
             } else {
-                TT_FATAL(memory_config.is_sharded());
                 auto bbox = memory_config.shard_spec.value().grid.bounding_box();
                 CoreCoord grid_size(bbox.end.x + 1, bbox.end.y + 1);
                 return operation::run(
                            Sharded{
                                .grid_size = grid_size,
-                               .shard_spec = memory_config.shard_spec.value(),
                                .sharded_op_type = ShardedOpType::InterleavedToSharded,
                                .output_mem_config = memory_config,
                                .output_dtype = dtype.value_or(tensor.get_dtype())},
@@ -117,12 +111,9 @@ struct ToMemoryConfig {
         } else {
             // to_interleaved path
             if (tensor.is_sharded()) {
-                TT_FATAL(tensor.shard_spec().has_value());
-                auto shard_spec = tensor.shard_spec().value();
                 return operation::run(
                            Sharded{
                                .grid_size = tensor.device()->compute_with_storage_grid_size(),
-                               .shard_spec = shard_spec,
                                .sharded_op_type = ShardedOpType::ShardedToInterleaved,
                                .output_mem_config = memory_config,
                                .output_dtype = dtype.value_or(tensor.get_dtype())},

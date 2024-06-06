@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
-
 #include <functional>
 #include <map>
 #include <optional>
@@ -14,6 +12,7 @@
 #include "tt_eager/tensor/tensor.hpp"
 #include "tt_eager/tensor/tensor_impl.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "tt_eager/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -128,9 +127,8 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto NCHt = N * C * Ht;
-    tt_metal::CoreGridDesc core_grid(device);
-    const auto num_cores_y = core_grid.y_;
-    CoreCoord core_grid_coord = {core_grid.x_, num_cores_y};
+    auto grid = device->compute_with_storage_grid_size();
+    const auto num_cores_y = grid.y;
 
     // core_group_2 works more.
     // If number of working cores is 108 and NCHt is 110,
@@ -141,7 +139,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
          core_group_1,
          core_group_2,
          num_rows_per_core_group_1,
-         num_rows_per_core_group_2] = tt_metal::split_work_to_cores(core_grid_coord, NCHt);
+         num_rows_per_core_group_2] = tt_metal::split_work_to_cores(grid, NCHt);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
@@ -386,7 +384,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
                 runtime_args[0] = input_buffer->address();
                 if (gamma_buffer != nullptr) {
                     runtime_args[6] = gamma_buffer->address();
@@ -397,7 +395,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
                 runtime_args[0] = ouput_buffer->address();
                 if (mean_buffer != nullptr) {
                     runtime_args[1] = mean_buffer->address();
@@ -437,7 +435,10 @@ void MorehLayerNorm::validate(
             fmt::format("{} != {}", input.get_legacy_shape()[3], gamma.value().get_legacy_shape()[3]));
         TT_ASSERT(
             input.get_legacy_shape().without_padding()[3] == gamma.value().get_legacy_shape().without_padding()[3],
-            fmt::format("{} != {}", input.get_legacy_shape().without_padding()[3], gamma.value().get_legacy_shape().without_padding()[3]));
+            fmt::format(
+                "{} != {}",
+                input.get_legacy_shape().without_padding()[3],
+                gamma.value().get_legacy_shape().without_padding()[3]));
         TT_ASSERT(input.device() == gamma.value().device());
     }
 
@@ -448,7 +449,10 @@ void MorehLayerNorm::validate(
             fmt::format("{} != {}", input.get_legacy_shape()[3], beta.value().get_legacy_shape()[3]));
         TT_ASSERT(
             input.get_legacy_shape().without_padding()[3] == beta.value().get_legacy_shape().without_padding()[3],
-            fmt::format("{} != {}", input.get_legacy_shape().without_padding()[3], beta.value().get_legacy_shape().without_padding()[3]));
+            fmt::format(
+                "{} != {}",
+                input.get_legacy_shape().without_padding()[3],
+                beta.value().get_legacy_shape().without_padding()[3]));
         TT_ASSERT(input.device() == beta.value().device());
     }
 
@@ -497,12 +501,26 @@ Tensor moreh_layernorm(
     const std::optional<std::reference_wrapper<const Tensor>> mean,
     const std::optional<std::reference_wrapper<const Tensor>> rstd,
     const MemoryConfig& output_mem_config) {
-    return operation::run(
-               MorehLayerNorm{
-                   .normalized_dims = normalized_dims, .eps = eps, .output_mem_config = std::move(output_mem_config)},
-               {input},
-               {gamma, beta, mean, rstd})
-        .at(0);
+    std::vector<Tensor> output_tensors = {
+        Tensor(operation::get_workers_for_op_output({input}, {gamma, beta, mean, rstd}))};
+
+    operation::launch_op(
+        [normalized_dims, eps, output_mem_config](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                MorehLayerNorm{
+                    .normalized_dims = normalized_dims, .eps = eps, .output_mem_config = std::move(output_mem_config)},
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
+        {input},
+        output_tensors,
+        {gamma, beta, mean, rstd});
+
+    return output_tensors.at(0);
 }
 
 }  // namespace primary
@@ -520,12 +538,26 @@ Tensor moreh_layernorm(
     const std::optional<std::reference_wrapper<const Tensor>> mean,
     const std::optional<std::reference_wrapper<const Tensor>> rstd,
     const MemoryConfig& output_mem_config) {
-    return operation::run_with_autoformat(
-               operations::primary::MorehLayerNorm{
-                   .normalized_dims = normalized_dims, .eps = eps, .output_mem_config = std::move(output_mem_config)},
-               {input},
-               {gamma, beta, mean, rstd})
-        .at(0);
+    std::vector<Tensor> output_tensors = {
+        Tensor(operation::get_workers_for_op_output({input}, {gamma, beta, mean, rstd}))};
+
+    operation::launch_op(
+        [normalized_dims, eps, output_mem_config](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(
+                operations::primary::MorehLayerNorm{
+                    .normalized_dims = normalized_dims, .eps = eps, .output_mem_config = std::move(output_mem_config)},
+                input_tensors,
+                optional_input_tensors,
+                optional_output_tensors);
+        },
+        {input},
+        output_tensors,
+        {gamma, beta, mean, rstd});
+
+    return output_tensors.at(0);
 }
 
 }  // namespace tt_metal

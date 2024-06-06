@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt_eager/tensor/tensor.hpp>
+
 #include "tt_dnn/op_library/operation.hpp"
 
 namespace tt {
@@ -22,10 +23,15 @@ struct TensorRecord {
     const Layout layout;
     const std::optional<MemoryConfig> memory_config;
 
-    static constexpr auto attribute_names = std::make_tuple("storage_type", "shape", "data_type", "layout", "memory_config");
+    static constexpr auto attribute_names =
+        std::make_tuple("storage_type", "shape", "data_type", "layout", "memory_config");
     const auto attribute_values() const {
         return std::make_tuple(
-            std::cref(this->storage_type), std::cref(this->shape), std::cref(this->data_type), std::cref(this->layout), std::cref(this->memory_config));
+            std::cref(this->storage_type),
+            std::cref(this->shape),
+            std::cref(this->data_type),
+            std::cref(this->layout),
+            std::cref(this->memory_config));
     }
 };
 
@@ -54,12 +60,12 @@ struct OperationHistory {
     std::vector<OperationRecord> records;
 };
 
-inline OperationHistory OPERATION_HISTORY{};
+extern OperationHistory OPERATION_HISTORY;
 
 }  // namespace detail
 
-template<typename ... Args>
-inline void append(Args&& ... args) {
+template <typename... Args>
+inline void append(Args&&... args) {
     detail::OPERATION_HISTORY.append(std::forward<Args>(args)...);
 }
 

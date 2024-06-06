@@ -6,7 +6,7 @@
 
 namespace tt::stl::concepts {
 
-template <auto...>
+template <typename ...T>
 inline constexpr bool always_false_v = false;
 
 }  // namespace tt::stl::concepts

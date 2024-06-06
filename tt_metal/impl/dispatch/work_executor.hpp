@@ -4,17 +4,27 @@
 
 #pragma once
 
-#include <condition_variable>
-#include <functional>
 #include <pthread.h>
 #include <sched.h>
 #include <sys/resource.h>
-#include <thread>
 #include <unistd.h>
+
+#include <condition_variable>
+#include <functional>
+#include <thread>
 
 #include "common/env_lib.hpp"
 #include "lock_free_queue.hpp"
+#include "tt_metal/third_party/tracy/public/common/TracySystem.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+
+#if defined(TRACY_ENABLE)
+#define TracyTTThreadName(name, id)                     \
+    std::string tmp = fmt::format("{} : {}", name, id); \
+    tracy::SetThreadName(tmp.c_str());
+#else
+#define TracyTTThreadName(name, id)
+#endif
 
 namespace tt {
 
@@ -34,15 +44,17 @@ enum class WorkerState {
     IDLE = 2,
 };
 
-inline void set_device_thread_affinity(std::thread& thread_, int managed_device_id) {
+inline void set_device_thread_affinity(std::thread& thread_, int cpu_core_for_worker) {
     // Bind a device worker/reader thread to a CPU core, determined using round-robin.
-    static int num_online_cores = sysconf(_SC_NPROCESSORS_ONLN);
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
-    CPU_SET(managed_device_id % num_online_cores, &cpuset);
+    CPU_SET(cpu_core_for_worker, &cpuset);
     int rc = pthread_setaffinity_np(thread_.native_handle(), sizeof(cpu_set_t), &cpuset);
     if (rc) {
-        log_warning(tt::LogMetal, "Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: {}", rc);
+        log_warning(
+            tt::LogMetal,
+            "Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: {}",
+            rc);
     }
 }
 
@@ -50,7 +62,8 @@ inline void set_process_priority(int requested_priority) {
     // Get priority for calling process
     int process_priority = getpriority(PRIO_PROCESS, 0);
     log_debug(tt::LogMetal, "Initial Process Priority: {}", process_priority);
-    if (process_priority == requested_priority) return;
+    if (process_priority == requested_priority)
+        return;
     // Set priority for calling process to user specified value
     int rc = setpriority(PRIO_PROCESS, 0, requested_priority);
     if (rc) {
@@ -59,14 +72,14 @@ inline void set_process_priority(int requested_priority) {
 }
 
 class WorkExecutor {
-    // In asynchronous mode, each device has a worker thread that processes all host <--> cluster commands for this device.
-    // Commands are pushed to the worker queue and picked up + executed asyncrhonously.
-    // Higher level functions that have access to the device handle can queue up tasks asynchronously.
-    // In synchronous/pass through mode, we bypass the queue and tasks are executed immediately after being pushed.
-    public:
+    // In asynchronous mode, each device has a worker thread that processes all host <--> cluster commands for this
+    // device. Commands are pushed to the worker queue and picked up + executed asyncrhonously. Higher level functions
+    // that have access to the device handle can queue up tasks asynchronously. In synchronous/pass through mode, we
+    // bypass the queue and tasks are executed immediately after being pushed.
+   public:
     LockFreeQueue<std::function<void()>> worker_queue;
 
-    WorkExecutor(int device_id) : managed_device_id(device_id) {
+    WorkExecutor(int cpu_core, int device_id) : cpu_core_for_worker(cpu_core), managed_device_id(device_id) {
         set_process_priority(0);
         if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS) {
             this->set_worker_queue_mode(this->worker_queue_mode);
@@ -74,9 +87,19 @@ class WorkExecutor {
         }
     }
 
-    WorkExecutor(WorkExecutor &&other) {
-        worker_state = other.worker_state;
-        managed_device_id = other.managed_device_id;
+    WorkExecutor(WorkExecutor&& other) {
+        worker_state = std::move(other.worker_state);
+        cpu_core_for_worker = std::move(other.managed_device_id);
+        managed_device_id = std::move(other.managed_device_id);
+    }
+
+    WorkExecutor& operator=(WorkExecutor &&other) {
+        if (this != &other) {
+            worker_state = std::move(other.worker_state);
+            managed_device_id = std::move(other.managed_device_id);
+            cpu_core_for_worker = std::move(other.cpu_core_for_worker);
+        }
+        return *this;
     }
 
     ~WorkExecutor() {
@@ -86,15 +109,19 @@ class WorkExecutor {
     }
 
     inline void run_worker() {
+        TracyTTThreadName("TT_WORKER_DEVICE_ID", this->managed_device_id);
         while (true) {
             {
                 // Worker stalls until queue is non-empty or terminate signal is set
                 std::unique_lock<std::mutex> lock(this->cv_mutex);
-                this->cv.wait(lock, [this] {return (not this->worker_queue.empty()) or this->worker_state == WorkerState::TERMINATE;});
+                this->cv.wait(lock, [this] {
+                    return (not this->worker_queue.empty()) or this->worker_state == WorkerState::TERMINATE;
+                });
             }
             if (this->worker_state == WorkerState::TERMINATE) {
                 // Terminate signal set, and queue is empty - worker exits
-                if(this->worker_queue.empty()) break;
+                if (this->worker_queue.empty())
+                    break;
             }
             ZoneScopedN("PopWork");
             // Queue non-empty: run command
@@ -105,8 +132,10 @@ class WorkExecutor {
 
     inline void push_work(const std::function<void()>& work_executor, bool blocking = false) {
         ZoneScopedN("PushWork");
-        if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == this->worker_queue.worker_thread_id.load() or not (this->worker_state == WorkerState::RUNNING)) {
-            // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current thread.
+        if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == this->worker_queue.worker_thread_id.load() or
+            not(this->worker_state == WorkerState::RUNNING)) {
+            // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current
+            // thread.
             work_executor();
         } else {
             // Push to worker queue.
@@ -124,8 +153,10 @@ class WorkExecutor {
     inline void push_work(std::shared_ptr<std::function<void()>> work_executor, bool blocking = false) {
         // Latest push API, passing ptrs around for work container. Usually faster, since no data-copies.
         ZoneScopedN("PushWork");
-        if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == this->worker_queue.worker_thread_id.load() or not (this->worker_state == WorkerState::RUNNING)) {
-            // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current thread.
+        if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == this->worker_queue.worker_thread_id.load() or
+            not(this->worker_state == WorkerState::RUNNING)) {
+            // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current
+            // thread.
             (*work_executor)();
         } else {
             // Push to worker queue.
@@ -141,15 +172,17 @@ class WorkExecutor {
     }
 
     inline void synchronize() {
-        if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS and not(std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.worker_thread_id.load())) {
-            // Blocking = wait for queue flushed. Worker thread cannot explcitly insert a synchronize, otherwise we have a deadlock.
-            this->worker_queue.push([](){}); // Send flush command (i.e. empty function)
+        if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS and
+            not(std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.worker_thread_id.load())) {
+            // Blocking = wait for queue flushed. Worker thread cannot explcitly insert a synchronize, otherwise we have
+            // a deadlock.
+            this->worker_queue.push([]() {});  // Send flush command (i.e. empty function)
             {
                 std::lock_guard lock(this->cv_mutex);
                 cv.notify_one();
             }
             // Wait for queue empty, i.e. flush command picked up
-            while(not this->worker_queue.empty()) {
+            while (not this->worker_queue.empty()) {
                 std::this_thread::sleep_for(std::chrono::microseconds(10));
             };
         }
@@ -173,8 +206,7 @@ class WorkExecutor {
     inline void set_worker_queue_mode(const WorkerQueueMode& mode) {
         if (mode == WorkerQueueMode::LOCKFREE) {
             this->worker_queue.set_lock_free();
-        }
-        else {
+        } else {
             this->worker_queue.set_lock_based();
         }
         this->worker_queue_mode = mode;
@@ -183,9 +215,11 @@ class WorkExecutor {
     WorkerQueueMode get_worker_queue_mode() { return worker_queue_mode; }
 
     inline std::size_t get_parent_thread_id() { return this->worker_queue.parent_thread_id; }
-    private:
+
+   private:
     std::thread worker_thread;
     WorkerState worker_state = WorkerState::IDLE;
+    int cpu_core_for_worker = 0;
     int managed_device_id = 0;
     std::condition_variable cv;
     std::mutex cv_mutex;
@@ -196,7 +230,7 @@ class WorkExecutor {
         this->worker_thread = std::thread(&WorkExecutor::run_worker, this);
         this->worker_queue.worker_thread_id = std::hash<std::thread::id>{}(this->worker_thread.get_id());
         // Bind a worker tied to a device to a specific CPU core in round robin fashion. Thread affinity == Better Perf.
-        set_device_thread_affinity(this->worker_thread, this->managed_device_id);
+        set_device_thread_affinity(this->worker_thread, this->cpu_core_for_worker);
     }
 
     inline void stop_worker() {
@@ -213,7 +247,8 @@ class WorkExecutor {
     }
 
     static WorkExecutorMode default_worker_executor_mode() {
-        static int value = parse_env<int>("TT_METAL_ASYNC_DEVICE_QUEUE", static_cast<int>(WorkExecutorMode::SYNCHRONOUS));
+        static int value =
+            parse_env<int>("TT_METAL_ASYNC_DEVICE_QUEUE", static_cast<int>(WorkExecutorMode::SYNCHRONOUS));
         return static_cast<WorkExecutorMode>(value);
     }
 
@@ -226,4 +261,4 @@ class WorkExecutor {
     WorkerQueueMode worker_queue_mode = default_worker_queue_mode();
 };
 
-} // namespace tt
+}  // namespace tt

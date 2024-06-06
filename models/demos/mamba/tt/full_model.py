@@ -4,6 +4,7 @@
 
 import torch
 import ttnn
+import tt_lib as ttl
 
 from loguru import logger
 
@@ -11,7 +12,6 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from models.demos.mamba.tt.residual_block import TtResidualBlock
-from models.demos.mamba.tt.transforms import MambaSsmBlockTransformer
 
 
 class TtTensorLoader:
@@ -64,7 +64,12 @@ class TtTensorLoader:
 
 class MambaTT(torch.nn.Module):
     def __init__(
-        self, reference_model, device: ttnn.Device, configs, tt_cache_path: Optional[str] = None, num_layers=None
+        self,
+        reference_model,
+        device: ttnn.Device,
+        configs,
+        tt_cache_path: Optional[str] = None,
+        num_layers=None,
     ):
         super().__init__()
         self.args = reference_model.args
@@ -81,13 +86,9 @@ class MambaTT(torch.nn.Module):
         self.embedding = reference_model.embedding
 
         loader = TtTensorLoader(reference_model.state_dict(), self.device, tt_cache_path=tt_cache_path)
-        transformer = MambaSsmBlockTransformer(
-            self.device, self.args.batch_size, self.args.d_inner, configs["latent_size"]
-        )
 
         self.layers = [
-            TtResidualBlock(self.args, device, configs, loader.get_tensor_loader(i), transformer)
-            for i in range(self.num_layers)
+            TtResidualBlock(self.args, device, configs, loader.get_tensor_loader(i)) for i in range(self.num_layers)
         ]
 
         load_fn = loader.get_tensor_loader()
@@ -99,6 +100,11 @@ class MambaTT(torch.nn.Module):
             "lm_head.weight",
             lambda x: x.transpose(-1, -2),
             tt_dtype=ttnn.bfloat16,
+        )
+        self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
         )
 
     def forward(self, x):
@@ -114,7 +120,7 @@ class MambaTT(torch.nn.Module):
             device=self.device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
+            dtype=self.configs["dtype"]["activations"],
         )
 
         for layer in self.layers:
@@ -134,7 +140,8 @@ class MambaTT(torch.nn.Module):
             self.lm_head_weights,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             use_1d_systolic_array=True,
-            core_grid=ttnn.CoreGrid(y=7, x=8),
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=self.configs["dtype"]["activations"],
         )
 
         x = ttnn.to_torch(x).to(torch.float32)  # (1, 1, B, E)

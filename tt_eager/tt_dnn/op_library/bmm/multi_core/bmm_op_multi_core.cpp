@@ -39,18 +39,19 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto num_output_tiles_total = cshape[0] * cshape[1] * cshape[2] * cshape[3] / TILE_HW;
+    uint32_t c_batch_size = get_batch_size(cshape);
+    auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / TILE_HW;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    // C = A*B
+    // C = A*B*...
     // MN = MK*KN
-    uint32_t B = ashape[0]*ashape[1];
-    uint32_t Mt = ashape[2]/TILE_HEIGHT;
-    uint32_t Kt = ashape[3]/TILE_WIDTH;
-    uint32_t Nt = bshape[3]/TILE_WIDTH;
+    uint32_t B = get_batch_size(ashape);
+    uint32_t Mt = ashape[-2]/TILE_HEIGHT;
+    uint32_t Kt = ashape[-1]/TILE_WIDTH;
+    uint32_t Nt = bshape[-1]/TILE_WIDTH;
     uint32_t KtNt = Kt * Nt;
     uint32_t MtKt = Mt * Kt;
     uint32_t MtNt = Mt * Nt;

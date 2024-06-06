@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
 from models.demos.t3000.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
-from models.demos.t3000.mixtral8x7b.tt.mixtral_rms_norm import TtRMSNormSharded
+from models.demos.t3000.mixtral8x7b.tt.mixtral_rms_norm import TtRMSNormSharded, TtRMSNorm
 from models.demos.t3000.mixtral8x7b.tt.mixtral_moe import TtMoeLayer
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule
 
 
-class TtTransformerBlock(torch.nn.Module):
+class TtTransformerBlock(LightweightModule):
     def __init__(
         self,
         device_mesh,
@@ -52,7 +52,7 @@ class TtTransformerBlock(torch.nn.Module):
             layer_num=layer_num,
             dtype=dtype,
         )
-        self.attention_norm = TtRMSNormSharded(
+        self.attention_norm = TtRMSNorm(
             device_mesh=device_mesh,
             state_dict=state_dict,
             args=args,
@@ -61,7 +61,7 @@ class TtTransformerBlock(torch.nn.Module):
             weight_key="attention_norm",
         )
 
-        self.ffn_norm = TtRMSNormSharded(
+        self.ffn_norm = TtRMSNorm(
             device_mesh=device_mesh,
             state_dict=state_dict,
             args=args,
@@ -75,6 +75,7 @@ class TtTransformerBlock(torch.nn.Module):
         xs_1SBH,
         start_pos,
         current_pos,
+        attn_masks,
         rot_mats,
     ) -> ttnn.Tensor:
         """
@@ -90,6 +91,7 @@ class TtTransformerBlock(torch.nn.Module):
             attn_norm_1SBH,
             start_pos,
             current_pos,
+            attn_masks,
             rot_mats,
         )
         hs_1SBH = ttnn.add(xs_1SBH, attn_1SBH)

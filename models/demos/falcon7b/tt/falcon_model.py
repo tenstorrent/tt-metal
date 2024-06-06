@@ -6,7 +6,6 @@ from abc import abstractmethod
 from typing import List, Optional, Tuple
 
 import torch
-import tt_lib
 import ttnn
 
 from models.demos.falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
@@ -50,7 +49,7 @@ class TtFalconModelShared(torch.nn.Module):
             embedding_weights_str,
             weight_config_str="WORD_EMBEDDING_WEIGHTS",
             weights_to_cache=(state_dict[embedding_weights_str] if state_dict else None),
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
 
         # stack all decoders
@@ -117,11 +116,7 @@ class TtFalconModelShared(torch.nn.Module):
                 dim=-1,
             )
 
-            if (
-                self.model_config["PREFILL_OPTIMIZED_MODE"]
-                and self.model_config["PREFILL_ATTENTION_OPTIMIZED_MODE"]
-                and num_input_tokens in [128, 1024, 2048]
-            ):
+            if self.model_config["PREFILL_OPTIMIZED_MODE"] and num_input_tokens in [128, 1024, 2048]:
                 attention_mask_ = create_prefill_attn_mask_for_sharded_softmax(
                     attention_mask_bool_padded * -1e5,
                     self.config.num_attention_heads,
@@ -131,8 +126,8 @@ class TtFalconModelShared(torch.nn.Module):
                 attn_masks_unordered = [
                     torch_tensors_to_tt_tensors(
                         [attention_mask_slice for _ in self.devices],
-                        tt_lib.tensor.Layout.ROW_MAJOR,
-                        tt_lib.tensor.DataType.BFLOAT16,  # subsequent tilize op excepts bfloat16 inputs
+                        ttnn.experimental.tensor.Layout.ROW_MAJOR,
+                        ttnn.experimental.tensor.DataType.BFLOAT16,  # subsequent tilize op excepts bfloat16 inputs
                         self.model_config["ATTN_MASK_MEMCFG"],
                         self.devices,
                     )
@@ -141,10 +136,10 @@ class TtFalconModelShared(torch.nn.Module):
                 # Tilize attn masks
                 for tt_attention_mask_slice in attn_masks_unordered:
                     for i in range(self.num_devices):
-                        tt_attention_mask_slice[i] = tt_lib.tensor.tilize(
+                        tt_attention_mask_slice[i] = ttnn.experimental.tensor.tilize(
                             tt_attention_mask_slice[i],
                             output_mem_config=self.model_config["ATTN_MASK_MEMCFG"],
-                            output_dtype=self.model_config["ATTN_MASK_DTYPE"],
+                            output_dtype=self.model_config["ATTN_MASK_OPTIMIZED_PREFILL_DTYPE"],
                         )
                 # Expected output attention_masks
                 # [dev0: [slice0, slice1, ...], dev1: [slice0, slice1, ...], ...]
@@ -155,21 +150,21 @@ class TtFalconModelShared(torch.nn.Module):
                 # Send attn masks to device
                 tt_attention_mask = torch_tensors_to_tt_tensors(
                     attention_masks,
-                    tt_lib.tensor.Layout.ROW_MAJOR,
-                    tt_lib.tensor.DataType.BFLOAT16,  # subsequent tilize op excepts bfloat16 inputs
+                    ttnn.experimental.tensor.Layout.ROW_MAJOR,
+                    ttnn.experimental.tensor.DataType.BFLOAT16,  # subsequent tilize op excepts bfloat16 inputs
                     self.model_config["ATTN_MASK_MEMCFG"],
                     self.devices,
                 )
                 # Repeat attn masks for all heads
                 for i in range(self.num_devices):
-                    tt_attention_mask[i] = tt_lib.tensor.repeat(
+                    tt_attention_mask[i] = ttnn.experimental.tensor.repeat(
                         tt_attention_mask[i],
                         [1, self.config.num_attention_heads, 1, 1],
                         output_mem_config=self.model_config["ATTN_MASK_MEMCFG"],
                     )
                 # Tilize attn masks
                 for i in range(self.num_devices):
-                    tt_attention_mask[i] = tt_lib.tensor.tilize(
+                    tt_attention_mask[i] = ttnn.experimental.tensor.tilize(
                         tt_attention_mask[i],
                         output_mem_config=self.model_config["ATTN_MASK_MEMCFG"],
                         output_dtype=self.model_config["ATTN_MASK_DTYPE"],
@@ -219,14 +214,14 @@ class TtFalconModelShared(torch.nn.Module):
             # Send attn masks to device
             tt_attention_mask = torch_tensors_to_tt_tensors(
                 attention_masks,
-                tt_lib.tensor.Layout.ROW_MAJOR,
-                tt_lib.tensor.DataType.BFLOAT16,  # subsequent tilize op excepts bfloat16 inputs
+                ttnn.experimental.tensor.Layout.ROW_MAJOR,
+                ttnn.experimental.tensor.DataType.BFLOAT16,  # subsequent tilize op excepts bfloat16 inputs
                 self.model_config["ATTN_MASK_MEMCFG"],
                 self.devices,
             )
             # Tilize attn masks
             for i in range(self.num_devices):
-                tt_attention_mask[i] = tt_lib.tensor.tilize(
+                tt_attention_mask[i] = ttnn.experimental.tensor.tilize(
                     tt_attention_mask[i],
                     output_mem_config=self.model_config["ATTN_MASK_MEMCFG"],
                     output_dtype=self.model_config["ATTN_MASK_DTYPE"],
@@ -234,7 +229,7 @@ class TtFalconModelShared(torch.nn.Module):
 
             if self.model_config["l1_sharded"]:
                 for i, device in enumerate(self.devices):
-                    tt_attention_mask[i] = tt_lib.tensor.interleaved_to_sharded(
+                    tt_attention_mask[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                         tt_attention_mask[i],
                         sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](
                             nearest_32(self.config.num_attention_heads), num_max_tokens
@@ -260,14 +255,14 @@ class TtFalconModelShared(torch.nn.Module):
     @abstractmethod
     def forward(
         self,
-        input_ids: tt_lib.tensor.Tensor,
+        input_ids: ttnn.experimental.tensor.Tensor,
         llm_mode: str,
-        attention_mask: tt_lib.tensor.Tensor = None,
+        attention_mask: ttnn.experimental.tensor.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.experimental.tensor.Tensor:
         # Convert input tokens to embeddings
         input_embeddings = [
             ttnn.embedding(
@@ -280,7 +275,7 @@ class TtFalconModelShared(torch.nn.Module):
         for i in range(self.num_devices):
             input_embeddings[i] = ttnn.unsqueeze_to_4D(input_embeddings[i])
         for i in range(self.num_devices):
-            input_embeddings[i] = ttnn.to_layout(input_embeddings[i], tt_lib.tensor.Layout.TILE)
+            input_embeddings[i] = ttnn.to_layout(input_embeddings[i], ttnn.experimental.tensor.Layout.TILE)
 
         layer_output = input_embeddings
         presents = ()
@@ -300,25 +295,25 @@ class TtFalconModelShared(torch.nn.Module):
 
         # apply final norm layer
         for i in range(self.num_devices):
-            layer_output[i] = tt_lib.tensor.layernorm(
+            layer_output[i] = ttnn.experimental.tensor.layernorm(
                 layer_output[i],
                 self.layernorm_eps,
                 output_mem_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
             )
         for i in range(self.num_devices):
-            layer_output[i] = tt_lib.tensor.bcast(
+            layer_output[i] = ttnn.experimental.tensor.bcast(
                 layer_output[i],
                 self.layernorm_gamma[i],
-                tt_lib.tensor.BcastOpMath.MUL,
-                tt_lib.tensor.BcastOpDim.H,
+                ttnn.experimental.tensor.BcastOpMath.MUL,
+                ttnn.experimental.tensor.BcastOpDim.H,
                 output_mem_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
             )
         for i in range(self.num_devices):
-            layer_output[i] = tt_lib.tensor.bcast(
+            layer_output[i] = ttnn.experimental.tensor.bcast(
                 layer_output[i],
                 self.layernorm_beta[i],
-                tt_lib.tensor.BcastOpMath.ADD,
-                tt_lib.tensor.BcastOpDim.H,
+                ttnn.experimental.tensor.BcastOpMath.ADD,
+                ttnn.experimental.tensor.BcastOpDim.H,
                 output_mem_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
             )
 
@@ -350,14 +345,14 @@ class TtFalconModel(TtFalconModelShared):
 
     def forward(
         self,
-        input_ids: tt_lib.tensor.Tensor,
+        input_ids: ttnn.experimental.tensor.Tensor,
         llm_mode: str,
-        attention_mask: tt_lib.tensor.Tensor = None,
+        attention_mask: ttnn.experimental.tensor.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.experimental.tensor.Tensor:
         hidden_states, presents = super().forward(
             input_ids=input_ids,
             llm_mode=llm_mode,

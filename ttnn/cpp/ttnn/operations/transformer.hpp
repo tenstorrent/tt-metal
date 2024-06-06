@@ -223,7 +223,9 @@ struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
                 *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
         }
     }
+};
 
+struct ExecuteConcatenateHeads {
     static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
         return {ttnn::TensorSchema{
             4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false}};
@@ -231,28 +233,17 @@ struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
 
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
-        return std::make_tuple(input_tensor);
+        return std::forward_as_tuple(input_tensor);
     }
 
-    static inline ttnn::Tensor execute(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+    static inline ttnn::Tensor execute_on_worker_thread(
+        const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
         return operation::run(ConcatenateHeads{memory_config.value_or(input_tensor.memory_config())}, {input_tensor})
             .at(0);
     }
 };
 
-struct RotaryEmbedding : public tt::tt_metal::RotaryEmbedding {
-    void validate(const std::vector<Tensor>& input_tensors) const {
-        tt::tt_metal::RotaryEmbedding::validate(input_tensors);
-    }
-
-    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-        return tt::tt_metal::RotaryEmbedding::compute_output_shapes(input_tensors);
-    }
-
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-        return tt::tt_metal::RotaryEmbedding::create_output_tensors(input_tensors);
-    }
-
+struct ExecuteRotaryEmbedding {
     static inline const std::array<TensorSchema, 3> input_tensor_schemas() {
         return {
             ttnn::TensorSchema{4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false},
@@ -261,7 +252,7 @@ struct RotaryEmbedding : public tt::tt_metal::RotaryEmbedding {
                 4, 4, {ttnn::bfloat16, ttnn::bfloat8_b}, {ttnn::TILE_LAYOUT}, true, false, false, false}};
     }
 
-    static inline ttnn::Tensor execute(
+    static inline ttnn::Tensor execute_on_worker_thread(
         const Tensor& input_tensor,
         const Tensor& cos_cache,
         const Tensor& sin_cache,
@@ -277,11 +268,8 @@ struct RotaryEmbedding : public tt::tt_metal::RotaryEmbedding {
             init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
 
         return operation::run(
-                   RotaryEmbedding{
-                       seq_len,
-                       token_index,
-                       memory_config.value_or(input_tensor.memory_config()),
-                       kernel_config_val},
+                   tt::tt_metal::RotaryEmbedding{
+                       seq_len, token_index, memory_config.value_or(input_tensor.memory_config()), kernel_config_val},
                    {input_tensor, cos_cache, sin_cache})
             .at(0);
     }
@@ -301,10 +289,10 @@ struct ExecuteAttentionSoftmax {
         const std::optional<int>& head_size = std::nullopt,
         const std::optional<const ttnn::Tensor>& attention_mask = std::nullopt,
         Args&&... args) {
-        return std::make_tuple(input_tensor, attention_mask);
+        return std::forward_as_tuple(input_tensor, attention_mask);
     }
 
-    static ttnn::Tensor execute(
+    static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
         const std::optional<int>& head_size_arg = std::nullopt,
         const std::optional<const ttnn::Tensor>& attention_mask = std::nullopt,
@@ -346,15 +334,15 @@ struct ExecuteAttentionSoftmax {
 
 namespace transformer {
 
-constexpr auto split_query_key_value_and_split_heads =
-    ttnn::register_operation<ttnn::operations::transformer::split_query_key_value_and_split_heads>(
-        "ttnn::transfomer::split_query_key_value_and_split_heads");
+constexpr auto split_query_key_value_and_split_heads = ttnn::register_operation(
+    "ttnn::transfomer::split_query_key_value_and_split_heads",
+    TO_LAMBDA(ttnn::operations::transformer::split_query_key_value_and_split_heads));
 
-constexpr auto concatenate_heads =
-    ttnn::register_operation<ttnn::operations::transformer::ConcatenateHeads>("ttnn::transfomer::concatenate_heads");
+constexpr auto concatenate_heads = ttnn::register_operation<ttnn::operations::transformer::ExecuteConcatenateHeads>(
+    "ttnn::transfomer::concatenate_heads");
 
-constexpr auto rotary_embedding =
-    ttnn::register_operation<ttnn::operations::transformer::RotaryEmbedding>("ttnn::transfomer::rotary_embedding");
+constexpr auto rotary_embedding = ttnn::register_operation<ttnn::operations::transformer::ExecuteRotaryEmbedding>(
+    "ttnn::transfomer::rotary_embedding");
 
 constexpr auto attention_softmax =
     ttnn::register_operation<ttnn::operations::transformer::ExecuteAttentionSoftmax<false>>(

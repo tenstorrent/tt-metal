@@ -36,6 +36,7 @@ def test_pre_and_post_operation_hooks_for_printing(device, batch_size, h, w, dim
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])

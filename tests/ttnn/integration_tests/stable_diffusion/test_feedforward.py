@@ -9,11 +9,11 @@ from diffusers import UNet2DConditionModel
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.experimental.functional_stable_diffusion.tt.ttnn_functional_feedforward import (
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_feedforward import (
     feedforward as ttnn_feedforward,
 )
-from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_feedforward import (
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_feedforward import (
     feedforward as tt2_ttnn_feedforward,
 )
 from models.utility_functions import torch_random
@@ -90,7 +90,7 @@ def test_feedforward_256x256(device, model_name, N, C, H, W, index, reset_seeds)
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index",

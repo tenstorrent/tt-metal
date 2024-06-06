@@ -12,7 +12,7 @@ namespace ttnn {
     using DeviceBuffer = std::shared_ptr<Buffer>;
     using queue_id = uint8_t;
 
-    DeviceBuffer allocate_buffer_on_device(uint32_t buffer_size_bytes, types::Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config, std::optional<ShardSpecBuffer> shard_spec = std::nullopt);
+    DeviceBuffer allocate_buffer_on_device(uint32_t buffer_size_bytes, types::Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config, const std::optional<ShardSpecBuffer>& shard_spec = std::nullopt);
 
     void write_buffer(queue_id cq_id, Tensor& dst, std::vector<std::shared_ptr<void>> src, const std::optional<std::size_t> transfer_size = std::nullopt);
 
@@ -47,7 +47,7 @@ namespace ttnn {
         for (auto worker : outputs.at(0).workers) {
             tt::tt_metal::operation::launch_op(
                 [devop, worker, cq_id] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-                    return operation::run(std::move(devop), input_tensors, optional_input_tensors, optional_output_tensors, worker->command_queue(cq_id));
+                    return operation::run(std::move(devop), input_tensors, optional_input_tensors, optional_output_tensors, cq_id);
                 }, input_tensors, outputs, optional_input_tensors, optional_output_tensors);
         }
         return outputs;

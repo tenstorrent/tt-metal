@@ -67,8 +67,6 @@ run_post_commit_pipeline_tests() {
         ./tests/scripts/run_pre_post_commit_regressions_slow_dispatch.sh
     elif [[ $dispatch_mode == "fast" ]]; then
         ./tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh
-    elif [[ $dispatch_mode == "fast-multi-queue-single-device" ]]; then
-        TT_METAL_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_fast_dispatch_single_chip_multi_queue --gtest_filter=MultiCommandQueueSingleDeviceFixture.*
     fi
 }
 
@@ -174,7 +172,7 @@ run_microbenchmarks_pipeline_tests() {
 
     export TT_METAL_DEVICE_PROFILER=1
 
-    source build/python_env/bin/activate
+    source python_env/bin/activate
     ./tests/scripts/run_moreh_microbenchmark.sh
     pytest -svv tests/tt_metal/microbenchmarks
 }
@@ -185,6 +183,22 @@ run_ttnn_sweeps_pipeline_tests() {
     local dispatch_mode=$3
 
     ./tests/scripts/run_ttnn_sweeps.sh
+}
+
+run_demos_single_card_n150_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/single_card/run_demos_single_card_n150_tests.sh
+}
+
+run_demos_single_card_n300_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/single_card/run_demos_single_card_n300_tests.sh
 }
 
 ##########################T3000##########################
@@ -327,6 +341,10 @@ run_pipeline_tests() {
         run_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "ttnn_sweeps" ]]; then
         run_ttnn_sweeps_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "demos_single_card_n150" ]]; then
+        run_demos_single_card_n150_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "demos_single_card_n300" ]]; then
+        run_demos_single_card_n300_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     # T3000 pipelines
     elif [[ $pipeline_type == "unit_t3000_device" ]]; then
         unit_t3000_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
@@ -439,7 +457,7 @@ main() {
     dispatch_mode=${dispatch_mode:-$default_dispatch_mode}
     pipeline_type=${pipeline_type:-$default_pipeline_type}
 
-    available_dispatch_modes=("fast" "slow" "fast-multi-queue-single-device")
+    available_dispatch_modes=("fast" "slow")
     available_tt_archs=("grayskull" "wormhole_b0")
 
     # Validate arguments

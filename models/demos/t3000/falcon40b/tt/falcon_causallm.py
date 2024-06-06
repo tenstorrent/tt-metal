@@ -5,12 +5,12 @@
 import torch
 from typing import Optional, Tuple
 
-import tt_lib
+import ttnn
 
 from models.demos.t3000.falcon40b.tt.falcon_model import TtFalconModelShared
 from models.utility_functions import torch2tt_tensor
 
-from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul
+from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
 
 
 class TtFalconCausalLM(TtFalconModelShared):
@@ -51,7 +51,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             )
             if (lm_head_path).exists():
                 self.lm_head_weights.append(
-                    tt_lib.tensor.load_tensor(str(lm_head_path)).to(
+                    ttnn.experimental.tensor.load_tensor(str(lm_head_path)).to(
                         devices[i], self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"]
                     )
                 )
@@ -65,21 +65,21 @@ class TtFalconCausalLM(TtFalconModelShared):
                 self.lm_head_weights.append(
                     lm_head_weights_host.to(devices[i], self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"])
                 )
-                tt_lib.tensor.dump_tensor(
+                ttnn.experimental.tensor.dump_tensor(
                     str(lm_head_path),
                     lm_head_weights_host,
                 )
 
     def __call__(
         self,
-        input_ids: tt_lib.tensor.Tensor,
+        input_ids: ttnn.experimental.tensor.Tensor,
         llm_mode: str,
-        attention_mask: tt_lib.tensor.Tensor = None,
+        attention_mask: ttnn.experimental.tensor.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.experimental.tensor.Tensor:
         if llm_mode == "prefill":
             return self.fwd_prefill_causallm(
                 input_ids=input_ids,
@@ -105,14 +105,14 @@ class TtFalconCausalLM(TtFalconModelShared):
 
     def fwd_prefill_causallm(
         self,
-        input_ids: tt_lib.tensor.Tensor,
+        input_ids: ttnn.experimental.tensor.Tensor,
         llm_mode: str,
-        attention_mask: tt_lib.tensor.Tensor = None,
+        attention_mask: ttnn.experimental.tensor.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.experimental.tensor.Tensor:
         hidden_states, presents = super().__call__(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -129,6 +129,9 @@ class TtFalconCausalLM(TtFalconModelShared):
         overwrite_subblock_h = 1
         overwrite_subblock_w = 1 if hidden_states[0].shape[2] < 512 else 4
 
+        should_deallocate_ln_tensors = determine_tensor_deallocation(
+            self.model_config["layernorm_params"]["slice_size"], hidden_states[0].get_legacy_shape()[2]
+        )
         # LM Head
         lm_logits = []
         for i in range(len(hidden_states)):
@@ -148,20 +151,21 @@ class TtFalconCausalLM(TtFalconModelShared):
                     overwrite_subblock_h=overwrite_subblock_h,
                 )
             )
-            hidden_states[i].deallocate(True)
+            if should_deallocate_ln_tensors:
+                hidden_states[i].deallocate(True)
 
         return lm_logits, presents
 
     def fwd_decode_causallm(
         self,
-        input_ids: tt_lib.tensor.Tensor,
+        input_ids: ttnn.experimental.tensor.Tensor,
         llm_mode: str,
-        attention_mask: tt_lib.tensor.Tensor = None,
+        attention_mask: ttnn.experimental.tensor.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.experimental.tensor.Tensor:
         hidden_states, presents = super().__call__(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -176,7 +180,7 @@ class TtFalconCausalLM(TtFalconModelShared):
         lm_logits = []
         for i in range(len(hidden_states)):
             lm_logits.append(
-                tt_lib.operations.primary.matmul_1d(
+                ttnn.experimental.operations.primary.matmul_1d(
                     hidden_states[i],
                     self.lm_head_weights[i],
                     program_config=self.model_config["LM_HEAD_MM_PROGCFG"],

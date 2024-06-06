@@ -12,6 +12,7 @@
 
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/tensor_utils.hpp"
+#include "tt_eager/tensor/types.hpp"
 
 namespace tt {
 
@@ -45,31 +46,33 @@ void dump_borrowed_storage(ofstream& output_stream, const BorrowedStorage& stora
     );
 }
 
-void dump_multi_device_host_storage(ofstream& output_stream, const MultiDeviceHostStorage& storage) {
-    std::size_t num_buffers = storage.buffers.size();
+void dump_multi_device_host_storage(ofstream& output_stream, const MultiDeviceHostStorage& storage, const DistributedTensorConfig& strategy) {
+    std::size_t num_buffers = storage.num_buffers();
     output_stream.write(reinterpret_cast<const char*>(&num_buffers), sizeof(std::size_t));
-    output_stream.write(reinterpret_cast<const char*>(&storage.strategy), sizeof(DistributedTensorConfig));
 
-    if (std::holds_alternative<ReplicateTensor>(storage.strategy)) {
+    // Use the user-specified strategy which defines how it gets distributed when mapped onto multi-device
+    output_stream.write(reinterpret_cast<const char*>(&strategy), sizeof(DistributedTensorConfig));
+
+    if (std::holds_alternative<ReplicateTensor>(strategy)) {
         std::visit(
             [&output_stream]<typename T>(const owned_buffer::Buffer<T>& generic_buffer) {
                 const auto buffer = owned_buffer::get_as<T>(generic_buffer);
                 auto size = buffer.size();
                 output_stream.write(reinterpret_cast<const char*>(&size), sizeof(size));
                 output_stream.write(reinterpret_cast<const char*>(buffer.begin()), sizeof(T) * size);
-            }, storage.buffers.at(0)
+            }, storage.get_buffer(0)
         );
         output_stream.write(reinterpret_cast<const char*>(&storage.shapes.at(0)), sizeof(Shape));
 
     } else {
-        for (const auto& buffer : storage.buffers) {
+        for (int i = 0; i < num_buffers; i++) {
             std::visit(
                 [&output_stream]<typename T>(const owned_buffer::Buffer<T>& generic_buffer) {
                     const auto buffer = owned_buffer::get_as<T>(generic_buffer);
                     auto size = buffer.size();
                     output_stream.write(reinterpret_cast<const char*>(&size), sizeof(size));
                     output_stream.write(reinterpret_cast<const char*>(buffer.begin()), sizeof(T) * size);
-                }, buffer
+                }, storage.get_buffer(i)
             );
         }
         for (const auto& shape : storage.shapes) {
@@ -175,7 +178,7 @@ MultiDeviceHostStorage load_multi_device_host_storage(ifstream& input_stream, Da
 
 template <typename T>
 Storage load_storage(ifstream& input_stream, DataType data_type, StorageType storage_type, T device) {
-    if (storage_type == StorageType::MULTI_DEVICE_HOST) {
+    if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::MULTI_DEVICE) {
         if constexpr (std::is_same_v<T, DeviceMesh*>) {
             return load_multi_device_host_storage(input_stream, data_type, device);
         } else {
@@ -186,9 +189,9 @@ Storage load_storage(ifstream& input_stream, DataType data_type, StorageType sto
     }
 }
 
-}
+}  // namespace detail
 
-void dump_tensor(const std::string& file_name, const Tensor& tensor) {
+void dump_tensor(const std::string& file_name, const Tensor& tensor, const std::unordered_map<std::string, std::string>& strategy) {
     ofstream output_stream(file_name, ios::out | ios::binary);
     if (not output_stream) {
         throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
@@ -221,7 +224,7 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor) {
     }
 
     std::visit(
-        [&output_stream](const auto& storage) {
+        [&output_stream, &strategy](const auto& storage) {
 
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
@@ -237,7 +240,8 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor) {
                 TT_THROW("Device storage isn't supported");
             }
             else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
-                detail::dump_multi_device_host_storage(output_stream, storage);
+                auto distribute_config = get_distributed_tensor_config(strategy);
+                detail::dump_multi_device_host_storage(output_stream, storage, distribute_config);
             }
             else {
                 raise_unsupported_storage<StorageType>();

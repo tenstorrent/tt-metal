@@ -38,9 +38,9 @@ New Device Operation
         std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
         operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
 
-        static constexpr auto attribute_names = std::make_tuple();
+        static constexpr auto attribute_names = std::forward_as_tuple();
         const auto attribute_values() const {
-            return std::make_tuple();
+            return std::forward_as_tuple();
         }
     };
 
@@ -57,9 +57,9 @@ New Device Operation with a member
         std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
         operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
 
-        static constexpr auto attribute_names = std::make_tuple("some_member");
+        static constexpr auto attribute_names = std::forward_as_tuple("some_member");
         const auto attribute_values() const {
-            return std::make_tuple(std::cref(some_member));
+            return std::forward_as_tuple(std::cref(some_member));
         }
     };
 
@@ -78,9 +78,9 @@ New Device Operation with Optional Input Tensors
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             std::vector<Tensor> &output_tensors) const;
 
-        static constexpr auto attribute_names = std::make_tuple();
+        static constexpr auto attribute_names = std::forward_as_tuple();
         const auto attribute_values() const {
-            return std::make_tuple();
+            return std::forward_as_tuple();
         }
     };
 
@@ -98,9 +98,9 @@ and create_output_tensors with the additional parameter for the output_tensors.
         std::vector<std::optional<Tensor>> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
         operation::ProgramWithOptionalOutputTensors create_program(const std::vector<Tensor>& input_tensors, std::vector<std::optional<Tensor>> &output_tensors) const;
 
-        static constexpr auto attribute_names = std::make_tuple();
+        static constexpr auto attribute_names = std::forward_as_tuple();
         const auto attribute_values() const {
-            return std::make_tuple();
+            return std::forward_as_tuple();
         }
     };
 
@@ -116,9 +116,9 @@ And below, is an example of how to declare a new on-host operation with all of t
         std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
         std::vector<Tensor> compute_output_tensors(const std::vector<Tensor> &input_tensors) const;
 
-        static constexpr auto attribute_names = std::make_tuple();
+        static constexpr auto attribute_names = std::forward_as_tuple();
         const auto attribute_values() const {
-            return std::make_tuple();
+            return std::forward_as_tuple();
         }
     };
 
@@ -412,6 +412,8 @@ Tensor elementwise operations
 .. autofunction:: tt_lib.tensor.tanhshrink
 
 .. autofunction:: tt_lib.tensor.heaviside
+
+.. autofunction:: tt_lib.tensor.right_shift
 
 .. autofunction:: tt_lib.tensor.logaddexp
 

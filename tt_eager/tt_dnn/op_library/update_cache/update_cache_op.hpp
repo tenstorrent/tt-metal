@@ -46,7 +46,13 @@ struct UpdateCache {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors,
         std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("batch_idx", "update_idx", "batch_offset", "op_type", "compute_kernel_config");
+
+    const auto attribute_values() const {
+        return std::forward_as_tuple(batch_idx, update_idx, batch_offset, op_type, compute_kernel_config);
+    }
 
     const operation::Hash compute_program_hash(
         const std::vector<Tensor> &input_tensors) const;

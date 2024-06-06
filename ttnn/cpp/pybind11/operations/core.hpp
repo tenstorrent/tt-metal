@@ -113,7 +113,7 @@ void py_module(py::module& module) {
                 * :attr:`memory_config`: the desired MemoryConfig
                 * :attr:`dtype`: the optional `ttnn` data type.
 
-            Example::
+
                 >>> device_id = 0
                 >>> device = ttnn.open_device(device_id=device_id)
                 >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
@@ -133,7 +133,7 @@ void py_module(py::module& module) {
                 * :attr:`tensor`: the ttnn.Tensor
                 * :attr:`dtype`: `ttnn` data type.
 
-            Example::
+            Example:
                 >>> tensor = ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16))
                 >>> tensor = ttnn.to_dtype(tensor, dtype=ttnn.uint16)
         )doc",
@@ -141,8 +141,12 @@ void py_module(py::module& module) {
 
     module.def(
         "allocate_tensor_on_device",
-        py::overload_cast<const ttnn::Shape&, ttnn::DataType, ttnn::Layout, Device*, const std::optional<ttnn::MemoryConfig>&>(
-            &ttnn::operations::core::allocate_tensor_on_device),
+        py::overload_cast<
+            const ttnn::Shape&,
+            ttnn::DataType,
+            ttnn::Layout,
+            Device*,
+            const std::optional<ttnn::MemoryConfig>&>(&ttnn::operations::core::allocate_tensor_on_device),
         py::arg("shape"),
         py::arg("dtype"),
         py::arg("layout"),
@@ -151,21 +155,28 @@ void py_module(py::module& module) {
 
     module.def(
         "allocate_tensor_on_device",
-        py::overload_cast<const ttnn::Shape&, ttnn::DataType, ttnn::Layout, DeviceMesh*, const std::optional<ttnn::MemoryConfig>&>(
-            &ttnn::operations::core::allocate_tensor_on_device),
+        py::overload_cast<
+            const ttnn::Shape&,
+            ttnn::DataType,
+            ttnn::Layout,
+            DeviceMesh*,
+            const std::optional<ttnn::MemoryConfig>&>(&ttnn::operations::core::allocate_tensor_on_device),
         py::arg("shape"),
         py::arg("dtype"),
         py::arg("layout"),
         py::arg("device_mesh"),
         py::arg("memory_config") = std::nullopt);
 
-    module.def("copy_host_to_device_tensor", &ttnn::operations::core::copy_host_to_device_tensor, py::arg("host_tensor"), py::arg("device_tensor"), py::arg("cq_id") = 0);
+    module.def(
+        "copy_host_to_device_tensor",
+        &ttnn::operations::core::copy_host_to_device_tensor,
+        py::arg("host_tensor"),
+        py::arg("device_tensor"),
+        py::arg("cq_id") = 0);
 
     module.def(
         "begin_trace_capture",
-        py::overload_cast<Device*, const uint32_t, const uint8_t>(
-            &ttnn::operations::core::begin_trace_capture
-        ),
+        py::overload_cast<Device*, const uint32_t, const uint8_t>(&ttnn::operations::core::begin_trace_capture),
         py::arg("device"),
         py::kw_only(),
         py::arg("trace_buffer_size"),
@@ -173,9 +184,7 @@ void py_module(py::module& module) {
 
     module.def(
         "end_trace_capture",
-        py::overload_cast<Device*, const uint32_t, const uint8_t>(
-            &ttnn::operations::core::end_trace_capture
-        ),
+        py::overload_cast<Device*, const uint32_t, const uint8_t>(&ttnn::operations::core::end_trace_capture),
         py::arg("device"),
         py::arg("trace_id"),
         py::kw_only(),
@@ -183,9 +192,7 @@ void py_module(py::module& module) {
 
     module.def(
         "execute_trace",
-        py::overload_cast<Device*, const uint32_t, const uint8_t, bool>(
-            &ttnn::operations::core::execute_trace
-        ),
+        py::overload_cast<Device*, const uint32_t, const uint8_t, bool>(&ttnn::operations::core::execute_trace),
         py::arg("device"),
         py::arg("trace_id"),
         py::kw_only(),
@@ -194,17 +201,13 @@ void py_module(py::module& module) {
 
     module.def(
         "release_trace",
-        py::overload_cast<Device*, const uint32_t>(
-            &ttnn::operations::core::release_trace
-        ),
+        py::overload_cast<Device*, const uint32_t>(&ttnn::operations::core::release_trace),
         py::arg("device"),
         py::arg("trace_id"));
 
     module.def(
         "begin_trace_capture",
-        py::overload_cast<DeviceMesh*, const uint32_t, const uint8_t>(
-            &ttnn::operations::core::begin_trace_capture
-        ),
+        py::overload_cast<DeviceMesh*, const uint32_t, const uint8_t>(&ttnn::operations::core::begin_trace_capture),
         py::arg("device_mesh"),
         py::kw_only(),
         py::arg("trace_buffer_size"),
@@ -212,9 +215,7 @@ void py_module(py::module& module) {
 
     module.def(
         "end_trace_capture",
-        py::overload_cast<DeviceMesh*, const uint32_t, const uint8_t>(
-            &ttnn::operations::core::end_trace_capture
-        ),
+        py::overload_cast<DeviceMesh*, const uint32_t, const uint8_t>(&ttnn::operations::core::end_trace_capture),
         py::arg("device_mesh"),
         py::arg("trace_id"),
         py::kw_only(),
@@ -222,9 +223,7 @@ void py_module(py::module& module) {
 
     module.def(
         "execute_trace",
-        py::overload_cast<DeviceMesh*, const uint32_t, const uint8_t, bool>(
-            &ttnn::operations::core::execute_trace
-        ),
+        py::overload_cast<DeviceMesh*, const uint32_t, const uint8_t, bool>(&ttnn::operations::core::execute_trace),
         py::arg("device_mesh"),
         py::arg("trace_id"),
         py::kw_only(),
@@ -233,9 +232,7 @@ void py_module(py::module& module) {
 
     module.def(
         "release_trace",
-        py::overload_cast<DeviceMesh*, const uint32_t>(
-            &ttnn::operations::core::release_trace
-        ),
+        py::overload_cast<DeviceMesh*, const uint32_t>(&ttnn::operations::core::release_trace),
         py::arg("device_mesh"),
         py::arg("trace_id"));
 
@@ -255,7 +252,8 @@ void py_module(py::module& module) {
         * :attr:`dtype`: the optional output data type.
         * :attr:`memory_config`: the optional output memory configuration.
         * :attr:`device`: Device/DeviceMesh whose worker thread on host should be used for the layout conversion
-    Example::
+
+    Example:
         >>> device_id = 0
         >>> device = ttnn.open_device(device_id=device_id)
         >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)

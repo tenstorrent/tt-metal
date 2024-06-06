@@ -7,11 +7,11 @@ import torch
 from diffusers import StableDiffusionPipeline
 import ttnn
 
-from models.experimental.functional_stable_diffusion.tt.ttnn_functional_cross_attention import (
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention import (
     cross_attention as ttnn_cross_attention,
 )
-from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_cross_attention import (
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_cross_attention import (
     cross_attention as tt2_ttnn_cross_attention,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -139,7 +139,7 @@ def test_cross_attention_256x256(device, model_name, N, C, H, W, index, has_enco
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "N, C, H, W, index, has_encoder_hidden_states",

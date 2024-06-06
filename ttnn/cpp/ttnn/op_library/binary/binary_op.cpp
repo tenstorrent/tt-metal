@@ -26,9 +26,7 @@ enum class BinaryProgramType {
     BroadcastHeightAndWidthMultiCore,
 };
 
-template <BinaryOpType binary_op_type, bool in_place>
-inline BinaryProgramType get_program_type(
-    const Binary<binary_op_type, in_place>& operation, const std::vector<Tensor>& input_tensors) {
+inline BinaryProgramType get_program_type(const Binary& operation, const std::vector<Tensor>& input_tensors) {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
@@ -82,8 +80,7 @@ inline BinaryProgramType get_program_type(
     TT_THROW("ttnn::operations::binary::Binary: unsupported broadcast");
 }
 
-template <BinaryOpType binary_op_type, bool in_place>
-void Binary<binary_op_type, in_place>::validate(const std::vector<Tensor>& input_tensors) const {
+void Binary::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     auto program_type = get_program_type(*this, input_tensors);
 
     const auto& input_tensor_a = input_tensors.at(0);
@@ -126,7 +123,7 @@ void Binary<binary_op_type, in_place>::validate(const std::vector<Tensor>& input
     TT_FATAL(
         (input_tensor_a.get_layout() == Layout::TILE && input_tensor_b.get_layout() == Layout::TILE),
         "Inputs to eltwise binary must be tilized");
-    if constexpr (in_place) {
+    if (this->program_config.in_place) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == this->program_config.memory_config.memory_layout);
         TT_FATAL(input_tensor_a.memory_config().buffer_type == this->program_config.memory_config.buffer_type);
         TT_FATAL(input_tensor_a.get_dtype() == this->program_config.dtype);
@@ -173,11 +170,17 @@ void Binary<binary_op_type, in_place>::validate(const std::vector<Tensor>& input
     if (program_type != BinaryProgramType::ElementWiseMultiCore) {
         TT_FATAL(not this->program_config.activations.has_value());
     }
+
+    if (!output_tensors.empty()) {
+        TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensors");
+
+        if(output_tensors.at(0).has_value()) {
+            TT_FATAL(!this->program_config.in_place, "Operation is configured as in_place. First input is used as output. Provided output tensor is ignored");
+        }
+    }
 }
 
-template <BinaryOpType binary_op_type, bool in_place>
-std::vector<tt::tt_metal::Shape> Binary<binary_op_type, in_place>::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::Shape> Binary::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     if (input_tensor_a.get_shape().rank() >= input_tensor_b.get_shape().rank()) {
@@ -186,14 +189,16 @@ std::vector<tt::tt_metal::Shape> Binary<binary_op_type, in_place>::compute_outpu
     return {input_tensor_b.get_legacy_shape()};
 }
 
-template <BinaryOpType binary_op_type, bool in_place>
-std::vector<Tensor> Binary<binary_op_type, in_place>::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<Tensor> Binary::create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    if constexpr (in_place) {
+    if (this->program_config.in_place) {
         return {input_tensor_a};
     } else {
+        if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
+            return {output_tensors.at(0).value()};
+        }
+
         auto program_type = get_program_type(*this, input_tensors);
 
         if (program_type == BinaryProgramType::ElementWiseMultiCore) {
@@ -244,21 +249,16 @@ std::vector<Tensor> Binary<binary_op_type, in_place>::create_output_tensors(
     }
 }
 
-template <BinaryOpType binary_op_type>
-constexpr auto binary_op_type_to_bcast_op_math() {
-    if constexpr (binary_op_type == BinaryOpType::ADD) {
-        return tt::tt_metal::BcastOpMath::ADD;
-    } else if constexpr (binary_op_type == BinaryOpType::SUB) {
-        return tt::tt_metal::BcastOpMath::SUB;
-    } else if constexpr (binary_op_type == BinaryOpType::MUL) {
-        return tt::tt_metal::BcastOpMath::MUL;
-    } else {
-        TT_THROW("Invalid binary_op_type");
+const std::optional<tt::tt_metal::BcastOpMath> binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
+    switch (binary_op_type) {
+        case BinaryOpType::ADD: return tt::tt_metal::BcastOpMath::ADD;
+        case BinaryOpType::SUB: return tt::tt_metal::BcastOpMath::SUB;
+        case BinaryOpType::MUL: return tt::tt_metal::BcastOpMath::MUL;
+        default: return std::nullopt;
     }
 }
 
-template <BinaryOpType binary_op_type, bool in_place>
-operation::ProgramWithCallbacks Binary<binary_op_type, in_place>::create_program(
+operation::ProgramWithCallbacks Binary::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
@@ -275,63 +275,47 @@ operation::ProgramWithCallbacks Binary<binary_op_type, in_place>::create_program
     }
 
     auto program_type = get_program_type(*this, input_tensors);
-    if constexpr (std::is_same_v<
-                      decltype(binary_op_type_to_bcast_op_math<binary_op_type>()),
-                      tt::tt_metal::BcastOpMath>) {
+    auto bcast_op_math = binary_op_type_to_bcast_op_math(this->program_config.binary_op_type);
+    if (bcast_op_math.has_value()) {
         switch (program_type) {
             case BinaryProgramType::ElementWiseMultiCore:
                 return eltwise_binary_multi_core(
-                    input_tensor_a, input_tensor_b, output_tensor, binary_op_type, activations);
+                    input_tensor_a, input_tensor_b, output_tensor, this->program_config.binary_op_type, activations);
             case BinaryProgramType::BroadcastHeightAndWidthMultiCore:
                 return bcast_multi_core_hw(
-                    input_tensor_a,
-                    input_tensor_b,
-                    output_tensor,
-                    binary_op_type_to_bcast_op_math<binary_op_type>(),
-                    false /* in-place */);
+                    input_tensor_a, input_tensor_b, output_tensor, bcast_op_math.value(), false /* in-place */);
             case BinaryProgramType::BroadcastHeightMultiCore:
-                return bcast_multi_core_h(
-                    input_tensor_a,
-                    input_tensor_b,
-                    output_tensor,
-                    binary_op_type_to_bcast_op_math<binary_op_type>());
+                return bcast_multi_core_h(input_tensor_a, input_tensor_b, output_tensor, bcast_op_math.value());
             case BinaryProgramType::BroadcastWidthMultiCore:
-                return bcast_multi_core_w(
-                    input_tensor_a,
-                    input_tensor_b,
-                    output_tensor,
-                    binary_op_type_to_bcast_op_math<binary_op_type>());
+                return bcast_multi_core_w(input_tensor_a, input_tensor_b, output_tensor, bcast_op_math.value());
             default: TT_THROW("Invalid program type");
         }
     } else {
         switch (program_type) {
             case BinaryProgramType::ElementWiseMultiCore:
                 return eltwise_binary_multi_core(
-                    input_tensor_a, input_tensor_b, output_tensor, binary_op_type, activations);
+                    input_tensor_a, input_tensor_b, output_tensor, this->program_config.binary_op_type, activations);
             default: TT_THROW("Invalid program type");
         }
     }
 }
 
-template <BinaryOpType binary_op_type, bool in_place>
-const operation::Hash Binary<binary_op_type, in_place>::compute_program_hash(
-    const std::vector<Tensor>& input_tensors) const {
+const operation::Hash Binary::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     auto program_type = get_program_type(*this, input_tensors);
-    operation::Hash hash = tt::stl::hash::hash_objects(
+    operation::Hash hash = tt::stl::hash::hash_objects_with_default_seed(
         typeid(*this).hash_code(),
         this->program_config,
         program_type,
-        input_tensor_a.get_dtype(),
-        input_tensor_a.memory_config(),
-        input_tensor_b.get_dtype(),
-        input_tensor_b.memory_config());
+        input_tensor_a.dtype(),
+        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config(),
+        input_tensor_b.dtype(),
+        std::get<DeviceStorage>(input_tensor_b.storage()).memory_config());
     return hash;
 }
 
-template <BinaryOpType binary_op_type, bool in_place>
-operation::OpPerformanceModel Binary<binary_op_type, in_place>::create_op_performance_model(
+operation::OpPerformanceModel Binary::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
@@ -354,21 +338,6 @@ operation::OpPerformanceModel Binary<binary_op_type, in_place>::create_op_perfor
 #endif
     return result;
 }
-
-template class Binary<BinaryOpType::ADD, false>;
-template class Binary<BinaryOpType::ADD, true>;
-template class Binary<BinaryOpType::SUB, false>;
-template class Binary<BinaryOpType::SUB, true>;
-template class Binary<BinaryOpType::MUL, false>;
-template class Binary<BinaryOpType::MUL, true>;
-template class Binary<BinaryOpType::EQ, false>;
-template class Binary<BinaryOpType::NE, false>;
-template class Binary<BinaryOpType::LT, false>;
-template class Binary<BinaryOpType::LTE, false>;
-template class Binary<BinaryOpType::GT, false>;
-template class Binary<BinaryOpType::GTE, false>;
-template class Binary<BinaryOpType::LOGICAL_AND, false>;
-template class Binary<BinaryOpType::LOGICAL_OR, false>;
 
 }  // namespace binary
 

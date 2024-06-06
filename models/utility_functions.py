@@ -103,10 +103,20 @@ class Profiler:
 
         return sum(self.times[key]) / len(self.times[key])
 
-    def print(self):
+    def print(self, units="s"):
         for key in self.times:
             average = self.get(key)
-            print(f"{key}: {average:.3f}s")
+            if units == "s":
+                pass
+            elif units == "ms":
+                average *= 1000
+            elif units == "us":
+                average *= 1000000
+            elif units == "ns":
+                average *= 1000000000
+            else:
+                raise ValueError(f"Invalid units: {units}")
+            print(f"{key}: {average:.3f}{units}")
 
 
 profiler = Profiler()
@@ -117,6 +127,9 @@ def enable_persistent_kernel_cache():
     """
     Enables persistent compiled kernel caching - disables recompiling the kernels for the duration of running process if built_kernels/.../hash directory with kernel binaries is present.
     """
+    logger.warning(
+        "Persistent kernel cache is enabled. Cache invalidation may fail after a rebase and may require deleting the build directory."
+    )
     tt_lib.device.EnablePersistentKernelCache()
 
 

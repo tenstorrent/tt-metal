@@ -12,6 +12,7 @@ if os.getenv("CI") == "true":
     os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
     os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
+    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
@@ -29,7 +30,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
     pcc = 0.99
     dtype = ttnn.bfloat8_b
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
-    state_dict = torch.load(model_args.consolidated_weights_path(0), map_location="cpu")
+    state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {k[19:]: v for k, v in state_dict.items() if (k.startswith("layers.0.attention."))}
@@ -49,25 +50,32 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
     )
 
     generation_start_pos = 0
-    generation_length = 1
+    generation_length = 2
     all_tests_pass = True
 
     for i in range(generation_length):
         pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
         tt_attention_input = pt_attention_input
         start_pos = generation_start_pos + i
-        attention_input = prepare_inputs_ttnn(
+        attention_input, attn_mask = prepare_inputs_ttnn(
             tt_attention_input,
-            tt_model.hidden_size,
+            # tt_model.hidden_size,
+            model_args.dim,
+            start_pos,
+            model_args.sliding_window,
             tt_model.device_mesh,
         )
+
         current_pos = start_pos % model_args.sliding_window
         tt_out = tt_model(
             attention_input,
             start_pos,
             current_pos,
+            attn_mask,
             rot_mat,
         )
+        # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
+        del attention_input, attn_mask
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
             .squeeze(2)
