@@ -35,7 +35,7 @@ void bind_unary_operation(py::module& module, const unary_operation_t& operation
             Keyword Args:
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
 
-            Example::
+            Example:
 
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor)
@@ -67,7 +67,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, con
                 * :attr:`fast_and_approximate_mode` (bool): "Use fast and approximate mode".
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
 
-            Example::
+            Example:
 
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor, fast_and_approximate_mode=true)
@@ -108,7 +108,7 @@ void bind_unary_operation_with_float_parameter(
                 * :attr:`{2}` (bool): {3}.
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
 
-            Example::
+            Example:
 
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor, {2}=true)
@@ -147,7 +147,7 @@ void bind_softplus(py::module& module) {
                 * :attr:`threshold` (float): Used to switch to a linear function for large values to improve numerical stability. This avoids issues with floating-point representation for very large values
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
 
-            Example::
+            Example:
 
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor, parameter=true)

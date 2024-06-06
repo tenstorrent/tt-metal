@@ -113,7 +113,7 @@ void py_module(py::module& module) {
                 * :attr:`memory_config`: the desired MemoryConfig
                 * :attr:`dtype`: the optional `ttnn` data type.
 
-            Example::
+
                 >>> device_id = 0
                 >>> device = ttnn.open_device(device_id=device_id)
                 >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
@@ -133,7 +133,7 @@ void py_module(py::module& module) {
                 * :attr:`tensor`: the ttnn.Tensor
                 * :attr:`dtype`: `ttnn` data type.
 
-            Example::
+            Example:
                 >>> tensor = ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16))
                 >>> tensor = ttnn.to_dtype(tensor, dtype=ttnn.uint16)
         )doc",
@@ -252,7 +252,8 @@ void py_module(py::module& module) {
         * :attr:`dtype`: the optional output data type.
         * :attr:`memory_config`: the optional output memory configuration.
         * :attr:`device`: Device/DeviceMesh whose worker thread on host should be used for the layout conversion
-    Example::
+
+    Example:
         >>> device_id = 0
         >>> device = ttnn.open_device(device_id=device_id)
         >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)

@@ -38,7 +38,7 @@ void bind_global_avg_pool2d(py::module& module) {
         Returns:
             ttnn.Tensor: The tensor with the averaged values. The output tensor shape is (batch_size, channels, 1, 1).
 
-        Example::
+        Example:
 
             >>> tensor = ttnn.from_torch(torch.randn((10, 3, 32, 32), dtype=ttnn.bfloat16), device=device)
             >>> output = {1}(tensor)

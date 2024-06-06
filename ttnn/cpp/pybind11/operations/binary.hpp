@@ -39,7 +39,7 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             * :attr:`activations` (Optional[List[str]]): list of activation functions to apply to the output tensor
             * :attr:`queue_id` (Optional[uint8]): command queue id
 
-        Example::
+        Example:
 
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
             >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)

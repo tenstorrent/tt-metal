@@ -248,85 +248,9 @@ def _golden_function(tensor, repeats, dim=0, **_):
     return torch.repeat_interleave(tensor, repeats, dim=dim)
 
 
-def _repeat_interleave_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.int32, ttnn.uint32),
-        layouts=(ttnn.TILE_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=True,
-    )
-
-
-# This operation does not support the following cases:
-#   - Shape([2[32], 2[32]]) -> repeats = 2, dim = 0
-#   - Shape([2[32], 2[32]]) -> repeats = Tensor[1,2], dim = 1
-@ttnn.register_operation(
-    name="ttnn.repeat_interleave",
-    validate_input_tensors=_repeat_interleave_validate_input_tensors,
-    golden_function=_golden_function,
+repeat_interleave = ttnn.register_operation(golden_function=_golden_function)(
+    ttnn._ttnn.operations.data_movement.repeat_interleave
 )
-def repeat_interleave(input_tensor: ttnn.Tensor, repeats: Union[ttnn.Tensor, int], dim: int = 0) -> ttnn.Tensor:
-    r"""
-    repeat_interleave(input_tensor: ttnn.Tensor, repeats : Union[ttnn.Tensor,int], dim: int = 0) -> ttnn.Tensor
-
-    Repeats elements of a :attr:`tensor` in the given :attr:`dim`.
-
-    Args:
-        * :attr:`input_tensor`: the input_tensor to apply the repeate interleave operation.
-        * :attr:`repeats`: The number of repetitions for each element. repeats is broadcasted to fit the shape of the given axis.
-        * :attr:`dim`: the dimension to expand with the repetitions.
-
-    Example::
-
-        >>> a = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]]), device=device, layout=ttnn.TILE_LAYOUT)
-        >>> b = ttnn.repeat_interleave(a, 2, dim=0)
-        >>> print(a.shape, b.shape)
-        ttnn.Shape([2[32], 2[32]]) ttnn.Shape([4[32], 2[32]])
-
-    """
-
-    if not isinstance(repeats, int) and not isinstance(repeats, ttnn.Tensor):
-        raise RuntimeError("ttnn: Expected repeat to either be an int or a ttnn.Tensor")
-
-    rank_of_tensor = len(input_tensor.shape)
-    if dim >= rank_of_tensor:
-        dimension_range = f"[{-rank_of_tensor}, {rank_of_tensor - 1}]"
-        raise RuntimeError(
-            f"ttnn: Dimension out of range (expected to be in range of {dimension_range}, but got {dim})"
-        )
-
-    def custom_numel(tensor):
-        total_elements = 1
-        for dimension in tensor.shape:
-            total_elements *= dimension
-        return total_elements
-
-    if isinstance(repeats, ttnn.Tensor):
-        if input_tensor.shape[dim] != custom_numel(repeats):
-            raise RuntimeError("ttnn: repeats must have the same size as input along dim")
-        elif len(repeats.shape) != 1:
-            raise RuntimeError("ttnn: repeats must be 0-dim or 1-dim tensor")
-
-    dtype = input_tensor.dtype
-    rank = len(input_tensor.shape)
-    if dtype == ttnn.bfloat16 and rank == 4 and dim != 2 and dim != 3:
-        output_tensor = ttl.tensor.repeat_interleave(input_tensor, repeats, dim=dim)
-        *batch, _, _ = output_tensor.shape
-        *_, h, w = input_tensor.shape
-        *_, padded_h, padded_w = input_tensor.shape.with_tile_padding()
-        if dim == 2:
-            *_, h, _ = output_tensor.shape
-            *_, padded_h, _ = output_tensor.shape.with_tile_padding()
-        elif dim == 3:
-            *_, _, w = output_tensor.shape
-            *_, _, padded_w = output_tensor.shape.with_tile_padding()
-        output_tensor = ttnn.reshape(output_tensor, shape=ttnn.Shape(batch + [h, w], batch + [padded_h, padded_w]))
-        return output_tensor
-    else:
-        raise NotImplementedError
 
 
 def _golden_function(tensor, shape, **_):
