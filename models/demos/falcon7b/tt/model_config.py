@@ -145,7 +145,9 @@ def get_model_config(model_config_str, prefill_seq_len=0):
         if model_config_str == "BFLOAT16-L1_SHARDED":
             model_config["ATTN_MASK_MEMCFG"] = L1_MEMCFG
         model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"] = L1_MEMCFG
-        model_config["K_CACHE_SLICE_OUTPUT_MEMCFG"] = L1_MEMCFG
+        if not model_config_str == "BFLOAT16-L1_SHARDED":
+            # Don't send keys to l1 before converting to l1-sharded (after kcache update) to avoid l1 framgentation issues with kv_cache_size=2048
+            model_config["K_CACHE_SLICE_OUTPUT_MEMCFG"] = L1_MEMCFG
         model_config["V_CACHE_SLICE_OUTPUT_MEMCFG"] = L1_MEMCFG
         model_config["K_TRANSPOSED_OUTPUT_MEMCFG"] = L1_MEMCFG
         model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"] = L1_MEMCFG
@@ -191,17 +193,27 @@ def get_model_config(model_config_str, prefill_seq_len=0):
         )
 
         if is_wormhole_b0():
-            model_config["COMPUTE_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+            model_config["PRE_SOFTMAX_MM_COMPUTE_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            model_config[
+                "POST_SOFTMAX_MM_COMPUTE_KERNEL_CONFIG"
+            ] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
                 math_approx_mode=True,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
         else:
-            model_config["COMPUTE_KERNEL_CONFIG"] = ttnn.experimental.tensor.GrayskullComputeKernelConfig(
+            gs_compute_kernel_config = ttnn.experimental.tensor.GrayskullComputeKernelConfig(
                 math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
                 math_approx_mode=True,
             )
+            model_config["PRE_SOFTMAX_MM_COMPUTE_KERNEL_CONFIG"] = gs_compute_kernel_config
+            model_config["POST_SOFTMAX_MM_COMPUTE_KERNEL_CONFIG"] = gs_compute_kernel_config
 
     # uncomment if need to see all the configs
     # logger.debug(f"Falcon model config: \n{pretty_print_model_config(model_config)}")
