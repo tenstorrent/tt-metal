@@ -402,7 +402,7 @@ operation::ProgramWithCallbacks create_program(
         const bool src1_sharded = input_tensors.at(1).memory_config().is_sharded();
         const bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
-        if (!(src0_sharded || src1_sharded || out_sharded)) {
+        if (!(src0_sharded and src1_sharded and out_sharded)) {
             for (uint32_t i = 0; i < cores.size(); ++i) {
                 const CoreCoord& core = cores[i];
 
@@ -412,7 +412,7 @@ operation::ProgramWithCallbacks create_program(
                     runtime_args[4] = src_buffer_a->address();
                 }
 
-                if (!(src1_sharded || out_sharded)) {
+                if (!(src1_sharded and out_sharded)) {
                     auto writer_kernel_id = writer_kernel_ids.at(i);
                     auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                     runtime_args[5] = src_buffer_b->address();
