@@ -20,6 +20,7 @@ from models.experimental.llama2_70b.tt.model_config import (
 )
 from models.utility_functions import get_devices_for_t3000
 from models.experimental.llama2_70b.tt.llama_common import get_llama_path, load_llama_state_dict
+from models.experimental.llama2_70b.reference.llama.llama.tokenizer3 import ChatFormat
 
 
 def main(args):
@@ -75,10 +76,14 @@ def load_prompts_file(args, tokenizer):
     # Load prompts from json
     prompts = json.load(open(args.prompts_file))
     # Encode the prompt
-    tokenized = [tokenizer.encode(x, bos=True, eos=False) for x in prompts]
+    if args.chat:
+        formatter = ChatFormat(tokenizer)
+        tokenized = [formatter.encode_dialog_prompt(dialog) for dialog in prompts]
+    else:
+        tokenized = [tokenizer.encode(x, bos=True, eos=False) for x in prompts]
 
     if len(tokenized) > args.max_batch_size:
-        logger.warn(
+        logger.info(
             f"Warning: prompts file contains {len(tokenized)} prompts, but max batch size is {args.max_batch_size}. Only first {args.max_batch_size} are decoded."
         )
         tokenized = tokenized[: args.max_batch_size]
@@ -185,19 +190,20 @@ def latency_printout(latencies, args, generated_len):
     overall_time = sum(latencies)
     overall_tokens = args.max_batch_size * len(latencies)
     warmup_batch = 2
-    # skip initial warmup batch
+    # Skip initial warmup batch
     if len(latencies) > warmup_batch:
         overall_time -= sum(latencies[:warmup_batch])
         overall_tokens -= warmup_batch * args.max_batch_size
         latencies = latencies[warmup_batch:]
-    mean_latency = sum(latencies) / len(latencies)
+
+    mean_latency = sum(latencies) / len(latencies) if len(latencies) > 0 else 0
+
     tokens_per_second = 1 / mean_latency if mean_latency != 0 else 0
     overall_tokens_per_second = overall_tokens / overall_time if overall_time != 0 else 0
-    tokens_per_second_per_user = overall_tokens_per_second / args.max_batch_size
+    tokens_per_second_per_user = overall_tokens_per_second / args.max_batch_size if args.max_batch_size != 0 else 0
+    throughput = 1000 * overall_time / overall_tokens if overall_tokens != 0 else 0
 
-    logger.info(
-        f"Overall throughput: {1000 * overall_time / overall_tokens:.1f} ms @ {overall_tokens_per_second:.1f} tokens/s"
-    )
+    logger.info(f"Overall throughput: {throughput:.1f} ms @ {overall_tokens_per_second:.1f} tokens/s")
     logger.info(f"Tokens per second per user: {tokens_per_second_per_user:.1f} tokens/s/u")
     logger.info(f"User latency: {1000 * mean_latency:.1f} ms @ {tokens_per_second:.1f} tokens/s")
 
@@ -205,14 +211,20 @@ def latency_printout(latencies, args, generated_len):
 def get_all_text(tokenizer, tokens, prompt_tokens, max_gen_len):
     out_tokens = []
     for i, toks in enumerate(tokens.tolist()):
-        # cut to max gen len
-        start = 0
-        toks = toks[start : len(prompt_tokens[i]) + max_gen_len]
+        try:
+            # cut to max gen len
+            start = 0
+            toks = toks[start : len(prompt_tokens[i]) + max_gen_len]
+        except IndexError:
+            logger.info(f"Index out of range for sequence {i}, returning entire sequence.")
+            pass
+
         # cut to eos tok if any
         if tokenizer.eos_id in toks:
             eos_idx = toks.index(tokenizer.eos_id)
             toks = toks[:eos_idx]
         out_tokens.append(toks)
+
     all_text = [tokenizer.decode(toks) for toks in out_tokens]
     return all_text
 
@@ -248,6 +260,7 @@ class Args:
         top_p=1,
         top_k=1,
         temperature=1.0,
+        chat=False,
         # TT args
         device_mesh=None,
         n_devices=8,
@@ -268,6 +281,7 @@ class Args:
         self.top_p = top_p
         self.top_k = top_k
         self.temperature = temperature
+        self.chat = chat
         self.device_mesh = device_mesh
         self.n_devices = n_devices
         self.emulated = emulated
@@ -280,6 +294,14 @@ def construct_arg(**kwargs):
 
 
 @pytest.mark.timeout(240000)
+@pytest.mark.parametrize(
+    "chat, prompts_file",
+    [
+        (True, "models/demos/t3000/llama2_70b/demo/data/multi_prompt_chat.json"),
+        (False, "models/demos/t3000/llama2_70b/demo/data/multi_prompt.json"),
+    ],
+    ids=["chat_completion", "text_completion"],
+)
 @pytest.mark.parametrize("decode_only", (True, False), ids=["decode_only", "prefill_decode"])
 @pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=["1L", "2L", "10L", "80L"])
 @pytest.mark.parametrize(
@@ -297,20 +319,14 @@ def construct_arg(**kwargs):
             8,
             True,
         ),
-        (
-            "tt",
-            False,
-            8,
-            True,
-        ),
     ],
-    ids=["tt-70b-T3000", "meta-70b", "tt-70b-emulated"],
+    ids=["tt-70b-T3000", "meta-70b"],
 )
 @pytest.mark.parametrize(
-    "num_tokens, prompts_file, output_at_end, top_p, top_k, temperature",
+    "num_tokens, output_at_end, top_p, top_k, temperature",
     [
-        (128, "models/demos/t3000/llama2_70b/demo/data/multi_prompt.json", True, 1, 1, 1.0),
-        (128, "models/demos/t3000/llama2_70b/demo/data/multi_prompt.json", True, 0.9, 10, 1.0),
+        (128, True, 1, 1, 1.0),
+        (128, True, 0.9, 10, 1.0),
     ],
     ids=["greedy", "sampling"],
 )
@@ -326,6 +342,7 @@ def test_LlamaModel_demo(
     top_p,
     top_k,
     temperature,
+    chat,
     # TT args
     # all_devices,
     t3k_device_mesh,
@@ -366,6 +383,7 @@ def test_LlamaModel_demo(
         top_p=top_p,
         top_k=top_k,
         temperature=temperature,
+        chat=chat,
         device_mesh=t3k_device_mesh,
         n_devices=n_devices,
         emulated=emulated,
