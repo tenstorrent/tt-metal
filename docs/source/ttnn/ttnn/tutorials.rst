@@ -1,5 +1,8 @@
 .. _Tutorials:
 
+.. note::
+   TT-NN tutorials currently work on Grayskull only.
+
 Tutorials
 #########
 
