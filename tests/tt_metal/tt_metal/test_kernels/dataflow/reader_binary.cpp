@@ -46,4 +46,33 @@ void kernel_main() {
         src0_addr += ublock_size_bytes_0;
         src1_addr += ublock_size_bytes_1;
     }
+
+
+    // This input populates dest with values before binary operation
+    // executes, this is used to test eltwise binary with dest re-use
+    // and eltwise binary with dest accumulation
+    #if defined(DST_ACCUM_MODE) || defined(ELTWISE_DEST_REUSE_TYPE)
+    uint32_t src2_addr  = get_arg_val<uint32_t>(7);
+    uint32_t src2_noc_x = get_arg_val<uint32_t>(8);
+    uint32_t src2_noc_y = get_arg_val<uint32_t>(9);
+    constexpr uint32_t cb_id_in2 = 2;
+    uint32_t ublock_size_bytes_2 = get_tile_size(cb_id_in2);
+    uint32_t l1_write_addr_in2;
+
+    for (uint32_t i=0; i<num_tiles; i += ublock_size_tiles) {
+        uint64_t src2_noc_addr = get_noc_addr(src2_noc_x, src2_noc_y, src2_addr);
+
+        cb_reserve_back(cb_id_in2, ublock_size_tiles);
+
+        l1_write_addr_in2 = get_write_ptr(cb_id_in2);
+        noc_async_read(src2_noc_addr, l1_write_addr_in2, ublock_size_bytes_2);
+        noc_async_read_barrier();
+
+        cb_push_back(cb_id_in2, ublock_size_tiles);
+
+        src2_addr += ublock_size_bytes_2;
+    }
+    #endif
+
+
 }
