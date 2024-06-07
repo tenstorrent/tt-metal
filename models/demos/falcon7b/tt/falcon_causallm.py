@@ -6,7 +6,6 @@ from typing import Optional, Tuple
 
 import torch
 import ttnn
-from models.demos.falcon7b.tt.falcon_lm_head import falcon_lm_head_matmul_2d
 from models.demos.falcon7b.tt.falcon_model import TtFalconModelShared
 from models.demos.falcon7b.tt.model_utils import get_falcon_default_core_grid, get_weights_cached
 from models.utility_functions import torch_tensors_to_tt_tensors
@@ -23,7 +22,6 @@ class TtFalconCausalLM(TtFalconModelShared):
         max_position_embeddings,
         model_config,
         tt_cache_path,
-        seq_len,
     ):
         assert base_url == "", "base_url should be empty at the root of the model!"
         super().__init__(
@@ -38,43 +36,54 @@ class TtFalconCausalLM(TtFalconModelShared):
         )
         self.num_devices = len(devices)
         self.model_config = model_config
-        self.seq_len = seq_len
 
         lm_head_weight = None
         if self.state_dict:
             lm_head_weight = self.state_dict["lm_head.weight"]
             lm_head_weight = torch.transpose(lm_head_weight, -2, -1)
 
-        if self.model_config["PREFILL_OPTIMIZED_MODE"] and self.seq_len > 512:
+        if self.model_config["PREFILL_OPTIMIZED_MODE"]:
             # Optimization for lm_head matmul
-            self.num_slices = 4 if self.seq_len <= 1024 else 8
+            num_slices = self.model_config["LM_HEAD_NUM_SLICES"]
             if lm_head_weight is not None:
-                PADDING = torch.zeros([64, lm_head_weight.shape[1] // self.num_slices])
-                lm_head_weights = torch.chunk(lm_head_weight, self.num_slices, dim=-1)
+                PADDING = torch.zeros([64, lm_head_weight.shape[1] // num_slices])
+                lm_head_weights = torch.chunk(lm_head_weight, num_slices, dim=-1)
                 lm_head_weights_padded = [torch.cat([weight, PADDING], 0) for weight in lm_head_weights]
-            # Cache sliced weights for lm_head with different seq_len
             self.lm_head_sliced_weights = [
                 get_weights_cached(
                     devices,
                     model_config,
                     tt_cache_path,
-                    f"lm_head.weight_slice_{i}_of_{self.num_slices}",
+                    f"lm_head.weight_slice_{i}_of_{num_slices}",
                     weight_config_str="LM_HEAD_MM_WEIGHTS",
                     weights_to_cache=lm_head_weights_padded[i] if lm_head_weight is not None else None,
                 )
-                for i in range(self.num_slices)
+                for i in range(num_slices)
             ]
             # Generate padding for lm_head > 512
-            padding = torch.zeros([1, 1, seq_len, 64])
+            padding = torch.zeros([1, 1, 1024, 64])
 
-            tt_paddings = torch_tensors_to_tt_tensors(
+            tt_paddings_1k = torch_tensors_to_tt_tensors(
                 [padding.detach().clone() for _ in range(self.num_devices)],
                 ttnn.experimental.tensor.Layout.TILE,
                 self.model_config["LM_HEAD_MM_INPUT_DTYPE"],
                 self.model_config["LM_HEAD_MM_INPUT_MEMCFG"],
                 self.devices,
             )
-            self.lm_head_padding = tt_paddings
+
+            padding = torch.zeros([1, 1, 2048, 64])
+
+            tt_paddings_2k = torch_tensors_to_tt_tensors(
+                [padding.detach().clone() for _ in range(self.num_devices)],
+                ttnn.experimental.tensor.Layout.TILE,
+                self.model_config["LM_HEAD_MM_INPUT_DTYPE"],
+                self.model_config["LM_HEAD_MM_INPUT_MEMCFG"],
+                self.devices,
+            )
+
+            self.lm_head_padding = {}
+            self.lm_head_padding[1024] = tt_paddings_1k
+            self.lm_head_padding[2048] = tt_paddings_2k
 
         self.lm_head_weights = get_weights_cached(
             devices,
@@ -105,19 +114,34 @@ class TtFalconCausalLM(TtFalconModelShared):
             use_cache=use_cache,
         )
 
+        seq_len = hidden_states[0].get_legacy_shape()[-2]
+
         if llm_mode == "prefill":
-            if self.model_config["PREFILL_OPTIMIZED_MODE"] and hidden_states[0].get_legacy_shape()[-2] > 512:
-                lm_logits = [
-                    falcon_lm_head_matmul_2d(
-                        hidden_states[device_id],
-                        [weights[device_id] for weights in self.lm_head_sliced_weights],
-                        self.num_slices,
-                        lm_head_padding=self.lm_head_padding[device_id],
-                        out_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
-                        out_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
+            if self.model_config["PREFILL_OPTIMIZED_MODE"] and seq_len > 512:
+                lm_logits = []
+                for device_id in range(self.num_devices):
+                    hidden_states[device_id] = ttnn.experimental.tensor.concat(
+                        [hidden_states[device_id], self.lm_head_padding[seq_len][device_id]], -1
                     )
-                    for device_id in range(self.num_devices)
-                ]
+
+                    out_slices = []
+                    for slice_id in range(self.model_config["LM_HEAD_NUM_SLICES"]):
+                        out_slices.append(
+                            ttnn.experimental.operations.primary.matmul(
+                                hidden_states[device_id],
+                                self.lm_head_sliced_weights[slice_id][device_id],
+                                program_config=self.model_config["LM_HEAD_PROGCFG"][seq_len],
+                                output_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
+                                output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
+                                compute_kernel_config=self.model_config["LM_HEAD_KERNEL_CONFIG"],
+                            )
+                        )
+
+                    out = ttnn.experimental.tensor.concat(out_slices, -1)
+                    lm_logits.append(out)
+
+                    for slice_id in range(self.model_config["LM_HEAD_NUM_SLICES"]):
+                        out_slices[slice_id].deallocate(True)
             else:
                 lm_logits = [
                     ttnn.matmul(

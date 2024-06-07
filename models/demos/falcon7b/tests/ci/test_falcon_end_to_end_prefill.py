@@ -15,13 +15,23 @@ from models.utility_functions import disable_compilation_reports, disable_persis
         ("prefill", 32, 1, 32, 0, "BFLOAT16-DRAM", 0.97, 0.95, 0.95),
         ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.97, 0.99, 0.97),
         ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.98),
-        # ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.98), # CI machines don't have enough RAM memory to run this test atm; to reduce memory usage (#8349)
+        (
+            "prefill",
+            32,
+            1,
+            2048,
+            0,
+            "BFLOAT16-DRAM",
+            0.99,
+            0.99,
+            0.98,
+        ),  # CI machines don't have enough RAM memory to run this test atm; to reduce memory usage (#8349)
     ),
     ids=[
         "prefill_seq32",
         "prefill_seq128",
         "prefill_seq1024",
-        # "prefill_seq2048",
+        "prefill_seq2048",
     ],
 )
 @pytest.mark.parametrize(

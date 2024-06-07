@@ -9,7 +9,7 @@ from models.demos.falcon7b.demo.demo import run_falcon_demo_kv
 @pytest.mark.parametrize(
     "perf_mode, expected_perf_prefill_decode, greedy_sampling, expected_greedy_output_path",
     (
-        (True, [1100, 335], False, None),
+        (True, [2000, 335], False, None),
         (True, None, False, None),
         (False, None, True, "models/demos/wormhole/falcon7b/expected_greedy_output.json"),
         (False, None, True, None),
