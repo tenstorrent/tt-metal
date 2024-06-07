@@ -14,13 +14,13 @@ import GoldenTensorComparisonIndicator from './GoldenTensorComparisonIndicator';
 
 const ApplicationList = () => {
     const ops = [
-        'ttnn.from_torch',
-        'ttnn.from_torch',
-        'ttnn.add',
+        { name: 'ttnn.from_torch', goldenGlobal: 1, goldenLocal: 1 },
+        { name: 'ttnn.from_torch', goldenGlobal: 0.9999, goldenLocal: 0.9999 },
+        { name: 'ttnn.add', goldenGlobal: 0.9888, goldenLocal: 1 },
 
-        'ttnn.deallocate.buffer.opname',
-        'ttnn.to_torch',
-        'ttnn.compare',
+        { name: 'ttnn.deallocate.buffer.opname', goldenGlobal: 1, goldenLocal: 0.988 },
+        { name: 'ttnn.to_torch', goldenGlobal: 1, goldenLocal: 1 },
+        { name: 'ttnn.compare', goldenGlobal: 0.8888, goldenLocal: 0.99 },
     ];
 
     const [filterQuery, setFilterQuery] = useState('');
@@ -59,12 +59,13 @@ const ApplicationList = () => {
                     />
                     {ops.map((op, index: number) => {
                         const hasContent =
-                            op.toLowerCase().includes('ttnn.add') || op.toLowerCase().includes('ttnn.to_torch');
+                            op.name.toLowerCase().includes('ttnn.add') ||
+                            op.name.toLowerCase().includes('ttnn.to_torch');
                         return (
                             <FilterableComponent
                                 data-woof='aas'
                                 key={index}
-                                filterableString={op}
+                                filterableString={op.name}
                                 filterQuery={filterQuery}
                                 component={
                                     <div className='op'>
@@ -73,7 +74,7 @@ const ApplicationList = () => {
                                                 <>
                                                     <Icon size={20} icon={IconNames.CUBE} />
                                                     <span style={{ color: '#fff', fontSize: '20px' }}>
-                                                        <HighlightedText text={op} filter={filterQuery} />
+                                                        <HighlightedText text={op.name} filter={filterQuery} />
                                                     </span>
                                                     <Tooltip2 content='Operation tensor report'>
                                                         <Button minimal small icon={IconNames.GRAPH} />
@@ -84,8 +85,8 @@ const ApplicationList = () => {
                                                     <Tooltip2 content='Buffer view'>
                                                         <Button minimal small icon={IconNames.SEGMENTED_CONTROL} />
                                                     </Tooltip2>
-                                                    <GoldenTensorComparisonIndicator index={index} calc='global' />
-                                                    <GoldenTensorComparisonIndicator index={index} calc='local' />
+                                                    <GoldenTensorComparisonIndicator value={op.goldenGlobal} />
+                                                    <GoldenTensorComparisonIndicator value={op.goldenLocal} />
                                                 </>
                                             }
                                             isOpen={false}
