@@ -192,10 +192,6 @@ op_map = {
         "tt_op": ttnn_ops.sum,
         "pytorch_op": pytorch_ops.sum,
     },
-    "ttnn-split": {
-        "tt_op": ttnn_ops.split,
-        "pytorch_op": pytorch_ops.split,
-    },
     "ttnn-activation_glu": {
         "tt_op": ttnn_ops.activation_glu,
         "pytorch_op": pytorch_ops.activation_glu,
