@@ -7,7 +7,7 @@
 #include <numeric>
 
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "tensor/tensor.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 

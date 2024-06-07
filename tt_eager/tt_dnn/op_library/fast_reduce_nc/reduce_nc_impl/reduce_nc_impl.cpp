@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/fast_reduce_nc/fast_reduce_nc_op.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -123,10 +122,10 @@ operation::ProgramWithCallbacks reduce_nc_impl(const Tensor &input, const Tensor
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args =
-             {static_cast<uint32_t>(tt::operations::primary::is_dram(input)),
+             {static_cast<uint32_t>(input.memory_config().buffer_type == BufferType::DRAM),
               input_granularity} ;
     std::vector<uint32_t> writer_compile_time_args =
-             {static_cast<uint32_t>(tt::operations::primary::is_dram(output)),
+             {static_cast<uint32_t>(output.memory_config().buffer_type == BufferType::DRAM),
               input_granularity} ;
     const auto reader_kernel_file = "tt_eager/tt_dnn/op_library/fast_reduce_nc/reduce_nc_impl/kernels/reader_reduce_nc.cpp";
     const auto writer_kernel_file = "tt_eager/tt_dnn/op_library/fast_reduce_nc/reduce_nc_impl/kernels/writer_reduce_nc.cpp";
