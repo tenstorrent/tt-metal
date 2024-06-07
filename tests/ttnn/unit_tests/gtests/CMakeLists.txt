@@ -4,11 +4,12 @@ set(TTNN_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_repeat_interleave.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_async_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_multiprod_queue.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_reflect.cpp
 )
 
 add_executable(unit_tests_ttnn ${TTNN_UNIT_TESTS_SRC})
 
-target_link_libraries(unit_tests_ttnn PUBLIC test_common_libs ttnn_lib tt_metal tt_eager)
+target_link_libraries(unit_tests_ttnn PUBLIC test_common_libs ttnn_lib tt_metal tt_eager reflect::reflect)
 target_include_directories(unit_tests_ttnn PRIVATE
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}
