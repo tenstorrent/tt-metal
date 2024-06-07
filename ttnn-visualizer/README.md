@@ -51,6 +51,7 @@ pip install -r requirements.txt
 ```
 run server
 ```shell
+cd backend
 uvicorn main:app --reload 
 ```
 access on localhost:8000/
