@@ -138,7 +138,7 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, sliding_window, device_
     return xs_1SBH, attn_mask
 
 
-def prepare_inputs_ttnn_prefill(x_bsh, device_mesh, attn_mask=None, attn_mask_torch=None):
+def prepare_inputs_ttnn_prefill(x_bsh, device_mesh):
     """
     Prepare inputs for decode mode.
     x: (batch, seq, hidden_dim)
@@ -162,19 +162,18 @@ def prepare_inputs_ttnn_prefill(x_bsh, device_mesh, attn_mask=None, attn_mask_to
     )
 
     # Attention mask
-    if not attn_mask:
-        attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
-        attn_mask_torch = torch.triu(attn_mask, diagonal=1)
-        attn_mask = attn_mask_torch.view(1, 1, seq_len, seq_len)
+    attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
+    attn_mask_torch = torch.triu(attn_mask, diagonal=1)
+    attn_mask = attn_mask_torch.view(1, 1, seq_len, seq_len)
 
-        attn_mask = ttnn.from_torch(
-            attn_mask,
-            device=device_mesh,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
-        )
+    attn_mask = ttnn.from_torch(
+        attn_mask,
+        device=device_mesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+    )
 
     return xs_1BSH, attn_mask, attn_mask_torch
 

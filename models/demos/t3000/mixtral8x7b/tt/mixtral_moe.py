@@ -68,6 +68,17 @@ class TtMoeLayer(LightweightModule):
         )
         self.top2_mask_11BB = ttnn.sum(self.top2_mask_11BB, dim=2)
 
+        reduce_mask_torch = torch.zeros(1, 1, self.args.max_batch_size, self.args.max_batch_size * 8)
+        for i in range(self.args.max_batch_size):
+            reduce_mask_torch[:, :, i, range(i, self.args.max_batch_size * 8, self.args.max_batch_size)] = 1
+        self.reduce_mask = ttnn.from_torch(
+            reduce_mask_torch,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device_mesh,
+            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+        )
+
     def forward(self, inputs, mode="prefill"):
         input_i_1SBH = inputs
         expert_i_HH = self.experts
@@ -95,12 +106,17 @@ class TtMoeLayer(LightweightModule):
         results_11BH = ttnn.mul(weights, weights_1SB1)
 
         # all gather
-        output_11BH_gathered = ttnn.all_gather(results_11BH, dim=1, num_links=1)
-        results_11BH.deallocate(True)
 
         # sum on each device
-        output_11BH_gathered = ttnn.experimental.operations.primary.moreh_sum(
-            output_11BH_gathered, dims=[1], output=None, compute_kernel_config=None
-        )
+        if mode == "prefill":
+            output_11BH_gathered = ttnn.all_gather(results_11BH, dim=1, num_links=1)
+            results_11BH.deallocate(True)
+            output_11BH_gathered = ttnn.experimental.operations.primary.moreh_sum(
+                output_11BH_gathered, dims=[1], output=None, compute_kernel_config=None
+            )
+        else:
+            output_11BH_gathered = ttnn.all_gather(results_11BH, dim=2, num_links=1)
+            results_11BH.deallocate(True)
+            output_11BH_gathered = ttnn.experimental.operations.primary.matmul(self.reduce_mask, output_11BH_gathered)
 
         return output_11BH_gathered
