@@ -21,12 +21,12 @@ if os.getenv("CI") == "true":
     "llama_version",
     (
         ("llama2"),
-        # ("llama3"),
+        ("llama3"),
     ),
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    ((32, 1, 0.9993), (1, 128, 0.9996), (1, 2048, 0.9994)),
+    ((32, 1, 0.9996), (1, 128, 0.998), (1, 2048, 0.998)),
     ids=("decode", "prefill_128", "prefill_2k"),
 )
 def test_LlamaDecoder_inference_t3000(
