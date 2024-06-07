@@ -219,7 +219,7 @@ struct operation_t {
 
     template <typename... args_t>
     auto operator()(args_t&&... args) const {
-        ZoneScoped;
+        ZoneScopedN("Run ttnn operation (struct-based)");
         ZoneName(this->cpp_fully_qualified_name, std::strlen(this->cpp_fully_qualified_name));
         tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", this->cpp_fully_qualified_name);
 
@@ -332,7 +332,7 @@ struct lambda_operation_t {
 
     template <typename... args_t>
     auto operator()(args_t&&... args) const {
-        ZoneScoped;
+        ZoneScopedN("Run ttnn operation (lambda-based)");
         ZoneName(this->cpp_fully_qualified_name, std::strlen(this->cpp_fully_qualified_name));
         tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", this->cpp_fully_qualified_name);
         auto output = this->lambda(std::forward<decltype(args)>(args)...);

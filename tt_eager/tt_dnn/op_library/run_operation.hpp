@@ -276,12 +276,6 @@ inline void log_operation(
     const OptionalTensors& optional_output_tensors = {}) {}
 #endif
 
-inline uint32_t assign_id()
-{
-    static std::atomic<uint32_t> atomic_count{0};
-    return atomic_count.fetch_add(1);
-}
-
 template<class OutputTensors=Tensors>
 OutputTensors run(
     const HostOperation<OutputTensors>& operation,

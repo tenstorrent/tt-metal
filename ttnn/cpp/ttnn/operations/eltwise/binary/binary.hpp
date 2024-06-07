@@ -6,7 +6,7 @@
 #pragma once
 
 #include "device/binary_op.hpp"
-
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"
 
 namespace ttnn {
@@ -108,17 +108,11 @@ struct ExecuteBinary {
             dtype = optional_output_tensor.value().get_dtype();
         }
 
-        auto output_tensors = operation::run(Binary{BinaryProgramConfig{binary_op_type,
-                                                                        in_place,
-                                                                        activations,
-                                                                        output_memory_config,
-                                                                        dtype}},
-                                                    {input_tensor_a, input_tensor_b},
-                                                    {},
-                                                    {optional_output_tensor},
-                                                    queue_id);
-
-        return output_tensors.at(0);
+        return ttnn::device_operation::run<Binary>(
+            queue_id,
+            Binary::operation_attributes_t{
+                binary_op_type, in_place, activations, output_memory_config, dtype, std::nullopt},
+            Binary::tensor_args_t{input_tensor_a, input_tensor_b, optional_output_tensor});
     }
 
     template <typename... Args>

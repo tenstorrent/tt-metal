@@ -43,7 +43,8 @@ struct Tensor {
         bool track_ref_count = false;
         TensorAttributes(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout) :
             storage(storage), shape(shape), dtype(dtype), layout(layout) {}
-        TensorAttributes() : shape({0xff, 0xff, 0xff, 0xff}), dtype(DataType::INVALID), layout(Layout::INVALID) {}
+        TensorAttributes() :
+            shape(std::array<uint32_t, 4>{0xff, 0xff, 0xff, 0xff}), dtype(DataType::INVALID), layout(Layout::INVALID) {}
         ~TensorAttributes() = default;
 
         // Use these functions to manage the main_thread_ref_count for a tensor attr instance.
@@ -391,6 +392,15 @@ Tensor create_device_tensor(
     Layout layout,
     Device *device,
     const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
+
+static Tensor create_device_tensor(
+    const ttnn::Shape &shape,
+    DataType dtype,
+    Layout layout,
+    Device *device,
+    const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    return create_device_tensor(shape.value(), dtype, layout, device, memory_config);
+}
 
 // template<typename Buffer>
 // void *get_host_buffer(const Tensor &tensor);

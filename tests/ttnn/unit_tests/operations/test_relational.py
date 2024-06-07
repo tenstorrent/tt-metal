@@ -236,16 +236,16 @@ def test_expand_and_broadcast(device, h, w):
 @pytest.mark.parametrize("h", [500])
 @pytest.mark.parametrize("w", [512])
 def test_expand_and_broadcast_reversed(device, h, w):
-    torch_a = torch.rand((1, h, w), dtype=torch.bfloat16)
-    torch_b = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_output = torch.lt(torch_b, torch_a)
+    torch_input_tensor_a = torch.rand((1, h, w), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_output = torch.lt(torch_input_tensor_b, torch_input_tensor_a)
 
-    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
-    b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_output = ttnn.lt(b, a)
-    tt_output = ttnn.to_torch(tt_output)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.lt(input_tensor_b, input_tensor_a)
+    output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_with_pcc(torch_output, output, 0.9999)
 
 
 @pytest.mark.parametrize("atol", [1e-8, 1e-10])
