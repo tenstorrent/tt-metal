@@ -7,14 +7,13 @@ export default defineConfig({
     plugins: [react()],
     server: {
         open: true,
+        proxy: {
+            '/api': 'http://localhost:8000',
+        },
     },
     resolve: {
         alias: {
           'styles/': `${path.resolve(__dirname, 'src/scss')}/`
         }
-      }
-      proxy: {
-          '/api': 'http://localhost:8000',
-      },
-   }
+    }
 })
