@@ -14,117 +14,43 @@ Basic Examples
 1. Converting from and to torch tensor
 --------------------------------------
 
-.. code-block:: python
-
-    import torch
-    import ttnn
-
-    torch_input_tensor = torch.zeros(2, 4, dtype=torch.float32)
-    tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16)
-    torch_output_tensor = ttnn.to_torch(tensor)
+.. literalinclude:: ../../../../ttnn/examples/usage/convert_to_from_torch.py
+   :language: python
 
 
 2. Running an operation on the device
 --------------------------------------
 
-.. code-block:: python
-
-    import torch
-    import ttnn
-
-    device_id = 0
-    device = ttnn.open_device(device_id=device_id)
-
-    torch_input_tensor = torch.rand(2, 4, dtype=torch.float32)
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.exp(input_tensor)
-    torch_output_tensor = ttnn.to_torch(output_tensor)
-
-    ttnn.close_device(device)
+.. literalinclude:: ../../../../ttnn/examples/usage/run_op_on_device.py
+   :language: python
 
 
 3. Using __getitem__ to slice the tensor
 ----------------------------------------
 
-.. code-block:: python
-
-    # Note that this not a view, unlike torch tensor
-
-    import torch
-    import ttnn
-
-    device_id = 0
-    device = ttnn.open_device(device_id=device_id)
-
-    torch_input_tensor = torch.rand(3, 96, 128, dtype=torch.float32)
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = input_tensor[:1, 32:64, 32:64] # this particular slice will run on the device
-    torch_output_tensor = ttnn.to_torch(output_tensor)
-
-    ttnn.close_device(device)
+.. literalinclude:: ../../../../ttnn/examples/usage/get_item.py
+   :language: python
 
 
 4. Enabling program cache
 --------------------------------------
 
-.. code-block:: python
-
-    import torch
-    import ttnn
-    import time
-
-    ttnn.enable_program_cache()
-
-    device_id = 0
-    device = ttnn.open_device(device_id=device_id)
-
-    torch_input_tensor = torch.rand(2, 4, dtype=torch.float32)
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # Running the first time will compile the program and cache it
-    start_time = time.time()
-    output_tensor = ttnn.exp(input_tensor)
-    torch_output_tensor = ttnn.to_torch(output_tensor)
-    end_time = time.time()
-    duration = end_time - start_time
-    print(f"duration of the first run: {duration}")
-    # stdout: duration of the first run: 0.6391518115997314
-
-    # Running the subsequent time will use the cached program
-    start_time = time.time()
-    output_tensor = ttnn.exp(input_tensor)
-    torch_output_tensor = ttnn.to_torch(output_tensor)
-    end_time = time.time()
-    duration = end_time - start_time
-    print(f"duration of the second run: {duration}")
-    # stdout: duration of the subsequent run: 0.0007393360137939453
-
-    ttnn.close_device(device)
+.. literalinclude:: ../../../../ttnn/examples/usage/program_cache.py
+   :language: python
 
 
 5. Debugging intermediate tensors
 ---------------------------------
 
-.. code-block:: python
-
-    import torch
-    import ttnn
-
-    device_id = 0
-    device = ttnn.open_device(device_id=device_id)
-
-    torch_input_tensor = torch.rand(32, 32, dtype=torch.float32)
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    with ttnn.manage_config("enable_comparison_mode", True):
-        with ttnn.manage_config("comparison_mode_pcc", 0.9998): # This is optional in case default value of 0.9999 is too high
-            output_tensor = ttnn.exp(input_tensor)
-    torch_output_tensor = ttnn.to_torch(output_tensor)
-
-    ttnn.close_device(device)
+.. literalinclude:: ../../../../ttnn/examples/usage/debugging_intermediate_tensors.py
+   :language: python
 
 
 6. Tracing the graph of operations
 ----------------------------------
+
+.. note::
+   This basic snippet is under construction, and may not work on all hardware architectures.
 
 .. code-block:: python
 
@@ -151,22 +77,8 @@ Basic Examples
 
 `tt_lib` operations are missing some of the features of ttnn operations such as graph tracing and in order to support these features, ttnn provides a different to call `tt_lib` operations that enabled the missing features.
 
-.. code-block:: python
-
-    import torch
-    import ttnn
-
-
-    device_id = 0
-    device = ttnn.open_device(device_id=device_id)
-
-    torch_input_tensor = torch.rand(1, 1, 2, 4, dtype=torch.float32)
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.experimental.tensor.exp(input_tensor) # equivalent to tt_lib.tensor.exp(input_tensor)
-    torch_output_tensor = ttnn.to_torch(output_tensor)
-
-    ttnn.close_device(device)
-
+.. literalinclude:: ../../../../ttnn/examples/usage/using_tt_lib.py
+   :language: python
 
 
 8. Enabling Logging
@@ -196,6 +108,9 @@ Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations
 
 9. Supported Python Operators
 -----------------------------
+
+.. note::
+   This basic snippet is under construction, and may not work on all hardware architectures.
 
 .. code-block:: python
 
@@ -239,18 +154,18 @@ Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations
 10. Changing the string representation of the tensor
 ----------------------------------------------------
 
-.. code-block:: python
+.. note::
+   This basic snippet is under construction, and may not work on all hardware architectures.
 
-    import ttnn
-
-    # Profile can be set to "empty", "short" or "full"
-
-    ttnn.set_printoptions(profile="full")
-
+.. literalinclude:: ../../../../ttnn/examples/usage/string_repr.py
+   :language: python
 
 
 11. Visualize using Web Browser
 -------------------------------
+
+.. note::
+   This basic snippet is under construction, and may not work on all hardware architectures.
 
 Set the following environment variables as needed
 
@@ -292,27 +207,8 @@ Set the following environment variables as needed
 
 Run the code. i.e.:
 
-.. code-block:: python
-
-    import torch
-    import ttnn
-
-    device_id = 0
-    device = ttnn.open_device(device_id=device_id)
-
-    torch_input_tensor_a = torch.rand(2048, 2048, dtype=torch.float32)
-    torch_input_tensor_b = torch.rand(2048, 2048, dtype=torch.float32)
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG)
-    ttnn.deallocate(input_tensor_a)
-    ttnn.deallocate(input_tensor_b)
-
-    torch_output_tensor = ttnn.to_torch(output_tensor)
-    ttnn.deallocate(output_tensor)
-
-    ttnn.close_device(device)
+.. literalinclude:: ../../../../ttnn/examples/usage/visualizer_example.py
+   :language: python
 
 Open the visualizer by running the following command:
 
@@ -324,6 +220,9 @@ Open the visualizer by running the following command:
 
 12. Register pre- and/or post-operation hooks
 ---------------------------------------------
+
+.. note::
+   This basic snippet is under construction, and may not work on all hardware architectures.
 
 .. code-block:: python
 
@@ -352,6 +251,9 @@ Open the visualizer by running the following command:
 13. Query all operations
 ------------------------
 
+.. note::
+   This basic snippet is under construction, and may not work on all hardware architectures.
+
 .. code-block:: python
 
     import ttnn
@@ -361,6 +263,9 @@ Open the visualizer by running the following command:
 
 14. Disable Fallbacks
 ---------------------
+
+.. note::
+   This basic snippet is under construction, and may not work on all hardware architectures.
 
 Fallbacks are used when the operation is not supported by the device. The fallbacks are implemented in the host and are slower than the device operations.
 The user will be notified when a fallback is used. The fallbacks can be disabled by setting the following environment variable.
