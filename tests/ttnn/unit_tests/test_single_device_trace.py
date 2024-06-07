@@ -11,9 +11,10 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("shape", [(1, 1, 512, 512), (1, 1, 32, 32), (1, 3, 512, 512), (1, 3, 32, 32)])
+@pytest.mark.parametrize("shape", [[1, 3, 1024, 1024], (1, 1, 512, 512), (1, 3, 512, 512), (1, 3, 32, 32)])
 @pytest.mark.parametrize("enable_async", [True, False])
 @pytest.mark.parametrize("blocking", [True, False])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 106496}], indirect=True)
 def test_single_device_single_trace(device, shape, enable_async, blocking):
     device.enable_async(enable_async)
     device.enable_program_cache()
@@ -31,7 +32,7 @@ def test_single_device_single_trace(device, shape, enable_async, blocking):
 
     # Capture Trace
     logger.info("Capture Trace")
-    tid = ttnn.begin_trace_capture(device, trace_buffer_size=106496, cq_id=0)
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
     output_tensor = run_op_chain(input_0_dev, input_1_dev)
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
@@ -73,6 +74,7 @@ def test_single_device_single_trace(device, shape, enable_async, blocking):
 @pytest.mark.parametrize("shape", [(1, 1, 512, 512), (1, 1, 32, 32), (1, 3, 512, 512), (1, 3, 32, 32)])
 @pytest.mark.parametrize("enable_async", [True, False])
 @pytest.mark.parametrize("blocking", [True, False])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 133120}], indirect=True)
 def test_single_device_multi_trace(device, shape, enable_async, blocking):
     device.enable_async(enable_async)
     device.enable_program_cache()
@@ -89,7 +91,7 @@ def test_single_device_multi_trace(device, shape, enable_async, blocking):
         )
 
     def run_op_chain_1(input_0, input_1, weight):
-        return ttnn.tanh(ttnn.mul(ttnn.sub(input_0, input_1), weight))
+        return ttnn.gelu(ttnn.add(ttnn.tanh(ttnn.mul(ttnn.sub(input_0, input_1), weight)), input_1))
 
     # Compile program binaries
     run_op_chain(input_0_dev, input_1_dev, weight_dev)
@@ -97,13 +99,13 @@ def test_single_device_multi_trace(device, shape, enable_async, blocking):
 
     # Capture Trace 0
     logger.info("Capture Trace 0")
-    tid = ttnn.begin_trace_capture(device, trace_buffer_size=106496, cq_id=0)
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
     output_tensor = run_op_chain(input_0_dev, input_1_dev, weight_dev)
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
     # Capture Trace 1
     logger.info("Capture Trace 1")
-    tid_1 = ttnn.begin_trace_capture(device, trace_buffer_size=26624, cq_id=0)
+    tid_1 = ttnn.begin_trace_capture(device, cq_id=0)
     output_tensor_1 = run_op_chain_1(input_0_dev, input_1_dev, weight_dev)
     ttnn.end_trace_capture(device, tid_1, cq_id=0)
 
@@ -122,8 +124,11 @@ def test_single_device_multi_trace(device, shape, enable_async, blocking):
             )
         ) @ torch_silu(torch_weight)
 
-        torch_output_golden_1 = torch.tanh(
-            torch.mul(torch.sub(torch_input_tensor_0, torch_input_tensor_1), torch_weight)
+        torch_output_golden_1 = torch.nn.functional.gelu(
+            torch.add(
+                torch.tanh(torch.mul(torch.sub(torch_input_tensor_0, torch_input_tensor_1), torch_weight)),
+                torch_input_tensor_1,
+            )
         )
 
         # Convert torch tensors to TTNN Multi-Device Host Tensors

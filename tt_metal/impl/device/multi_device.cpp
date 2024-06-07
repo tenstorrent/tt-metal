@@ -14,7 +14,7 @@ namespace ttnn {
 namespace multi_device {
 
 
-DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_ids, size_t l1_small_size)
+DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size)
     : device_grid(device_grid)
 {
     auto [num_rows, num_cols] = device_grid;
@@ -42,7 +42,7 @@ DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_id
     } else {
         mmio_device_ids = device_ids;
     }
-    managed_devices = tt::tt_metal::detail::CreateDevices(mmio_device_ids, 1, l1_small_size);
+    managed_devices = tt::tt_metal::detail::CreateDevices(mmio_device_ids, 1, l1_small_size, trace_region_size);
     if (is_galaxy) {
         DeviceIds galaxy_device_ids;
         for (const auto &[dev_id, dev]: managed_devices) {

@@ -28,8 +28,7 @@ class Trace {
     // Thread-safe accessors to manage trace instances
     static void validate_instance(const TraceBuffer& trace_buffer);
     static void initialize_buffer(CommandQueue& cq, std::shared_ptr<TraceBuffer> trace_buffer);
-    static std::shared_ptr<TraceBuffer> create_trace_buffer(
-        const CommandQueue& cq, shared_ptr<detail::TraceDescriptor> desc, uint32_t unpadded_size);
+    static std::shared_ptr<TraceBuffer> create_empty_trace_buffer();
 };
 
 }  // namespace tt::tt_metal
