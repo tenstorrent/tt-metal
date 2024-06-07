@@ -2331,15 +2331,15 @@ def eltwise_typecast(
     x,
     *args,
     device,
-    dtype,
+    tt_input_dtype,
     tt_output_dtype,
     layout,
     input_mem_config,
     output_mem_config,
     **kwargs,
 ):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.eltwise_typecast(t0, tt_output_dtype[0], output_mem_config=output_mem_config)
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], tt_input_dtype[0])
+    t1 = ttl.tensor.eltwise_typecast(t0, tt_input_dtype[0], tt_output_dtype[0], output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 

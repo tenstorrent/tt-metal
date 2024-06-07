@@ -12,21 +12,21 @@ namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE, uint32_t OUT_DTYPE>
+template <bool APPROXIMATE, uint32_t IN_DTYPE, uint32_t OUT_DTYPE>
 inline void llk_math_eltwise_unary_sfpu_typecast(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    if constexpr (OUT_DTYPE == (uint32_t)DataFormat::UInt16) {
+    if constexpr (IN_DTYPE == (uint32_t)DataFormat::Float16_b && OUT_DTYPE == (uint32_t)DataFormat::UInt16) {
         llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
             ckernel::sfpu::calculate_typecast_fp16b_to_uint16<APPROXIMATE,8>,
             dst_index,
             vector_mode);
     }
-    else if constexpr (OUT_DTYPE == (uint32_t)DataFormat::UInt32) {
+    else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Float16_b && OUT_DTYPE == (uint32_t)DataFormat::UInt32) {
         llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
             ckernel::sfpu::calculate_typecast_fp16b_to_uint32<APPROXIMATE,8>,
             dst_index,
             vector_mode);
     }
-    else if constexpr (OUT_DTYPE == (uint32_t)DataFormat::Float16_b) {
+    else if constexpr (IN_DTYPE == (uint32_t)DataFormat::UInt16 && OUT_DTYPE == (uint32_t)DataFormat::Float16_b) {
         llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
             ckernel::sfpu::calculate_typecast_uint16_to_fp16b<APPROXIMATE,8>,
             dst_index,
