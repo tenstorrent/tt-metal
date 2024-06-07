@@ -392,7 +392,7 @@ struct Pad {
         // std::vector<uint32_t> pad_front_vec;
         // std::ranges::copy(pad_front, std::back_inserter(pad_front_vec));
         std::vector<uint32_t> pad_front_vec(pad_front.begin(), pad_front.end());
-        auto output_tensor = operation::run_without_autoformat(
+        auto output_tensor = operation::run(
             tt::tt_metal::Pad{
                 .output_tensor_shape=tt::tt_metal::Shape(output_padded_shape),
                 .input_tensor_start=tt::tt_metal::Shape(pad_front_vec),
