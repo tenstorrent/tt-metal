@@ -210,8 +210,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/scan/scan_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/topk/topk_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/topk/single_core/single_core_topk.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/risc_v/risc_v_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/risc_v/argmax_op.cpp
 )
 
 add_library(tt_dnn OBJECT ${TT_DNN_SRCS})

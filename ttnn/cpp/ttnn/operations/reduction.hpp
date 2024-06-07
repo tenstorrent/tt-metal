@@ -7,6 +7,7 @@
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_eager/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_eager/tt_dnn/op_library/run_operation.hpp"
+#include "ttnn/cpp/ttnn/op_library/reduction/reduction_op.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
 #include "ttnn/validation.hpp"
@@ -163,9 +164,28 @@ struct Reduce {
     }
 };
 
+struct ExecuteArgMax {
+    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
+        return {ttnn::TensorSchema{
+            4, 4, {ttnn::bfloat16}, {ttnn::ROW_MAJOR_LAYOUT}, true, false, false, false}};
+    }
+
+    template <typename... Args>
+    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
+        return std::forward_as_tuple(input_tensor);
+    }
+
+    static ttnn::Tensor execute_on_worker_thread(
+        const Tensor& input_tensor, const std::optional<int> dim, const std::optional<MemoryConfig>& memory_config) {
+            return operation::run(ArgMax{tt::tt_metal::DataType::UINT32, dim, memory_config.value_or(input_tensor.memory_config())}, {input_tensor}).at(0);
+    }
+};
+
+
 }  // namespace reduction
 }  // namespace operations
 
+// Generic reductions
 constexpr auto sum =
     ttnn::register_operation<ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Sum>>(
         "ttnn::sum");
@@ -189,5 +209,9 @@ constexpr auto std =
 constexpr auto var =
     ttnn::register_operation<ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Var>>(
         "ttnn::var");
+
+// Special reductions
+constexpr auto argmax =
+    ttnn::register_operation<ttnn::operations::reduction::ExecuteArgMax>("ttnn::argmax");
 
 }  // namespace ttnn

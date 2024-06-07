@@ -222,6 +222,7 @@ Reduction
    ttnn/std
    ttnn/sum
    ttnn/var
+   ttnn/argmax
 
 Data Movement
 =============

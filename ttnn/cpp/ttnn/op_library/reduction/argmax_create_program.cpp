@@ -4,29 +4,34 @@
 
 #include <algorithm>
 
+#include "ttnn/cpp/ttnn/op_library/reduction/reduction_op.hpp"
+
 #include "tt_dnn/op_library/math.hpp"
-#include "tt_dnn/op_library/risc_v/risc_v_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
+namespace ttnn {
+
+namespace operations {
+
+namespace reduction {
+
+namespace detail {
+
 using namespace tt::constants;
 
-namespace tt {
-
-namespace tt_metal {
-
 operation::ProgramWithCallbacks argmax_multi_core(
-    const Tensor &input, const Tensor &output, std::optional<const int> dim) {
-    tt_metal::Program program{};
+    const Tensor &input, const Tensor &output, const std::optional<int> dim) {
+    tt::tt_metal::Program program{};
 
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     uint32_t input_unit_size = input.get_legacy_shape()[-1] * input.element_size();
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_unit_size = output.get_legacy_shape()[-1] * output.element_size();
 
-    tt_metal::Device *device = output.device();
+    tt::tt_metal::Device *device = output.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -41,37 +46,37 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const uint32_t H = input_shape[2];
     const uint32_t W = input_shape[3];
 
-    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t src0_cb_index = tt::CB::c_in0;
     uint32_t num_input_units = W;
     uint32_t aligned_input_unit_size = round_up_to_mul32(input_unit_size * num_input_units);
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(
+    tt::tt_metal::CircularBufferConfig cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(
             aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
             .set_page_size(src0_cb_index, aligned_input_unit_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t intermed0_cb_index = CB::c_intermed0;
+    uint32_t intermed0_cb_index = tt::CB::c_intermed0;
     uint32_t num_intermed0_units = B * C * H * W;
     // TODO: output stick size should be output dim tensor innermost dim
-    tt_metal::CircularBufferConfig intermed0_cb_config =
-        tt_metal::CircularBufferConfig(
+    tt::tt_metal::CircularBufferConfig intermed0_cb_config =
+        tt::tt_metal::CircularBufferConfig(
             num_intermed0_units * output.element_size(), {{intermed0_cb_index, output_cb_data_format}})
             .set_page_size(intermed0_cb_index, output.element_size());  /// page size shouldn't matter here
-    auto cb_intermed0 = tt_metal::CreateCircularBuffer(program, all_cores, intermed0_cb_config);
+    auto cb_intermed0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, intermed0_cb_config);
 
     /* NO WRITER FOR NOW
     uint32_t output_cb_index = 16; // same as input cb
     uint32_t num_output_units = 2;
     uint32_t aligned_output_unit_size = round_up_to_mul32(output_unit_size);
-    tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(num_output_units *
+    tt::tt_metal::CircularBufferConfig output_cb_config = tt::tt_metal::CircularBufferConfig(num_output_units *
     aligned_output_unit_size, {{output_cb_index, output_cb_data_format}}) .set_page_size(output_cb_index,
-    aligned_output_unit_size); auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    aligned_output_unit_size); auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
     */
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     std::vector<uint32_t> reader_compile_time_args = {
         src0_cb_index,
@@ -89,11 +94,11 @@ operation::ProgramWithCallbacks argmax_multi_core(
     };
 
     std::map<string, string> kernel_defines;
-    tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/risc_v/kernels/reader_argmax_interleaved.cpp",
+        "ttnn/cpp/ttnn/op_library/reduction/kernels/reader_argmax_interleaved.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
     uint32_t g1_numcores = core_group_1.num_cores();
     uint32_t g2_numcores = core_group_2.num_cores();
@@ -102,7 +107,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord &core = cores.at(i);
 
-        tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address(), dst_buffer->address()});
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address(), dst_buffer->address()});
     }
 
     auto override_runtime_args_callback = [reader_kernel_id, cores](
@@ -125,6 +130,10 @@ operation::ProgramWithCallbacks argmax_multi_core(
     return {std::move(program), override_runtime_args_callback};
 }
 
-}  // namespace tt_metal
+}  // namespace detail
 
-}  // namespace tt
+}  // namespace reduction
+
+}  // namespace operations
+
+}  // namespace ttnn

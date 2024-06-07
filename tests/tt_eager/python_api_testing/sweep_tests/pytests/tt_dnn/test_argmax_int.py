@@ -40,7 +40,7 @@ class TestArgmax:
 
         input_tensor = tt_lib.tensor.Tensor(input_data, tt_lib.tensor.DataType.BFLOAT16).to(device, memconfig)
 
-        tt_output_tensor_on_device = tt_lib.tensor.argmax_int(input_tensor, dim=dim)
+        tt_output_tensor_on_device = ttnn.argmax(input_tensor, dim=dim)
         tt_out_tensor = tt_output_tensor_on_device.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
         golden_tensor = torch.argmax(input_data, dim=dim)
         if dim == 1 or dim == -3 or dim == 0 or dim == -4:
