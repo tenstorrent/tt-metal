@@ -120,6 +120,7 @@ void py_module(py::module& m_transformers) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("program_config").noconvert() = SDPADefaultProgramConfig{},
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        py::arg("valid_seq_len").noconvert() = std::nullopt,
         "Causal scaled dot product attention. This API mimicks the PyTorch API of the same name."
         "The implementation is FlashAttention-2 and it currently only supports MQA with causal masking.\n"
 

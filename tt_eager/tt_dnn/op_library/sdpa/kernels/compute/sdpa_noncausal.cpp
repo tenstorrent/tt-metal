@@ -317,15 +317,15 @@ void matmul_blocks(const uint32_t& in0_cb, const uint32_t& in1_cb, const uint32_
 }
 
 void MAIN {
-    constexpr uint32_t B = get_compile_time_arg_val(0);
-    constexpr uint32_t NQH = get_compile_time_arg_val(1);
-    constexpr uint32_t NKH = get_compile_time_arg_val(2);
+    constexpr uint32_t NKH = get_compile_time_arg_val(0);
+    constexpr uint32_t B = get_compile_time_arg_val(1);
+    constexpr uint32_t _unused1 = get_compile_time_arg_val(2);
     constexpr uint32_t St = get_compile_time_arg_val(3);
     constexpr uint32_t DHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t q_num_chunks = get_compile_time_arg_val(6);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(7);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(8);
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(8); // num chunks in valid_seq_len
 
     constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(9);
     constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(10);
@@ -383,30 +383,13 @@ void MAIN {
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
-                uint32_t q_chunk;
-                #if defined BALANCED_Q_PARALLEL
-                uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
-                if (q_iter < q_chunk_div_2) { // bottom half
-                    q_chunk = local_q_start + q_iter;
-                } else {
-                    uint32_t back_q_iter = q_iter - q_chunk_div_2; // Back half should start at 0
-                    q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
-                }
-                #else
-                q_chunk = local_q_start + q_iter;
-                #endif
-
-                // Get Q chunk
-                const uint32_t q_low_idx = q_chunk * Sq_chunk_t; // This is the sequence index of the first tile of this chunk
-                const uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
                 cb_wait_front(cb_q_in, q_chunk_tiles);
 
                 // loop while k_low < q_high
-                for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
-                    const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
-                    const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
+                for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
 
                     /* QK = Q_CHUNK @ K_CHUNK */
+                    unpack_reconfig_data_format(cb_q_in, cb_k_in); // DEBUG
                     pack_reconfig_data_format(cb_qk_im);
                     matmul_blocks(cb_q_in, cb_k_in, cb_qk_im, Sq_chunk_t, Sk_chunk_t, DHt, qk_num_blocks, qk_in0_num_subblocks, qk_in1_num_subblocks, qk_in0_block_w, qk_subblock_h, qk_subblock_w, true /*transpose*/);
 
@@ -418,35 +401,45 @@ void MAIN {
                     // K-range = [k_low, k_high)
                     // does_overlap = not (q_low >= k_high or k_low >= q_high)
                     // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
-                    if (!(q_low_idx >= k_high_idx)) {
-                        /* QK += MASK */
-                        unpack_reconfig_data_format(cb_qk_im, cb_mask_in);
-                        add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
-                    }
+                    /* QK += MASK */
+                    unpack_reconfig_data_format(cb_qk_im, cb_mask_in);
+                    add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
 
                     unpack_reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                    pack_reconfig_data_format(cb_cur_max);
                     reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_max, Sq_chunk_t, Sk_chunk_t>();
 
                     if (k_chunk > 0) {
+                        unpack_reconfig_data_format(cb_cur_max, cb_prev_max);
                         max_block_inplace<cb_cur_max, cb_prev_max, Sq_chunk_t>();
                     }
 
                     /* QK -= cb_cur_max */
                     /* QK = exp(QK)*/
+                    unpack_reconfig_data_format(cb_qk_im, cb_cur_max);
+                    pack_reconfig_data_format(cb_qk_im);
                     sub_exp_block_bcast_cols_inplace<cb_qk_im, cb_cur_max, Sq_chunk_t, Sk_chunk_t>();
 
                     /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
+                    unpack_reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                    pack_reconfig_data_format(cb_cur_sum);
                     reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_sum, Sq_chunk_t, Sk_chunk_t>();
 
                     /* OUT_IM = QK @ V_CHUNK */
+                    unpack_reconfig_data_format(cb_qk_im, cb_v_in); // DEBUG
+                    pack_reconfig_data_format(cb_out_im);
                     matmul_blocks(cb_qk_im, cb_v_in, cb_out_im, Sq_chunk_t, DHt, Sk_chunk_t, out_num_blocks, out_in0_num_subblocks, out_in1_num_subblocks, out_in0_block_w, out_subblock_h, out_subblock_w, false /*transpose*/);
                     unpack_reconfig_data_format_srca(cb_out_im);
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
 
                     /* OUT_ACC += OUT_IM */
                     if (k_chunk == 0) {
+                        unpack_reconfig_data_format_srca(cb_out_im);
+                        pack_reconfig_data_format(cb_out_accumulate_im);
                         copy_block(cb_out_im, cb_out_accumulate_im, out_chunk_tiles);
                     } else {
+                        unpack_reconfig_data_format(cb_prev_max, cb_cur_max); // DEBUG
+                        pack_reconfig_data_format(cb_exp_max_diff);
                         /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
                         sub_exp_block(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
                         cb_pop_front(cb_prev_max, Sq_chunk_t);
@@ -455,25 +448,39 @@ void MAIN {
                         mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
                         /* cb_out_accumulate_im *= cb_exp_max_diff */
+                        unpack_reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff); // DEBUG
+                        pack_reconfig_data_format(cb_out_accumulate_im);
                         mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, DHt);
 
                         /* cb_cur_sum += cb_prev_sum */
+                        unpack_reconfig_data_format(cb_cur_sum, cb_prev_sum); // DEBUG
+                        pack_reconfig_data_format(cb_cur_sum);
                         add_block_inplace(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
 
                         /* cb_out_accumulate_im += cb_out_im */
+                        unpack_reconfig_data_format(cb_out_accumulate_im, cb_out_im); // DEBUG
+                        pack_reconfig_data_format(cb_out_accumulate_im);
                         add_block_inplace(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
                     }
 
                     // Set cb_prev_sum and cb_prev_max
+                    unpack_reconfig_data_format(cb_cur_max, cb_cur_max); // DEBUG
+                    pack_reconfig_data_format(cb_prev_max);
                     copy_block(cb_cur_max, cb_prev_max, Sq_chunk_t);
                     copy_block(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 }
 
+
                 /* cb_cur_sum = 1.0 / cb_cur_sum */
                 cb_push_back(cb_cur_sum, Sq_chunk_t);
+
+                unpack_reconfig_data_format(cb_cur_sum, cb_cur_sum); // DEBUG
+                pack_reconfig_data_format(cb_cur_sum);
                 recip_block_inplace(cb_cur_sum, Sq_chunk_t);
 
                 /* cb_out_accumulate_im *= cb_cur_sum */
+                unpack_reconfig_data_format(cb_out_accumulate_im, cb_cur_sum); // DEBUG
+                pack_reconfig_data_format(cb_out_accumulate_im);
                 mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, DHt);
                 pack_reconfig_data_format(cb_out);
                 copy_block(cb_out_accumulate_im, cb_out, out_chunk_tiles);
