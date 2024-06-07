@@ -57,6 +57,8 @@ def get_rotation_mat(dhead, end):
 
 #  Add-Multiply method of rotary embeddings for prefill
 def get_rot_transformation_mat(dhead):
+    # ROPE op uses a single tile
+    dhead = 32
     rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
     rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
     rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
