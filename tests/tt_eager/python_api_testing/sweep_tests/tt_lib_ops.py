@@ -3641,8 +3641,6 @@ def interleaved_to_sharded_partial_coregrid(
     output_mem_config,
     **kwargs,
 ):
-    print(x_core)
-    print(y_core)
     grid_size = (x_core, y_core)
     W = x.shape[-1]
     H = x.shape[-2]
