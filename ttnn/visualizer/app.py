@@ -19,6 +19,7 @@ import pandas as pd
 
 import ttnn
 import ttnn.database
+import os
 
 ttnn.CONFIG.enable_logging = False
 
@@ -241,6 +242,30 @@ def operations_with_l1_buffer_report():
         l1_reports=l1_reports,
         stack_traces=stack_traces,
     )
+
+
+@app.route("/perf_trace_report")
+def perf_trace_report():
+    report_path = get_report_path()
+    csv_path = ""
+    perf_report = ""
+    try:
+        for x in os.scandir(report_path / "tracy"):
+            for y in os.scandir(report_path / "tracy" / x.name):
+                if y.name.startswith("ops_perf_results"):
+                    csv_path = report_path / "tracy" / x.name / y.name
+                    break
+        f = open(csv_path, "r")
+        perf_report = f.read()
+    except FileNotFoundError:
+        logger.warning(f"Performance report file not found")
+
+    if perf_report == "":
+        logger.warning(
+            "Find docs on setting up profiler at: https://tenstorrent.github.io/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html"
+        )
+
+    return render_template("perf_trace_report.html", perf_report=perf_report)
 
 
 def create_summarized_l1_buffer_plot(operation_id):

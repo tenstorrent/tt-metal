@@ -17,6 +17,8 @@ from tt_metal.tools.profiler.common import (
     PROFILER_OUTPUT_DIR,
 )
 
+import ttnn
+
 
 def profile_command(test_command, output_folder, name_append):
     currentEnvs = dict(os.environ)
@@ -39,6 +41,8 @@ def main(command, output_folder, name_append):
         "profile_this.py is getting deprecated soon. Please use the tracy.py module with -r option to obtain op reports."
     )
     if command:
+        if ttnn.CONFIG.report_path and not output_folder:
+            output_folder = ttnn.CONFIG.report_path / "tracy"
         profile_command(command, output_folder, name_append)
 
 
