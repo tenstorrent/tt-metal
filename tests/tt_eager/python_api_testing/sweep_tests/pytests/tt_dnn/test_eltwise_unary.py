@@ -16,7 +16,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from models.utility_functions import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0, skip_for_grayskull
 
 shapes = [
     [[1, 1, 32, 32]],  # Single core
@@ -584,6 +584,39 @@ class TestEltwiseUnary:
             test_args,
         )
 
+    @pytest.mark.parametrize("round_off_method", ["floor", "trunc"])
+    @skip_for_grayskull("#ToDo: GS implementation needs to be done for Floor")
+    def test_run_eltwise_round_off_ops(
+        self,
+        round_off_method,
+        input_shapes,
+        device,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=-1000, high=1000), torch.bfloat16
+            )
+        ]
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        test_args.update(
+            {
+                "input_mem_config": [input_mem_config],
+                "output_mem_config": output_mem_config,
+            }
+        )
+        comparison_func = comparison_funcs.comp_equal
+        run_single_pytorch_test(
+            f"eltwise-{round_off_method}",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            device,
+            test_args,
+        )
+
     @pytest.mark.parametrize("scalar", [0.5])
     def test_run_eltwise_heaviside(
         self,
@@ -1094,6 +1127,40 @@ class TestEltwiseUnary:
         comparison_func = comparison_funcs.comp_equal
         run_single_pytorch_test(
             f"eltwise-{unary_comp}",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            device,
+            test_args,
+        )
+
+    @skip_for_grayskull("Softplus kernel not currently availible for GS")
+    @pytest.mark.parametrize("beta", [1.0, 5.0])
+    @pytest.mark.parametrize("threshold", [10.0, 20.0])
+    def test_run_eltwise_softplus(
+        self,
+        input_shapes,
+        beta,
+        threshold,
+        device,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
+        ]
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        test_args.update({"beta": beta, "threshold": threshold})
+        test_args.update(
+            {
+                "input_mem_config": [input_mem_config],
+                "output_mem_config": output_mem_config,
+            }
+        )
+        comparison_func = comparison_funcs.comp_pcc
+        run_single_pytorch_test(
+            "eltwise-softplus",
             input_shapes,
             datagen_func,
             comparison_func,

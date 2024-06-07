@@ -86,6 +86,7 @@ class RunTimeOptions {
     bool test_mode_enabled = false;
 
     bool profiler_enabled = false;
+    bool profile_dispatch_cores = false;
 
     bool null_kernels = false;
 
@@ -93,6 +94,8 @@ class RunTimeOptions {
 
     bool riscv_debug_info_enabled = false;
     uint32_t watcher_debug_delay = 0;
+
+    bool validate_kernel_binaries = false;
 
    public:
     RunTimeOptions();
@@ -188,6 +191,9 @@ class RunTimeOptions {
     inline bool get_dprint_noc_transfers() { return dprint_noc_transfer_data; }
     inline void set_dprint_noc_transfers(bool val) { dprint_noc_transfer_data = val; }
 
+    inline bool get_validate_kernel_binaries() { return validate_kernel_binaries; }
+    inline void set_validate_kernel_binaries(bool val) { validate_kernel_binaries = val; }
+
     // Returns the string representation for hash computation.
     inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) {
         switch (feature) {
@@ -213,6 +219,7 @@ class RunTimeOptions {
     inline void set_test_mode_enabled(bool enable) { test_mode_enabled = enable; }
 
     inline bool get_profiler_enabled() { return profiler_enabled; }
+    inline bool get_profiler_do_dispatch_cores() { return profile_dispatch_cores; }
 
     inline void set_kernels_nullified(bool v) { null_kernels = v; }
     inline bool get_kernels_nullified() { return null_kernels; }

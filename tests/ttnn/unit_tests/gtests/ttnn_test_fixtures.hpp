@@ -10,6 +10,9 @@
 
 #include "gtest/gtest.h"
 
+#include "ttnn/device.hpp"
+#include "tests/tt_metal/test_utils/env_vars.hpp"
+
 namespace ttnn {
 
 class TTNNFixture : public ::testing::Test {
@@ -26,4 +29,20 @@ class TTNNFixture : public ::testing::Test {
 
     void TearDown() override { tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false); }
 };
+
+class TTNNFixtureWithDevice : public TTNNFixture {
+   protected:
+    tt::tt_metal::Device* device_ = nullptr;
+
+    void SetUp() override {
+        TTNNFixture::SetUp();
+        device_ = tt::tt_metal::CreateDevice(0);
+    }
+
+    void TearDown() override {
+        TTNNFixture::TearDown();
+        tt::tt_metal::CloseDevice(device_);
+    }
+};
+
 }  // namespace ttnn

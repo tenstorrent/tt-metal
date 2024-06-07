@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import os
 import torch
 import pytest
 from loguru import logger
@@ -21,6 +22,10 @@ from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 from models.utility_functions import profiler, skip_for_grayskull
 
+if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    from tracy import signpost
+import tt_lib
+
 
 class Emb(torch.nn.Module):
     def __init__(self):
@@ -38,6 +43,7 @@ class Emb(torch.nn.Module):
     (
         (32, 5, 0.105),
         (128, 5, 0.125),
+        (1024, 5, 0.225),
     ),
 )
 def test_mistral_model_perf(
@@ -115,6 +121,11 @@ def test_mistral_model_perf(
     profiler.end(f"end_to_end_inference_with_compile")
     profiler.print()
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
+
+    tt_lib.device.DumpDeviceProfiler(device)
+
+    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+        signpost("Model perf run")
 
     profiler.clear()
     profiler.start(f"end_to_end_inference")

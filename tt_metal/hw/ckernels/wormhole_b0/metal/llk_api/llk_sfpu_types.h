@@ -73,6 +73,10 @@ enum SfpuType {
     unary_ne,
     unary_gt,
     unary_lt,
+    softplus,
     tiled_prod,
+    right_shift,
+    floor,
+    left_shift,
     unused,
 };

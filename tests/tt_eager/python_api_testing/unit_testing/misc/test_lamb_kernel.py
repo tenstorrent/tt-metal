@@ -49,24 +49,16 @@ def test_lamb_kernel(input_shapes, beta1, beta2, step_size, eps, weight_decay, d
     param_data = torch.Tensor(size=input_shapes).uniform_(1, 100)
     grad_data, exp_avg_data, exp_avg_sq_data = param_data, param_data, param_data
 
-    param = (
-        tt_lib.tensor.Tensor(param_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.ROW_MAJOR).to(device)
-    )
+    param = tt_lib.tensor.Tensor(param_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
 
-    grad = (
-        tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.ROW_MAJOR).to(device)
-    )
+    grad = tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
 
     exp_avg = (
-        tt_lib.tensor.Tensor(exp_avg_data, tt_lib.tensor.DataType.BFLOAT16)
-        .to(tt_lib.tensor.Layout.ROW_MAJOR)
-        .to(device)
+        tt_lib.tensor.Tensor(exp_avg_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
     )
 
     exp_avg_sq = (
-        tt_lib.tensor.Tensor(exp_avg_sq_data, tt_lib.tensor.DataType.BFLOAT16)
-        .to(tt_lib.tensor.Layout.ROW_MAJOR)
-        .to(device)
+        tt_lib.tensor.Tensor(exp_avg_sq_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
     )
 
     tt_output_tensor_on_device = tt_lib.tensor.lamb_optimizer(

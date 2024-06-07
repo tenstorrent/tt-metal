@@ -89,7 +89,7 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, Device* device, CoreCoord 
 
         std::map<string, string> binary_defines = {
             { "ELTWISE_OP", "add_tiles" },
-            { "ELTWISE_OP_CODE", "0" }
+            { "ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD" }
         };
         auto eltwise_binary_kernel = tt_metal::CreateKernel(
             program,

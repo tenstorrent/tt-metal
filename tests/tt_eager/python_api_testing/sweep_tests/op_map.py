@@ -488,6 +488,14 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_heaviside,
         "pytorch_op": pytorch_ops.heaviside,
     },
+    "eltwise-right_shift": {
+        "tt_op": tt_lib_ops.eltwise_right_shift,
+        "pytorch_op": pytorch_ops.right_shift,
+    },
+    "eltwise-left_shift": {
+        "tt_op": tt_lib_ops.eltwise_left_shift,
+        "pytorch_op": pytorch_ops.left_shift,
+    },
     "eltwise-unary_ne": {
         "tt_op": tt_lib_ops.eltwise_unary_ne,
         "pytorch_op": pytorch_ops.unary_ne,
@@ -568,6 +576,26 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_signbit,
         "pytorch_op": pytorch_ops.signbit,
     },
+    "eltwise-floor": {
+        "tt_op": tt_lib_ops.eltwise_floor,
+        "pytorch_op": pytorch_ops.floor,
+    },
+    "eltwise-trunc": {
+        "tt_op": tt_lib_ops.eltwise_trunc,
+        "pytorch_op": pytorch_ops.trunc,
+    },
+    "eltwise-floor_div": {
+        "tt_op": tt_lib_ops.eltwise_floor_div,
+        "pytorch_op": pytorch_ops.floor_div,
+    },
+    "eltwise-unary_floor_div": {
+        "tt_op": tt_lib_ops.eltwise_unary_floor_div,
+        "pytorch_op": pytorch_ops.unary_floor_div,
+    },
+    "eltwise-round": {
+        "tt_op": tt_lib_ops.eltwise_round,
+        "pytorch_op": pytorch_ops.round,
+    },
     "eltwise-rpow": {
         "tt_op": tt_lib_ops.eltwise_rpow,
         "pytorch_op": pytorch_ops.eltwise_rpow,
@@ -583,6 +611,10 @@ op_map = {
     "eltwise-identity": {
         "tt_op": tt_lib_ops.eltwise_identity,
         "pytorch_op": pytorch_ops.eltwise_identity,
+    },
+    "eltwise-typecast": {
+        "tt_op": tt_lib_ops.eltwise_typecast,
+        "pytorch_op": pytorch_ops.eltwise_typecast,
     },
     "eltwise-unary_gt": {
         "tt_op": tt_lib_ops.eltwise_unary_gt,
@@ -725,6 +757,71 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_isclose,
         "pytorch_op": pytorch_ops.isclose,
     },
+    # Eltwise binary with optional output
+    "eltwise-ne-optional": {
+        "tt_op": tt_lib_ops.eltwise_ne_optional,
+        "pytorch_op": pytorch_ops.ne,
+    },
+    "eltwise-bias_gelu-optional": {
+        "tt_op": tt_lib_ops.eltwise_bias_gelu_optional,
+        "pytorch_op": pytorch_ops.bias_gelu,
+    },
+    "eltwise-eq-optional": {
+        "tt_op": tt_lib_ops.eltwise_eq_optional,
+        "pytorch_op": pytorch_ops.eq,
+    },
+    "eltwise-lt-optional": {
+        "tt_op": tt_lib_ops.eltwise_lt_optional,
+        "pytorch_op": pytorch_ops.lt,
+    },
+    "eltwise-gt-optional": {
+        "tt_op": tt_lib_ops.eltwise_gt_optional,
+        "pytorch_op": pytorch_ops.gt,
+    },
+    "eltwise-gte-optional": {
+        "tt_op": tt_lib_ops.eltwise_gte_optional,
+        "pytorch_op": pytorch_ops.gte,
+    },
+    "eltwise-lte-optional": {
+        "tt_op": tt_lib_ops.eltwise_lte_optional,
+        "pytorch_op": pytorch_ops.lte,
+    },
+    "eltwise-add-optional": {
+        "tt_op": tt_lib_ops.eltwise_add_optional,
+        "pytorch_op": pytorch_ops.add,
+    },
+    "eltwise-sub-optional": {
+        "tt_op": tt_lib_ops.eltwise_sub_optional,
+        "pytorch_op": pytorch_ops.sub,
+    },
+    "eltwise-mul-optional": {
+        "tt_op": tt_lib_ops.eltwise_mul_optional,
+        "pytorch_op": pytorch_ops.mul,
+    },
+    "eltwise-squared_difference-optional": {
+        "tt_op": tt_lib_ops.eltwise_squared_difference_optional,
+        "pytorch_op": pytorch_ops.squared_difference,
+    },
+    "eltwise-ldexp-optional": {
+        "tt_op": tt_lib_ops.eltwise_ldexp_optional,
+        "pytorch_op": pytorch_ops.ldexp,
+    },
+    "eltwise-logaddexp-optional": {
+        "tt_op": tt_lib_ops.eltwise_logaddexp_optional,
+        "pytorch_op": pytorch_ops.logaddexp,
+    },
+    "eltwise-logaddexp2-optional": {
+        "tt_op": tt_lib_ops.eltwise_logaddexp2_optional,
+        "pytorch_op": pytorch_ops.logaddexp2,
+    },
+    "eltwise-logical_or-optional": {
+        "tt_op": tt_lib_ops.eltwise_logical_or_optional,
+        "pytorch_op": pytorch_ops.logical_or,
+    },
+    "eltwise-logical_and-optional": {
+        "tt_op": tt_lib_ops.eltwise_logical_and_optional,
+        "pytorch_op": pytorch_ops.logical_and,
+    },
     # Eltwise ternary
     "eltwise-arange": {
         "tt_op": tt_lib_ops.arange,
@@ -733,6 +830,14 @@ op_map = {
     "eltwise-where": {
         "tt_op": tt_lib_ops.where,
         "pytorch_op": pytorch_ops.where,
+    },
+    "eltwise-where-optional": {
+        "tt_op": tt_lib_ops.where_optional,
+        "pytorch_op": pytorch_ops.where,
+    },
+    "eltwise-where-scalar-optional": {
+        "tt_op": tt_lib_ops.where_scalar_optional,
+        "pytorch_op": pytorch_ops.where_scalar,
     },
     "where-bw": {
         "tt_op": tt_lib_ops.where_bw,

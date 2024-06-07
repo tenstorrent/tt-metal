@@ -61,12 +61,7 @@ run_profiling_test(){
 
     run_async_mode_T3000_test
 
-    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py::test_custom_cycle_count -vvv
-    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py::test_full_buffer -vvv
-    #TODO(MO): Needed until #6560 is fixed.
-    if [ "$ARCH_NAME" != "grayskull" ]; then
-        TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py::test_multi_op -vvv
-    fi
+    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py
 
     remove_default_log_locations
 
@@ -92,7 +87,7 @@ run_profiling_no_reset_test(){
     source python_env/bin/activate
     export PYTHONPATH=$TT_METAL_HOME
 
-    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py::test_multi_op -vvv
+    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler_gs_no_reset.py
 
     remove_default_log_locations
 }

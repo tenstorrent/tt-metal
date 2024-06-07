@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/dprint.h"  // required in all kernels using DPRINT
 #include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
@@ -40,16 +39,13 @@ void kernel_main() {
     const DataFormat weight_data_format = get_dataformat(cb_weight);
     const InterleavedAddrGen<weight_is_dram> addrg_weight = {
         .bank_base_address = weight_addr,
-        .page_size = 1024 * element_size,
+        .page_size = weight_tile_bytes,
     };
 #endif
 
     constexpr uint32_t onetile = 1;
 
-    union {
-        float f;
-        uint32_t u;
-    } one, zero;
+    Scalar one, zero;
     one.f = 1.0f;
     zero.f = 0.0f;
 

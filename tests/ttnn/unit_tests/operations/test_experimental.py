@@ -217,11 +217,8 @@ def test_ttnn_experimental_operations_primary_matmul_dram_sharded(device, m_size
 
     program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=32,
-        out_subblock_h=1,
-        out_subblock_w=4,
         per_core_M=1,
         per_core_N=4,
-        fuse_batch=True,
         fused_activation=None,
     )
 

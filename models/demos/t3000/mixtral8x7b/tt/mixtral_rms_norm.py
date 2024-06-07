@@ -4,9 +4,10 @@
 import torch
 import ttnn
 from ttnn import ReplicateTensorToMesh
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import LightweightModule
 
 
-class TtRMSNorm(torch.nn.Module):
+class TtRMSNorm(LightweightModule):
     def __init__(
         self,
         device_mesh,
@@ -50,7 +51,7 @@ class TtRMSNorm(torch.nn.Module):
         return x
 
 
-class TtRMSNormSharded(torch.nn.Module):
+class TtRMSNormSharded(LightweightModule):
     def __init__(
         self,
         device_mesh,
@@ -87,7 +88,6 @@ class TtRMSNormSharded(torch.nn.Module):
             cache_file_name=cache_name,
             mesh_mapper=ReplicateTensorToMesh(device_mesh),
         )
-        self.weight = ttnn.to_device(self.weight, device_mesh)
 
     def forward(self, x: ttnn.Tensor, out_sharded=False) -> ttnn.Tensor:
         x = ttnn.experimental.tensor.interleaved_to_sharded(

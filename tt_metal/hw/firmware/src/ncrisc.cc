@@ -33,12 +33,18 @@ uint32_t atomic_ret_val __attribute__((section("l1_data"))) __attribute__((used)
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
+#if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
-uint32_t wIndex __attribute__((used));
-uint32_t stackSize __attribute__((used));
-uint32_t sums[SUM_COUNT] __attribute__((used));
-uint32_t sumIDs[SUM_COUNT] __attribute__((used));
-}  // namespace kernel_profiler
+    uint32_t wIndex __attribute__((used));
+    uint32_t stackSize __attribute__((used));
+    uint32_t sums[SUM_COUNT] __attribute__((used));
+    uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+    uint16_t core_flat_id __attribute__((used));
+    uint32_t nocWriteSize __attribute__((used));
+    uint32_t *nocWriteBuffer __attribute__((used));
+    uint32_t *nocWriteIndex __attribute__((used));
+}
+#endif
 
 extern "C" void ncrisc_resume(void);
 extern "C" void notify_brisc_and_halt(uint32_t status);

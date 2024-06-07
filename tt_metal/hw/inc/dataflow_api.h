@@ -476,7 +476,7 @@ uint64_t get_l1_noc_addr(const uint32_t id, const uint32_t page_size, const uint
 }
 
 uint64_t get_system_memory_noc_addr(const uint32_t id, const uint32_t page_size, const uint32_t base_addr, const uint32_t offset = 0) {
-    constexpr static uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32;
+    uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_PCIE_ENCODING(NOC_X(PCIE_NOC_X), NOC_Y(PCIE_NOC_Y), noc_index)) << 32;
     uint32_t addr = base_addr + page_size * id + offset;
     uint64_t noc_addr = pcie_core_noc_encoding | addr;
     return noc_addr;
@@ -503,7 +503,7 @@ std::uint64_t get_noc_addr(std::uint32_t addr) {
  *
  * | Argument          | Description                                        | Data type | Valid range | required |
  * |-------------------|----------------------------------------------------|-----------|------------------------------------------|----------|
- * | src_noc_addr      | Encoding of the source DRAM location (x,y)+address | uint64_t  | DOX-TODO(ref to explain valid coords)    | Yes      |
+ * | src_noc_addr      | Encoding of the source NOC location (x,y)+address  | uint64_t  | DOX-TODO(ref to explain valid coords)    | Yes      |
  * | dst_local_l1_addr | Address in local L1 memory                         | uint32_t  | 0..1MB                                   | Yes      |
  * | size              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                                   | Yes      |
  */
@@ -1215,11 +1215,11 @@ FORCE_INLINE void noc_async_read_tile(
  *
  * Return value: None
  *
- * | Argument          | Description                                             | Type     | Valid Range | Required |
- * |-------------------|---------------------------------------------------------|----------|-----------------------------------------------------------|----------|
- * | src_local_l1_addr | Source address in local L1 memory                       | uint32_t | 0..1MB | True     |
- * | dst_noc_addr      | Encoding of the destination DRAM location (x,y)+address | uint64_t | DOX-TODO(insert a reference  to what constitutes valid coords) | True     |
- * | size              | Size of data transfer in bytes | uint32_t | 0..1MB                                                    | True     |
+ * | Argument          | Description                                             | Type     | Valid Range                                                    | Required |
+ * |-------------------|---------------------------------------------------------|----------|----------------------------------------------------------------|----------|
+ * | src_local_l1_addr | Source address in local L1 memory                       | uint32_t | 0..1MB                                                         | True     |
+ * | dst_noc_addr      | Encoding of the destination NOC location (x,y)+address  | uint64_t | DOX-TODO(insert a reference  to what constitutes valid coords) | True     |
+ * | size              | Size of data transfer in bytes                          | uint32_t | 0..1MB                                                         | True     |
  */
 template<uint32_t max_page_size=NOC_MAX_BURST_SIZE + 1>
 inline

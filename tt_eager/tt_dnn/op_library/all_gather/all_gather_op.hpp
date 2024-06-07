@@ -47,7 +47,7 @@ class AllGatherConfig {
 
         erisc_handshake_address(round_up(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, 16)),
         topology(topology),
-        enable_bidirectional(/*false*/topology == all_gather_op::Topology::Ring && dim != 0 && dim != 1),
+        enable_bidirectional(topology == all_gather_op::Topology::Ring),
 
         input_is_dram(input_tensor.buffer()->buffer_type() == BufferType::DRAM),
         output_is_dram(output_tensor.buffer()->buffer_type() == BufferType::DRAM),
@@ -218,7 +218,21 @@ struct AllGather {
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "dim",
+        "num_links",
+        "ring_size",
+        "ring_index",
+        "receiver_device_id",
+        "sender_device_id",
+        "output_mem_config",
+        "topology");
+
+    const auto attribute_values() const {
+        return std::forward_as_tuple(
+            dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, output_mem_config, topology);
+    }
 };
 
 // All Gather Variants

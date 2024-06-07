@@ -10,6 +10,8 @@
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_dnn/op_library/compute_kernel_config.hpp"
+#include "tt_eager/tensor/tensor_utils.hpp"
+#include "ttnn/types.hpp"
 
 namespace tt {
 
@@ -25,7 +27,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_padding (const Tensor &i
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_padding (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0, bool untilize_out);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool untilize_out, bool skip_compute, bool skip_in0_mcast, bool skip_write_back);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t per_core_M, uint32_t per_core_N, std::optional<UnaryWithParam> fused_activation, bool untilize_out, bool skip_compute, bool skip_in0_mcast, bool skip_write_back);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation, bool untilize_out);
 operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor &output_tensor, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, DeviceComputeKernelConfig compute_kernel_config, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool untilize_out);
 
@@ -218,29 +220,20 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
     std::size_t in0_block_w;
-    std::size_t out_subblock_h;
-    std::size_t out_subblock_w;
     std::size_t per_core_M;
     std::size_t per_core_N;
-    bool fuse_batch;
     std::optional<UnaryWithParam> fused_activation;
 
     static constexpr auto attribute_names = std::make_tuple(
         "in0_block_w",
-        "out_subblock_h",
-        "out_subblock_w",
         "per_core_M",
         "per_core_N",
-        "fuse_batch",
         "fused_activation");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->in0_block_w),
-            std::cref(this->out_subblock_h),
-            std::cref(this->out_subblock_w),
             std::cref(this->per_core_M),
             std::cref(this->per_core_N),
-            std::cref(this->fuse_batch),
             std::cref(this->fused_activation));
     }
 };
@@ -307,9 +300,9 @@ struct Matmul {
     }
 };
 
-
 inline bool get_broadcast_batch(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const MatmulProgramConfig> matmul_program_config) {
-    bool broadcast_batch = input_tensor_b.get_legacy_shape()[0] * input_tensor_b.get_legacy_shape()[1] == 1;
+    uint32_t batch_size_b = get_batch_size(input_tensor_b.get_legacy_shape());
+    bool broadcast_batch = batch_size_b == 1;
     if (!matmul_program_config.has_value()) {
         return broadcast_batch;
     }
@@ -325,7 +318,8 @@ inline bool get_broadcast_batch(const Tensor &input_tensor_a, const Tensor &inpu
         matmul_program_config.value()
     );
     if (is_multi_core_reuse) {
-        broadcast_batch &= input_tensor_a.get_legacy_shape()[0] * input_tensor_a.get_legacy_shape()[1] > 1;
+        uint32_t batch_size_a = get_batch_size(input_tensor_a.get_legacy_shape());
+        broadcast_batch &= batch_size_a > 1;
     }
     return broadcast_batch;
 }

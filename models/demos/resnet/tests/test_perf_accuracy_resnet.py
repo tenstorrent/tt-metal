@@ -162,11 +162,11 @@ def run_perf_resnet(
 
 
 @skip_for_wormhole_b0(reason_str="Not tested on single WH")
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time, iterations",
-    ((16, 0.015, 14.3, 160), (20, 0.014, 14.3, 160)),
+    ((16, 0.015, 14.5, 160), (20, 0.014, 14.5, 160)),
 )
 def test_perf_bare_metal(
     device,

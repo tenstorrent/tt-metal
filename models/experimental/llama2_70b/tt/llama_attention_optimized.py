@@ -443,19 +443,7 @@ class TtLlamaAttention_optimized:
         # key and value layers will have kv_seq_len padded to nearest 32
 
         keys = self.layer_past[0]
-        key_layer = tt_lib.tensor.unpad(
-            keys,
-            [0, 0, 0, 0],
-            [
-                self.n_local_kv_heads - 1,
-                self.max_batch_size - 1,
-                padded_layer_past_len - 1,
-                self.head_dim - 1,
-            ],
-            output_mem_config=self.model_config["DRAM_MEMCFG"],
-        )
-
-        key_layer = tt_lib.tensor.interleaved_to_sharded(key_layer, sharded_mem_config=kv_cache_memcfg)
+        key_layer = tt_lib.tensor.nlp_kv_cache_load_slice(keys, 0, padded_layer_past_len)
 
         # PRE-SOFTMAX MM
 
@@ -503,19 +491,7 @@ class TtLlamaAttention_optimized:
         value_layer.deallocate(True)
 
         values = self.layer_past[1]
-        value_layer = tt_lib.tensor.unpad(
-            values,
-            [0, 0, 0, 0],
-            [
-                self.n_local_kv_heads - 1,
-                self.max_batch_size - 1,
-                padded_layer_past_len - 1,
-                self.head_dim - 1,
-            ],
-            output_mem_config=self.model_config["DRAM_MEMCFG"],
-        )
-
-        value_layer = tt_lib.tensor.interleaved_to_sharded(value_layer, sharded_mem_config=kv_cache_memcfg)
+        value_layer = tt_lib.tensor.nlp_kv_cache_load_slice(values, 0, padded_layer_past_len)
 
         # POST-SOFTMAX MM
         scores_prog_config = self.model_config["SCORES_BATCHED_MM_PROGCFG_LAMBDA"](padded_layer_past_len // 32)
@@ -620,28 +596,20 @@ class TtLlamaAttention_optimized:
         # Q Rotary Embeddings
         # query_layer: ttnn.Shape([1, 8, seq_len, 128]) -> [bsz, n_local_heads, seq_len, head_dim]
 
-        query_layer_ret = self.apply_rotary_prefill(query_layer, rot_mats[0], rot_mats[1], self.transformation_mats)
+        query_layer_ret = ttnn.experimental.tensor.rotary_embedding_llama(
+            query_layer, rot_mats[0], rot_mats[1], self.transformation_mats
+        )
         query_layer.deallocate(True)
 
         # K Rotary Embeddings
 
         # key_layer: ttnn.Shape([1, 1, seq_len, 128])
-        key_layer_ret = self.apply_rotary_prefill(key_layer, rot_mats[0], rot_mats[1], self.transformation_mats)
+        key_layer_ret = ttnn.experimental.tensor.rotary_embedding_llama(
+            key_layer, rot_mats[0], rot_mats[1], self.transformation_mats
+        )
         key_layer.deallocate(True)
 
         return query_layer_ret, key_layer_ret, value_layer
-
-    def apply_rotary_prefill(self, x, cos, sin, transform_mat):
-        batch, n_heads, _, _ = x.shape
-
-        cos = ttnn.repeat(cos, ttnn.Shape([batch, n_heads, 1, 1]))
-        sin = ttnn.repeat(sin, ttnn.Shape([batch, n_heads, 1, 1]))
-
-        x_transformed = ttnn.matmul(x, transform_mat)
-
-        x_cos = ttnn.mul(cos, x)
-        x_sin = ttnn.mul(sin, x_transformed)
-        return ttnn.add(x_cos, x_sin)
 
     def prefill_attn_mqa(
         self,
@@ -655,16 +623,6 @@ class TtLlamaAttention_optimized:
         slice_size = 256 if seq_len == 2048 else 128
         cores_y = 4 if slice_size == 128 else 8
         num_slices = seq_len // slice_size  # we do q_lens of 128 per iteration (slice), then we concat the result.
-
-        # this is the output we write to. Initiate as empty tensors
-        attn_output_cat = ttnn.as_tensor(
-            torch.zeros([1, self.n_local_heads, seq_len, self.head_dim]),
-            device=self.device_mesh,
-            memory_config=self.model_config["DRAM_MEMCFG"],
-            dtype=ttnn.bfloat16,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
-            layout=ttnn.TILE_LAYOUT,
-        )
 
         # FILL K CACHE
         keys = self.layer_past[0]
@@ -688,90 +646,23 @@ class TtLlamaAttention_optimized:
         #     values_reshaped, value_layer, user_id
         # )
 
-        # PRE-SOFTMAX MM
-
-        key_layer_transposed = tt_lib.tensor.transpose(
+        # SPDA
+        attn_output = tt_lib.operations.primary.transformers.scaled_dot_product_attention(
+            query_layer,
             key_layer,
-            -2,
-            -1,
-            output_mem_config=self.model_config["DRAM_MEMCFG"],
+            value_layer,
+            attn_masks,
+            is_causal=True,
+            scale=self.scale,
+            program_config=self.model_config["SDPA_PROGCFG"],
         )
 
-        key_layer.deallocate(True)
-
-        for slice_i in range(num_slices):
-            q_slices = tt_lib.tensor.interleaved_to_sharded_partial(
-                query_layer,
-                (8, cores_y),
-                [32, self.head_dim],  # each slice is [1,8,128,128], we use 32 cores
-                num_slices,  # num_slices
-                slice_i,  # slice_index
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
-            )
-            attn_mask_slices = tt_lib.tensor.interleaved_to_sharded_partial(
-                attn_masks,
-                (8, cores_y),
-                [32, seq_len],  # each slice is [1,8,128,128], we use 32 cores
-                num_slices,  # num_slices
-                slice_i,  # slice_index
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
-            )
-            # print('qk matmul')
-            attn_weights = tt_lib.operations.primary.matmul(
-                q_slices,
-                key_layer_transposed,
-                program_config=self.model_config["ATTN_BATCHED_MM_PROGCFG"],
-                output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-                output_dtype=self.model_config["ATTN_BATCHED_MM_OUTPUT_DTYPE"],
-                compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-            )
-            q_slices.deallocate(True)
-
-            # SOFTMAX
-            softmax_progcfg = self.model_config["BATCHED_SOFTMAX_PROGCFG"]
-            softmax_progcfg.block_w = seq_len // 32
-
-            attn_weights = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
-                attn_weights,
-                self.scale,
-                attn_mask_slices,
-                program_config=self.model_config["BATCHED_SOFTMAX_PROGCFG"],
-                is_causal_mask=True,
-            )
-            attn_mask_slices.deallocate(True)
-
-            # POST-SOFTMAX MM
-            # print('v matmul')
-            attn_output = tt_lib.operations.primary.matmul(
-                attn_weights,
-                value_layer,
-                program_config=self.model_config["SCORES_BATCHED_MM_PROGCFG"],
-                output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-                output_dtype=self.model_config["BFP8_DTYPE"],
-                compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-            )
-
-            attn_weights.deallocate(True)
-
-            # write output to attn_output_cat
-            tt_lib.tensor.sharded_to_interleaved_partial(
-                attn_output,
-                attn_output_cat,
-                num_slices,
-                slice_i,
-                self.model_config["DRAM_MEMCFG"],
-            )
-            attn_output.deallocate(True)
-
         # deallocate keys and values
-
         query_layer.deallocate(True)
-        key_layer_transposed.deallocate(True)
+        key_layer.deallocate(True)
         value_layer.deallocate(True)
 
-        return attn_output_cat
+        return attn_output
 
     def prefill_attn_selfout(self, attn_output):
         # ATTENTION SELFOUT
@@ -787,9 +678,7 @@ class TtLlamaAttention_optimized:
             memory_config=self.model_config["DRAM_MEMCFG"],
         )
 
-        seq_tiles = attn_output.shape[2] // 32
-        cores_y = 8 if seq_tiles % 8 == 0 else 4
-        dense_out_prog_cfg = self.model_config["SELFOUT_MM_PROGCFG_LAMBDA"](seq_tiles, cores_y)
+        dense_out_prog_cfg = self.model_config["SELFOUT_MM_PROGCFG"]
         # print('wo matmul')
         attn_output = tt_lib.operations.primary.matmul(
             attn_output,

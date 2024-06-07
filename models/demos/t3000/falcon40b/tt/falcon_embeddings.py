@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
 import ttnn
 
 
@@ -41,13 +40,13 @@ class TtFalconEmbeddings(torch.nn.Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         for i in range(self.num_devices):
-            x[i] = tt_lib.tensor.embeddings(
+            x[i] = ttnn.experimental.tensor.embeddings(
                 x[i], self.embd_weights[i], tilized=True, output_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"]
             )
 
         if self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"].is_sharded():
             for i in range(self.num_devices):
-                x[i] = tt_lib.tensor.interleaved_to_sharded(
+                x[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                     x[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
                 )
 

@@ -5,16 +5,17 @@ cmake_policy(VERSION 3.16)
 # Project setup
 ############################################
 
-### Uncomment this if you don't want to manually pass Clang-17 compiler through CLI ###
-# find_program(CLANG_17 clang++-17)
-# if(CLANG_17)
-#     message(STATUS "Found Clang-17 here: ${CLANG_17}")
-#     set(CMAKE_CXX_COMPILER "${CLANG_17}")
-# else()
-#     message(WARNING "Clang++-17 not found, recommended to build with Clang-17 > GCC for better perf")
-# endif()
+# Use Clang-17 by default until we upgrade to Ubuntu version that supports higher GCC
+# No longer support GCC-9 as it does not support C++20
+find_program(CLANG_17 clang++-17)
+if(CLANG_17)
+    message(STATUS "Found Clang-17 here: ${CLANG_17}")
+    set(CMAKE_CXX_COMPILER "${CLANG_17}")
+else()
+    message(WARNING "Clang++-17 not found!!!")
+endif()
 
-if(${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_BINARY_DIR})
+if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(FATAL_ERROR "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!")
 endif()
 
@@ -25,13 +26,13 @@ project(tt-metal
         LANGUAGES CXX
 )
 
-include(${CMAKE_SOURCE_DIR}/cmake/macros.cmake)
+include(${PROJECT_SOURCE_DIR}/cmake/macros.cmake)
 CHECK_COMPILERS()
 
 ############################################################################################################################
 # Find all required libraries to build
 ############################################################################################################################
-find_package(Boost REQUIRED COMPONENTS thread filesystem system regex)
+include(${PROJECT_SOURCE_DIR}/cmake/CPM_boost.cmake)
 find_package(GTest REQUIRED)
 find_package (Python3 COMPONENTS Interpreter Development)
 find_library(NUMA_LIBRARY NAMES numa)
@@ -57,11 +58,12 @@ set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG=DEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG=DEBUG")
 set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG=DEBUG")
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Set default values for variables/options
-set(UMD_HOME "${CMAKE_SOURCE_DIR}/tt_metal/third_party/umd")
+set(UMD_HOME "${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd")
 
 option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
 option(TT_METAL_VERSIM_DISABLED "Disable TT_METAL_VERSIM" ON)
@@ -75,11 +77,11 @@ endif()
 message(STATUS "Build shared libs: ${BUILD_SHARED_LIBS}")
 
 include(GNUInstallDirs)
-set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}")
-set(CMAKE_INSTALL_LIBDIR "${CMAKE_BINARY_DIR}/lib")
-set(CMAKE_INSTALL_BINDIR "${CMAKE_BINARY_DIR}/tmp/bin")
-set(CMAKE_INSTALL_INCLUDEDIR "${CMAKE_BINARY_DIR}/tmp/include")
-set(CMAKE_INSTALL_DATAROOTDIR "${CMAKE_BINARY_DIR}/tmp/share")
+set(CMAKE_INSTALL_PREFIX "${PROJECT_BINARY_DIR}")
+set(CMAKE_INSTALL_LIBDIR "${PROJECT_BINARY_DIR}/lib")
+set(CMAKE_INSTALL_BINDIR "${PROJECT_BINARY_DIR}/tmp/bin")
+set(CMAKE_INSTALL_INCLUDEDIR "${PROJECT_BINARY_DIR}/tmp/include")
+set(CMAKE_INSTALL_DATAROOTDIR "${PROJECT_BINARY_DIR}/tmp/share")
 
 ############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
@@ -88,8 +90,7 @@ set(CMAKE_INSTALL_DATAROOTDIR "${CMAKE_BINARY_DIR}/tmp/share")
 ############################################################################################################################
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(metal_common_libs INTERFACE
-    dl z pthread atomic stdc++ numa # system libraries
-    Boost::thread Boost::filesystem Boost::system Boost::regex hwloc    # hwloc has no cmake support, find_package won't find it
+    dl z pthread atomic stdc++ hwloc numa # system libraries, hwloc has no cmake support, find_package won't find it
 )
 
 # Note on flags:
@@ -121,7 +122,11 @@ if($ENV{ENABLE_TRACY})
 endif()
 
 add_library(metal_header_directories INTERFACE)
-target_include_directories(metal_header_directories INTERFACE tt_metal/hw/inc)
+target_include_directories(metal_header_directories INTERFACE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc)
+foreach(lib ${BoostPackages})
+    target_include_directories(metal_header_directories INTERFACE ${Boost${lib}_SOURCE_DIR}/include)
+endforeach()
+
 if ("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
     target_include_directories(metal_header_directories INTERFACE tt_metal/hw/inc/wormhole
         tt_metal/hw/inc/wormhole/wormhole_b0_defines
@@ -139,28 +144,27 @@ endif()
 # Can't use the `REUSE_FROM` option bc tt_lib and ttnn have different build flags :(
 add_library(pch_pybinds INTERFACE)
 target_precompile_headers(pch_pybinds INTERFACE
-    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/operators.h
-    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/pybind11.h
-    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/stl.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/operators.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/pybind11.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/stl.h
 )
 
 ############################################################################################################################
 # Build subdirectories
 ############################################################################################################################
 if($ENV{ENABLE_TRACY})
-    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/tracy.cmake)
+    include(${PROJECT_SOURCE_DIR}/cmake/tracy.cmake)
 endif()
 
 # Build umd_device
-include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/umd_device.cmake)
+include(${PROJECT_SOURCE_DIR}/cmake/umd_device.cmake)
 
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/hw)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_metal)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_eager)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ttnn)
+add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal/hw)
+add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal)
+add_subdirectory(${PROJECT_SOURCE_DIR}/tt_eager)
+add_subdirectory(${PROJECT_SOURCE_DIR}/ttnn)
 
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tests EXCLUDE_FROM_ALL)
-
+add_subdirectory(${PROJECT_SOURCE_DIR}/tests EXCLUDE_FROM_ALL)
 
 ############################################################################################################################
 # Install targets for build artifacts and pybinds
@@ -193,11 +197,22 @@ install(TARGETS ttnn
 )
 
 # Install .so into src files for pybinds implementation
-install(FILES ${CMAKE_BINARY_DIR}/lib/_ttnn.so
-    DESTINATION ${CMAKE_SOURCE_DIR}/ttnn/ttnn
+install(FILES ${PROJECT_BINARY_DIR}/lib/_ttnn.so
+    DESTINATION ${PROJECT_SOURCE_DIR}/ttnn/ttnn
     COMPONENT tt_pybinds
 )
-install(FILES ${CMAKE_BINARY_DIR}/lib/_C.so
-    DESTINATION ${CMAKE_SOURCE_DIR}/tt_eager/tt_lib
+install(FILES ${PROJECT_BINARY_DIR}/lib/_C.so
+    DESTINATION ${PROJECT_SOURCE_DIR}/tt_eager/tt_lib
     COMPONENT tt_pybinds
+)
+
+# Temporary workaround for Issue #8767
+install(DIRECTORY ${PROJECT_BINARY_DIR}/hw/toolchain
+    DESTINATION ${PROJECT_SOURCE_DIR}/runtime/hw
+)
+
+# Custom clean target for `built` folder for when new kernel changes are pulled
+add_custom_target(clean-built
+   COMMAND ${CMAKE_COMMAND} -E remove_directory ${PROJECT_SOURCE_DIR}/built
+   COMMENT "Cleaning `built` directory"
 )

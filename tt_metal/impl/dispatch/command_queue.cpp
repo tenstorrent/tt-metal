@@ -43,16 +43,12 @@ namespace tt::tt_metal {
 thread_local std::unordered_map<uint64_t, EnqueueProgramCommand::CachedProgramCommandSequence>
     EnqueueProgramCommand::cached_program_command_sequences = {};
 
-uint32_t get_noc_unicast_encoding(const CoreCoord& coord) { return NOC_XY_ENCODING(NOC_X(coord.x), NOC_Y(coord.y)); }
-uint32_t get_noc_multicast_encoding(const CoreCoord& start, const CoreCoord& end) {
-    return NOC_MULTICAST_ENCODING(start.x, start.y, end.x, end.y);
-}
-
 // EnqueueReadBufferCommandSection
 
 EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     uint32_t command_queue_id,
     Device* device,
+    NOC noc_index,
     Buffer& buffer,
     void* dst,
     SystemMemoryManager& manager,
@@ -60,6 +56,7 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     uint32_t src_page_index,
     std::optional<uint32_t> pages_to_read) :
     command_queue_id(command_queue_id),
+    noc_index(noc_index),
     dst(dst),
     manager(manager),
     buffer(buffer),
@@ -86,9 +83,12 @@ void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceComma
 
 void EnqueueReadShardedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
     uint32_t padded_page_size = align(this->buffer.page_size(), ADDRESS_ALIGNMENT);
-    const CoreCoord physical_core = this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
+    const CoreCoord physical_core =
+        this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
     command.add_prefetch_relay_linear(
-        get_noc_unicast_encoding(physical_core), padded_page_size * this->pages_to_read, this->bank_base_address);
+        this->device->get_noc_unicast_encoding(this->noc_index, physical_core),
+        padded_page_size * this->pages_to_read,
+        this->bank_base_address);
 }
 
 void EnqueueReadBufferCommand::process() {
@@ -124,6 +124,7 @@ void EnqueueReadBufferCommand::process() {
 EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
     uint32_t command_queue_id,
     Device* device,
+    NOC noc_index,
     const Buffer& buffer,
     const void* src,
     SystemMemoryManager& manager,
@@ -134,6 +135,7 @@ EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
     uint32_t dst_page_index,
     std::optional<uint32_t> pages_to_write) :
     command_queue_id(command_queue_id),
+    noc_index(noc_index),
     manager(manager),
     issue_wait(issue_wait),
     src(src),
@@ -206,11 +208,15 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
 
 void EnqueueWriteShardedBufferCommand::add_dispatch_write(HugepageDeviceCommand& command_sequence) {
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
-    const CoreCoord physical_core = this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
-
+    const CoreCoord physical_core =
+        this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_linear(
-        flush_prefetch, 0, get_noc_unicast_encoding(physical_core), this->bank_base_address, data_size_bytes);
+        flush_prefetch,
+        0,
+        this->device->get_noc_unicast_encoding(this->noc_index, physical_core),
+        this->bank_base_address,
+        data_size_bytes);
 }
 
 void EnqueueWriteShardedBufferCommand::add_buffer_data(HugepageDeviceCommand& command_sequence) {
@@ -286,10 +292,12 @@ void EnqueueWriteBufferCommand::process() {
 EnqueueProgramCommand::EnqueueProgramCommand(
     uint32_t command_queue_id,
     Device* device,
+    NOC noc_index,
     Program& program,
     SystemMemoryManager& manager,
     uint32_t expected_num_workers_completed) :
     command_queue_id(command_queue_id),
+    noc_index(noc_index),
     manager(manager),
     expected_num_workers_completed(expected_num_workers_completed),
     program(program) {
@@ -461,13 +469,12 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                 // can make a vector of unicast encodings here
                 CoreCoord physical_core =
                     device->physical_core_from_logical_core(core_coord, kernel->get_kernel_core_type());
-                uint32_t unicast_noc_encoding = get_noc_unicast_encoding(physical_core);
                 const auto& runtime_args_data = kernel->runtime_args(core_coord);
                 unique_rt_args_data[processor_idx].emplace_back(kernel->runtime_args_data(core_coord));
                 // 2, 17, could be differnet len here
 
-                unique_sub_cmds[processor_idx].emplace_back(
-                    CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = unicast_noc_encoding});
+                unique_sub_cmds[processor_idx].emplace_back(CQDispatchWritePackedUnicastSubCmd{
+                    .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_core)});
                 unique_rt_data_and_sizes[processor_idx].emplace_back(
                     runtime_args_data.data(), runtime_args_data.size() * sizeof(uint32_t));
                 unique_max_runtime_args_len[processor_idx] =
@@ -495,12 +502,11 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                 for (auto& core_coord : kernel->logical_cores()) {
                     // can make a vector of unicast encodings here
                     CoreCoord physical_core = device->ethernet_core_from_logical_core(core_coord);
-                    uint32_t unicast_noc_encoding = get_noc_unicast_encoding(physical_core);
-                    unicast_sub_cmd.emplace_back(
-                        CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = unicast_noc_encoding});
+                    unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
+                        .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_core)});
                 }
             } else {
-                vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
+                vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
                     extract_dst_noc_multicast_info<std::vector<CoreRange>>(
                         device, kernel->logical_coreranges(), kernel->get_kernel_core_type());
                 common_sub_cmds[kernel_id].emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(
@@ -510,7 +516,9 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                 multicast_sub_cmd.reserve(dst_noc_multicast_info.size());
                 for (const auto& mcast_dests : dst_noc_multicast_info) {
                     multicast_sub_cmd.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                        .noc_xy_addr = mcast_dests.first, .num_mcast_dests = mcast_dests.second});
+                        .noc_xy_addr = this->device->get_noc_multicast_encoding(
+                            this->noc_index, std::get<CoreRange>(mcast_dests.first)),
+                        .num_mcast_dests = mcast_dests.second});
                 }
             }
         }
@@ -633,7 +641,6 @@ void EnqueueProgramCommand::assemble_device_commands() {
             for (const CoreRange& core_range : circular_buffers_unique_coreranges) {
                 const CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
                 const CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
-                const uint32_t dst_noc_multicast_encoding = get_noc_multicast_encoding(physical_start, physical_end);
 
                 const uint32_t num_receivers = core_range.size();
                 auto& cb_config_payload = cb_config_payloads[i];
@@ -658,7 +665,9 @@ void EnqueueProgramCommand::assemble_device_commands() {
                     }
                 }
                 multicast_cb_config_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                    .noc_xy_addr = dst_noc_multicast_encoding, .num_mcast_dests = (uint32_t)core_range.size()});
+                    .noc_xy_addr = this->device->get_noc_multicast_encoding(
+                        this->noc_index, CoreRange(physical_start, physical_end)),
+                    .num_mcast_dests = (uint32_t)core_range.size()});
                 multicast_cb_config_data.emplace_back(
                     cb_config_payload.data(),
                     (max_base_index + UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG) * sizeof(uint32_t));
@@ -682,7 +691,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
         for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
             const auto& kg_transfer_info = program.program_transfer_info.kernel_bins[buffer_idx];
             for (int kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
-                for (const pair<uint32_t, uint32_t>& dst_noc_info : kg_transfer_info.dst_noc_info) {
+                for (const pair<transfer_info_cores, uint32_t>& dst_noc_info : kg_transfer_info.dst_noc_info) {
                     cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
                     cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
                 }
@@ -708,9 +717,10 @@ void EnqueueProgramCommand::assemble_device_commands() {
                 CoreCoord physical_end =
                     device->physical_core_from_logical_core(core_range.end, kernel_group.get_core_type());
 
-                uint32_t dst_noc_multicast_encoding = get_noc_multicast_encoding(physical_start, physical_end);
                 multicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                    .noc_xy_addr = dst_noc_multicast_encoding, .num_mcast_dests = (uint32_t)core_range.size()});
+                    .noc_xy_addr = this->device->get_noc_multicast_encoding(
+                        this->noc_index, CoreRange(physical_start, physical_end)),
+                    .num_mcast_dests = (uint32_t)core_range.size()});
                 multicast_go_signal_data.emplace_back(launch_message_data, go_signal_sizeB);
             }
         }
@@ -732,9 +742,8 @@ void EnqueueProgramCommand::assemble_device_commands() {
                     for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
                         CoreCoord physical_coord =
                             device->physical_core_from_logical_core(CoreCoord({x, y}), kernel_group.get_core_type());
-                        uint32_t dst_noc_unicast_encoding = get_noc_unicast_encoding(physical_coord);
-                        unicast_go_signal_sub_cmds.emplace_back(
-                            CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = dst_noc_unicast_encoding});
+                        unicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
+                            .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_coord)});
                         unicast_go_signal_data.emplace_back(launch_message_data, go_signal_sizeB);
                     }
                 }
@@ -767,7 +776,9 @@ void EnqueueProgramCommand::assemble_device_commands() {
                 for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
                     num_packed_cmds += 1;
                     multicast_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                        .noc_xy_addr = dst_noc_info.first, .num_mcast_dests = dst_noc_info.second});
+                        .noc_xy_addr = this->device->get_noc_multicast_encoding(
+                            this->noc_index, std::get<CoreRange>(dst_noc_info.first)),
+                        .num_mcast_dests = dst_noc_info.second});
                     sem_data.emplace_back(transfer_info.data.data(), transfer_info.data.size() * sizeof(uint32_t));
                 }
             }
@@ -794,8 +805,9 @@ void EnqueueProgramCommand::assemble_device_commands() {
             for (const auto& transfer_info : transfer_info_vec) {
                 for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
                     num_packed_cmds += 1;
-                    unicast_sub_cmds.emplace_back(
-                        CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = dst_noc_info.first});
+                    unicast_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
+                        .noc_xy_addr = this->device->get_noc_unicast_encoding(
+                            this->noc_index, std::get<CoreCoord>(dst_noc_info.first))});
                     sem_data.emplace_back(transfer_info.data.data(), transfer_info.data.size() * sizeof(uint32_t));
                 }
             }
@@ -827,11 +839,22 @@ void EnqueueProgramCommand::assemble_device_commands() {
         for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
             const auto& kg_transfer_info = program.program_transfer_info.kernel_bins[buffer_idx];
             for (int kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
-                for (const pair<uint32_t, uint32_t>& dst_noc_info : kg_transfer_info.dst_noc_info) {
+                for (const pair<transfer_info_cores, uint32_t>& dst_noc_info : kg_transfer_info.dst_noc_info) {
+                    uint32_t noc_encoding;
+                    std::visit(
+                        [&](auto&& cores) {
+                            using T = std::decay_t<decltype(cores)>;
+                            if constexpr (std::is_same_v<T, CoreRange>) {
+                                noc_encoding = this->device->get_noc_multicast_encoding(this->noc_index, cores);
+                            } else {
+                                noc_encoding = this->device->get_noc_unicast_encoding(this->noc_index, cores);
+                            }
+                        },
+                        dst_noc_info.first);
                     program_command_sequence.add_dispatch_write_linear(
                         false,                // flush_prefetch
                         dst_noc_info.second,  // num_mcast_dests
-                        dst_noc_info.first,   // noc_xy_addr
+                        noc_encoding,         // noc_xy_addr
                         kg_transfer_info.dst_base_addrs[kernel_idx],
                         align(kg_transfer_info.lengths[kernel_idx], NOC_DRAM_ALIGNMENT_BYTES));
                     // Difference between prefetch total relayed pages and dispatch write linear
@@ -867,11 +890,9 @@ void EnqueueProgramCommand::assemble_device_commands() {
             }
         }
 
-        // Wait Noc Write Barrier, wait for binaries to be written to worker cores
+        // Wait Noc Write Barrier, wait for binaries/configs to be written to worker cores
         if (program.program_transfer_info.num_active_cores > 0) {
-            // Wait Noc Write Barrier, wait for binaries to be written to worker cores
-            // TODO: any way to not have dispatcher poll the addr here?
-            program_command_sequence.add_dispatch_wait(true, DISPATCH_MESSAGE_ADDR, 0);
+            program_command_sequence.add_dispatch_wait(true, DISPATCH_MESSAGE_ADDR, 0, 0, false, false);
         }
 
         // Go Signals
@@ -1025,12 +1046,14 @@ void EnqueueProgramCommand::process() {
 EnqueueRecordEventCommand::EnqueueRecordEventCommand(
     uint32_t command_queue_id,
     Device* device,
+    NOC noc_index,
     SystemMemoryManager& manager,
     uint32_t event_id,
     uint32_t expected_num_workers_completed,
     bool clear_count) :
     command_queue_id(command_queue_id),
     device(device),
+    noc_index(noc_index),
     manager(manager),
     event_id(event_id),
     expected_num_workers_completed(expected_num_workers_completed),
@@ -1078,8 +1101,8 @@ void EnqueueRecordEventCommand::process() {
         }
 
         CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, core_type);
-        unicast_sub_cmds[cq_id] =
-            CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = get_noc_unicast_encoding(dispatch_physical_core)};
+        unicast_sub_cmds[cq_id] = CQDispatchWritePackedUnicastSubCmd{
+            .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, dispatch_physical_core)};
         event_payloads[cq_id] = {event_payload.data(), event_payload.size() * sizeof(uint32_t)};
     }
 
@@ -1208,11 +1231,12 @@ void EnqueueTerminateCommand::process() {
 }
 
 // HWCommandQueue section
-HWCommandQueue::HWCommandQueue(Device* device, uint32_t id) :
+HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
     manager(device->sysmem_manager()), completion_queue_thread{} {
     ZoneScopedN("CommandQueue_constructor");
     this->device = device;
     this->id = id;
+    this->noc_index = noc_index;
     this->num_entries_in_completion_q = 0;
     this->num_completed_completion_q_reads = 0;
 
@@ -1324,7 +1348,8 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
             }
             uint32_t bank_base_address = buffer.address();
             if (buffer.buffer_type() == BufferType::DRAM) {
-                bank_base_address += buffer.device()->bank_offset(BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
+                bank_base_address += buffer.device()->bank_offset(
+                    BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
             }
             if (num_pages_to_read > 0) {
                 if (width_split) {
@@ -1338,6 +1363,7 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                 auto command = EnqueueReadShardedBufferCommand(
                     this->id,
                     this->device,
+                    this->noc_index,
                     buffer,
                     dst,
                     this->manager,
@@ -1348,7 +1374,8 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                     num_pages_to_read);
 
                 this->issued_completion_q_reads.push(detail::ReadBufferDescriptor(
-                    buffer,
+                    buffer.buffer_layout(),
+                    buffer.page_size(),
                     padded_page_size,
                     dst,
                     unpadded_dst_offset,
@@ -1373,6 +1400,7 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
         auto command = EnqueueReadInterleavedBufferCommand(
             this->id,
             this->device,
+            this->noc_index,
             buffer,
             dst,
             this->manager,
@@ -1381,7 +1409,13 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
             pages_to_read);
 
         this->issued_completion_q_reads.push(detail::ReadBufferDescriptor(
-            buffer, padded_page_size, dst, unpadded_dst_offset, pages_to_read, src_page_index));
+            buffer.buffer_layout(),
+            buffer.page_size(),
+            padded_page_size,
+            dst,
+            unpadded_dst_offset,
+            pages_to_read,
+            src_page_index));
         this->enqueue_command(command, blocking);
         this->increment_num_entries_in_completion_q();
         if (not blocking) {  // should this be unconditional?
@@ -1480,7 +1514,8 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
             uint32_t curr_page_idx_in_shard = 0;
             uint32_t bank_base_address = buffer.address();
             if (buffer.buffer_type() == BufferType::DRAM) {
-                bank_base_address += buffer.device()->bank_offset(BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
+                bank_base_address += buffer.device()->bank_offset(
+                    BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
             }
             while (num_pages != 0) {
                 // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
@@ -1504,6 +1539,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
                     auto command = EnqueueWriteShardedBufferCommand(
                         this->id,
                         this->device,
+                        this->noc_index,
                         buffer,
                         src,
                         this->manager,
@@ -1595,6 +1631,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
             auto command = EnqueueWriteInterleavedBufferCommand(
                 this->id,
                 this->device,
+                this->noc_index,
                 buffer,
                 src,
                 this->manager,
@@ -1632,12 +1669,46 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
                 false);
         }
     }
+#ifdef DEBUG
+    if (tt::llrt::OptionsG.get_validate_kernel_binaries()) {
+        TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
+        for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
+            const auto& buffer = program.kg_buffers[buffer_idx];
+            std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
+            this->enqueue_read_buffer(*buffer, read_data.data(), true);
+            TT_FATAL(
+                program.program_transfer_info.kernel_bins[buffer_idx].data == read_data,
+                "Binary for program to be executed is corrupted. Another program likely corrupted this binary");
+        }
+    }
+#endif
 
     // Snapshot of expected workers from previous programs, used for dispatch_wait cmd generation.
     uint32_t expected_workers_completed = this->manager.get_bypass_mode() ? this->trace_ctx->num_completion_worker_cores
                                                                           : this->expected_num_workers_completed;
-    auto command = EnqueueProgramCommand(this->id, this->device, program, this->manager, expected_workers_completed);
+    if (this->manager.get_bypass_mode()) {
+        this->trace_ctx->num_completion_worker_cores += program.program_transfer_info.num_active_cores;
+    } else {
+        this->expected_num_workers_completed += program.program_transfer_info.num_active_cores;
+    }
+
+    auto command = EnqueueProgramCommand(
+        this->id, this->device, this->noc_index, program, this->manager, expected_workers_completed);
     this->enqueue_command(command, blocking);
+
+#ifdef DEBUG
+    if (tt::llrt::OptionsG.get_validate_kernel_binaries()) {
+        TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
+        for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
+            const auto& buffer = program.kg_buffers[buffer_idx];
+            std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
+            this->enqueue_read_buffer(*buffer, read_data.data(), true);
+            TT_FATAL(
+                program.program_transfer_info.kernel_bins[buffer_idx].data == read_data,
+                "Binary for program that executed is corrupted. This program likely corrupted its own binary.");
+        }
+    }
+#endif
 
     log_trace(
         tt::LogMetal,
@@ -1645,12 +1716,6 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         program.program_transfer_info.num_active_cores,
         this->manager.get_bypass_mode(),
         expected_workers_completed);
-
-    if (this->manager.get_bypass_mode()) {
-        this->trace_ctx->num_completion_worker_cores += program.program_transfer_info.num_active_cores;
-    } else {
-        this->expected_num_workers_completed += program.program_transfer_info.num_active_cores;
-    }
 }
 
 void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event, bool clear_count) {
@@ -1667,7 +1732,13 @@ void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event, bool cle
     event->ready = true;  // what does this mean???
 
     auto command = EnqueueRecordEventCommand(
-        this->id, this->device, this->manager, event->event_id, this->expected_num_workers_completed, clear_count);
+        this->id,
+        this->device,
+        this->noc_index,
+        this->manager,
+        event->event_id,
+        this->expected_num_workers_completed,
+        clear_count);
     this->enqueue_command(command, false);
 
     if (clear_count) {
@@ -1914,24 +1985,24 @@ void HWCommandQueue::read_completion_queue() {
             uint32_t num_events_to_read = this->num_entries_in_completion_q - this->num_completed_completion_q_reads;
             for (uint32_t i = 0; i < num_events_to_read; i++) {
                 ZoneScopedN("CompletionQueuePopulated");
-                std::variant<detail::ReadBufferDescriptor, detail::ReadEventDescriptor> read_descriptor = *(this->issued_completion_q_reads.pop());
+                std::variant<detail::ReadBufferDescriptor, detail::ReadEventDescriptor> read_descriptor =
+                    *(this->issued_completion_q_reads.pop());
                 {
                     ZoneScopedN("CompletionQueueWait");
-                    this->manager.completion_queue_wait_front(this->id, this->exit_condition); // CQ DISPATCHER IS NOT HANDSHAKING WITH HOST RN
+                    this->manager.completion_queue_wait_front(
+                        this->id, this->exit_condition);  // CQ DISPATCHER IS NOT HANDSHAKING WITH HOST RN
                 }
                 if (this->exit_condition) {  // Early exit
                     return;
                 }
 
                 std::visit(
-                    [&](auto&& read_descriptor)
-                    {
+                    [&](auto&& read_descriptor) {
                         using T = std::decay_t<decltype(read_descriptor)>;
                         if constexpr (std::is_same_v<T, detail::ReadBufferDescriptor>) {
                             ZoneScopedN("CompletionQueueReadData");
                             this->copy_into_user_space(read_descriptor, mmio_device_id, channel);
-                        }
-                        else if constexpr (std::is_same_v<T, detail::ReadEventDescriptor>) {
+                        } else if constexpr (std::is_same_v<T, detail::ReadEventDescriptor>) {
                             ZoneScopedN("CompletionQueueReadEvent");
                             uint32_t read_ptr = this->manager.get_completion_queue_read_ptr(this->id);
                             thread_local static std::vector<uint32_t> dispatch_cmd_and_event(
@@ -2285,10 +2356,6 @@ void EnqueueProgramImpl(
 }
 
 void EnqueueRecordEvent(CommandQueue& cq, std::shared_ptr<Event> event) {
-    TT_ASSERT(event->device == nullptr, "EnqueueRecordEvent expected to be given an uninitialized event");
-    TT_ASSERT(event->event_id == -1, "EnqueueRecordEvent expected to be given an uninitialized event");
-    TT_ASSERT(event->cq_id == -1, "EnqueueRecordEvent expected to be given an uninitialized event");
-
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{
         .type = EnqueueCommandType::ENQUEUE_RECORD_EVENT,

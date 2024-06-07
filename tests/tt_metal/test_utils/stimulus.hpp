@@ -35,6 +35,16 @@ std::vector<ValueType> generate_strided_vector(
 }
 
 template <typename ValueType>
+std::vector<ValueType> generate_constant_vector(
+    const ValueType& constant, const size_t& numel) {
+    std::vector<ValueType> results(numel);
+    for (unsigned int index = 0; index < numel; index+=1) {
+        results.at(index) = constant;
+    }
+    return results;
+}
+
+template <typename ValueType>
 std::vector<ValueType> generate_uniform_random_vector(
     ValueType min, ValueType max, const size_t numel, const float seed = 0) {
     std::mt19937 gen(seed);
@@ -101,6 +111,12 @@ template <typename PackType, typename ValueType>
 std::vector<PackType> generate_packed_strided_vector(
      const ValueType& init, const ValueType& assigned, const size_t& stride, const size_t& offset, const size_t& numel) {
     return pack_vector<PackType, ValueType>(generate_strided_vector(init, assigned, stride, offset, numel));
+}
+
+template <typename PackType, typename ValueType>
+std::vector<PackType> generate_packed_constant_vector(
+     const ValueType& constant, const size_t& numel) {
+    return pack_vector<PackType, ValueType>(generate_constant_vector(constant, numel));
 }
 
 }  // namespace test_utils

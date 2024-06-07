@@ -288,6 +288,8 @@ const DataFormat get_single_pack_src_format(
             case DataFormat::RawUInt16: pack_src_format = DataFormat::Float16; break;
             default: pack_src_format = DataFormat::Lf8; break;
         }
+    } else if (input_format == DataFormat::UInt16) {
+        pack_src_format = output_format;
     } else if ((input_format == DataFormat::Invalid) || (output_format == DataFormat::Invalid)) {
         pack_src_format =  DataFormat::Invalid;
     } else if (input_format == DataFormat::Fp8_e4m3) {

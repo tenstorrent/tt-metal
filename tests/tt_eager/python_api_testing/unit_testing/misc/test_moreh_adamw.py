@@ -17,22 +17,7 @@ from models.utility_functions import (
 from loguru import logger
 
 
-@pytest.mark.parametrize(
-    "shape",
-    (
-        (1, 1, 32, 32),  # single
-        (12, 6, 64, 64),  # multi tile
-    ),
-)
-@pytest.mark.parametrize("lr", [0.0, 1e-2])
-@pytest.mark.parametrize("betas", ((0.9, 0.999), (0.5, 0.555)))
-@pytest.mark.parametrize("eps", [1e-06, 1e-08])
-@pytest.mark.parametrize("weight_decay", [0.0, 0.3])
-@pytest.mark.parametrize("amsgrad", [True, False])
-@pytest.mark.parametrize("step", [1, 2, 8])
-def test_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device):
-    torch.manual_seed(0)
-
+def run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device):
     N = shape[0]
     C = shape[1]
     H = shape[2]
@@ -205,3 +190,38 @@ def test_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)
         whole_passing &= passing
 
     assert whole_passing
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [1, 1, 32, 32],  # single
+        [12, 6, 64, 64],  # multi tile
+    ],
+)
+@pytest.mark.parametrize("lr", [0.0, 1e-2])
+@pytest.mark.parametrize("betas", ((0.9, 0.999), (0.5, 0.555)))
+@pytest.mark.parametrize("eps", [1e-06, 1e-08])
+@pytest.mark.parametrize("weight_decay", [0.0, 0.3])
+@pytest.mark.parametrize("amsgrad", [True, False])
+@pytest.mark.parametrize("step", [1, 2, 8])
+def test_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device):
+    torch.manual_seed(0)
+
+    run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [[1, 1, 32, 32]],  # single
+)
+@pytest.mark.parametrize("lr", [1e-2])
+@pytest.mark.parametrize("betas", [[0.9, 0.999], [0.5, 0.555]])
+@pytest.mark.parametrize("eps", [1e-08])
+@pytest.mark.parametrize("weight_decay", [0.3])
+@pytest.mark.parametrize("amsgrad", [True, False])
+@pytest.mark.parametrize("step", [8])
+def test_moreh_adamw_callback(shape, lr, betas, eps, weight_decay, amsgrad, step, device, use_program_cache):
+    torch.manual_seed(0)
+    for _ in range(2):
+        run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)

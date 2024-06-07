@@ -193,6 +193,8 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/rotate_half/rotate_half_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/multi_core/rotary_embedding_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/rotary_embedding_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/multi_core/rotary_embedding_llama_op_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/rotary_embedding_llama_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/embeddings/embeddings_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/multi_core/update_cache_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/update_cache_op.cpp
@@ -208,6 +210,8 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/scan/scan_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/topk/topk_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/topk/single_core/single_core_topk.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/risc_v/risc_v_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/risc_v/argmax_op.cpp
 )
 
 add_library(tt_dnn OBJECT ${TT_DNN_SRCS})
@@ -215,16 +219,16 @@ add_library(tt_dnn OBJECT ${TT_DNN_SRCS})
 target_link_libraries(tt_dnn PUBLIC metal_header_directories compiler_flags)
 target_include_directories(tt_dnn PUBLIC
     ${UMD_HOME}
-    ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/tt_metal
-    ${CMAKE_SOURCE_DIR}/tt_eager
-    ${CMAKE_SOURCE_DIR}/ttnn/cpp
-    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/fmt
+    ${PROJECT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/tt_metal
+    ${PROJECT_SOURCE_DIR}/tt_eager
+    ${PROJECT_SOURCE_DIR}/ttnn/cpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt
 )
 
 target_precompile_headers(tt_dnn PUBLIC
-    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/magic_enum/magic_enum.hpp
-    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/magic_enum/magic_enum.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/auto_format.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute_kernel_config.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/operation.hpp

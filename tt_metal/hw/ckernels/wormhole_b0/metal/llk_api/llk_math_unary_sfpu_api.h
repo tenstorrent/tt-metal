@@ -18,6 +18,7 @@
 #include "llk_math_eltwise_unary_sfpu_sigmoid.h"
 #include "llk_math_eltwise_unary_sfpu_sign.h"
 #include "llk_math_eltwise_unary_sfpu_signbit.h"
+#include "llk_math_eltwise_unary_sfpu_floor.h"
 #include "llk_math_eltwise_unary_sfpu_silu.h"
 #include "llk_math_eltwise_unary_sfpu_square.h"
 #include "llk_math_eltwise_unary_sfpu_tanh.h"
@@ -25,3 +26,5 @@
 #include "llk_math_eltwise_unary_sfpu_unary_comp.h"
 #include "llk_math_eltwise_unary_sfpu_trigonometry.h"
 #include "llk_math_eltwise_unary_sfpu_unary_comp.h"
+#include "llk_math_eltwise_unary_sfpu_right_shift.h"
+#include "llk_math_eltwise_unary_sfpu_left_shift.h"

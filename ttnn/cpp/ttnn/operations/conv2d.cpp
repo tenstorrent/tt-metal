@@ -316,7 +316,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_requir
                 needs_shard_or_reshard = true;
             }
             if (conv_config.override_sharding_config) {
-                if (conv_config.core_grid != input_shard_grid) {
+                TT_FATAL(conv_config.core_grid.has_value());
+                if (conv_config.core_grid.value() != input_shard_grid) {
                     needs_shard_or_reshard = true;
                 }
                 bool input_tensor_height_sharded = input_shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED;
@@ -345,19 +346,16 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_requir
             block_shard_orientation);
 
         if (conv_config.override_sharding_config) {
-            if (conv_config.core_grid.ranges().empty()) {
-                parallel_config = optimal_parallel_config;
-            } else {
-                // override parallel config
-                auto shard_scheme = conv_config.height_sharding ? TensorMemoryLayout::HEIGHT_SHARDED
-                                                                : TensorMemoryLayout::BLOCK_SHARDED;
-                auto shard_orientation =
-                    conv_config.height_sharding ? ShardOrientation::ROW_MAJOR : block_shard_orientation;
-                parallel_config = {
-                    .grid = conv_config.core_grid,
-                    .shard_scheme = shard_scheme,
-                    .shard_orientation = shard_orientation};
-            }
+            TT_FATAL(conv_config.core_grid.has_value());
+            // override parallel config
+            auto shard_scheme = conv_config.height_sharding ? TensorMemoryLayout::HEIGHT_SHARDED
+                                                            : TensorMemoryLayout::BLOCK_SHARDED;
+            auto shard_orientation =
+                conv_config.height_sharding ? ShardOrientation::ROW_MAJOR : block_shard_orientation;
+            parallel_config = {
+                .grid = conv_config.core_grid.value(),
+                .shard_scheme = shard_scheme,
+                .shard_orientation = shard_orientation};
         } else {
             parallel_config = optimal_parallel_config;
         }
@@ -446,11 +444,19 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t weight_block_h_ntiles,
     uint32_t weight_block_w_ntiles,
     const ParallelConfig& parallel_config,
-    Device& device) {
+    Device& device,
+    uint32_t groups) {
     validate_weight_and_bias_tensors(weight_tensor, bias_tensor);
     ttnn::Tensor weight_tensor_;  // tensor to return
     ttnn::Tensor bias_tensor_;
-    auto weights_shape = weight_tensor.get_shape();
+
+    // Convert weight tensor to 0 padded shape if groups > 1
+    weight_tensor_ = weight_tensor;
+    if (groups > 1) {
+        weight_tensor_ = convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, groups, weights_bias_dtype);
+    }
+
+    auto weights_shape = weight_tensor_.get_shape();
     uint32_t out_channels = weights_shape[0];
     uint32_t in_channels = weights_shape[1];
     uint32_t window_h = weights_shape[2];
@@ -459,19 +465,19 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         {round_up(out_channels, 32), round_up(in_channels, input_channels_alignment), window_h, window_w}));
 
     if (weights_bias_dtype == DataType::BFLOAT8_B) {
-        TT_ASSERT(weight_tensor.get_dtype() == DataType::FLOAT32);
+        TT_ASSERT(weight_tensor_.get_dtype() == DataType::FLOAT32);
         if (bias_tensor.has_value()) {
             TT_ASSERT(bias_tensor.value().get_dtype() == DataType::FLOAT32);
         }
     } else {
         // TODO: fix the need to check this. We should be able to accept any datatype and convert
-        TT_ASSERT(weight_tensor.get_dtype() == weights_bias_dtype);
+        TT_ASSERT(weight_tensor_.get_dtype() == weights_bias_dtype);
         if (bias_tensor.has_value()) {
             TT_ASSERT(bias_tensor.value().get_dtype() == weights_bias_dtype);
         }
     }
 
-    weight_tensor_ = tt::tt_metal::pad_on_host(weight_tensor, weights_channels_padded_shape, {0, 0, 0, 0}, 0);
+    weight_tensor_ = tt::tt_metal::pad_on_host(weight_tensor_, weights_channels_padded_shape, {0, 0, 0, 0}, 0);
 
     // for conv op, pad the weights to block shape
     if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -596,10 +602,11 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             opt_conv_op_block_config.act_block_w_ntiles,
             opt_conv_op_block_config.out_subblock_w_ntiles,
             parallel_config,
-            device);
+            device,
+            groups);
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
-    bool use_matmul_for_1x1_conv = kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == stride[1] &&
+    bool use_matmul_for_1x1_conv = kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == stride[1] && stride[0] == 1 &&
                                    padding[0] == 0 && padding[1] == 0 && dilation[0] == 1 && dilation[1] == 1 &&
                                    groups == 1;
     Tensor input_tensor_post_tm_out;
@@ -704,7 +711,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
                 ttnn::operations::core::deallocate(input_tensor_post_tm);
             }
         }
-        auto matmul_output = ttnn::operations::matmul::linear(
+        auto matmul_output = ttnn::operations::matmul::matmul(
             matmul_input,
             weight_tensor_on_device,
             bias_tensor_on_device,
@@ -724,30 +731,3 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
 }  // namespace conv2d
 }  // namespace operations
 }  // namespace ttnn
-
-auto fmt::formatter<ttnn::operations::conv2d::Conv2dConfig>::format(
-    const ttnn::operations::conv2d::Conv2dConfig& t, fmt::format_context& ctx) {
-    std::string str = fmt::format(
-        "Conv2dConfig(math_fidelity={}, dtype={}, weights_dtype={}, math_approx_mode_enabled={}, "
-        "fp32_dest_acc_enabled={}, packer_l1_accum_enabled={}, activation={}, input_channels_alignment={}, "
-        "deallocate_activation={}, reallocate_halo_output={}, act_block_h_override={}, reshard_if_not_optimal={}, "
-        "override_sharding_config={}, height_sharding={}, core_grid={}, transpose_shards={}, output_layout={})",
-        t.math_fidelity,
-        t.dtype,
-        t.weights_dtype,
-        t.math_approx_mode_enabled,
-        t.fp32_dest_acc_enabled,
-        t.packer_l1_accum_enabled,
-        t.activation,
-        t.input_channels_alignment,
-        t.deallocate_activation,
-        t.reallocate_halo_output,
-        t.act_block_h_override,
-        t.reshard_if_not_optimal,
-        t.override_sharding_config,
-        t.height_sharding,
-        t.core_grid.str(),
-        t.transpose_shards,
-        t.output_layout);
-    return format_to(ctx.out(), "{}", str);
-}

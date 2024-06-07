@@ -651,13 +651,11 @@ inline hash_t hash_objects(hash_t seed, const Types&... args) noexcept {
 
 template <typename... Types>
 inline hash_t hash_objects(hash_t seed, const Types&... args) noexcept {
-    ZoneScoped;
     return detail::hash_objects(seed, args...);
 }
 
 template <typename... Types>
 inline hash_t hash_objects_with_default_seed(const Types&... args) noexcept {
-    ZoneScoped;
     return detail::hash_objects(DEFAULT_SEED, args...);
 }
 

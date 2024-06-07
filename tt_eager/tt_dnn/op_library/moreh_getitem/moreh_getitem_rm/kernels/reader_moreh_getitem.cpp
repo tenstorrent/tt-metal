@@ -18,6 +18,11 @@ void kernel_main() {
     uint32_t input_stick_idx_stride_c = get_arg_val<uint32_t>(i++);
     uint32_t input_stick_idx_stride_h = get_arg_val<uint32_t>(i++);
 
+    uint32_t input_size_n = get_arg_val<uint32_t>(i++);
+    uint32_t input_size_c = get_arg_val<uint32_t>(i++);
+    uint32_t input_size_h = get_arg_val<uint32_t>(i++);
+    uint32_t input_size_w = get_arg_val<uint32_t>(i++);
+
     // index
     uint32_t index0_is_defined = get_arg_val<uint32_t>(i++);
     uint32_t index1_is_defined = get_arg_val<uint32_t>(i++);
@@ -80,6 +85,13 @@ void kernel_main() {
         cb_in4,
     };
 
+    uint32_t input_size_list[4] = {
+        input_size_n,
+        input_size_c,
+        input_size_h,
+        input_size_w,
+    };
+
     uint32_t output_size_list[4] = {
         output_size_n,
         output_size_c,
@@ -137,9 +149,13 @@ void kernel_main() {
                 noc_async_read(index_noc_addr, index_l1_addr, index_stick_sizes[dim]);
                 noc_async_read_barrier();
 
-                volatile tt_l1_ptr uint32_t* index_l1_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_l1_addr);
-                uint32_t noc_idx = index_l1_ptr[index_index];
+                volatile tt_l1_ptr int32_t* index_l1_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
+                int32_t noc_idx = index_l1_ptr[index_index];
+
+                if (noc_idx < 0) {
+                    noc_idx += input_size_list[dim];
+                }
 
                 noc_id += noc_idx * input_stick_idx_stride;
                 if (is_first_index) {

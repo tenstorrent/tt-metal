@@ -7,6 +7,7 @@
 #include "eth_l1_address_map.h"
 #include "tensor/tensor_impl.hpp"
 #include "tt_eager/tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include <limits>
 
 namespace tt {
 namespace tt_metal {
@@ -130,19 +131,25 @@ class EriscDatamoverBuilder {
             worker_semaphore_address(worker_semaphore_address),
             num_eth_messages_to_forward(num_eth_messages_to_forward),
             channel(channel),
+            largest_message_size_bytes(0),
             is_sender(is_sender) {}
 
         std::vector<ccl::WorkerXY> const worker_coords;
         uint32_t worker_semaphore_address;
         uint32_t num_eth_messages_to_forward;
         uint32_t channel;
+        uint32_t largest_message_size_bytes;
         bool is_sender;
     };
 
     void push_back_channel_args(std::vector<uint32_t>& args, ChannelBufferSpec const& channel) const {
         args.push_back(this->local_buffer_addresses.at(channel.channel));
         args.push_back(channel.num_eth_messages_to_forward);
-        args.push_back(this->eth_buffer_size_bytes);
+        if (channel.largest_message_size_bytes > 0) {
+            args.push_back(std::min<uint32_t>(channel.largest_message_size_bytes, this->eth_buffer_size_bytes));
+        } else {
+            args.push_back(this->eth_buffer_size_bytes);
+        }
         args.push_back(this->local_semaphore_addresses.at(channel.channel));
         args.push_back(channel.worker_semaphore_address);
         args.push_back(channel.worker_coords.size());
@@ -167,6 +174,7 @@ class EriscDatamoverBuilder {
 
    public:
     struct ChannelBufferInterface {
+        std::size_t channel;
         uint32_t eth_buffer_l1_address;
         uint32_t eth_semaphore_l1_address;
     };
@@ -224,8 +232,16 @@ class EriscDatamoverBuilder {
         log_trace(tt::LogOp, "\tbuffer_address: {}", local_buffer_addresses.at(channel));
         log_trace(tt::LogOp, "\tsemaphore_address: {}", local_semaphore_addresses.at(channel));
 
-        return ChannelBufferInterface{local_buffer_addresses.at(channel), local_semaphore_addresses.at(channel)};
+        return ChannelBufferInterface{channel, local_buffer_addresses.at(channel), local_semaphore_addresses.at(channel)};
     }
+
+    // This function is used to set the maximum message size for a given channel. If the maximum
+    // message size is < EDM channel buffer size, then the buffer size passed to the EDM for this channel
+    // will be trimmed be no larger than the largest message to save on unnecessary eth bandwidth.
+    void set_max_message_size_bytes(std::size_t channel, std::size_t max_message_size_bytes) {
+        active_channels.at(channel).largest_message_size_bytes = std::max<uint32_t>(active_channels.at(channel).largest_message_size_bytes, max_message_size_bytes);
+    }
+
     [[nodiscard]]
     ChannelBufferInterface add_receiver_channel(
         uint32_t worker_semaphore_address,
@@ -241,7 +257,7 @@ class EriscDatamoverBuilder {
         log_trace(tt::LogOp, "\tnum_eth_messages_to_forward: {}", active_channels.back().num_eth_messages_to_forward);
         log_trace(tt::LogOp, "\tchannel: {}", active_channels.back().channel);
         log_trace(tt::LogOp, "\tis_sender: {}", active_channels.back().is_sender ? 1 : 0);
-        return ChannelBufferInterface{local_buffer_addresses.at(channel), local_semaphore_addresses.at(channel)};
+        return ChannelBufferInterface{channel, local_buffer_addresses.at(channel), local_semaphore_addresses.at(channel)};
     }
 
     [[nodiscard]]

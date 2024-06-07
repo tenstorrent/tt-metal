@@ -47,10 +47,15 @@ RunTimeOptions::RunTimeOptions() {
     test_mode_enabled = false;
 
     profiler_enabled = false;
+    profile_dispatch_cores = false;
 #if defined(PROFILER)
     const char *profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
     if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
         profiler_enabled = true;
+        const char *profile_dispatch_str = std::getenv("TT_METAL_DEVICE_PROFILER_DISPATCH");
+        if (profile_dispatch_str != nullptr && profile_dispatch_str[0] == '1') {
+            profile_dispatch_cores = true;
+        }
     }
 #endif
     TT_FATAL(
@@ -70,6 +75,9 @@ RunTimeOptions::RunTimeOptions() {
 
     const char *riscv_debug_info_enabled_str = std::getenv("TT_METAL_RISCV_DEBUG_INFO");
     set_riscv_debug_info_enabled(riscv_debug_info_enabled_str != nullptr);
+
+    const char *validate_kernel_binaries = std::getenv("TT_METAL_VALIDATE_PROGRAM_BINARIES");
+    set_validate_kernel_binaries(validate_kernel_binaries != nullptr && validate_kernel_binaries[0] == '1');
 }
 
 const std::string &RunTimeOptions::get_root_dir() {

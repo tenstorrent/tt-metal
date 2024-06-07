@@ -44,17 +44,17 @@ foreach (TEST ${TT_METAL_TESTS})
     target_link_libraries(${TEST} PUBLIC test_metal_common_libs)
     target_include_directories(${TEST} PRIVATE
         ${UMD_HOME}
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/tt_metal
-        ${CMAKE_SOURCE_DIR}/tt_metal/common
-        ${CMAKE_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${PROJECT_SOURCE_DIR}/tt_metal/common
+        ${PROJECT_SOURCE_DIR}/tests
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
-    set_target_properties(${TEST} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/test/tt_metal)
+    set_target_properties(${TEST} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/tt_metal)
     list(APPEND METAL_TEST_TARGETS ${TEST})
 endforeach()
 
-add_subdirectory(${CMAKE_SOURCE_DIR}/tt_metal/programming_examples ${CMAKE_BINARY_DIR}/programming_examples)
+add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal/programming_examples ${PROJECT_BINARY_DIR}/programming_examples)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_common)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests)

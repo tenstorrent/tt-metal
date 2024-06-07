@@ -7,11 +7,11 @@ from diffusers import StableDiffusionPipeline
 import pytest
 import ttnn
 
-from models.experimental.functional_stable_diffusion.tt.ttnn_functional_upsample_2d import upsample2d as ttnn_upsample2d
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_upsample_2d import (
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_2d import upsample2d as ttnn_upsample2d
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_upsample_2d import (
     upsample2d as tt2_ttnn_upsample2d,
 )
-from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
     skip_for_grayskull,
@@ -19,7 +19,7 @@ from models.utility_functions import (
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.utility_functions import torch_random
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_utility_functions import (
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
     pre_process_input,
     post_process_output,
 )
@@ -88,7 +88,7 @@ def test_upsample2d_256x256(device, scale_factor, batch_size, in_channels, input
     ],
 )
 @pytest.mark.parametrize("scale_factor", [2])
-@pytest.mark.parametrize("device_l1_small_size", [32768], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_upsample2d_512x512(device, scale_factor, batch_size, in_channels, input_height, input_width, index):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)

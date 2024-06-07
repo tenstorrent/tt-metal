@@ -72,8 +72,8 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("where", py::overload_cast<const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&>(&where),
-            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("where", py::overload_cast<const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, std::optional<Tensor> >(&where),
+            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_tensor").noconvert() = std::nullopt, R"doc(
             Perform an ternary where operation on two tensors based on third @predicate.
 
             where(predicate, true_value, false_value) implements (predicate) ? true_value : false_value.
@@ -89,9 +89,10 @@ namespace tt::tt_metal::detail{
                 "true_value", "True Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "false_value", "False Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
         )doc");
-        m_tensor.def("where", py::overload_cast<const Tensor&, float, const Tensor&, const MemoryConfig&>(&where),
-            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("where", py::overload_cast<const Tensor&, float, const Tensor&, const MemoryConfig&, std::optional<Tensor> >(&where),
+            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_tensor").noconvert() = std::nullopt, R"doc(
             Perform an ternary where operation on two tensors based on third @predicate.
 
             where(predicate, true_value, false_value) implements (predicate) ? true_value : false_value.
@@ -107,9 +108,10 @@ namespace tt::tt_metal::detail{
                 "true_value", "float", "float", "float scalar", "Yes"
                 "false_value", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
         )doc");
-        m_tensor.def("where", py::overload_cast<const Tensor&, const Tensor&, const float, const MemoryConfig&>(&where),
-            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("where", py::overload_cast<const Tensor&, const Tensor&, const float, const MemoryConfig&, std::optional<Tensor> >(&where),
+            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_tensor").noconvert() = std::nullopt, R"doc(
             Perform an ternary where operation on two tensors based on third @predicate.
 
             where(predicate, true_value, false_value) implements (predicate) ? true_value : false_value.
@@ -125,9 +127,10 @@ namespace tt::tt_metal::detail{
                 "true_value", "True Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "false_value", "float", "float", "float scalar", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
         )doc");
-        m_tensor.def("where", py::overload_cast<const Tensor&, const float, const float, const MemoryConfig&>(&where),
-            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("where", py::overload_cast<const Tensor&, const float, const float, const MemoryConfig&, std::optional<Tensor> >(&where),
+            py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_tensor").noconvert() = std::nullopt, R"doc(
             Perform an ternary where operation on two tensors based on third @predicate.
 
             where(predicate, true_value, false_value) implements (predicate) ? true_value : false_value.
@@ -143,6 +146,7 @@ namespace tt::tt_metal::detail{
                 "true_value", "float", "float", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "false_value", "float", "float", "float scalar", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
         )doc");
         // *** composite unary ops ***
         detail::bind_unary_op(m_tensor, "normalize_hw", tt::tt_metal::normalize_hw, R"doc(Returns a new tensor with the Gaussian normalize of the elements of the input tensor ``{0}`` on H,W axes.)doc");
@@ -858,6 +862,69 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
+        m_tensor.def("trunc",&trunc,
+            py::arg("input").noconvert(),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
+            Performs the element-wise trunc operation on ``input``. Support provided only for Wormhole_B0.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Input Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+        m_tensor.def("round",&round,
+            py::arg("input").noconvert(),py::arg("decimals"),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
+            Performs the element-wise round operation on ``input`` , to the given number of ``decimals`` places. Support provided only for Wormhole_B0 and ``decimals = 0``.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Input Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "decimals", "Number of decimal places to round to", "int", "default to 0", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+        m_tensor.def("floor_div",py::overload_cast<const Tensor&, const Tensor&, const MemoryConfig&>(&floor_div),
+            py::arg("input_a").noconvert(),py::arg("input_b").noconvert(),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
+            Performs the element-wise floor division of ``input_a`` by ``input_b``. Support provided only for Wormhole_B0.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input_a", "Numerator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_b", "Denominator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+        m_tensor.def("floor_div",py::overload_cast<const Tensor&, float, const MemoryConfig&>(&floor_div),
+            py::arg("input").noconvert(),py::arg("value").noconvert(),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
+            Performs the element-wise floor_div on  a tensor ``input`` and  a scalar ``value``. Support provided only for Wormhole_B0.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Numerator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "value", "Denominator value", "float", "", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
         m_tensor.def("mac", py::overload_cast<const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&>(&mac),
             py::arg("input").noconvert(), py::arg("tensor1").noconvert(), py::arg("tensor2").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Returns tensor with the multiply and accumulation of all of elements of the input tensors ``input, tensor1, tensor2``.
@@ -991,14 +1058,14 @@ namespace tt::tt_metal::detail{
 	    py::arg("input_a"), py::arg("input_b"),
             py::arg("output_mem_config").noconvert() = std::nullopt,R"doc(Perform an polar to Cartesian transformation of the input_a (r), input_b(theta) into x + i*y generating a type-2 complex tensor.)doc");
 
-        detail::bind_binary_op<false, true, false>(m_tensor, "logical_xor", &logical_xor, R"doc(Performs eltwise-binary logical_xor (``{0} ^ {1}``) on two tensors.)doc");
-        detail::bind_binary_op<false, true, false>(m_tensor, "max", &tt::tt_metal::max, R"doc(Perform an eltwise-binary max on two tensors.)doc");
-        detail::bind_binary_op<false, true, false>(m_tensor, "min", &tt::tt_metal::min, R"doc(Perform an eltwise-binary min on two tensors.)doc");
-        detail::bind_binary_op<false, true, false>(m_tensor, "hypot", &hypot, R"doc(Returns tensor with the hypot activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
-        detail::bind_binary_op<false, true, false>(m_tensor, "scatter", &tt::tt_metal::scatter, R"doc(Performs scatter operation on elements of the input tensors ``{0}`` and ``{1}``,specifically to copy channel data.)doc");
-        detail::bind_binary_op<false, true, false>(m_tensor, "xlogy", &xlogy, R"doc(Performs eltwise-binary xlogy (``{0} * log( {1} )``) on two tensors.)doc");
-        detail::bind_binary_op<false, true, false>(m_tensor, "atan2", &atan2, R"doc(Returns tensor with the atan2 activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
-        detail::bind_binary_op<false, true, false>(m_tensor, "nextafter", &nextafter, R"doc(Returns the next floating-point value after input_a towards input_b of the input tensors ``{0}`` and ``{1}``.)doc");
+        detail::bind_binary_op<false, true, false, false>(m_tensor, "logical_xor", &logical_xor, R"doc(Performs eltwise-binary logical_xor (``{0} ^ {1}``) on two tensors.)doc");
+        detail::bind_binary_op<false, true, false, false>(m_tensor, "max", &tt::tt_metal::max, R"doc(Perform an eltwise-binary max on two tensors.)doc");
+        detail::bind_binary_op<false, true, false, false>(m_tensor, "min", &tt::tt_metal::min, R"doc(Perform an eltwise-binary min on two tensors.)doc");
+        detail::bind_binary_op<false, true, false, false>(m_tensor, "hypot", &hypot, R"doc(Returns tensor with the hypot activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
+        detail::bind_binary_op<false, true, false, false>(m_tensor, "scatter", &tt::tt_metal::scatter, R"doc(Performs scatter operation on elements of the input tensors ``{0}`` and ``{1}``,specifically to copy channel data.)doc");
+        detail::bind_binary_op<false, true, false, false>(m_tensor, "xlogy", &xlogy, R"doc(Performs eltwise-binary xlogy (``{0} * log( {1} )``) on two tensors.)doc");
+        detail::bind_binary_op<false, true, false, false>(m_tensor, "atan2", &atan2, R"doc(Returns tensor with the atan2 activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
+        detail::bind_binary_op<false, true, false, false>(m_tensor, "nextafter", &nextafter, R"doc(Returns the next floating-point value after input_a towards input_b of the input tensors ``{0}`` and ``{1}``.)doc");
 
 	    // *** type-2 complex operations in new submodule 'type2_complex' ***
         auto m_type2_cplx = m_tensor.def_submodule("complex", "Complex type2");
