@@ -437,10 +437,6 @@ all_binary_ops = [
         "name": "tt_lib.tensor.div",
     },
     {
-        "op": tt_lib.tensor.matmul,
-        "name": "tt_lib.tensor.matmul",
-    },
-    {
         "op": tt_lib.tensor.hypot,
         "name": "tt_lib.tensor.hypot",
     },

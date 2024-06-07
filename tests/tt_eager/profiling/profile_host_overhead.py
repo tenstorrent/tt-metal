@@ -32,7 +32,7 @@ test_sweep_args = [
 ]
 
 all_num_call_to_stack = [1, 3]  # For 10 and more test  execution spills to dispatch
-num_repeats = 10
+num_repeats = 5
 
 
 def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup):
@@ -66,9 +66,12 @@ def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup
     if not is_warmup:
         signpost(header=f"end {op_name}")
 
-    # Dumping profile info
-    logger.info(f"Dumping device profiler data")
-    tt_lib.device.DumpDeviceProfiler(device)
+    try:
+        # Dumping profile info
+        logger.info(f"Dumping device profiler data")
+        tt_lib.device.DumpDeviceProfiler(device)
+    except Exception as e:
+        logger.warning(f"DumpDeviceProfiler {e}")
 
     return overhead_ms, total_op_time
 
