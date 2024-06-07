@@ -145,8 +145,13 @@ class TtLlamaDecoder_optimized:
             assert batch == 1, "prefill mode only supports batch size 1"
             x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
 
-            xs = as_tensor(
-                x, ttnn.bfloat16, ttnn.TILE_LAYOUT, None, ShardTensorToMesh(self.device_mesh, dim=3), self.device_mesh
+            xs = ttnn.as_tensor(
+                x,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self.model_config["DRAM_MEMCFG"],
+                mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+                device=self.device_mesh,
             )
             xs = ttnn.to_device(xs, self.device_mesh)
 
@@ -186,13 +191,10 @@ class TtLlamaDecoder_optimized:
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
                 mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                memory_config=self.model_config["DRAM_MEMCFG"],
                 device=self.device_mesh,
             )
             attn_masks = ttnn.to_device(attn_masks, self.device_mesh)
-            repeat_shape = (1, self.n_local_heads, 1, 1)
-            attn_masks = tt_lib.tensor.repeat(
-                attn_masks, repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
-            )
 
         elif self.model_config["LLM_MODE"] == "decode":
             assert seq_len == 1, "Only supporting decode mode"
@@ -202,6 +204,7 @@ class TtLlamaDecoder_optimized:
                 x,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
+                memory_config=self.model_config["DRAM_MEMCFG"],
                 mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
                 device=self.device_mesh,
             )
@@ -210,13 +213,14 @@ class TtLlamaDecoder_optimized:
                 xs, sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
             )
 
-            rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2)
+            rot_emb = generate_rot_emb(self.head_dim, self.max_seq_len * 2, self.rope_theta)
             rot_mat = get_rotation_mat(rot_emb, start_pos, seq_len, batch=batch)
             assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
             rot_mats = ttnn.as_tensor(
                 rot_mat,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
+                memory_config=self.model_config["DRAM_MEMCFG"],
                 mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
                 device=self.device_mesh,
             )
@@ -235,6 +239,7 @@ class TtLlamaDecoder_optimized:
                 attn_mask,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
+                memory_config=self.model_config["DRAM_MEMCFG"],
                 mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
                 device=self.device_mesh,
             )
