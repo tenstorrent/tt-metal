@@ -11,6 +11,7 @@
 #include <filesystem>
 
 #include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/program/program.hpp"
 #include "llrt/llrt.hpp"
 #include "tools/profiler/profiler_state.hpp"
 #include "tools/profiler/common.hpp"
@@ -101,6 +102,7 @@ class DeviceProfiler {
 
         //DRAM buffer for device side results
         std::shared_ptr<tt::tt_metal::Buffer> output_dram_buffer = nullptr;
+        std::shared_ptr<tt::tt_metal::Program> sync_program = nullptr;
 
         // Device-core Syncdata
         std::map<CoreCoord, std::tuple<double,double,double>> device_core_sync_info;

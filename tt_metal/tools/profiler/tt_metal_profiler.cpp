@@ -43,7 +43,7 @@ std::unordered_map <uint32_t, uint64_t> smallestHostime;
 
 constexpr CoreCoord SYNC_CORE = {0,0};
 
-void syncDeviceHost(Device *device, CoreCoord logical_core, bool doHeader)
+void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_metal::Program> &sync_program, bool doHeader)
 {
     if (!tt::llrt::OptionsG.get_profiler_sync_enabled()) return;
     ZoneScopedC(tracy::Color::Tomato3);
@@ -53,23 +53,24 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, bool doHeader)
     deviceHostTimePair.emplace(device_id, (std::vector <std::pair<uint64_t,uint64_t>>){});
     smallestHostime.emplace(device_id, 0);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
-
     constexpr uint16_t sampleCount = 249;
-    std::map<string, string> kernel_defines = {
-        {"SAMPLE_COUNT", std::to_string(sampleCount)},
-    };
+    if (sync_program == nullptr) {
+        sync_program = std::make_shared<tt_metal::Program>();
 
-    tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
-        program, "tt_metal/tools/profiler/sync/sync_kernel.cpp",
-        logical_core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .defines = kernel_defines}
-        );
+        std::map<string, string> kernel_defines = {
+            {"SAMPLE_COUNT", std::to_string(sampleCount)},
+        };
 
-    EnqueueProgram(device->command_queue(), program, false);
+        tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
+            *sync_program, "tt_metal/tools/profiler/sync/sync_kernel.cpp",
+            logical_core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .defines = kernel_defines}
+            );
+    }
+    EnqueueProgram(device->command_queue(), sync_program, false);
 
     std::filesystem::path output_dir = std::filesystem::path(string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME));
     std::filesystem::path log_path = output_dir / "sync_device_info.csv";
@@ -287,7 +288,7 @@ void InitDeviceProfiler(Device *device){
         tt_metal::detail::WriteToBuffer(tt_metal_device_profiler_map.at(device_id).output_dram_buffer, inputs_DRAM);
         if (doSync)
         {
-            syncDeviceHost (device, SYNC_CORE, doHeader);
+            syncDeviceHost (device, SYNC_CORE, tt_metal_device_profiler_map.at(device_id).sync_program, doHeader);
         }
     }
 #endif
@@ -406,15 +407,16 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
         {
             if (!lastDump)
             {
-                syncDeviceHost (device, SYNC_CORE, false);
+                syncDeviceHost (device, SYNC_CORE, tt_metal_device_profiler_map.at(device_id).sync_program, false);
             }
             tt_metal_device_profiler_map.at(device_id).setDeviceArchitecture(device->arch());
             tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores);
             if (lastDump)
             {
                 // Process is ending, no more device dumps are coming, reset your ref on the buffer so deallocate is the last
-                // owner.
+                // owner. Sync program also contains a buffer so it is safter to release it here
                 tt_metal_device_profiler_map.at(device_id).output_dram_buffer.reset();
+                tt_metal_device_profiler_map.at(device_id).sync_program.reset();
             }
             else
             {
