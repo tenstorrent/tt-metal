@@ -2,9 +2,6 @@ import calculateOpPerformanceColor from '../functions/calculateOpPerformanceColo
 // TODO: look at making this import path nicer (alias throw a linting error in .tsx files)
 import '../scss/components/GoldenTensorComparisonIndicator.scss';
 
-const GOLDEN_GLOBAL = [1, 0.9999, 0.9888, 1, 1, 0.8888];
-const GOLDEN_LOCAL = [1, 0.9999, 1, 0.9888, 1, 0.99];
-
 interface GoldenTensorComparisonIndicatorProps {
     value: number;
 }
