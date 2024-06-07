@@ -1,9 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import './App.scss';
-import { FocusStyleManager } from "@blueprintjs/core";
+import { FocusStyleManager } from '@blueprintjs/core';
+import axios from 'axios';
 import ApplicationList from './components/ApplicationList';
 import TenstorrentLogo from './components/TenstorrentLogo';
-import axios from "axios";
 
 function App() {
     FocusStyleManager.onlyShowFocusOnTabs();
@@ -12,21 +11,21 @@ function App() {
     const [operations, setOperations] = useState('');
 
     useEffect(() => {
-        axios.get('http://localhost:8000/api')
-            .then(response => {
+        axios
+            .get('http://localhost:8000/api')
+            .then((response) => {
                 setMessage(response.data.message);
             })
-            .catch(error => {
+            .catch((error) => {
                 console.error('There was an error!', error);
             });
-
     }, []);
     useEffect(() => {
         const fetchOperations = async () => {
-            console.log('fetching operations')
+            console.log('fetching operations');
             try {
                 const response = await axios.get('/api/get-operations');
-                console.log(response)
+                console.log(response);
                 setOperations(response.data);
             } catch (error) {
                 console.error('Error fetching operations:', error);
