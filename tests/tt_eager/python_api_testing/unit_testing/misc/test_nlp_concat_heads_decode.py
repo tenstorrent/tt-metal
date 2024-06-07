@@ -7,43 +7,49 @@ from loguru import logger
 import torch
 from torch import nn
 import tt_lib as ttl
+import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
 
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
+from models.utility_functions import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+    skip_for_grayskull,
+    get_devices_for_t3000,
+    nearest_32,
+)
 
 
-def run_test_concat_head(
-    devices,
-    n_local_heads,
-    padded_local_heads,
-    head_dim,
-):
+def num_to_corerange(x):
+    assert x < 8 or x % 8 == 0
+    num_x = min(x, 8)
+    num_y = x // num_x
+    assert num_x * num_y == x
+    return ttnn.experimental.tensor.CoreRange(
+        ttnn.experimental.tensor.CoreCoord(0, 0),
+        ttnn.experimental.tensor.CoreCoord(num_x - 1, num_y - 1),
+    )
+
+
+def run_test_concat_head(devices, n_local_heads, padded_local_heads, head_dim, batch):
     ## Split Heads
-    batch = 32
+    padded_batch = nearest_32(batch)
     seq_len = 1
 
     # Prepare input
     concat_head_input = torch.rand(1, batch, padded_local_heads, head_dim)
 
-    shard_spec_32_cores_grid = ttl.tensor.CoreRangeSet(
-        {
-            ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 0),
-                ttl.tensor.CoreCoord(7, 3),
-            ),
-        }
-    )
+    shard_grid = ttl.tensor.CoreRangeSet({num_to_corerange(batch)})
     SCORES_BATCHED_MM_OUTPUT_MEMCFG = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         ttl.tensor.BufferType.L1,
         ttl.tensor.ShardSpec(
-            shard_spec_32_cores_grid,
+            shard_grid,
             [
-                batch,  # Each core has padded_local_heads
+                padded_local_heads,  # Each core has padded_local_heads
                 head_dim,  # head dim
             ],
             ttl.tensor.ShardOrientation.ROW_MAJOR,
@@ -72,20 +78,22 @@ def run_test_concat_head(
 
     # compare
     concat_head_output_tt_cpu = tt2torch_tensor(concat_head_output)
-    out_pass_q, output_pcc_q = comp_pcc(concat_head_output_tt_cpu, concat_head_output_torch)
+    concat_head_output_tt_unpadded = concat_head_output_tt_cpu[:, :, :batch, :]
+    out_pass_q, output_pcc_q = comp_pcc(concat_head_output_tt_unpadded, concat_head_output_torch)
     logger.info(f"PCC value: {output_pcc_q}")
     assert out_pass_q
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "n_local_heads, padded_local_heads, head_dim",
-    ((8, 32, 128), (17, 32, 96), (32, 32, 64)),
+    "n_local_heads, padded_local_heads, head_dim, batch_size",
+    ((8, 32, 128, 32), (17, 32, 96, 32), (32, 32, 64, 32), (8, 32, 128, 16)),
 )
 def test_concat_head(
     n_local_heads,
     padded_local_heads,
     head_dim,
+    batch_size,
     all_devices,
     use_program_cache,
 ):
@@ -94,9 +102,4 @@ def test_concat_head(
 
     for i in range(3):
         # multiple loops to test program caching
-        run_test_concat_head(
-            devices,
-            n_local_heads,
-            padded_local_heads,
-            head_dim,
-        )
+        run_test_concat_head(devices, n_local_heads, padded_local_heads, head_dim, batch_size)

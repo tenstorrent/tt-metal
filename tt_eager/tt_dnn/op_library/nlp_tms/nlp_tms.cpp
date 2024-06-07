@@ -100,7 +100,7 @@ std::vector<Shape> NlpCreateHeadsDecode::compute_output_shapes(const std::vector
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_legacy_shape();
 
-    auto batch = input_shape[2];
+    auto batch = input_tensor.get_shape()[2];
     auto head_dim = this->head_dim;
 
     // pad up to nearest multiple of TILE_HEIGHT for num_q_heads and num_kv_heads
@@ -118,7 +118,10 @@ std::vector<Shape> NlpCreateHeadsDecode::compute_output_shapes(const std::vector
 std::vector<Tensor> NlpCreateHeadsDecode::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_legacy_shape();
-    auto batch = input_shape[2];
+    auto output_shapes = this->compute_output_shapes(input_tensors);
+    const auto& q_output_shape = output_shapes[0];
+
+    auto batch = q_output_shape[1];
     auto num_q_heads_padded = (this->num_q_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
     auto num_kv_heads_padded = (this->num_kv_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
     auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
@@ -130,7 +133,6 @@ std::vector<Tensor> NlpCreateHeadsDecode::create_output_tensors(const std::vecto
     ShardSpec kv_shard_spec{kv_shard_grid, {num_kv_heads_padded, this->head_dim}};
     auto kv_mem_config = this->output_mem_config;
     kv_mem_config.shard_spec = kv_shard_spec;
-    auto output_shapes = this->compute_output_shapes(input_tensors);
     return {
         create_device_tensor(output_shapes[0], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), q_mem_config),
         create_device_tensor(output_shapes[1], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), kv_mem_config),
@@ -356,7 +358,7 @@ void NlpConcatHeadsDecode::validate(const std::vector<Tensor>& input_tensors) co
     TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format");
     TT_FATAL(input_tensor.get_layout() == Layout::TILE);
     TT_FATAL(input_shape[0] == 1, "seqlen=1 for decode");
-    TT_FATAL(input_shape[1] == 32, "currently only support 32 users");
+    TT_FATAL(input_shape[1] <= 32, "currently only support less than 32 users");
     TT_FATAL(input_shape[2] == 32, "currently only support 32 padded heads");
     TT_FATAL(input_shape[2] >= this->num_heads, "head_dim must be multiple of TILE_WIDTH");
 
@@ -379,6 +381,10 @@ std::vector<Shape> NlpConcatHeadsDecode::compute_output_shapes(const std::vector
     auto sequence_length = input_shape[0];
     auto batch = input_shape[1];
     auto head_dim = input_shape[3];
+    // pad batch to 32 if necessary
+    if (batch < 32) {
+        batch = 32;
+    }
 
     auto hidden_dim = num_heads * head_dim;
 
@@ -391,8 +397,9 @@ std::vector<Tensor> NlpConcatHeadsDecode::create_output_tensors(const std::vecto
     auto num_heads = this->num_heads;
     const auto input_shape = input_tensor.get_legacy_shape();
     auto sequence_length = input_shape[0];
-    auto batch = input_shape[1];
     auto head_dim = input_shape[3];
+    auto output_shape = this->compute_output_shapes(input_tensors).at(0);
+    auto batch = output_shape[2];
 
     auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
     auto shard_grid = num_cores_to_corerange_set(num_heads, core_grid, true);
@@ -400,7 +407,7 @@ std::vector<Tensor> NlpConcatHeadsDecode::create_output_tensors(const std::vecto
     auto mem_config = tt::tt_metal::MemoryConfig{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1};
     mem_config.shard_spec = shard_spec;
 
-    return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
+    return {create_device_tensor(output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
 }
 
 operation::ProgramWithCallbacks NlpConcatHeadsDecode::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
