@@ -789,7 +789,7 @@ def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_form
         run_dram_read_cmd(k, n, nblock, data_format, num_banks, bank_start_id)
         cycle = profile_results_kernel_duration()
         time = cycle / freq / 1000.0 / 1000.0
-        throughput = (input_size / 1024.0 / 1024.0 / 1024.0) / time
+        throughput = input_size / cycle
         logger.info("DRAM read cycle: " + str(cycle))
         logger.info("DRAM read time: " + str(time))
         logger.info("DRAM read throughput: " + str(throughput))
