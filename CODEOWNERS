@@ -4,13 +4,13 @@
 .github/ @tt-rkim
 
 # T3000 workflows
-.github/workflows/t3000*.yaml @tapspatel
+.github/workflows/t3000*.yaml @ttmchiou
 
 # TG workflows
-.github/workflows/tg-*.yaml @tapspatel
+.github/workflows/tg-*.yaml @ttmchiou
 
 # TGG workflows
-.github/workflows/tgg*.yaml @tapspatel
+.github/workflows/tgg*.yaml @ttmchiou
 
 /infra/ @tt-rkim
 
@@ -57,9 +57,9 @@ tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh @tt-rkim @TT-bill
 tests/scripts/run_models.sh @tt-rkim
 tests/scripts/single_card/ @tt-rkim
 tests/scripts/single_card/nightly/ @tt-rkim @vtangTT
-tests/scripts/t3000/ @tapspatel
-tests/scripts/tg/ @tapspatel
-tests/scripts/tgg/ @tapspatel
+tests/scripts/t3000/ @ttmchiou
+tests/scripts/tg/ @ttmchiou
+tests/scripts/tgg/ @ttmchiou
 
 # metal - base
 # tt_metal/tt_metal.cpp @abhullar-tt @TT-billteng
@@ -104,7 +104,7 @@ tt-metal/tt_metal/programming_examples/profiler @mo-tenstorrent
 
 # test scripts
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tt-rkim
-tests/scripts/run_performance.sh @tt-rkim @tapspatel
+tests/scripts/run_performance.sh @tt-rkim
 
 # eager - tensor
 # **/tensor/ @TT-BrianLiu @tt-aho @arakhmati
@@ -171,7 +171,6 @@ tests/**/*test*conv*.py @tt-nshanker
 tests/python_api_testing/conv/ @tt-nshanker
 tests/python_api_testing/unit_testing/fallback_ops @tt-aho
 scripts/profiler/ @mo-tenstorrent
-scripts/install @tapspatel
 scripts/docker @ttmchiou @TT-billteng @tt-rkim
 
 dockerfile @ttmchiou @TT-billteng @tt-rkim
