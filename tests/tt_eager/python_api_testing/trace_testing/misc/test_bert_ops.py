@@ -36,6 +36,7 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_ze
     ],
 )
 @pytest.mark.parametrize("enable_async", [True, False])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 34816}], indirect=True)
 def test_bert_linear(
     device,
     fidelity,
@@ -171,7 +172,7 @@ def test_bert_linear(
     run_ops(in0_t_res)
     # Capture
     logger.info("Start Trace capture")
-    tid = ttl.device.BeginTraceCapture(device, 0, 34816)
+    tid = ttl.device.BeginTraceCapture(device, 0)
     output_t_res = run_ops(in0_t_res)
     ttl.device.EndTraceCapture(device, 0, tid)
     logger.info("Trace captured")
