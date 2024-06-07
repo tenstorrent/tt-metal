@@ -68,6 +68,7 @@ Device *CreateDevice(
     chip_id_t device_id,
     const uint8_t num_hw_cqs = 1,
     const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+    const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
     const std::vector<uint32_t> &l1_bank_remap = {});
 
 /**
@@ -461,9 +462,8 @@ void Finish(CommandQueue& cq);
  * |-----------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | device          | The device holding being traced.                                       | Device *                      |                                    | Yes      |
  * | cq_id           | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
- * | trace_buff_size | The size of the trace buffer to pre-allocate.                          | uint32_t                      |                                    | Yes      |
 */
-uint32_t BeginTraceCapture(Device *device, const uint8_t cq_id, const uint32_t trace_buff_size);
+uint32_t BeginTraceCapture(Device *device, const uint8_t cq_id);
 
 /**
  * Completes capture on a trace, if captured commands do not conform to the rules of the trace, the trace will be invalidated.

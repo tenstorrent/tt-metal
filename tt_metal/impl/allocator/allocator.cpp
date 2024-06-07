@@ -176,7 +176,8 @@ void BankManager::dump_blocks(std::ofstream &out) const {
 void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &alloc_config) {
     // Space up to DRAM_UNRESERVED_BASE is reserved for DRAM write barrier
     uint64_t offset_bytes = static_cast<uint64_t>(DRAM_UNRESERVED_BASE);
-    uint32_t dram_bank_size = alloc_config.dram_bank_size - DRAM_UNRESERVED_BASE;
+    // DRAM bank is between unreserved start and trace_region start: UNRESERVED | DRAM BANK | TRACE REGION
+    uint32_t dram_bank_size = alloc_config.dram_bank_size - DRAM_UNRESERVED_BASE - alloc_config.trace_region_size;
     std::vector<int64_t> bank_offsets (alloc_config.num_dram_channels);
     for (uint32_t channel_id = 0; channel_id < alloc_config.num_dram_channels; channel_id++) {
         bank_offsets.at(channel_id) = static_cast<int32_t>(alloc_config.dram_bank_offsets.at(channel_id));
@@ -187,6 +188,16 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
         allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
         allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
         allocator.logical_core_to_bank_ids[BufferType::DRAM].insert({logical_core, {bank_id}});
+    }
+    if (alloc_config.trace_region_size > 0) {
+        // Trace buffers are allocated in this region (top-down). Trace region is offset at dram_bank_size + UNRESERVED offset
+        allocator.trace_buffer_manager = BankManager(BufferType::TRACE, bank_offsets, alloc_config.trace_region_size, dram_bank_size + DRAM_UNRESERVED_BASE);
+        for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
+            CoreCoord logical_core = CoreCoord{bank_id, 0};
+            allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
+            allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
+            allocator.logical_core_to_bank_ids[BufferType::TRACE].insert({logical_core, {bank_id}});
+        }
     }
 }
 
@@ -215,6 +226,7 @@ uint32_t num_banks(const Allocator &allocator, const BufferType &buffer_type) {
         case BufferType::DRAM: return allocator.dram_manager.num_banks();
         case BufferType::L1: return allocator.l1_manager.num_banks();
         case BufferType::L1_SMALL: return allocator.l1_small_manager.num_banks();
+        case BufferType::TRACE: return allocator.trace_buffer_manager.num_banks();
         default: {
             TT_THROW("Unsupported buffer type!");
         }
@@ -227,6 +239,7 @@ uint32_t bank_size(const Allocator &allocator, const BufferType &buffer_type) {
         case BufferType::DRAM: return allocator.dram_manager.bank_size();
         case BufferType::L1: return allocator.l1_manager.bank_size();
         case BufferType::L1_SMALL: return allocator.l1_small_manager.bank_size();
+        case BufferType::TRACE: return allocator.trace_buffer_manager.bank_size();
         default: {
             TT_THROW("Unsupported buffer type!");
         }
@@ -249,6 +262,7 @@ int32_t bank_offset(const Allocator &allocator, BufferType buffer_type, uint32_t
         case BufferType::DRAM: return allocator.dram_manager.bank_offset(bank_id);
         case BufferType::L1: return allocator.l1_manager.bank_offset(bank_id);
         case BufferType::L1_SMALL: return allocator.l1_small_manager.bank_offset(bank_id);
+        case BufferType::TRACE: return allocator.trace_buffer_manager.bank_offset(bank_id);
         default: {
             TT_THROW("Unsupported buffer type!");
         }
@@ -277,6 +291,7 @@ Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_t
         case BufferType::DRAM: return allocator.dram_manager.get_statistics();
         case BufferType::L1: return allocator.l1_manager.get_statistics();
         case BufferType::L1_SMALL: return allocator.l1_small_manager.get_statistics();
+        case BufferType::TRACE: return allocator.trace_buffer_manager.get_statistics();
         default: {
             TT_THROW("Unsupported buffer type!");
         }
@@ -290,7 +305,10 @@ void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_typ
         break;
         case BufferType::L1: allocator.l1_manager.dump_blocks(out);
         break;
-        case BufferType::L1_SMALL: allocator.l1_small_manager.dump_blocks(out); break;
+        case BufferType::L1_SMALL: allocator.l1_small_manager.dump_blocks(out);
+        break;
+        case BufferType::TRACE: allocator.trace_buffer_manager.dump_blocks(out);
+        break;
         default: {
             TT_THROW("Unsupported buffer type!");
         }
@@ -324,6 +342,7 @@ uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size
             TT_FATAL(num_shards.has_value(), "L1_SMALL only supports sharded allocations, see validate_num_banks");
             return allocator.descriptor.l1.alloc(
                 allocator.config, allocator.l1_small_manager, size, page_size, bottom_up, num_shards);
+        case BufferType::TRACE: return allocator.descriptor.dram.alloc(allocator.config, allocator.trace_buffer_manager, size, page_size, bottom_up, num_shards);
         }
         default: {
             TT_THROW("Unsupported buffer type!");
@@ -340,7 +359,12 @@ void deallocate_buffer(Allocator &allocator, uint64_t address, const BufferType 
         case BufferType::L1:
             allocator.l1_manager.deallocate_buffer(address);
         break;
-        case BufferType::L1_SMALL: allocator.l1_small_manager.deallocate_buffer(address); break;
+        case BufferType::L1_SMALL:
+            allocator.l1_small_manager.deallocate_buffer(address);
+            break;
+        case BufferType::TRACE:
+            allocator.trace_buffer_manager.deallocate_buffer(address);
+            break;
         default: {
             TT_THROW("Unsupported buffer type!");
         }
@@ -351,12 +375,14 @@ void deallocate_buffers(Allocator &allocator) {
     allocator.dram_manager.deallocate_all();
     allocator.l1_manager.deallocate_all();
     allocator.l1_small_manager.deallocate_all();
+    allocator.trace_buffer_manager.deallocate_all();
 }
 
 void clear(Allocator &allocator) {
     allocator.dram_manager.clear();
     allocator.l1_manager.clear();
     allocator.l1_small_manager.clear();
+    allocator.trace_buffer_manager.clear();
 }
 
 }  // namespace allocator
@@ -385,6 +411,7 @@ void Allocator::reset() {
     dram_manager.clear();
     l1_manager.clear();
     l1_small_manager.clear();
+    trace_buffer_manager.clear();
     config.reset();
 }
 

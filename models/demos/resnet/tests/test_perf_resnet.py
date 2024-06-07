@@ -115,7 +115,7 @@ def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_m
     tt_lib.device.DumpDeviceProfiler(device)
 
     # Capture
-    tid = tt_lib.device.BeginTraceCapture(device, 0, 1500000)
+    tid = tt_lib.device.BeginTraceCapture(device, 0)
     tt_output_res = tt_resnet50(tt_image_res)
     tt_lib.device.EndTraceCapture(device, 0, tid)
     tt_lib.device.DumpDeviceProfiler(device)
@@ -200,7 +200,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config)
     tt_lib.device.RecordEvent(device, 0, op_event)
 
-    tid = tt_lib.device.BeginTraceCapture(device, 0, 1500000)
+    tid = tt_lib.device.BeginTraceCapture(device, 0)
     tt_output_res = tt_resnet50(reshard_out, final_out_mem_config=interleaved_dram_mem_config)
     reshard_out = tt_lib.tensor.allocate_tensor_on_device(
         reshard_out.shape, reshard_out.dtype, reshard_out.layout, device, reshard_mem_config
@@ -357,7 +357,7 @@ def test_perf_bare_metal(
 
 
 @skip_for_wormhole_b0(reason_str="Not tested on single WH")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1500000}], indirect=True)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",

@@ -29,6 +29,7 @@ enum class BufferType {
     L1,
     SYSTEM_MEMORY,
     L1_SMALL,
+    TRACE,
 };
 
 enum class TensorMemoryLayout {
@@ -206,7 +207,8 @@ class Buffer {
     }
 
     bool is_l1() const { return buffer_type() == BufferType::L1 or buffer_type() == BufferType::L1_SMALL; }
-    bool is_dram() const { return buffer_type() == BufferType::DRAM; }
+    bool is_dram() const { return buffer_type() == BufferType::DRAM || buffer_type() == BufferType::TRACE; }
+    bool is_trace() const { return buffer_type() == BufferType::TRACE; }
 
     TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
 

@@ -176,10 +176,9 @@ void py_module(py::module& module) {
 
     module.def(
         "begin_trace_capture",
-        py::overload_cast<Device*, const uint32_t, const uint8_t>(&ttnn::operations::core::begin_trace_capture),
+        py::overload_cast<Device*, const uint8_t>(&ttnn::operations::core::begin_trace_capture),
         py::arg("device"),
         py::kw_only(),
-        py::arg("trace_buffer_size"),
         py::arg("cq_id") = 0);
 
     module.def(
@@ -207,10 +206,9 @@ void py_module(py::module& module) {
 
     module.def(
         "begin_trace_capture",
-        py::overload_cast<DeviceMesh*, const uint32_t, const uint8_t>(&ttnn::operations::core::begin_trace_capture),
+        py::overload_cast<DeviceMesh*, const uint8_t>(&ttnn::operations::core::begin_trace_capture),
         py::arg("device_mesh"),
         py::kw_only(),
-        py::arg("trace_buffer_size"),
         py::arg("cq_id") = 0);
 
     module.def(

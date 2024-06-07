@@ -21,13 +21,19 @@ Device = ttl.device.Device
 Device.core_grid = property(get_device_core_grid)
 
 
-def open_device(device_id: int, l1_small_size: int = ttl.device.DEFAULT_L1_SMALL_SIZE):
+def open_device(
+    device_id: int,
+    l1_small_size: int = ttl.device.DEFAULT_L1_SMALL_SIZE,
+    trace_region_size: int = ttl.device.DEFAULT_TRACE_REGION_SIZE,
+):
     """
     open_device(device_id: int) -> ttnn.Device:
 
     Open a device with the given device_id. If the device is already open, return the existing device.
     """
-    return ttnn._ttnn.device.open_device(device_id=device_id, l1_small_size=l1_small_size)
+    return ttnn._ttnn.device.open_device(
+        device_id=device_id, l1_small_size=l1_small_size, trace_region_size=trace_region_size
+    )
 
 
 def close_device(device):

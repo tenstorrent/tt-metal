@@ -18,17 +18,6 @@ public:
         uint64_t program_id = program.get_id();
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program);
-        } else if (this->metal_trace_) {
-            CommandQueue& cq = device->command_queue();
-            if (trace_captured.find(program_id) == trace_captured.end()) {
-                uint32_t tid = tt::tt_metal::BeginTraceCapture(device, cq.id(), 2048);
-                EnqueueProgram(cq, program, false);
-                tt::tt_metal::EndTraceCapture(device, cq.id(), tid);
-                trace_captured[program_id] = tid;
-            }
-            log_debug(tt::LogTest, "Executing trace for program {}", program_id);
-            tt::tt_metal::ReplayTrace(device, cq.id(), trace_captured[program_id], false);
-            Finish(cq);
         } else {
             CommandQueue& cq = device->command_queue();
             EnqueueProgram(cq, program, false);
@@ -58,7 +47,6 @@ public:
 protected:
     tt::ARCH arch_;
     vector<Device*> devices_;
-    bool metal_trace_;
     bool slow_dispatch_;
     bool has_remote_devices_;
 
@@ -69,8 +57,7 @@ protected:
             tt::log_info(tt::LogTest, "Running test using Slow Dispatch");
             slow_dispatch_ = true;
         } else {
-            metal_trace_ = tt::parse_env("TT_METAL_TRACE_MODE", false);
-            tt::log_info(tt::LogTest, "Running test using Fast Dispatch, Metal Trace = {}", metal_trace_ ? "ON" : "OFF");
+            tt::log_info(tt::LogTest, "Running test using Fast Dispatch");
             slow_dispatch_ = false;
         }
 

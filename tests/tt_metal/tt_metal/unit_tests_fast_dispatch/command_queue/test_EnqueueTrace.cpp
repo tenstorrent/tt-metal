@@ -91,7 +91,8 @@ constexpr bool kBlocking = true;
 constexpr bool kNonBlocking = false;
 vector<bool> blocking_flags = {kBlocking, kNonBlocking};
 
-TEST_F(CommandQueueFixture, InstantiateTraceSanity) {
+TEST_F(SingleDeviceTraceFixture, InstantiateTraceSanity) {
+    Setup(2048);
     CommandQueue& command_queue = this->device_->command_queue();
 
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
@@ -102,7 +103,7 @@ TEST_F(CommandQueueFixture, InstantiateTraceSanity) {
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
     auto simple_program = std::make_shared<Program>(create_simple_unary_program(input, output));
     EnqueueProgram(command_queue, simple_program, true);
-    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id(), 1280);
+    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id());
     EnqueueProgram(command_queue, simple_program, kNonBlocking);
     EndTraceCapture(this->device_, command_queue.id(), tid);
 
@@ -122,7 +123,8 @@ TEST_F(CommandQueueFixture, InstantiateTraceSanity) {
     ReleaseTrace(this->device_, tid);
 }
 
-TEST_F(CommandQueueFixture, EnqueueProgramTraceCapture) {
+TEST_F(SingleDeviceTraceFixture, EnqueueProgramTraceCapture) {
+    Setup(2048);
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
 
@@ -145,7 +147,7 @@ TEST_F(CommandQueueFixture, EnqueueProgramTraceCapture) {
 
     EnqueueWriteBuffer(command_queue, input, input_data.data(), true);
 
-    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id(), 2048);
+    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id());
     EnqueueProgram(command_queue, simple_program, false);
     EndTraceCapture(this->device_, command_queue.id(), tid);
 
@@ -158,7 +160,8 @@ TEST_F(CommandQueueFixture, EnqueueProgramTraceCapture) {
     ReleaseTrace(this->device_, tid);
 }
 
-TEST_F(CommandQueueFixture, EnqueueProgramDeviceCapture) {
+TEST_F(SingleDeviceTraceFixture, EnqueueProgramDeviceCapture) {
+    Setup(2048);
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
 
@@ -184,7 +187,7 @@ TEST_F(CommandQueueFixture, EnqueueProgramDeviceCapture) {
         EnqueueReadBuffer(command_queue, output, eager_output_data.data(), true);
     }
 
-    // DEVICE CAPTURE AND REPLAY MODE
+    // THIS->DEVICE_ CAPTURE AND REPLAY MODE
     bool has_trace = false;
     uint32_t tid = 0;
     for (int i = 0; i < 1; i++) {
@@ -192,7 +195,7 @@ TEST_F(CommandQueueFixture, EnqueueProgramDeviceCapture) {
 
         if (!has_trace) {
             // Program must be cached first
-            tid = BeginTraceCapture(this->device_, command_queue.id(), 2048);
+            tid = BeginTraceCapture(this->device_, command_queue.id());
             EnqueueProgram(command_queue, simple_program, false);
             EndTraceCapture(this->device_, command_queue.id(), tid);
             has_trace = true;
@@ -208,7 +211,8 @@ TEST_F(CommandQueueFixture, EnqueueProgramDeviceCapture) {
     ReleaseTrace(this->device_, tid);
 }
 
-TEST_F(CommandQueueFixture, EnqueueTwoProgramTrace) {
+TEST_F(SingleDeviceTraceFixture, EnqueueTwoProgramTrace) {
+    Setup(6144);
     // Get command queue from device for this test, since its running in async mode
     CommandQueue& command_queue = this->device_->command_queue();
 
@@ -262,7 +266,7 @@ TEST_F(CommandQueueFixture, EnqueueTwoProgramTrace) {
     }
 
     // Capture trace on a trace queue
-    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id(), 4096);
+    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id());
     EnqueueProgram(command_queue, op0, kNonBlocking);
     EnqueueProgram(command_queue, op1, kNonBlocking);
     EndTraceCapture(this->device_, command_queue.id(), tid);
@@ -283,7 +287,8 @@ TEST_F(CommandQueueFixture, EnqueueTwoProgramTrace) {
     }
 }
 
-TEST_F(CommandQueueFixture, EnqueueMultiProgramTraceBenchmark) {
+TEST_F(SingleDeviceTraceFixture, EnqueueMultiProgramTraceBenchmark) {
+    Setup(6144);
     CommandQueue& command_queue = this->device_->command_queue();
 
     std::shared_ptr<Buffer> input = std::make_shared<Buffer>(this->device_, 2048, 2048, BufferType::DRAM);
@@ -340,7 +345,7 @@ TEST_F(CommandQueueFixture, EnqueueMultiProgramTraceBenchmark) {
     }
 
     // Capture trace on a trace queue
-    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id(), 6144);
+    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id());
     for (uint32_t i = 0; i < num_programs; i++) {
         EnqueueProgram(command_queue, programs[i], kNonBlocking);
     }

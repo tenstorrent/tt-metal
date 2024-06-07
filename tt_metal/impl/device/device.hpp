@@ -57,6 +57,7 @@ class Device {
         chip_id_t device_id,
         const uint8_t num_hw_cqs,
         std::size_t l1_small_size,
+        std::size_t trace_region_size,
         const std::vector<uint32_t> &l1_bank_remap = {},
         bool minimal = false,
         uint32_t worker_core = 0);
@@ -197,7 +198,7 @@ class Device {
     CommandQueue& command_queue(size_t cq_id = 0);
 
     // Metal trace device capture mode
-    void begin_trace(const uint8_t cq_id, const uint32_t tid, const uint32_t trace_buff_size);
+    void begin_trace(const uint8_t cq_id, const uint32_t tid);
     void end_trace(const uint8_t cq_id, const uint32_t tid);
     void replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking);
     void release_trace(const uint32_t tid);
@@ -208,9 +209,9 @@ class Device {
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap = {}, bool minimal = false);
+    bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap = {}, bool minimal = false);
     void initialize_cluster();
-    void initialize_allocator(size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap = {});
+    void initialize_allocator(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap = {});
     void initialize_build();
     void build_firmware();
     void initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg);
@@ -297,7 +298,7 @@ class Device {
         return (std::hash<std::thread::id>{}(std::this_thread::get_id()) == this->work_executor.get_parent_thread_id())
                 or get_worker_mode() == WorkExecutorMode::SYNCHRONOUS;
     }
-
+   uint32_t trace_buffers_size = 0;
    private:
     std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
 };

@@ -117,7 +117,7 @@ struct Allocator {
     allocator::BankManager dram_manager;
     allocator::BankManager l1_manager;
     allocator::BankManager l1_small_manager;
-
+    allocator::BankManager trace_buffer_manager;
     // TODO: Track lowest l1 addresses!
 
     std::unordered_map<uint32_t, uint32_t> bank_id_to_dram_channel;

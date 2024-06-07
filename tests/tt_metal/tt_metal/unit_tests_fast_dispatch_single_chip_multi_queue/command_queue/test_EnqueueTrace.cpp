@@ -75,8 +75,8 @@ Program create_simple_unary_program(const Buffer& input, const Buffer& output) {
 // the eager mode results
 namespace basic_tests {
 
-TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTrace) {
-
+TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTrace) {
+    Setup(2048, 2);
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
 
@@ -103,7 +103,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTrace) {
 
     EnqueueWriteBuffer(data_movement_queue, input, input_data.data(), true);
 
-    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id(), 2048);
+    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id());
     EnqueueProgram(command_queue, simple_program, false);
     EndTraceCapture(this->device_, command_queue.id(), tid);
 
@@ -116,8 +116,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTrace) {
     ReleaseTrace(this->device_, tid);
 }
 
-TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceLoops) {
-
+TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTraceLoops) {
+    Setup(4096, 2);
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
 
@@ -149,7 +149,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceLoops) {
         EnqueueWriteBuffer(data_movement_queue, input, input_data.data(), true);
 
         if (not trace_captured) {
-            trace_id = BeginTraceCapture(this->device_, command_queue.id(), 4096);
+            trace_id = BeginTraceCapture(this->device_, command_queue.id());
             EnqueueProgram(command_queue, simple_program, false);
             EndTraceCapture(this->device_, command_queue.id(), trace_id);
             trace_captured = true;
@@ -167,8 +167,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceLoops) {
     ReleaseTrace(this->device_, trace_id);
 }
 
-TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceBenchmark) {
-
+TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTraceBenchmark) {
+    Setup(6144, 2);
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
 
@@ -223,7 +223,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceBenchmark) {
     }
 
     // Capture trace on a trace queue
-    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id(), 6144);
+    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id());
     EnqueueProgram(command_queue, simple_program, false);
     EndTraceCapture(this->device_, command_queue.id(), tid);
 

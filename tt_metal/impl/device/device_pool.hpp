@@ -27,15 +27,16 @@ class DevicePool {
         std::vector<chip_id_t> device_ids,
         const uint8_t num_hw_cqs,
         size_t l1_small_size,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         const std::vector<uint32_t> &l1_bank_remap = {},
         bool skip_remote_devices = false) noexcept {
         log_debug(tt::LogMetal, "DevicePool initialize");
         if (_inst == nullptr) {
-            static DevicePool device_pool(device_ids, num_hw_cqs, l1_small_size, l1_bank_remap, skip_remote_devices);
+            static DevicePool device_pool(device_ids, num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, skip_remote_devices);
             _inst = &device_pool;
             _inst->init_firmware_on_active_devices();
         } else {
-            _inst->add_devices_to_pool(device_ids, num_hw_cqs, l1_small_size, l1_bank_remap, skip_remote_devices);
+            _inst->add_devices_to_pool(device_ids, num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, skip_remote_devices);
             _inst->init_firmware_on_active_devices();
         }
     }
@@ -51,10 +52,12 @@ class DevicePool {
         std::vector<chip_id_t> device_ids,
         const uint8_t num_hw_cqs,
         size_t l1_small_size,
+        size_t trace_region_size,
         const std::vector<uint32_t> &l1_bank_remap,
         bool skip_remote_devices);
     uint8_t num_hw_cqs;
     size_t l1_small_size;
+    size_t trace_region_size;
     std::vector<uint32_t> l1_bank_remap;
     std::mutex lock;
     std::vector<std::unique_ptr<Device>> devices;
@@ -70,6 +73,7 @@ class DevicePool {
         std::vector<chip_id_t> device_ids,
         const uint8_t num_hw_cqs,
         size_t l1_small_size,
+        size_t trace_region_size,
         const std::vector<uint32_t> &l1_bank_remap,
         bool skip_remote_devices);
     static DevicePool *_inst;

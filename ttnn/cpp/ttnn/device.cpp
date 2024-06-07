@@ -8,8 +8,8 @@ namespace ttnn {
 
 namespace device {
 
-Device &open_device(int device_id, size_t l1_small_size) {
-    tt::DevicePool::initialize({device_id}, 1, l1_small_size);
+Device &open_device(int device_id, size_t l1_small_size, size_t trace_region_size) {
+    tt::DevicePool::initialize({device_id}, 1, l1_small_size, trace_region_size);
     return *(tt::DevicePool::instance().get_active_device(device_id));
 }
 
