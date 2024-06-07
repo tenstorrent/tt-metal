@@ -13,4 +13,8 @@ export default defineConfig({
           'styles/': `${path.resolve(__dirname, 'src/scss')}/`
         }
       }
-});
+      proxy: {
+          '/api': 'http://localhost:8000',
+      },
+   }
+})

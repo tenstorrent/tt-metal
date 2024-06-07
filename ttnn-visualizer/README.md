@@ -28,3 +28,29 @@ export default {
 - Replace `plugin:@typescript-eslint/recommended` to `plugin:@typescript-eslint/recommended-type-checked` or `plugin:@typescript-eslint/strict-type-checked`
 - Optionally add `plugin:@typescript-eslint/stylistic-type-checked`
 - Install [eslint-plugin-react](https://github.com/jsx-eslint/eslint-plugin-react) and add `plugin:react/recommended` & `plugin:react/jsx-runtime` to the `extends` list
+
+## Frontend
+```shell
+nvm use
+npm install
+npm run dev  
+```
+
+## Backend
+create env
+```shell
+python3 -m venv myenv 
+```
+activate env
+```shell
+source myenv/bin/activate
+```
+install requirements
+```shell
+pip install -r requirements.txt
+```
+run server
+```shell
+uvicorn main:app --reload 
+```
+access on localhost:8000/

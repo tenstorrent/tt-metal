@@ -14,6 +14,7 @@
     "@blueprintjs/core": "^5.10.3",
     "@blueprintjs/icons": "^5.9.0",
     "@blueprintjs/popover2": "^2.1.5",
+    "axios": "^1.7.2",
     "normalize.css": "^8.0.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
