@@ -55,7 +55,8 @@ tests/scripts/run_tests.sh @tt-rkim
 tests/scripts/run_pre_post_commit_regressions_multi_device.sh @tt-rkim @aliuTT @tt-aho @TT-BrianLiu
 tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh @tt-rkim @TT-billteng @ttmchiou
 tests/scripts/run_models.sh @tt-rkim
-tests/scripts/nightly/ @tt-rkim @vtangTT
+tests/scripts/single_card/ @tt-rkim
+tests/scripts/single_card/nightly/ @tt-rkim @vtangTT
 tests/scripts/t3000/ @tapspatel
 tests/scripts/tg/ @tapspatel
 tests/scripts/tgg/ @tapspatel
