@@ -315,6 +315,13 @@ inline void calculate_acos()
         vFloat v = dst_reg[0];
         v = sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v);
         v = (1.570796326794) - v;
+        v_if (dst_reg[0] > 1.0F) {
+            v = std::numeric_limits<float>::quiet_NaN();
+        }
+        v_elseif (dst_reg[0] < -1.0F) {
+            v = std::numeric_limits<float>::quiet_NaN();
+        }
+        v_endif;
         dst_reg[0] = v;
         dst_reg++;
     }
