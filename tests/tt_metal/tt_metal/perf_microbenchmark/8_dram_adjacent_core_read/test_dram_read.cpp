@@ -63,6 +63,16 @@ std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
     return vec;
 }
 
+void get_max_page_size_and_num_pages(uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages) {
+    uint64_t total_size = static_cast<uint64_t>(num_tiles) * tile_size;
+
+    page_size = (8192 / tile_size) * tile_size;
+    while (total_size % page_size != 0 && page_size >= tile_size) {
+        page_size -= tile_size;
+    }
+    num_pages = total_size / page_size;
+}
+
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::Device *device,
     const CoreRangeSet &all_cores,
@@ -88,7 +98,9 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
     uint32_t cb_index = 0;
     uint32_t cb_size = block_h * block_w * single_tile_size;
-    uint32_t page_size = block_w * single_tile_size;
+    uint32_t page_size, num_pages;
+    get_max_page_size_and_num_pages(block_num_tiles, single_tile_size, page_size, num_pages);
+
     uint32_t cb_addr = L1_UNRESERVED_BASE;
     tt_metal::CircularBufferConfig cb_config =
         tt_metal::CircularBufferConfig(cb_size, {{cb_index, tile_format}})
@@ -99,8 +111,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
         (std::uint32_t) input_buffer_addr,
         (std::uint32_t) start_tile_id,
         (std::uint32_t) num_blocks,
-        (std::uint32_t) block_w,
-        (std::uint32_t) block_h,
+        (std::uint32_t) num_pages,
         (std::uint32_t) block_num_tiles,
         (std::uint32_t) page_size
     };
