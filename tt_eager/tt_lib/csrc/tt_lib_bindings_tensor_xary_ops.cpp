@@ -110,12 +110,26 @@ namespace tt::tt_metal::detail {
         detail::bind_unary_op(m_tensor, "silu", silu, R"doc(Returns tensor with the silu all of elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "neg", neg, R"doc(Returns tensor with the negate all of elements of the input tensor ``{0}``.)doc");
 
-        detail::bind_unary_op_with_param(
-            m_tensor, "eltwise_typecast", eltwise_typecast,
-            py::arg("tt_output_dtype"),
-            R"doc(Returns tensor with all of the elements of the input tensor ``{0}`` typecasted from bfloat16 to uint32, bfloat16 to uint16, or uint16 to bfloat16.)doc",
-            R"doc("Indicates output dtype of typecast", "ttl.tensor.DataType", "")doc"
-        );
+        m_tensor.def("eltwise_typecast", &eltwise_typecast,
+            py::arg("input").noconvert(), py::arg("tt_input_dtype"), py::arg("tt_output_dtype"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Returns tensor with all elements of the input tensor ``{0}`` typecasted.
+            Supported typecasts:
+                BFLOAT16 -> UINT32
+                BFLOAT16 -> UINT16
+                UINT16 -> BFLOAT16
+
+            Input tensor must have tt_input_dtype data type.
+
+            Output tensor will have tt_output_dtype data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Tensor softplus is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "tt_input_dtype", "Input tensor DataType", "DataType", "One of supported input DataTypes", "Yes"
+                "tt_output_dtype", "Desired output tensor DataType", "DataType", "One of supported output DataTypes", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
 
         detail::bind_unary_op_with_param(
             m_tensor, "exp", py::overload_cast<const Tensor&, bool, const MemoryConfig&>(&exp),
