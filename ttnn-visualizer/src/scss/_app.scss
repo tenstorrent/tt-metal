@@ -3,6 +3,10 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 @use 'definitions/colours' as *;
 
+body{
+    background: $tt-background;
+}
+
 .app-header {
     margin-bottom: 1rem;
 }
