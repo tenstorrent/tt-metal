@@ -23,10 +23,9 @@ namespace {
     inline void check_tensor(
         const Tensor& tensor,
         const std::string& op_name,
-        DataType data_type = DataType::BFLOAT16,
         Layout layout = Layout::TILE) {
         TT_FATAL(tensor.get_layout() == layout, "{} only supports tiled layout.", op_name);
-        TT_FATAL(tensor.get_dtype() == data_type, "{} only supports data type {}.", op_name, data_type);
+        TT_FATAL(tensor.get_dtype() == DataType::BFLOAT16 || tensor.get_dtype() == DataType::BFLOAT8_B, "{} only supports data type {} and {}.", DataType::BFLOAT16, DataType::BFLOAT8_B);
         TT_FATAL(
             tensor.storage_type() == StorageType::DEVICE, "Operands to {} need to be on device!", op_name);
         TT_FATAL(

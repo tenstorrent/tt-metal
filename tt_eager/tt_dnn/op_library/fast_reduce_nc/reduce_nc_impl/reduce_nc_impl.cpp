@@ -48,6 +48,8 @@ operation::ProgramWithCallbacks reduce_nc_impl(const Tensor &input, const Tensor
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
     const auto single_tile_size = detail::TileSize(cb_data_format);
+    const auto cb_1_data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
+    const auto cb_1_tile_size = detail::TileSize(cb_1_data_format);
 
     const auto &input_shape = input.get_legacy_shape();
     const auto &input_shape_without_padding = input_shape.without_padding();
@@ -103,8 +105,8 @@ operation::ProgramWithCallbacks reduce_nc_impl(const Tensor &input, const Tensor
     auto cb_scr0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_scr0_config);
 
     tt_metal::CircularBufferConfig cb_scr1_config =
-        tt_metal::CircularBufferConfig(in1_t*single_tile_size, {{CB::c_in1, cb_data_format}})
-            .set_page_size(CB::c_in1, single_tile_size);
+        tt_metal::CircularBufferConfig(in1_t*cb_1_tile_size, {{CB::c_in1, cb_1_data_format}})
+            .set_page_size(CB::c_in1, cb_1_tile_size);
     auto cb_scr1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_scr1_config);
 
     tt_metal::CircularBufferConfig cb_intermed0_config =
