@@ -26,6 +26,7 @@ from models.utility_functions import (
     pad_and_fold_conv_filters_for_unity_stride,
     pad_and_fold_conv_activation_for_unity_stride,
     enable_memory_reports,
+    skip_for_grayskull,
 )
 
 from models.experimental.resnet.tt.ttnn_functional_resnet50 import resnet50
