@@ -124,7 +124,7 @@ namespace tt::tt_metal::detail
         )doc");
         m_tensor.def("nlp_create_qkv_heads_decode", &nlp_create_qkv_heads_decode,
             py::arg("input").noconvert(), py::arg("num_heads").noconvert(), py::arg("num_kv_heads").noconvert() = std::nullopt, py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Shuffles [1, S=1, B=32, head_dim * (num_heads + 2*num_kv_heads)] fused qkv matrix into Q, K, and V heads with shape [S, B, num_heads, head_dim] for Q and [S, B, num_kv_heads, head_dim] for K and V, where num_heads and num_kv_heads will be padded to nearest 32. Input must be sharded, B=32 and S=1.
+            Shuffles [1, S=1, B, head_dim * (num_heads + 2*num_kv_heads)] fused qkv matrix into Q, K, and V heads with shape [S, B, num_heads, head_dim] for Q and [S, B, num_kv_heads, head_dim] for K and V, where num_heads and num_kv_heads will be padded to nearest 32. Input must be sharded, B=32 and S=1. If ttnn pads B from some number < 32 to 32, this op respects the unpadded B.
         )doc");
         m_tensor.def("nlp_concat_heads_decode", &nlp_concat_heads_decode,
             py::arg().noconvert(), py::arg("num_heads").noconvert() = std::nullopt, R"doc(

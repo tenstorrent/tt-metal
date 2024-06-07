@@ -180,13 +180,11 @@ inline std::vector<Tensor> nlp_create_qkv_heads_decode(
             const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_heads);
 
             // Infer head_dim
-            uint32_t head_dim;
-            TT_FATAL(input_tensors.at(0).get_legacy_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0, "Unsupported input shape");
-            head_dim = input_tensors.at(0).get_legacy_shape()[3] / (num_heads + 2 * num_kv_heads_val);
-
+            const auto& input_tensor = input_tensors.at(0);
+            TT_FATAL(input_tensor.get_legacy_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0, "Unsupported input shape");
+            uint32_t head_dim = input_tensor.get_legacy_shape()[3] / (num_heads + 2 * num_kv_heads_val);
             return operation::run(NlpCreateHeadsDecode{num_heads, num_kv_heads_val, head_dim, mem_config}, input_tensors);
 
-            return operation::run(NlpConcatHeadsDecode{num_heads}, input_tensors);
         }, {input_tensor}, output_tensors);
     return output_tensors;
 }
