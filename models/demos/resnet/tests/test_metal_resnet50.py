@@ -238,7 +238,7 @@ def run_trace_2cq_model(device, tt_image, tt_resnet50):
 
     # Compile
     tt_lib.device.WaitForEvent(device, 1, op_event)
-    tt_lib.tensor.write_tensor(tt_image, tt_image_res)
+    tt_lib.tensor.write_tensor(tt_image, tt_image_res, 1)
     tt_lib.device.RecordEvent(device, 1, write_event)
 
     tt_lib.device.WaitForEvent(device, 0, write_event)
@@ -250,7 +250,7 @@ def run_trace_2cq_model(device, tt_image, tt_resnet50):
     tt_lib.device.Synchronize(device)
     # Trace
     tt_lib.device.WaitForEvent(device, 1, op_event)
-    tt_lib.tensor.write_tensor(tt_image, tt_image_res)
+    tt_lib.tensor.write_tensor(tt_image, tt_image_res, 1)
     tt_lib.device.RecordEvent(device, 1, write_event)
 
     tt_lib.device.WaitForEvent(device, 0, write_event)
@@ -267,11 +267,10 @@ def run_trace_2cq_model(device, tt_image, tt_resnet50):
     tt_lib.device.Synchronize(device)
 
     # Test overlapping write
-    tt_lib.device.RecordEvent(device, 0, op_event)
     outputs = []
     for iter in range(0, 2):
         tt_lib.device.WaitForEvent(device, 1, op_event)
-        tt_lib.tensor.write_tensor(tt_image, tt_image_res)
+        tt_lib.tensor.write_tensor(tt_image, tt_image_res, 1)
         tt_lib.device.RecordEvent(device, 1, write_event)
 
         tt_lib.device.WaitForEvent(device, 0, write_event)
