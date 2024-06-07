@@ -13,19 +13,50 @@ def main():
     parser.add_argument("csv", help="Input CSV file")
     parser.add_argument("--all", help="Show all times for each device", action="store_true")
     parser.add_argument("--signpost", help="Only include data after this signpost and before any others")
+    parser.add_argument("--skip-last", help="Do not include timings from the last N ops", type=int, default=0)
+    parser.add_argument(
+        "--estimate-full-model",
+        help="Estimate the full model performance by multiplying by N and adding back in the skipped ops",
+        type=int,
+        default=0,
+    )
     args = parser.parse_args()
 
     header, rows = read_rows(args.csv)
     blocks, signposts_seen = make_blocks(header, rows, args.signpost)
 
+    if args.signpost and not args.signpost in signposts_seen:
+        print(f'Error: signpost "{args.signpost}" was not found in this file')
+        print(f"Valid signposts are: {signposts_seen}")
+        return
+
     print(f'{"Op":20} {"Time (us)"}')
-    for block in blocks:
+    for block in blocks[: -args.skip_last] if args.skip_last else blocks:
         print(block.long_str() if args.all else block.short_str())
+
+    if args.skip_last:
+        print(f"The following ops from the end of the run are not included below:")
+        for block in blocks[-args.skip_last :]:
+            print(block.long_str() if args.all else block.short_str())
+        skipped_ops = blocks[-args.skip_last :]
+        blocks = blocks[: -args.skip_last]
+    else:
+        skipped_ops = []
 
     total_time_ns = sum(block.time() for block in blocks)
     total_time_s = total_time_ns / 1e9
     tokens_per_s = 1 / total_time_s
-    print(f"Tokens/s/user: {tokens_per_s:.2f} ({total_time_s*1000:.1f} ms latency)")
+    print(f"Tokens/s/user: {tokens_per_s:.2f} ({total_time_s*1000*1000:.1f} us latency)")
+
+    if args.estimate_full_model:
+        total_time_ns *= args.estimate_full_model
+        total_time_ns += sum(block.time() for block in skipped_ops)
+        total_time_s = total_time_ns / 1e9
+        tokens_per_s = 1 / total_time_s
+        print(
+            f"Estimated full model ({args.estimate_full_model} * above + skipped ops) tokens/s/user: {tokens_per_s:.2f} ({total_time_s*1000*1000:.1f} us latency)"
+        )
+
     if signposts_seen and not args.signpost:
         print(f"Warning - this file contains the following signposts that were not used for this analysis:")
         for s in signposts_seen:
@@ -101,7 +132,7 @@ def make_blocks(header, rows, signpost):
     # blocks_by_device is a dict of device_id -> Block
     # we want to get a list of Block (with all device times)
 
-    device_ids = list(block_by_device.keys())
+    device_ids = list(sorted(block_by_device.keys()))
     merged_blocks = block_by_device[device_ids[0]]
 
     for device_id in device_ids[1:]:
