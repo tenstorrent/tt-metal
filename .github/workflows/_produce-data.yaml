@@ -25,3 +25,11 @@ jobs:
           echo "orchestrator: github (Static)"
           echo "docker_image: ${{ job.container.image }}"
           echo "build duration is post-process"
+      - name: Output auxiliary values
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "[Info] Workflow run"
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.run_id }}
+          echo "[Info] Workflow run attempt"
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
