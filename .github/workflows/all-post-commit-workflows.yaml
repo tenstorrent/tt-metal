@@ -13,34 +13,15 @@ permissions:
   id-token: write
 
 jobs:
+  produce-data:
+    uses: ./.github/workflows/_produce-data.yaml
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-  sd-unit-tests:
-    needs: build-artifact
-    uses: ./.github/workflows/build-and-unit-tests.yaml
-    secrets: inherit
-  fd-unit-tests:
-    needs: build-artifact
-    uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
-    secrets: inherit
-  profiler-regression:
-    uses: ./.github/workflows/run-profiler-regression.yaml
-    secrets: inherit
-  eager-package-main:
-    uses: ./.github/workflows/eager-package-main.yaml
-    secrets: inherit
   build-docs:
     needs: build-artifact
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
-  build:
-    uses: ./.github/workflows/build.yaml
-    secrets: inherit
-  # We used to use this for post-commit, but we didn't have enough runners
-  # to support the number of developers running this workflow
-  # build-and-test-measure-perf:
-  # build-and-test-measure-perf-device:

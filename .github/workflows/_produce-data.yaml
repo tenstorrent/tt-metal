@@ -3,6 +3,9 @@ name: "[internal] Produce data for external analysis"
 on:
   workflow_call:
   workflow_dispatch:
+  push:
+    branches:
+      - rkim/9319-data-testing
 
 jobs:
   produce-data:
