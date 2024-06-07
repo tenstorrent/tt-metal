@@ -70,18 +70,6 @@ run_post_commit_pipeline_tests() {
     fi
 }
 
-run_eager_package_end_to_end_pipeline_tests() {
-    local tt_arch=$1
-    local pipeline_type=$2
-
-    # This is important for validating our wheel. Ideally end to end testing should
-    # be a diff repo
-    unset PYTHONPATH
-
-    cd tests/end_to_end_tests
-    env pytest -c conftest.py . -m $pipeline_type
-}
-
 run_frequent_api_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -327,10 +315,6 @@ run_pipeline_tests() {
         run_post_commit_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "frequent_api" ]]; then
         run_frequent_api_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "eager_host_side" ]]; then
-        run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
-    elif [[ $pipeline_type == "eager_package_silicon" ]]; then
-        run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == *"models_performance_bare_metal" || $pipeline_type == "models_device_performance_bare_metal" ]]; then
         run_models_performance_bare_metal_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "models_performance_virtual_machine" ]]; then
