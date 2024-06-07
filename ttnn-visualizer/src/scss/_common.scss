@@ -4,39 +4,6 @@
 @use 'sass:color';
 @use 'definitions/colours' as *;
 
-:root {
-    color-scheme: dark;
-}
-
-::-webkit-scrollbar-track {
-    background-color: transparent;
-    pointer-events: none;
-}
-
-body {
-    margin: 0;
-    background: $tt-background;
-    color: $tt-white-text;
-    font-family: 'Arial Nova', Arial, sans-serif;
-
-    // font-family: 'Helvetica Neue', Helvetica, sans-serif;
-
-    // overflow-y: hidden;
-    // overflow-x: hidden;
-    // height: 100vh;
-    // display: flex;
-}
-
-*,
-*::before,
-*::after {
-    box-sizing: border-box;
-}
-
-a {
-    color: $tt-light-blue;
-}
-
 .bp4-control input:focus ~ .bp4-control-indicator {
     outline: $focus-ring solid 2px;
     outline-offset: 0;

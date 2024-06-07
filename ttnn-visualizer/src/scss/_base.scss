@@ -1,21 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+@use 'definitions/colours' as *;
+
 :root {
     font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
     line-height: 1.5;
     font-weight: 400;
     color-scheme: light dark;
-    color: rgb(255 255 255 / 87%);
-    background-color: #242424;
+    background-color: $tt-background;
+    color: $tt-white-text;
     font-synthesis: none;
     text-rendering: optimizelegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 }
 
+::-webkit-scrollbar-track {
+    background-color: transparent;
+    pointer-events: none;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
 body {
-    color: #fff;
+    margin: 0;
+    font-family: 'Arial Nova', Arial, sans-serif;
     height: 100vh;
     padding: 1rem
 }
@@ -53,7 +67,7 @@ a {
     width: fit-content;
     margin: 10px;
     font-weight: 500;
-    color: #646cff;
+    color: $tt-light-blue;
     text-decoration: inherit;
 
     &:hover {
