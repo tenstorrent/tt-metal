@@ -99,7 +99,7 @@ class TtMoeLayer(LightweightModule):
         gate_logits_1SB8 = ttnn.add(gate_logits_1SB8, self.top8_mask_11B_64)
         ttl_topk_values, ttl_topk_indices = ttnn.experimental.operations.primary.topk(gate_logits_1SB8, 32)
         ttl_topk_values = ttnn.add(ttl_topk_values, self.top2_mask_11BB)
-        mask_B2 = ttnn.eq(self.expert_mask_11BB, ttl_topk_indices)
+        mask_B2 = ttnn.eq(self.expert_mask_11BB, ttl_topk_indices, dtype=ttnn.bfloat16)
         weights_1SB1 = ttnn.sum(ttnn.softmax(ttl_topk_values, dim=-1) * mask_B2, dim=3)
 
         # MLP and masking
