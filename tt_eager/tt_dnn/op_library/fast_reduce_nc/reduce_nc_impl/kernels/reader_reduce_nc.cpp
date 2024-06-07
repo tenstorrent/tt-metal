@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "dataflow_api.h"
 #include "tt_eager/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
 inline uint32_t get_read_tile_id(uint32_t output_tile_id, uint32_t reduce_tile_size, uint32_t inner_tile_size) {
@@ -15,14 +15,13 @@ void kernel_main() {
     constexpr uint32_t input_granularity = get_compile_time_arg_val(1);
 
     // runtime args
-    ArgFetcher arg_fetcher;
-    const auto input_addr = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto num_input_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto start_id = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto dim = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto reduce_tile_size = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto inner_tile_size = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto input_addr = get_arg_val<uint32_t>(0);
+    const auto num_input_tiles = get_arg_val<uint32_t>(1);
+    const auto num_output_tiles = get_arg_val<uint32_t>(2);
+    const auto start_id = get_arg_val<uint32_t>(3);
+    const auto dim = get_arg_val<uint32_t>(4);
+    const auto reduce_tile_size = get_arg_val<uint32_t>(5);
+    const auto inner_tile_size = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t cb_id_in0 = 0;
@@ -44,19 +43,15 @@ void kernel_main() {
             if (input_granularity_index == 0) {
                 cb_reserve_back(cb_id_in0, input_granularity);
                 l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                DPRINT << "Reseted" << ENDL();
             }
             noc_async_read_tile(read_tile_id, input_addrg, l1_write_addr_in0);
             l1_write_addr_in0 += input_tile_bytes; // correctness error
             read_tile_id += inner_tile_size;
             input_granularity_index++;
-            DPRINT << "input_granularity index " << input_granularity_index << ENDL();
-            DPRINT << "l1_write_addr_in0 " << l1_write_addr_in0 << ENDL();
             if (input_granularity_index == input_granularity) {
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in0, input_granularity);
                 input_granularity_index = 0;
-                DPRINT << "Pushed" << ENDL();
             }
         }
     }

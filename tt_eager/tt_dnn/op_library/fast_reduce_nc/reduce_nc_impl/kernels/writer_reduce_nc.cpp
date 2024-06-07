@@ -1,18 +1,17 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "dataflow_api.h"
 
 void kernel_main() {
     // compile-time args
     constexpr bool output_is_dram = (get_compile_time_arg_val(0) == 1);
 
     // runtime args
-    ArgFetcher arg_fetcher;
-    const auto output_addr = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto num_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto start_id = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto output_addr = get_arg_val<uint32_t>(0);
+    const auto num_tiles = get_arg_val<uint32_t>(1);
+    const auto start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_out = 16;
     constexpr uint32_t onetile = 1;
