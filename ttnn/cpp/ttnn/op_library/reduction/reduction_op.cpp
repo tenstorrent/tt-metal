@@ -2,23 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/risc_v/risc_v_op.hpp"
+#include "ttnn/op_library/reduction/reduction_op.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
-#include "tt_metal/host_api.hpp"
+namespace ttnn {
 
-namespace tt {
+namespace operations {
 
-namespace tt_metal {
+namespace reduction {
 
 void ArgMax::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Input to argmax need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr , "Input to argmax need to be allocated in buffers on device!");
 
-    TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Only BFLOAT16 is supported for inputs!");
     TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Only INTERLEAVED memory layout is supported for inputs!");
-    TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for inputs!");
 
     TT_FATAL(this->output_dtype == DataType::UINT32, "Only UINT32 is supported for outputs!");
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Only INTERLEAVED memory layout is supported for outputs!");
@@ -31,22 +26,22 @@ void ArgMax::validate(const std::vector<Tensor> &input_tensors) const {
     }
 }
 
-std::vector<Shape> ArgMax::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::Shape> ArgMax::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     auto input_shape = input_tensors[0].get_legacy_shape();
     if (this->dim.has_value()) {
         // TODO: There seems to be an underflow issue with directly modifying last two dims
         if (this->dim.value() == -1 or this->dim.value() == 3) {
-            Shape output_shape({input_shape[0], input_shape[1], input_shape[2], 1});
+            tt::tt_metal::Shape output_shape({input_shape[0], input_shape[1], input_shape[2], 1});
             return {output_shape};
         } else if (this->dim.value() == -2 or this->dim.value() == 2) {
-            Shape output_shape({input_shape[0], input_shape[1], 1, input_shape[3]});
+            tt::tt_metal::Shape output_shape({input_shape[0], input_shape[1], 1, input_shape[3]});
             return {output_shape};
         } else {
             input_shape[this->dim.value()] = 1;
             return {input_shape};
         }
     } else {
-        Shape output_shape({1, 1, 1, 1});
+        tt::tt_metal::Shape output_shape({1, 1, 1, 1});
         return {output_shape};
     }
 }
@@ -62,17 +57,11 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     const auto &input_tensor = input_tensors.at(0);
     const auto &output_tensor = output_tensors.at(0);
 
-    return argmax_multi_core(input_tensor, output_tensor, this->dim);
+    return detail::argmax_multi_core(input_tensor, output_tensor, this->dim);
 }
 
-tt::stl::reflection::Attributes ArgMax::attributes() const {
-    return {
-        {"output_dtype", this->output_dtype},
-        {"output_mem_config", this->output_mem_config},
-        {"dim", this->dim},
-    };
-}
+}  // namespace reduction
 
-}  // namespace tt_metal
+}  // namespace operations
 
-}  // namespace tt
+}  // namespace ttnn
