@@ -1374,12 +1374,12 @@ def eltwise_identity(x, *args, **kwargs):
     return x
 
 
-def eltwise_typecast(x, *args, tt_output_dtype, **kwargs):
-    if tt_output_dtype[0] == ttl.tensor.DataType.UINT16:
+def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
+    if tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT16 and tt_output_dtype[0] == ttl.tensor.DataType.UINT16:
         return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
-    elif tt_output_dtype[0] == ttl.tensor.DataType.UINT32:
+    elif tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT16 and tt_output_dtype[0] == ttl.tensor.DataType.UINT32:
         return torch.relu(x.to(torch.int32))  # due to no uint32 support
-    elif tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT16:
+    elif tt_input_dtype[0] == ttl.tensor.DataType.UINT16 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT16:
         return x.to(torch.bfloat16)
     else:
         return x
