@@ -45,7 +45,7 @@
 | Model                                                                                | Gen. Token [3]     |  Batch               | End-to-end throughput [1]    | Device throughput [2]       | Target         |
 |--------------------------------------------------------------------------------------|--------------------|----------------------|------------------------------|-----------------------------|----------------|
 | [Falcon7B-decode](./models/demos/wormhole/falcon7b)                                  | 129th              | 32                   | 11.6 t/s/u - 371 t/s         | 15.4 t/s/u - 493 t/s        | 21             |
-| [Mistral-7B-decode](./models/demos/wormhole/mistral7b)                               | 33rd               | 32                   | 10.9 t/s/u - 349 t/s         | 13.3 t/s/u - 426 t/s        | 21             |
+| [Mistral-7B-decode](./models/demos/wormhole/mistral7b)                               | 33rd               | 32                   | 11.7 t/s/u - 374 t/s         | 16.7 t/s/u - 538 t/s        | 21             |
 | [Mamba-2.8B-decode](./models/demos/mamba)                                            | any                | 32                   | 9.6 t/s/u - 307 t/s          | 15.8 t/s/u - 506 t/s        | 22             |
 | [BERT-Large](./models/demos/metal_BERT_large_11/) (sen/s) [4]                        |                    | 8                    | 270                          | 340                         | 400            |
 | [Stable Diffusion 1.4](./models/demos/wormhole/stable_diffusion) 512x512  (sec/img)  |                    | 1                    | 8                            | 5                           |                |
