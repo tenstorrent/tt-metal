@@ -79,7 +79,7 @@ def unsqueeze_all_params_to_4d(params):
 @pytest.mark.parametrize(
     "batch_size, num_inference_steps, expected_compile_time, expected_inference_time",
     [
-        (2, 4, 3600, 0.28),  # Issue 7816 Inference time
+        (2, 4, 3600, 0.14),  # Issue 7816 Inference time
     ],
 )
 def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected_compile_time, expected_inference_time):
