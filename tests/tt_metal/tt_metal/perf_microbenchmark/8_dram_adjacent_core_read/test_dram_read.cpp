@@ -488,7 +488,7 @@ int main(int argc, char **argv) {
         }
 
         std::vector<uint32_t> harvested_rows;
-        std::vector<uint32_t> all_phy_coord_y = {1,2,3,4,5,7,8,9,10,11};
+        std::vector<uint32_t> all_phy_coord_y = {0,1,2,3,4,5,7,8,9,10,11};
         for (int i=0; i<all_phy_coord_y.size(); ++i) {
             auto y = all_phy_coord_y[i];
 
@@ -500,80 +500,53 @@ int main(int argc, char **argv) {
             log_info("harvested rows phyiscal grid_y: {}", harvested_rows[i]);
         }
 
-        uint32_t x_step = 3;
-        for (int i=0; i<adj_core_phy_g1.size(); ++i) {
-            auto y = adj_core_phy_g1[i].y;
+        auto process_group = [&](std::vector<CoreCoord>& group, std::vector<size_t>& group_y, uint32_t x_step) {
+            for (auto& coord : group) {
+                auto y = coord.y;
 
-            if (std::find(harvested_rows.begin(), harvested_rows.end(), y) != harvested_rows.end() or
-                std::count(adj_core_phy_y_g1.begin(), adj_core_phy_y_g1.end(), y) >= 2) {
-
-                if (y >= 11) {
-                    for (int j=max_worker_y_phy; j >= min_worker_y_phy; j--) {
-                        auto temp_y = j;
-
-                        if (std::find(harvested_rows.begin(), harvested_rows.end(), temp_y) == harvested_rows.end() and
-                            std::count(adj_core_phy_y_g1.begin(), adj_core_phy_y_g1.end(), temp_y) == 0) {
-
-                            adj_core_phy_g1[i].y = temp_y;
-                            adj_core_phy_g1[i].x += x_step;
-                            x_step --;
-                            break;
+                if (std::find(harvested_rows.begin(), harvested_rows.end(), y) != harvested_rows.end() ||
+                    std::count(group_y.begin(), group_y.end(), y) >= 2) {
+                    auto adjust_coord = [&](int start, int end, int step) {
+                        bool found_new_row = false;
+                        for (int j = start; step > 0 ? j <= end : j >= end; j += step) {
+                            if (std::find(harvested_rows.begin(), harvested_rows.end(), j) == harvested_rows.end() &&
+                                std::count(group_y.begin(), group_y.end(), j) == 0) {
+                                coord.y = j;
+                                coord.x += x_step;
+                                x_step--;
+                                found_new_row = true;
+                                break;
+                            }
                         }
-                    }
-                } else {
-                    for (int j=min_worker_y_phy; j <= max_worker_y_phy; j++) {
-                        auto temp_y = j;
-                        if (std::find(harvested_rows.begin(), harvested_rows.end(), temp_y) == harvested_rows.end() and
-                            std::count(adj_core_phy_y_g1.begin(), adj_core_phy_y_g1.end(), temp_y) == 0) {
-
-                            adj_core_phy_g1[i].y = temp_y;
-                            adj_core_phy_g1[i].x += x_step;
-                            x_step --;
-                            break;
+                        if (not found_new_row) {
+                            for (int j = start; step > 0 ? j <= end : j >= end; j += step) {
+                                if (std::find(harvested_rows.begin(), harvested_rows.end(), j) == harvested_rows.end()) {
+                                    coord.y = j;
+                                    coord.x += x_step;
+                                    x_step--;
+                                    found_new_row = true;
+                                    break;
+                                }
+                            }
                         }
+                    };
+
+                    if (y >= num_banks_all) {
+                        adjust_coord(max_worker_y_phy, min_worker_y_phy, -1);
+                    } else {
+                        adjust_coord(min_worker_y_phy, max_worker_y_phy, 1);
                     }
                 }
             }
-        }
+        };
+        // move the workers, if they are on harvested rows
+        uint32_t x_step = 3;
+        process_group(adj_core_phy_g1, adj_core_phy_y_g1, x_step);
         for (int i=0; i < adj_core_phy_g1.size(); ++i) {
             log_info("adj_core_phy_g1: {}", adj_core_phy_g1[i]);
         }
-
         x_step = 3;
-        for (int i=0; i<adj_core_phy_g2.size(); ++i) {
-            auto y = adj_core_phy_g2[i].y;
-
-            if (std::find(harvested_rows.begin(), harvested_rows.end(), y) != harvested_rows.end() or
-                std::count(adj_core_phy_y_g2.begin(), adj_core_phy_y_g2.end(), y) >= 2) {
-
-                if (y >= 11) {
-                    for (int j=max_worker_y_phy; j >= min_worker_y_phy; j--) {
-                        auto temp_y = j;
-
-                        if (std::find(harvested_rows.begin(), harvested_rows.end(), temp_y) == harvested_rows.end() and
-                            std::count(adj_core_phy_y_g2.begin(), adj_core_phy_y_g2.end(), temp_y) == 0 and temp_y != eth_coord_y_phy) {
-
-                            adj_core_phy_g2[i].y = temp_y;
-                            adj_core_phy_g2[i].x += x_step;
-                            x_step --;
-                            break;
-                        }
-                    }
-                } else {
-                    for (int j=min_worker_y_phy; j <= max_worker_y_phy; j++) {
-                        auto temp_y = j;
-                        if (std::find(harvested_rows.begin(), harvested_rows.end(), temp_y) == harvested_rows.end() and
-                            std::count(adj_core_phy_y_g2.begin(), adj_core_phy_y_g2.end(), temp_y) == 0 and temp_y != eth_coord_y_phy) {
-
-                            adj_core_phy_g2[i].y = temp_y;
-                            adj_core_phy_g2[i].x += x_step;
-                            x_step --;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+        process_group(adj_core_phy_g2, adj_core_phy_y_g2, x_step);
         for (int i=0; i < adj_core_phy_g2.size(); ++i) {
             log_info("adj_core_phy_g2: {}", adj_core_phy_g2[i]);
         }
