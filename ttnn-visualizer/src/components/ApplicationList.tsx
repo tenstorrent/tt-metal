@@ -1,13 +1,16 @@
-import React, { useState } from 'react';
+// SPDX-License-Identifier: Apache-2.0
+//
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+import { useState } from 'react';
 
 import { Button, Icon } from '@blueprintjs/core';
 import { IconNames } from '@blueprintjs/icons';
 import { Tooltip2 } from '@blueprintjs/popover2';
-import TenstorrentLogo from './TenstorrentLogo.tsx';
-import SearchField from './SearchField.tsx';
-import FilterableComponent from './FilterableComponent.tsx';
-import Collapsible from './Collapsible.tsx';
-import HighlightedText from './HighlightedText.tsx';
+import SearchField from './SearchField';
+import FilterableComponent from './FilterableComponent';
+import Collapsible from './Collapsible';
+import HighlightedText from './HighlightedText';
+import GoldenTensorComparisonIndicator from './GoldenTensorComparisonIndicator';
 
 const ApplicationList = () => {
     const ops = [
@@ -20,24 +23,10 @@ const ApplicationList = () => {
         'ttnn.compare',
     ];
 
-    const goldenGlobal = [1, 0.9999, 0.9888, 1, 1, 0.8888];
-    const goldenLocal = [1, 0.9999, 1, 0.9888, 1, 0.99];
-
-    const calculateOpPerformanceColor = (value: number): string => {
-        const min = 0.8;
-        const ratio = (value - min) / (1 - min);
-        const intensity = Math.round(ratio * 255);
-        console.log(value, ratio, intensity);
-
-        return `rgb(${255 - intensity}, ${intensity}, 0)`;
-    };
-
     const [filterQuery, setFilterQuery] = useState('');
 
     return (
         <div className='app'>
-            <TenstorrentLogo style={{ display: 'block', position: 'relative', marginBottom: '30px' }} />
-
             <fieldset className='operations-wrap'>
                 <legend>Operations</legend>
 
@@ -73,6 +62,7 @@ const ApplicationList = () => {
                             op.toLowerCase().includes('ttnn.add') || op.toLowerCase().includes('ttnn.to_torch');
                         return (
                             <FilterableComponent
+                                data-woof='aas'
                                 key={index}
                                 filterableString={op}
                                 filterQuery={filterQuery}
@@ -81,7 +71,6 @@ const ApplicationList = () => {
                                         <Collapsible
                                             label={
                                                 <>
-                                                    {' '}
                                                     <Icon size={20} icon={IconNames.CUBE} />
                                                     <span style={{ color: '#fff', fontSize: '20px' }}>
                                                         <HighlightedText text={op} filter={filterQuery} />
@@ -95,29 +84,8 @@ const ApplicationList = () => {
                                                     <Tooltip2 content='Buffer view'>
                                                         <Button minimal small icon={IconNames.SEGMENTED_CONTROL} />
                                                     </Tooltip2>
-                                                    <div
-                                                        style={{
-                                                            width: '10px',
-                                                            height: '10px',
-                                                            margin: '0 -7px 0 0',
-                                                            // padding: '0 5px',
-                                                            backgroundColor: calculateOpPerformanceColor(
-                                                                goldenGlobal[index],
-                                                            ),
-                                                        }}
-                                                    />
-                                                    <span>{goldenGlobal[index].toFixed(4)}</span>
-                                                    <div
-                                                        style={{
-                                                            width: '10px',
-                                                            height: '10px',
-                                                            margin: '0 -7px 0 0',
-                                                            backgroundColor: calculateOpPerformanceColor(
-                                                                goldenLocal[index],
-                                                            ),
-                                                        }}
-                                                    />
-                                                    <span>{goldenLocal[index].toFixed(4)}</span>
+                                                    <GoldenTensorComparisonIndicator index={index} calc='global' />
+                                                    <GoldenTensorComparisonIndicator index={index} calc='local' />
                                                 </>
                                             }
                                             isOpen={false}

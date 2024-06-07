@@ -2,13 +2,10 @@
 //
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
-import { CSSProperties } from 'react';
-
-function TenstorrentLogo({ style }: { style?: CSSProperties }) {
+function TenstorrentLogo() {
     // from the web site
     return (
         <svg
-            style={style}
             aria-label='Tenstorrent'
             width='220'
             height='50'

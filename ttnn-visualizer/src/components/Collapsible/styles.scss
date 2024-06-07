@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
+//
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
-@import "../scss/variables";
+@use 'styles/definitions/colours' as *;
 
 .collapsible-component {
     // &:hover {

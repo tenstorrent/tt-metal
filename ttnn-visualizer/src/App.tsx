@@ -1,10 +1,18 @@
-import './app.scss';
 import { FocusStyleManager } from '@blueprintjs/core';
-import ApplicationList from './components/ApplicationList.tsx';
+import ApplicationList from './components/ApplicationList';
+import TenstorrentLogo from './components/TenstorrentLogo';
 
 function App() {
     FocusStyleManager.onlyShowFocusOnTabs();
-    return <ApplicationList />;
+
+    return (
+        <>
+            <header className='app-header'>
+                <TenstorrentLogo />
+            </header>
+            <ApplicationList />;
+        </>
+    );
 }
 
 export default App;

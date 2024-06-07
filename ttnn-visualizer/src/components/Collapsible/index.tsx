@@ -7,7 +7,7 @@ import { IconNames } from '@blueprintjs/icons';
 import React, { useEffect } from 'react';
 import { JSX } from 'react/jsx-runtime';
 
-import './Collapsible.scss';
+import './styles.scss';
 
 interface CollapsibleProps {
     label: string | JSX.Element;
