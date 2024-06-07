@@ -57,13 +57,16 @@ def main(output_directory, output_csv):
                 continue
 
         # Read the csv file
-        df = pd.read_csv(file)
+        try:
+            df = pd.read_csv(file)
 
-        if final_df is None:
-            final_df = df
-        else:
-            # Append the dataframe to the final dataframe
-            final_df = pd.concat([final_df, df], ignore_index=True)
+            if final_df is None:
+                final_df = df
+            else:
+                # Append the dataframe to the final dataframe
+                final_df = pd.concat([final_df, df], ignore_index=True)
+        except:
+            logger.warning(f"Cannot parse {file}")
 
     # Subfolder csv files
     subfolder_files = Path(output_directory).glob("**/*.csv")
