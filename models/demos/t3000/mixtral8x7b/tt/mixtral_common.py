@@ -55,6 +55,23 @@ def get_rotation_mat(dhead, end):
     return rot_mat
 
 
+#  Add-Multiply method of rotary embeddings for prefill
+def get_rot_transformation_mat(dhead):
+    rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
+    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
+    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
+    return rot_emb_matrix
+
+
+def gather_cos_sin(position_ids, cos, sin):
+    position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
+    cos = cos.gather(0, position_id_expanded)
+    sin = sin.gather(0, position_id_expanded)
+    cos = torch.stack([cos, cos], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    sin = torch.stack([sin, sin], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    return cos, sin
+
+
 def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, sliding_window, device_mesh):
     """
     Prepare inputs for decode mode.
@@ -121,22 +138,87 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, sliding_window, device_
     return xs_1SBH, attn_mask
 
 
-def prepare_rotation_mat_ttnn(head_dim, max_seq_len, device_mesh):
+def prepare_inputs_ttnn_prefill(x_bsh, device_mesh, attn_mask=None, attn_mask_torch=None):
     """
-    Prepare rotation matricies for decode mode.
+    Prepare inputs for decode mode.
+    x: (batch, seq, hidden_dim)
+    B: batch (32)
+    S: sequence len (1)
+    H: dim (4096)
     """
-    rot_mat = get_rotation_mat(dhead=head_dim, end=max_seq_len * 2)
-    rot_mats = [
-        ttnn.from_torch(
-            rot_mat_i.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
+    batch = x_bsh.size(0)
+    seq_len = x_bsh.size(1)
+
+    x_1BSH = x_bsh.unsqueeze(0)
+
+    # input goes to L1
+    xs_1BSH = ttnn.from_torch(
+        x_1BSH,
+        device=device_mesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+    )
+
+    # Attention mask
+    if not attn_mask:
+        attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
+        attn_mask_torch = torch.triu(attn_mask, diagonal=1)
+        attn_mask = attn_mask_torch.view(1, 1, seq_len, seq_len)
+
+        attn_mask = ttnn.from_torch(
+            attn_mask,
             device=device_mesh,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ReplicateTensorToMesh(device_mesh),
         )
-        for rot_mat_i in rot_mat
-    ]
 
+    return xs_1BSH, attn_mask, attn_mask_torch
+
+
+def prepare_rotation_mat_ttnn(head_dim, max_seq_len, device_mesh, mode="decode", seq_len=0):
+    """
+    Prepare rotation matricies for decode mode.
+    """
+    if mode == "decode":
+        rot_mat = get_rotation_mat(dhead=head_dim, end=max_seq_len * 2)
+        rot_mats = [
+            ttnn.from_torch(
+                rot_mat_i.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
+                device=device_mesh,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            )
+            for rot_mat_i in rot_mat
+        ]
+        rot_mats = [ttnn.to_device(rot_mat, device_mesh) for rot_mat in rot_mats]
+
+    elif mode == "prefill":
+        cos, sin = precompute_freqs(head_dim, max_seq_len * 2)
+        cos_gathered, sin_gathered = gather_cos_sin(torch.arange(0, seq_len), cos, sin)
+        assert cos_gathered.size() == (1, 1, seq_len, head_dim)
+        assert sin_gathered.size() == (1, 1, seq_len, head_dim)
+
+        cos_gathereds = ttnn.from_torch(
+            cos_gathered,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            device=device_mesh,
+        )
+        sin_gathereds = ttnn.from_torch(
+            sin_gathered,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            device=device_mesh,
+        )
+
+        rot_mats = [cos_gathereds, sin_gathereds]
     return rot_mats
 
 

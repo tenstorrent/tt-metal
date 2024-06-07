@@ -65,16 +65,14 @@ class TtTransformer(LightweightModule):
         self.compute_kernel = self.args.get_compute_kernel_config()
 
     def forward(
-        self,
-        x,
-        start_pos,
-        current_pos,
-        attn_masks,
-        rot_mats,
+        self, x, start_pos, current_pos, attn_masks, rot_mats, transformation_mats=None, user_id=0, mode="decode"
     ):
         for i, layer in enumerate(self.layers):
-            x = layer(x, start_pos, current_pos, attn_masks, rot_mats)
+            x = layer(x, start_pos, current_pos, attn_masks, rot_mats, transformation_mats, user_id, mode)
         attn_masks.deallocate(True)
+
+        if mode == "prefill":
+            return x
 
         x_norm = self.norm(x)
         outputs = ttnn.experimental.operations.primary.matmul(

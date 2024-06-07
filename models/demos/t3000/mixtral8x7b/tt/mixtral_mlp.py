@@ -46,38 +46,69 @@ class TtMixtralMLP(LightweightModule):
         self.w2 = as_tensor("w2")
         self.w3 = as_tensor("w3")
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        self.prefill_mlp_config = self.model_config["PREFILL_MLP_COMPUTE_CONFIG"]
+
+    def forward(self, x: ttnn.Tensor, mode="prefill") -> ttnn.Tensor:
         """
         w1 -> gate_proj
         w2 -> down_proj
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
-        w1_out = ttnn.experimental.operations.primary.matmul_1d(
-            x,
-            self.w1,
-            program_config=self.model_config["FF1_OUTPUT_PROGCFG"],  # SILu activation fused in the op
-            output_mem_config=self.model_config["FF1_OUTPUT_MEMCFG"],
-            compute_kernel_config=self.model_args.get_compute_kernel_config(),
-            output_dtype=ttnn.bfloat8_b,
-        )
-        w3_out = ttnn.experimental.operations.primary.matmul_1d(
-            x,
-            self.w3,
-            program_config=self.model_config["FF3_OUTPUT_PROGCFG"],
-            output_mem_config=self.model_config["FF3_OUTPUT_MEMCFG"],
-            compute_kernel_config=self.model_args.get_compute_kernel_config(),
-            output_dtype=ttnn.bfloat8_b,
-        )
-        w2_in = ttnn.experimental.tensor.mul(w1_out, w3_out)
+        if mode == "prefill":
+            w1_out = ttnn.linear(
+                x,
+                self.w1,
+                compute_kernel_config=self.prefill_mlp_config,
+                core_grid=ttnn.CoreGrid(y=8, x=8),
+                dtype=ttnn.bfloat16,
+                activation="silu",
+            )
 
-        w2_out = ttnn.experimental.operations.primary.matmul_1d(
-            w2_in,
-            self.w2,
-            program_config=self.model_config["FF2_OUTPUT_PROGCFG"],
-            output_mem_config=self.model_config["FF2_OUTPUT_MEMCFG"],
-            compute_kernel_config=self.model_args.get_compute_kernel_config(),
-            output_dtype=ttnn.bfloat8_b,
-        )
+            w3_out = ttnn.linear(
+                x,
+                self.w3,
+                compute_kernel_config=self.prefill_mlp_config,
+                core_grid=ttnn.CoreGrid(y=8, x=8),
+                dtype=ttnn.bfloat16,
+            )
+            w2_in = ttnn.experimental.tensor.mul(w1_out, w3_out)
 
-        return w2_out
+            w2_out = ttnn.linear(
+                w2_in,
+                self.w2,
+                compute_kernel_config=self.prefill_mlp_config,
+                core_grid=ttnn.CoreGrid(y=8, x=8),
+                dtype=ttnn.bfloat16,
+            )
+            return w2_out
+
+        else:
+            w1_out = ttnn.experimental.operations.primary.matmul_1d(
+                x,
+                self.w1,
+                program_config=self.model_config["FF1_OUTPUT_PROGCFG"],  # SILu activation fused in the op
+                output_mem_config=self.model_config["FF1_OUTPUT_MEMCFG"],
+                compute_kernel_config=self.model_args.get_compute_kernel_config(),
+                output_dtype=ttnn.bfloat8_b,
+            )
+            w3_out = ttnn.experimental.operations.primary.matmul_1d(
+                x,
+                self.w3,
+                program_config=self.model_config["FF3_OUTPUT_PROGCFG"],
+                output_mem_config=self.model_config["FF3_OUTPUT_MEMCFG"],
+                compute_kernel_config=self.model_args.get_compute_kernel_config(),
+                output_dtype=ttnn.bfloat8_b,
+            )
+            w2_in = ttnn.experimental.tensor.mul(w1_out, w3_out)
+
+            w2_out = ttnn.experimental.operations.primary.matmul_1d(
+                w2_in,
+                self.w2,
+                program_config=self.model_config["FF2_OUTPUT_PROGCFG"],
+                output_mem_config=self.model_config["FF2_OUTPUT_MEMCFG"],
+                compute_kernel_config=self.model_args.get_compute_kernel_config(),
+                output_dtype=ttnn.bfloat8_b,
+            )
+
+            return w2_out

@@ -139,7 +139,7 @@ class TtMixtralAttention(LightweightModule):
         self.q_mem_config = None
         self.k_mem_config = None
 
-    def forward(
+    def forward_decode(
         self,
         xs,
         start_pos,
@@ -312,3 +312,105 @@ class TtMixtralAttention(LightweightModule):
 
         dense_outputs_11BH_gathered.deallocate(True)
         return dense_outputs_11BH
+
+    def forward_prefill(self, xs_11SH, attn_masks, rot_mats, transformation_mats, user_id: int = 0):
+        assert xs_11SH.shape[2] % 128 == 0 and xs_11SH.shape[2] > 0, "Seqlen must be divisible by 128"
+        ###
+        # QKV matmuls
+        ###
+        xqkv_fused = ttnn.linear(
+            xs_11SH,
+            self.wqkv,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,  # self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+            core_grid=self.core_grid_attention,
+            compute_kernel_config=self.compute_kernel,
+        )
+
+        # split qkv into heads
+        (
+            q_heads_14SD_pre_rot,
+            k_heads_11SD_pre_rot,
+            v_heads_11SD,
+        ) = ttnn.experimental.tensor.nlp_create_qkv_heads(
+            xqkv_fused,
+            num_heads=self.n_local_heads,
+            num_kv_heads=self.n_local_kv_heads,
+            transpose_k_heads=False,
+            output_mem_config=ttnn.DRAM_MEMORY_CONFIG,  # self.model_config["HEIGHT_SHARDED_MEMCFG"],
+        )
+
+        xqkv_fused.deallocate(True)
+
+        ###
+        # Rotary embeddings
+        ###
+
+        q_heads_14SD = ttnn.experimental.tensor.rotary_embedding_llama(
+            q_heads_14SD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
+        )
+        q_heads_14SD_pre_rot.deallocate(True)
+
+        k_heads_11SD = ttnn.experimental.tensor.rotary_embedding_llama(
+            k_heads_11SD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
+        )
+        k_heads_11SD_pre_rot.deallocate(True)
+
+        # FILL KV CACHE
+        keys_11SD = self.layer_past[0]
+        values_11SD = self.layer_past[1]
+        keys_reshaped = ttnn.reshape(keys_11SD, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
+        values_reshaped = ttnn.reshape(values_11SD, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
+        ttnn.kv_cache.fill_cache_for_user_(
+            keys_reshaped, ttnn.experimental.tensor.typecast(k_heads_11SD, dtype=ttnn.bfloat8_b), user_id
+        )
+        ttnn.kv_cache.fill_cache_for_user_(
+            values_reshaped, ttnn.experimental.tensor.typecast(v_heads_11SD, dtype=ttnn.bfloat8_b), user_id
+        )
+        keys_11SD = ttnn.reshape(keys_reshaped, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
+        values_11SD = ttnn.reshape(values_reshaped, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
+        self.layer_past = [keys_11SD, values_11SD]
+
+        # SDPA
+
+        attn_output_14SD = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
+            q_heads_14SD,
+            k_heads_11SD,
+            v_heads_11SD,
+            attn_masks,
+            is_causal=True,
+            scale=self.scale,
+            program_config=self.model_config["SDPA_PROGCFG"],
+        )
+
+        # deallocate keys and values
+        q_heads_14SD.deallocate(True)
+        k_heads_11SD.deallocate(True)
+        v_heads_11SD.deallocate(True)
+
+        ###
+        # Output matmul
+        ###
+
+        attn_output_11SH = ttnn.experimental.tensor.nlp_concat_heads(
+            attn_output_14SD,
+            output_mem_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        attn_output_11SH = ttnn.all_gather(
+            attn_output_11SH,
+            dim=3,
+            num_links=1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        attn_output_11SH = ttnn.linear(attn_output_11SH, self.wo, core_grid=ttnn.CoreGrid(y=7, x=6))
+
+        return attn_output_11SH
+
+    def forward(
+        self, xs, start_pos, current_pos, attn_masks, rot_mats, transformation_mats=None, user_id=0, mode="decode"
+    ):
+        if mode == "prefill":
+            return self.forward_prefill(xs, attn_masks, rot_mats, transformation_mats, user_id)
+        else:
+            return self.forward_decode(xs, start_pos, current_pos, attn_masks, rot_mats)
