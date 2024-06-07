@@ -1,0 +1,24 @@
+name: "[internal] Produce data for external analysis"
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  produce-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Output (safe) pipeline values
+        run: |
+          echo "pipeline_id (id / run #): ${{ github.run_id }}/${{ github.run_attempt }}"
+          echo "submissions_ts: "
+          echo "start_ts: "
+          echo "end_ts: "
+          echo "name: ${{ github.workflow }}, but rk recommended name w/out @: ${{ github.workflow_ref }}"
+          echo "trigger: ${{ github.event_name }}"
+          echo "sha: ${{ github.sha }}"
+          echo "(triggering) author/actor: ${{ github.actor }}"
+          echo "author/actor: ${{ github.triggering_actor }}"
+          echo "orchestrator: github (Static)"
+          echo "docker_image: ${{ job.container.image }}"
+          echo "build duration is post-process"
