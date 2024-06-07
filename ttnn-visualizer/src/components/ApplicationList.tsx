@@ -63,7 +63,6 @@ const ApplicationList = () => {
                             op.name.toLowerCase().includes('ttnn.to_torch');
                         return (
                             <FilterableComponent
-                                data-woof='aas'
                                 key={index}
                                 filterableString={op.name}
                                 filterQuery={filterQuery}
