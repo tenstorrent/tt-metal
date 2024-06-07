@@ -64,12 +64,13 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, dev
         # Pre append [INST] and post append [/INST] to the encoded prompts if instruct mode
         encoded_prompts = [tokenizer.encode("[INST] " + prompt + " [/INST]") for prompt in input_prompts]
     else:
-        encoded_prompts = [tokenizer.encode(prompt * 300) for prompt in input_prompts]
+        encoded_prompts = [tokenizer.encode(prompt) for prompt in input_prompts]
 
     prompt_lens = [len(x) for x in encoded_prompts]
 
     min_prompt_len = min(prompt_lens)
     max_prompt_len = max(prompt_lens)
+
     assert (
         max_prompt_len <= model_args.max_seq_len
     ), f"Max prompt length {max_prompt_len} exceeds model max seq len {model_args.max_seq_len}"
@@ -383,8 +384,8 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
     [
-        ("models/demos/t3000/mixtral8x7b/demo/input_data.json", False),
-        ("models/demos/t3000/mixtral8x7b/demo/input_data_questions.json", True),
+        ("models/demos/t3000/mixtral8x7b/demo/input_data_prefill.json", False),
+        ("models/demos/t3000/mixtral8x7b/demo/input_data_questions_prefill.json", True),
     ],
     ids=["general_weights", "instruct_weights"],
 )
