@@ -12,6 +12,75 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_wormhole_b0
 
 
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [64])
+@pytest.mark.parametrize("padding,torch_padding", [(((0, 64),), (0, 64)), (((16, 16), (0, 32)), (0, 32, 0, 32))])
+@pytest.mark.parametrize("value", [0])
+def test_pad(device, h, w, padding, torch_padding, value):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert output_tensor.shape == torch_output_tensor.shape
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("h", [2, 30])
+@pytest.mark.parametrize("w", [128, 60])
+@pytest.mark.parametrize("padding", [((0, 32), (0, 32)), ((0, 32), (0, 64))])
+@pytest.mark.parametrize("value", [0])
+def test_pad_any_input_shape(device, h, w, padding, value):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    tilezed_input_shape = input_tensor.shape.with_tile_padding()
+    th = tilezed_input_shape[-2]
+    tw = tilezed_input_shape[-1]
+    assert output_tensor.shape == ttnn.Shape((th + padding[0][0] + padding[0][1], tw + padding[1][0] + padding[1][1]))
+
+
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [64])
+@pytest.mark.parametrize("padding,torch_padding", [(((32, 32),), (32, 32))])
+@pytest.mark.parametrize("value", [0])
+def test_pad_padding_validation_front_pad_not_supported(device, h, w, padding, torch_padding, value):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with pytest.raises(RuntimeError) as e:
+        ttnn.pad(input_tensor, padding=padding, value=value)
+    assert "ttnn.pad: on device padding does not support front padding" in str(e.value)
+    return
+
+
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [64])
+@pytest.mark.parametrize("padding,torch_padding", [(((0, 32), (0, 32), (0, 32)), (0, 32, 0, 32, 0, 32))])
+@pytest.mark.parametrize("value", [0])
+def test_pad_padding_validation_length(device, h, w, padding, torch_padding, value):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with pytest.raises(RuntimeError) as e:
+        ttnn.pad(input_tensor, padding=padding, value=value)
+    assert "ttnn.pad: padding len can't be larger than input tensor rank" in str(e.value)
+    return
+
+
 @pytest.mark.skip(reason="ttnn.pad does not support row_major tensors because the kernel currently causes a PCC error")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
@@ -46,7 +115,6 @@ def test_pad_back_to_back(device, h, w, padding, torch_padding, value):
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
-    torch_output_tensor = torch.nn.functional.pad(torch_output_tensor, torch_padding, mode="constant", value=value)
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
     input_tensor = ttnn.to_device(input_tensor, device)

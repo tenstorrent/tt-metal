@@ -340,11 +340,17 @@ struct Pad {
 
     static ttnn::Tensor execute_on_worker_thread(
         const ttnn::Tensor& input_tensor,
-        const std::vector<std::pair<size_t, size_t>>& padding,
+        std::vector<std::pair<uint32_t, uint32_t>> padding, //intentionally not const&
         const float value,
         const std::optional<MemoryConfig>& memory_config_arg) {
 
         const int original_rank = input_tensor.get_shape().rank();
+        if(int diff = original_rank - padding.size(); diff != 0) {
+            TT_FATAL(diff > 0, "ttnn.pad: padding len can't be larger than input tensor rank");
+
+            padding.insert(padding.begin(), diff, {0, 0});
+        }
+
         TT_FATAL(
             padding.size() == original_rank,
             "ttnn.pad: padding must be the same length as the input tensor rank");
@@ -352,39 +358,31 @@ struct Pad {
             input_tensor.get_layout() != ttnn::ROW_MAJOR_LAYOUT,
             "ttnn.pad: row-major tensors have to use fallback because the kernel currently causes a PCC error");
 
-        const bool padding_has_negative_value = std::any_of(padding.begin(), padding.end(), [](const auto& p) { return p.first < 0 || p.second < 0; });
-        TT_FATAL(
-            !padding_has_negative_value,
-            "ttnn.pad: padding must be non-negative");
-
         // Unsqueeze Tensor to 4D if it is not already
         ttnn::Tensor input_tensor_4D = input_tensor;
-        auto padding_4D = padding;
-        if (original_rank < 4) {
-            input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
-            padding_4D.insert(padding_4D.begin(), 4 - original_rank, {0, 0});
-        }
+        input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+        padding.insert(padding.begin(), 4 - original_rank, {0, 0});
         auto input_shape_with_tile_padding = input_tensor_4D.get_shape().with_tile_padding();
-        std::vector<uint32_t> output_padded_shape(padding_4D.size());
-        for(int i = 0; i < padding_4D.size(); i++) {
-            output_padded_shape[i] = input_shape_with_tile_padding[i] + padding_4D[i].second;
+        std::vector<uint32_t> output_padded_shape(padding.size());
+        for(size_t i = 0; i < padding.size(); i++) {
+            output_padded_shape[i] = input_shape_with_tile_padding[i] + padding[i].second;
         }
 
         // Due to the strangeness of tt::tt_metal::pad, we need to split front and back pad
         // Front will be passed separately. And pad_back is retrieved -> output_padded_shape - pad_front
         auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
-        auto pad_front = padding_4D | std::views::transform([](const auto& p) { return p.first; });
-        auto pad_back = padding_4D | std::views::transform([](const auto& p) { return p.second; });
+        auto pad_front = padding | std::views::transform([](const auto& p) { return p.first; });
+        auto pad_back = padding | std::views::transform([](const auto& p) { return p.second; });
 
-        const bool padding_starts_from_zero = std::accumulate(pad_front.begin(), pad_front.end(), 0) == 0;
+        const bool front_padding_is_zero = std::accumulate(pad_front.begin(), pad_front.end(), 0) == 0;
         TT_FATAL(
-            !padding_starts_from_zero,
-            "ttnn.pad: padding start must be 0 currently");
+            front_padding_is_zero,
+            "ttnn.pad: on device padding does not support front padding");
 
-        const int pad_back_height = pad_back[pad_back.size() - 2];
-        const int pad_back_width = pad_back[pad_back.size() - 1];
+        const int target_height = output_padded_shape[output_padded_shape.size() - 2];
+        const int target_width = output_padded_shape[output_padded_shape.size() - 1];
         TT_FATAL(
-            pad_back_height % ttnn::TILE_SIZE == 0 || pad_back_width % ttnn::TILE_SIZE == 0,
+            target_height % ttnn::TILE_SIZE == 0 || target_width % ttnn::TILE_SIZE == 0,
             "ttnn.pad: for tiled tensors padding end must be a multiple of the tile size on height and width for a "
             "tensor in tile layout");
 
@@ -407,7 +405,7 @@ struct Pad {
         auto to_vec = [](const auto& arr) {return std::vector<uint32_t>(arr.begin(), arr.end());};
         auto shape = to_vec(output_tensor.get_shape().value());
         auto padded_shape = to_vec(output_tensor.get_shape().with_tile_padding().value());
-        if (auto rank_diff = shape.size() > original_rank; rank_diff) {
+        if (auto rank_diff = shape.size() - original_rank; rank_diff) {
             auto remove_first_elements = [](auto& source, size_t n) {
                 source.erase(source.begin(), source.begin() + n);
             };
