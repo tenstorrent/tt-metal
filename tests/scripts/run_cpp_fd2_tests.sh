@@ -61,16 +61,22 @@ run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -x -spre -sdis" # Smoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 5 -x -spre -sdis" # Random Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 6 -i 5 -x -spre -sdis" # Host Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 1000 -x -rb -spre -sdis"  # Smoke Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 1000 -x -rb -spre -sdis"  # Random Test
 
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 5 -spre -sdis -packetized_en" # TrueSmoke Test with packetized path
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -spre -sdis -packetized_en" # Smoke Test with packetized path
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 5 -spre -sdis -packetized_en" # Random Test with packetized path
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 6 -i 5 -spre -sdis -packetized_en" # Host Test with packetized path
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 1000 -rb -spre -sdis -packetized_en"  # Smoke Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 1000 -rb -spre -sdis -packetized_en"  # Random Test
 
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 5 -x -spre -sdis -packetized_en" # TrueSmoke Test with packetized path+exec
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5 -x -spre -sdis -packetized_en" # Smoke Test with packetized path+exec
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 5 -x -spre -sdis -packetized_en" # Random Test with packetized path+exec
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 6 -i 5 -x -spre -sdis -packetized_en" # Host Test with packetized path+exec
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 1000 -x -rb -spre -sdis -packetized_en"  # Smoke Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 1000 -x -rb -spre -sdis -packetized_en"  # Random Test
 
 
 # Testcase: Paged Write Cmd to DRAM. 256 pages, 224b size.
