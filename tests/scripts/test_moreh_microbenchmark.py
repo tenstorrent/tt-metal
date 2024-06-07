@@ -805,7 +805,7 @@ def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_form
     data.append([throughput])
     # check within range
     dev_freq = get_device_freq()
-    bw_bound = 240.0 * dev_freq / 1000.0
+    bw_bound = 260.0 * dev_freq / 1000.0
     assert bw_bound <= throughput
 
 
