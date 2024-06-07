@@ -20,7 +20,7 @@ if os.getenv("CI") == "true":
 @pytest.mark.parametrize(
     "llama_version",
     (
-        # ("llama2"),
+        ("llama2"),
         ("llama3"),
     ),
 )
