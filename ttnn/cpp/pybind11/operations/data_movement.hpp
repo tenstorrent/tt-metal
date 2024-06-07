@@ -16,12 +16,7 @@ namespace operations {
 namespace data_movement {
 
 void bind_permute(py::module& module) {
-    module.def(
-        "permute",
-        &permute,
-        py::arg("input_tensor"),
-        py::arg("order"),
-        R"doc(
+const auto doc = R"doc(
 Permutes :attr:`input_tensor` using :attr:`order`.
 
 Args:
@@ -35,18 +30,18 @@ Example:
     >>> print(output.shape)
     [1, 1, 32, 64]
 
-    )doc");
+    )doc";
+
+    module.def(
+        "permute",
+        &permute,
+        py::arg("input_tensor"),
+        py::arg("order"),
+        doc);
 }
 
 void bind_concat(py::module& module) {
-    module.def(
-        "concat",
-        &concat,
-        py::arg("input_tensor"),
-        py::arg("dim") = 0,
-        py::kw_only(),
-        py::arg("memory_config") = std::nullopt,
-        R"doc(
+    const auto doc = R"doc(
 Concats :attr:`tensors` in the given :attr:`dim`.
 
 Args:
@@ -66,7 +61,15 @@ Example:
     >>> print(output.shape)
     [1, 1, 32, 64]
 
-    )doc");
+    )doc";
+    module.def(
+        "concat",
+        &concat,
+        py::arg("input_tensor"),
+        py::arg("dim") = 0,
+        py::kw_only(),
+        py::arg("memory_config") = std::nullopt,
+        doc);
 }
 
 void bind_upsample(py::module& module) {
@@ -84,8 +87,11 @@ void bind_upsample(py::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::upsample,
-        doc ttnn::pybind_arguments_t{
-            py::arg("input_tensor"), py::arg("scale_factor"), py::arg("memory_config") = std::nullopt});
+        doc,
+        ttnn::pybind_arguments_t{
+            py::arg("input_tensor"),
+            py::arg("scale_factor"),
+            py::arg("memory_config") = std::nullopt});
 }
 
 void bind_pad(py::module& module) {
@@ -104,13 +110,13 @@ Keyword Args:
     ttnn::bind_registered_operation(
         module,
         ttnn::pad,
-        doc ttnn::pybind_arguments_t{
+        doc,
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg("padding"),
             py::arg("value"),
             py::kw_only(),
-            py::arg("memory_config") = nullopt,
-        });
+            py::arg("memory_config") = nullopt});
 }
 
 void bind_repeat_interleave(py::module& module) {
@@ -136,7 +142,7 @@ torch_input_tensor =
     >>> b = ttnn.repeat_interleave(a, 2, dim=0)
     >>> print(a.shape, b.shape)
     ttnn.Shape([1, 1, 32, 32]) ttnn.Shape([2, 1, 32, 32])
-        )doc"
+        )doc";
 
     ttnn::bind_registered_operation(
     module,
@@ -171,15 +177,16 @@ Example:
     [1, 2],
     [3, 4],
     [3, 4]])
-        )doc"
+        )doc";
+
     ttnn::bind_registered_operation(
     module,
     ttnn::repeat,
     doc,
     ttnn::pybind_arguments_t{
-        py::arg("input_tensor"), 
-        py::arg("shape"), 
-        py::kw_only(), 
+        py::arg("input_tensor"),
+        py::arg("shape"),
+        py::kw_only(),
         py::arg("memory_config") = std::nullopt});
 }
 
@@ -197,4 +204,3 @@ void py_module(py::module& module) {
 }  // namespace data_movement
 }  // namespace operations
 }  // namespace ttnn
-

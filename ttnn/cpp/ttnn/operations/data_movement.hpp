@@ -13,38 +13,11 @@
 #include "tt_eager/tt_dnn/op_library/upsample/upsample_op.hpp"
 #include "ttnn/cpp/ttnn/operations/core.hpp"
 
+#include <ranges>
+
 namespace ttnn {
 namespace operations {
 namespace data_movement {
-
-inline ttnn::Tensor squeeze(const ttnn::Tensor& input_tensor, size_t dimension) {
-    Shape shape = input_tensor.get_shape();
-    Shape full_shape = input_tensor.get_shape().with_tile_padding();
-
-    TT_FATAL(dimension == 0, "Can squeeze only at dimension=0");
-    TT_FATAL(
-        shape.rank == 1, "Cannot squeeze a tensor of rank 1 because tensors with rank 0 are not supported by ttnn");
-
-    if (input_tensor.get_shape()[0] != 1)
-        return tensor;
-
-    while (output_tensor.get_shape().rank() > rank) {
-        const auto shape = output_tensor.get_shape();
-        const auto full_shape = output_tensor.get_shape().with_tile_padding();
-        std::vector<uint32_t> shape_vec{};
-        std::vector<uint32_t> full_shape_vec{};
-        // int i = 0;
-        // while(i < 3 and shape[i] == 1) i++;
-        for (int i = 1; i < shape.rank(); i++) {
-            shape_vec.push_back(shape[i]);
-            full_shape_vec.push_back(full_shape[i]);
-        }
-        auto metal_shape = tt::tt_metal::Shape(shape_vec, full_shape_vec);
-        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(metal_shape));
-    }
-
-    return reshape(input_tensor, Shape(shape, full_shape))
-}
 
 inline bool is_on_device(const Tensor& t) {
     return t.storage_type() == tt::tt_metal::StorageType::DEVICE or
@@ -370,82 +343,93 @@ struct Pad {
         const std::vector<std::pair<size_t, size_t>>& padding,
         const float value,
         const std::optional<MemoryConfig>& memory_config_arg) {
+
         const int original_rank = input_tensor.get_shape().rank();
-        TT_FATAL(padding.size() == original_rank, "ttnn.pad: padding must be the same length as the input tensor rank");
+        TT_FATAL(
+            padding.size() == original_rank,
+            "ttnn.pad: padding must be the same length as the input tensor rank");
         TT_FATAL(
             input_tensor.get_layout() != ttnn::ROW_MAJOR_LAYOUT,
             "ttnn.pad: row-major tensors have to use fallback because the kernel currently causes a PCC error");
 
-        const bool padding_has_negative_value =
-            std::any_of(padding.begin(), padding.end(), [](const auto& p) { return p.first < 0 || p.second < 0; });
-        TT_FATAL(!padding_has_negative_value, "ttnn.pad: padding must be non-negative");
+        const bool padding_has_negative_value = std::any_of(padding.begin(), padding.end(), [](const auto& p) { return p.first < 0 || p.second < 0; });
+        TT_FATAL(
+            !padding_has_negative_value,
+            "ttnn.pad: padding must be non-negative");
 
-        const bool padding_starts_from_zero = std::accumulate(pad_start.begin(), pad_start.end(), 0) == 0;
-        TT_FATAL(!padding_starts_from_zero, "ttnn.pad: padding start must be 0 currently");
-
-        ttnn::Tensor adjusted_input_tensor = input_tensor;
-        auto adjusted_padding = padding;
+        // Unsqueeze Tensor to 4D if it is not already
+        ttnn::Tensor input_tensor_4D = input_tensor;
+        auto padding_4D = padding;
         if (original_rank < 4) {
-            adjusted_input_tensor = ttnn::unsqueeze_to_4D(input_tensor);
-            for (size_t i = 0; i < 4 - original_rank; ++i) {
-                adjusted_padding.insert(adjusted_padding.begin(), std::make_pair(0, 0));
-                ;
-            }
+            input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+            padding_4D.insert(padding_4D.begin(), 4 - original_rank, {0, 0});
+        }
+        auto input_shape_with_tile_padding = input_tensor_4D.get_shape().with_tile_padding();
+        std::vector<uint32_t> output_padded_shape(padding_4D.size());
+        for(int i = 0; i < padding_4D.size(); i++) {
+            output_padded_shape[i] = input_shape_with_tile_padding[i] + padding_4D[i].second;
         }
 
-        std::vector<size_t> pad_start(adjusted_padding.size());
-        std::vector<size_t> pad_end(adjusted_padding.size());
-        std::transform(
-            adjusted_padding.begin(), adjusted_padding.end(), pad_start.begin(), [](const std::pair<int, int>& p) {
-                return p.first;
-            });
-        std::transform(
-            adjusted_padding.begin(), adjusted_padding.end(), pad_end.begin(), [](const std::pair<int, int>& p) {
-                return p.second;
-            });
+        // Due to the strangeness of tt::tt_metal::pad, we need to split front and back pad
+        // Front will be passed separately. And pad_back is retrieved -> output_padded_shape - pad_front
+        auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
+        auto pad_front = padding_4D | std::views::transform([](const auto& p) { return p.first; });
+        auto pad_back = padding_4D | std::views::transform([](const auto& p) { return p.second; });
 
-        const int pad_end_height = pad_end[pad_end.size() - 2];
-        const int pad_end_width = pad_end[pad_end.size() - 1];
+        const bool padding_starts_from_zero = std::accumulate(pad_front.begin(), pad_front.end(), 0) == 0;
         TT_FATAL(
-            pad_end_height % ttnn::TILE_SIZE == 0 || pad_end_width % ttnn::TILE_SIZE == 0,
+            !padding_starts_from_zero,
+            "ttnn.pad: padding start must be 0 currently");
+
+        const int pad_back_height = pad_back[pad_back.size() - 2];
+        const int pad_back_width = pad_back[pad_back.size() - 1];
+        TT_FATAL(
+            pad_back_height % ttnn::TILE_SIZE == 0 || pad_back_width % ttnn::TILE_SIZE == 0,
             "ttnn.pad: for tiled tensors padding end must be a multiple of the tile size on height and width for a "
             "tensor in tile layout");
 
-        auto output_shape_with_tile_padding = adjusted_input_tensor.get_shape().with_tile_padding();
-        std::vector<int> padded_shape(adjusted_padding.size());
-        std::transform(
-            input_shape_with_tile_padding.begin(),
-            input_shape_with_tile_padding.end(),
-            pad_end.begin(),
-            padded_shape.begin(),
-            std::plus<int>());
+        // Performing actual padding
+        // std::vector<uint32_t> pad_front_vec;
+        // std::ranges::copy(pad_front, std::back_inserter(pad_front_vec));
+        std::vector<uint32_t> pad_front_vec(pad_front.begin(), pad_front.end());
+        auto output_tensor = operation::run_without_autoformat(
+            tt::tt_metal::Pad{
+                .output_tensor_shape=tt::tt_metal::Shape(output_padded_shape),
+                .input_tensor_start=tt::tt_metal::Shape(pad_front_vec),
+                .pad_value=value,
+                .output_mem_config=memory_config,
+                .use_multicore=true
+            },
+            {input_tensor_4D}).front();
 
-        auto output_tensor = ttl::tensor::pad(
-            adjusted_input_tensor,
-            ttnn::Shape(shape, padding),
-            pad_start,
-            value,
-            memory_config.value_or(input_tensor.memory_config()),
-            true  // use_multicore
-        );
 
-        while (output_tensor.get_shape().rank() > original_rank) {
-            output_tensor = ttnn::squeeze(output_tensor, 0);
+        // output_tensor is currently 4D. We have to squeeze back to the original rank
+        auto to_vec = [](const auto& arr) {return std::vector<uint32_t>(arr.begin(), arr.end());};
+        auto shape = to_vec(output_tensor.get_shape().value());
+        auto padded_shape = to_vec(output_tensor.get_shape().with_tile_padding().value());
+        if (auto rank_diff = shape.size() > original_rank; rank_diff) {
+            auto remove_first_elements = [](auto& source, size_t n) {
+                source.erase(source.begin(), source.begin() + n);
+            };
+            remove_first_elements(shape, rank_diff);
+            remove_first_elements(padded_shape, rank_diff);
+            auto squeezedShape = ttnn::Shape(tt::tt_metal::Shape(shape, padded_shape));
+            output_tensor = ttnn::reshape(output_tensor, squeezedShape);
         }
 
         // Padding always turns the intended shape to the shape with tile padding. For simplicity of the operation
-        output_tensor = ttnn::reshape(output_tensor, output_tensor.get_shape().with_tile_padding());
+        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(padded_shape));
 
         return output_tensor;
     }
 };
 
 }  // namespace data_movement
+}  // namespace operations
 
 constexpr auto pad = ttnn::register_operation<ttnn::operations::data_movement::Pad>("ttnn::pad");
 constexpr auto upsample = ttnn::register_operation<ttnn::operations::data_movement::UpSample>("ttnn::upsample");
 constexpr auto repeat = ttnn::register_operation<ttnn::operations::data_movement::Repeat>("ttnn::repeat");
 constexpr auto repeat_interleave = ttnn::register_operation<ttnn::operations::data_movement::RepeatInterleave>("ttnn::repeat_interleave");
 
-}  // namespace operations
 }  // namespace ttnn
