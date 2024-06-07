@@ -31,12 +31,18 @@ module.exports = {
         'prettier',
     ],
     settings: {
-        'import/parsers': {
-            '@typescript-eslint/parser': ['.ts', '.tsx'],
-        },
         react: {
             version: '18',
         },
+        'import/parsers': {
+            '@typescript-eslint/parser': ['.ts', '.tsx'],
+        },
+        "import/resolver": {
+            "typescript": {
+                "alwaysTryTypes": true
+            }
+        }
+
     },
     rules: {
         'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],

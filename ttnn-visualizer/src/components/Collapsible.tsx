@@ -17,12 +17,12 @@ interface CollapsibleProps {
 }
 
 const Collapsible: React.FC<React.PropsWithChildren<CollapsibleProps>> = ({
-                                                                              label,
-                                                                              isOpen = true,
-                                                                              styles = {},
-                                                                              contentStyles = {},
-                                                                              children,
-                                                                          }) => {
+    label,
+    isOpen = true,
+    styles = {},
+    contentStyles = {},
+    children,
+}) => {
     const [isOpenState, setIsOpenState] = React.useState(isOpen);
     useEffect(() => {
         setIsOpenState(isOpen);
@@ -36,7 +36,11 @@ const Collapsible: React.FC<React.PropsWithChildren<CollapsibleProps>> = ({
                     {label}
                 </Button>
             )}
-            {!children && <div className='collapsible-label-wrap'><div className={'collapsible-label'}>{label}</div></div>}
+            {!children && (
+                <div className='collapsible-label-wrap'>
+                    <div className='collapsible-label'>{label}</div>
+                </div>
+            )}
             {children && (
                 <Collapse isOpen={isOpenState} keepChildrenMounted>
                     <div style={contentStyles}>{children}</div>
