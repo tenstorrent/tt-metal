@@ -6,8 +6,9 @@ import pytest
 import torch
 from loguru import logger
 
-import tt_lib as ttl
-from models.utility_functions import comp_allclose_and_pcc
+import ttnn.experimental as ttl
+import ttnn
+from models.utility_functions import comp_allclose_and_pcc, comp_pcc
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
@@ -18,8 +19,8 @@ TILE_HEIGHT = 32
 TILE_WIDTH = 32
 
 
-def get_tensors(input_shape, output_shape, device, *, with_padding=True, use_randint=True):
-    npu_dtype = ttl.tensor.DataType.BFLOAT16
+def get_tensors(input_shape, output_shape, device, *, with_padding=True, use_randint=True, dataformat=ttnn.bfloat16):
+    npu_dtype = dataformat
     cpu_dtype = torch.bfloat16
     npu_layout = ttl.tensor.Layout.TILE
 
@@ -61,41 +62,29 @@ def get_tensors(input_shape, output_shape, device, *, with_padding=True, use_ran
     ],
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-@pytest.mark.parametrize(
-    "use_provide_output",
-    (False,),
-    ids=[
-        "False",
-    ],
-)
-def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, use_provide_output, device):
+@pytest.mark.parametrize("dataformat", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bfloat16", "bfloat8_b"])
+def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, device):
     torch.manual_seed(2023)
     output_shape = input_shape.copy()
 
     for dim in dims:
         output_shape[dim] = 1
 
-    (tt_input, tt_output, torch_input) = get_tensors(input_shape, output_shape, device)
-
-    if not use_provide_output:
-        tt_output = None
+    (tt_input, tt_output, torch_input) = get_tensors(input_shape, output_shape, device, dataformat=dataformat)
 
     torch_output = torch.sum(torch_input, dims, True)
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_output_cpu = (
-        ttl.tensor.fast_reduce_nc(tt_input, dims=dims, output=tt_output, compute_kernel_config=compute_kernel_config)
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(output_shape)
-        .to_torch()
-    )
+    tt_output = ttl.tensor.fast_reduce_nc(tt_input, dims=dims, output=None, compute_kernel_config=compute_kernel_config)
+    tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
 
     # test for equivalance
-    # TODO(Dongjin) : check while changing rtol after enabling fp32_dest_acc_en
     rtol = atol = 0.12
-    passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
+    if dataformat == ttnn.bfloat8_b:
+        passing, output_pcc = comp_pcc(torch_output, tt_output_cpu, pcc=0.999)
+    else:
+        passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
     logger.debug(f"Out passing={passing}")
     logger.debug(f"Output pcc={output_pcc}")
