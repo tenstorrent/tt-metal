@@ -186,6 +186,7 @@ class resnet50Bottleneck:
                     deallocate_activation=True,
                     reallocate_halo_output=True,
                     reshard_if_not_optimal=reshard_if_not_optimal,
+                    transpose_shards=height_sharding,
                 ),
                 conv_op_cache=conv_op_cache,
             )
@@ -235,6 +236,7 @@ class resnet50Bottleneck:
                 activation="relu",
                 height_sharding=height_sharding,
                 reshard_if_not_optimal=reshard_if_not_optimal,
+                transpose_shards=height_sharding,
             ),
             conv_op_cache=conv_op_cache,
         )
@@ -333,6 +335,7 @@ class resnet50Bottleneck:
                 act_block_h_override=act_block_h_override,
                 height_sharding=height_sharding,
                 reshard_if_not_optimal=reshard_if_not_optimal,
+                transpose_shards=height_sharding,
             ),
             conv_op_cache=conv_op_cache,
         )
@@ -358,6 +361,7 @@ class resnet50Bottleneck:
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 height_sharding=height_sharding,
                 reshard_if_not_optimal=reshard_if_not_optimal,
+                transpose_shards=height_sharding,
             ),
             conv_op_cache=conv_op_cache,
         )
