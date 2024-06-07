@@ -51,7 +51,10 @@ struct ProgramCache {
 
    private:
     inline static bool is_enabled_ = false;
-    std::unordered_map<uint64_t, tt::stl::unique_any<1024, 32>> cache_{};
+
+    static constexpr auto MAX_CACHED_PROGRAM_SIZE = 1024;
+    static constexpr auto ALIGNMENT = 32;
+    std::unordered_map<uint64_t, tt::stl::unique_any<MAX_CACHED_PROGRAM_SIZE, ALIGNMENT>> cache_{};
 };
 
 }

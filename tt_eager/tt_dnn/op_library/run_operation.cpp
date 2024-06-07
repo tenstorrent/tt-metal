@@ -17,6 +17,10 @@
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "tt_numpy/functions.hpp"
 
+namespace tt::tt_metal {
+    std::atomic<uint32_t> operation_id_atomic_count = 0;
+}
+
 namespace tt::tt_metal::operation {
 
 namespace detail {
@@ -119,7 +123,7 @@ constexpr auto decorate_device_operation(const Function& function) {
 template <typename OutputTensors>
 OutputTensors run_host_operation(const HostOperation<OutputTensors>& operation, const Tensors& input_tensors) {
     ZoneScopedN("TT_DNN_HOST_OP");
-    uint32_t op_id = assign_id();
+    uint32_t op_id = assign_operation_id();
 
     operation.validate(input_tensors);
     auto output_tensors = operation.compute_output_tensors(input_tensors);
@@ -143,7 +147,7 @@ OutputTensors run_device_operation(
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors) {
     ZoneScopedN("TT_DNN_DEVICE_OP");
-    uint32_t op_id = assign_id();
+    uint32_t op_id = assign_operation_id();
 
     std::function<std::variant<std::shared_ptr<Program>, std::reference_wrapper<Program>>(
         const DeviceOperation<OutputTensors>&,
