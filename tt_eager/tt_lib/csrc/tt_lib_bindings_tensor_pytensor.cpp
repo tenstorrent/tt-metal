@@ -567,7 +567,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                     ZoneScopedN("TT_DNN_FALLBACK_OP");
                     auto [op, input_tensors] = detail::parse_external_operation(function, args, kwargs, function_name);
                     operation::log_operation(op, input_tensors);
-                    uint32_t op_id = tt::tt_metal::operation::assign_id();
+                    uint32_t op_id = tt::tt_metal::assign_operation_id();
 
                     auto output_tensors = function(*args, **kwargs);
 

@@ -173,19 +173,21 @@ class Shape {
     }
 
     template <std::size_t Rank>
-    explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_tile_padding) :
+    explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_with_tile_padding) :
         rank_(Rank), dimensions_{}, padding_{Rank} {
         for (auto index = 0; index < Rank; index++) {
-            auto padded_dimension = shape_tile_padding[index];
+            auto padded_dimension = shape_with_tile_padding[index];
             this->dimensions_[index] = padded_dimension;
             this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
         }
     }
-    explicit Shape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_tile_padding) :
+    explicit Shape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding) :
         rank_(shape.size()), dimensions_{}, padding_{shape.size()} {
-        TT_ASSERT(shape.size() == shape_tile_padding.size(), "Shape and shape_tile_padding must have the same size");
+        TT_ASSERT(
+            shape.size() == shape_with_tile_padding.size(),
+            "Shape and shape_with_tile_padding must have the same size");
         for (auto index = 0; index < shape.size(); index++) {
-            auto padded_dimension = shape_tile_padding[index];
+            auto padded_dimension = shape_with_tile_padding[index];
             this->dimensions_[index] = padded_dimension;
             this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
         }
@@ -720,13 +722,19 @@ struct Shape {
     explicit Shape(const std::array<uint32_t, Rank> &shape) : ranked_shape{RankedShape<Rank>{shape}} {}
 
     template <std::size_t Rank>
-    explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_tile_padding) :
-        ranked_shape{RankedShape<Rank>{shape, shape_tile_padding}} {}
+    explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_with_tile_padding) :
+        ranked_shape{RankedShape<Rank>{shape, shape_with_tile_padding}} {}
 
     template <std::size_t Rank>
     explicit Shape(
         const std::array<uint32_t, Rank> &shape, const std::array<std::array<uint32_t, 2>, Rank> &tile_padding) :
         ranked_shape{RankedShape<Rank>{shape, tile_padding}} {}
+
+    static Shape from_vector(const std::vector<uint32_t> &shape) { return Shape{tt::tt_metal::Shape{shape}}; }
+
+    static Shape from_vector(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding) {
+        return Shape{tt::tt_metal::Shape{shape, shape_with_tile_padding}};
+    }
 
     const auto rank() const {
         return std::visit(
