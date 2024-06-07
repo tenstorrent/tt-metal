@@ -46,6 +46,15 @@ if (NOT NUMA_LIBRARY)
     message(FATAL_ERROR "NUMA library not found")
 endif()
 
+CPMAddPackage(
+  NAME reflect
+  GITHUB_REPOSITORY boost-ext/reflect
+  GIT_TAG v1.1.1
+)
+add_library(reflect INTERFACE)
+target_include_directories(reflect SYSTEM INTERFACE ${reflect_SOURCE_DIR})
+add_library(reflect::reflect ALIAS reflect)
+
 ############################################################################################################################
 # Setting build type flags
 #   Will default to assert build, unless CONFIG env variable is set or manually set -DCMAKE_BUILD_TYPE
