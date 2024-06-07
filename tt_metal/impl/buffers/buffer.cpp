@@ -317,15 +317,6 @@ void Buffer::deallocate() {
 
 Buffer::~Buffer() { this->deallocate(); }
 
-tt::stl::reflection::Attributes ShardSpec::attributes() const {
-    return {
-        {"grid", this->grid.str()},
-        {"shape", this->shape},
-        {"orientation", this->orientation},
-        {"halo", this->halo},
-    };
-}
-
 bool operator==(const ShardSpec &spec_a, const ShardSpec &spec_b) {
     if (spec_a.grid != spec_b.grid) {
         return false;
