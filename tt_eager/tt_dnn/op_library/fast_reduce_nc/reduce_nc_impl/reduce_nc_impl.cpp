@@ -145,7 +145,7 @@ operation::ProgramWithCallbacks reduce_nc_impl(const Tensor &input, const Tensor
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1, num_reduce_input_tile, input_granularity};
+    const std::vector<uint32_t> compute_args_group_1 = {num_cols_per_core_group_1, num_reduce_input_tile, input_granularity};
     std::map<string, string> compute_defines;
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
@@ -159,7 +159,7 @@ operation::ProgramWithCallbacks reduce_nc_impl(const Tensor &input, const Tensor
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2, num_reduce_input_tile};
+        const std::vector<uint32_t> compute_args_group_2 = {num_cols_per_core_group_2, num_reduce_input_tile, input_granularity};
         compute_kernel_2_id = tt_metal::CreateKernel(
             program,
             compute_kernel_file,
