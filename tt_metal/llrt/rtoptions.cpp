@@ -48,6 +48,7 @@ RunTimeOptions::RunTimeOptions() {
 
     profiler_enabled = false;
     profile_dispatch_cores = false;
+    profiler_sync_enabled = false;
 #if defined(PROFILER)
     const char *profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
     if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
@@ -55,6 +56,10 @@ RunTimeOptions::RunTimeOptions() {
         const char *profile_dispatch_str = std::getenv("TT_METAL_DEVICE_PROFILER_DISPATCH");
         if (profile_dispatch_str != nullptr && profile_dispatch_str[0] == '1') {
             profile_dispatch_cores = true;
+        }
+        const char *profiler_sync_enabled_str = std::getenv("TT_METAL_PROFILER_SYNC");
+        if (profiler_enabled && profiler_sync_enabled_str != nullptr && profiler_sync_enabled_str[0] == '1') {
+            profiler_sync_enabled = true;
         }
     }
 #endif
