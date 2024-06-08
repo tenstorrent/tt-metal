@@ -33,12 +33,20 @@ CHECK_COMPILERS()
 # Find all required libraries to build
 ############################################################################################################################
 include(${PROJECT_SOURCE_DIR}/cmake/CPM_boost.cmake)
-find_package(GTest REQUIRED)
 find_package (Python3 COMPONENTS Interpreter Development)
 find_library(NUMA_LIBRARY NAMES numa)
 if (NOT NUMA_LIBRARY)
     message(FATAL_ERROR "NUMA library not found")
 endif()
+
+CPMAddPackage(
+  NAME googletest
+  GITHUB_REPOSITORY google/googletest
+  GIT_TAG release-1.12.1
+  VERSION 1.12.1
+  OPTIONS "INSTALL_GTEST OFF"
+)
+
 
 ############################################################################################################################
 # Setting build type flags

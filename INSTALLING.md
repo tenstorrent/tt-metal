@@ -128,5 +128,3 @@ sudo apt install git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc libtbb-dev lib
 ```
 
 2. Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
-
-3. Download and install [gtest](https://github.com/google/googletest) from source (v1.13)
