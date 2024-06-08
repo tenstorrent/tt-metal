@@ -74,7 +74,7 @@ OPS_CSV_HEADER = [
 
 
 def import_tracy_op_logs():
-    logger.info(f"Importting ops logs")
+    logger.info(f"Importing ops logs")
     tracyOpTimesLog = os.path.join(PROFILER_LOGS_DIR, TRACY_OPS_TIMES_FILE_NAME)
     tracyOpDataLog = os.path.join(PROFILER_LOGS_DIR, TRACY_OPS_DATA_FILE_NAME)
 

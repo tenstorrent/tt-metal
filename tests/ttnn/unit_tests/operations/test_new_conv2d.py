@@ -106,14 +106,13 @@ def run_conv(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=math_fidelity,
-        activation=None,
         height_sharding=use_1d_systolic_array,
         input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
     )
     if config_override and "act_block_h" in config_override:
-        conv_config.act_block_h = config_override["act_block_h"]
-        print("Setting Act Block H to ", conv_config.act_block_h)
+        conv_config.act_block_h_override = config_override["act_block_h"]
+        print("Setting Act Block H to ", conv_config.act_block_h_override)
 
     [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
@@ -130,7 +129,6 @@ def run_conv(
         input_width=input_width,
         conv_config=conv_config,
         conv_op_cache=reader_patterns_cache,
-        reshard_if_not_optimal=False,
         debug=debug,
         groups=groups,
     )
@@ -226,13 +224,12 @@ def run_conv_with_split(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=math_fidelity,
-        activation=None,
         height_sharding=use_1d_systolic_array,
         # input_channels_alignment=(16 if use_shallow_conv_variant else 32),
     )
     if config_override and "act_block_h" in config_override:
-        conv_config.act_block_h = config_override["act_block_h"]
-        print("Setting Act Block H to ", conv_config.act_block_h)
+        conv_config.act_block_h_override = config_override["act_block_h"]
+        print("Setting Act Block H to ", conv_config.act_block_h_override)
     torch_output_tensor = None
     for i in range(split_factor):
         tt_weight_tensor = ttnn.from_torch(
@@ -265,7 +262,6 @@ def run_conv_with_split(
             input_width=input_width,
             conv_config=conv_config,
             conv_op_cache=reader_patterns_cache,
-            reshard_if_not_optimal=False,
         )
         tt_conv_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
         torch_conv_output_tensor = ttnn.to_torch(tt_conv_output_tensor)

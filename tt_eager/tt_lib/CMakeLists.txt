@@ -16,17 +16,17 @@ add_library(tt_lib SHARED ${TT_LIB_SRCS})
 target_link_libraries(tt_lib PUBLIC compiler_flags linker_flags tt_eager tt_metal pch_pybinds)  # linker_flags = -rdynamic if tracy enabled
 target_include_directories(tt_lib PUBLIC
     ${UMD_HOME}
-    ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/tt_metal
-    ${CMAKE_SOURCE_DIR}/ttnn/cpp
+    ${PROJECT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/tt_metal
+    ${PROJECT_SOURCE_DIR}/ttnn/cpp
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/pybind11/include
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include
     ${Python3_INCLUDE_DIRS}
 )
 target_compile_options(tt_lib PUBLIC -fno-var-tracking -Wno-int-to-pointer-cast)
 target_link_directories(tt_lib PUBLIC
-    ${CMAKE_BINARY_DIR}/tt_eager
-    ${CMAKE_BINARY_DIR}/tt_metal
+    ${PROJECT_BINARY_DIR}/tt_eager
+    ${PROJECT_BINARY_DIR}/tt_metal
     ${Python3_LIBRARIES}
 )
 
@@ -36,8 +36,8 @@ set_target_properties(tt_lib PROPERTIES
     OUTPUT_NAME "_C"
     PREFIX ""
     SUFFIX ".so"
-    BUILD_RPATH "${CMAKE_BINARY_DIR}/tt_metal;${CMAKE_BINARY_DIR}/tt_eager"
-    INSTALL_RPATH "${CMAKE_BINARY_DIR}/lib"
+    BUILD_RPATH "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/tt_eager"
+    INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib"
     CXX_VISIBILITY_PRESET "default"
-    ADDITIONAL_CLEAN_FILES "${CMAKE_SOURCE_DIR}/tt_eager/tt_lib/_C.so;${CMAKE_SOURCE_DIR}/tt_eager/metal_libs.egg-info"
+    ADDITIONAL_CLEAN_FILES "${PROJECT_SOURCE_DIR}/tt_eager/tt_lib/_C.so;${PROJECT_SOURCE_DIR}/tt_eager/metal_libs.egg-info"
 )

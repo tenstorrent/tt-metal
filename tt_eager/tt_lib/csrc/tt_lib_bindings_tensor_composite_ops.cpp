@@ -862,6 +862,69 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
+        m_tensor.def("trunc",&trunc,
+            py::arg("input").noconvert(),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
+            Performs the element-wise trunc operation on ``input``. Support provided only for Wormhole_B0.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Input Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+        m_tensor.def("round",&round,
+            py::arg("input").noconvert(),py::arg("decimals"),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
+            Performs the element-wise round operation on ``input`` , to the given number of ``decimals`` places. Support provided only for Wormhole_B0 and ``decimals = 0``.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Input Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "decimals", "Number of decimal places to round to", "int", "default to 0", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+        m_tensor.def("floor_div",py::overload_cast<const Tensor&, const Tensor&, const MemoryConfig&>(&floor_div),
+            py::arg("input_a").noconvert(),py::arg("input_b").noconvert(),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
+            Performs the element-wise floor division of ``input_a`` by ``input_b``. Support provided only for Wormhole_B0.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input_a", "Numerator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_b", "Denominator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+        m_tensor.def("floor_div",py::overload_cast<const Tensor&, float, const MemoryConfig&>(&floor_div),
+            py::arg("input").noconvert(),py::arg("value").noconvert(),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
+            Performs the element-wise floor_div on  a tensor ``input`` and  a scalar ``value``. Support provided only for Wormhole_B0.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Numerator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "value", "Denominator value", "float", "", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
         m_tensor.def("mac", py::overload_cast<const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&>(&mac),
             py::arg("input").noconvert(), py::arg("tensor1").noconvert(), py::arg("tensor2").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Returns tensor with the multiply and accumulation of all of elements of the input tensors ``input, tensor1, tensor2``.

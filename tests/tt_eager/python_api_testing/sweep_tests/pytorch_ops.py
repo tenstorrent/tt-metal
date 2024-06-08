@@ -533,6 +533,12 @@ def right_shift(x, *args, **kwargs):
     return result
 
 
+def left_shift(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.bitwise_left_shift(x, value)
+    return result
+
+
 def unary_ne(x, *args, **kwargs):
     value = kwargs.pop("scalar")
     result = torch.ne(x, value)
@@ -594,6 +600,31 @@ def tanhshrink(x, *args, **kwargs):
 
 def signbit(x, *args, **kwargs):
     return torch.signbit(x)
+
+
+def floor(x, *args, **kwargs):
+    return torch.floor(x)
+
+
+def trunc(x, *args, **kwargs):
+    return torch.trunc(x)
+
+
+def floor_div(x, y, *args, **kwargs):
+    result = torch.floor_divide(x, y)
+    return result
+
+
+def unary_floor_div(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.floor_divide(x, value)
+    return result
+
+
+def round(x, *args, **kwargs):
+    decimals = kwargs.pop("decimals")
+    result = torch.round(x, decimals=decimals)
+    return result
 
 
 def sin(x, *args, **kwargs):
@@ -1348,6 +1379,8 @@ def eltwise_typecast(x, *args, tt_output_dtype, **kwargs):
         return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
     elif tt_output_dtype[0] == ttl.tensor.DataType.UINT32:
         return torch.relu(x.to(torch.int32))  # due to no uint32 support
+    elif tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT16:
+        return x.to(torch.bfloat16)
     else:
         return x
 

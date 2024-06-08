@@ -128,7 +128,7 @@ def enable_persistent_kernel_cache():
     Enables persistent compiled kernel caching - disables recompiling the kernels for the duration of running process if built_kernels/.../hash directory with kernel binaries is present.
     """
     logger.warning(
-        "Persistent kernel cache is enabled. Cache invalidation may fail after a rebase and may require deleting the build directory."
+        "Persistent kernel cache is enabled. Cache invalidation may fail after a rebase and may require deleting the built directory."
     )
     tt_lib.device.EnablePersistentKernelCache()
 

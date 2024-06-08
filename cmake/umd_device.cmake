@@ -22,7 +22,7 @@ if($ENV{ENABLE_TRACY})
 endif()
 
 # MUST have the RPATH set, or else can't find the tracy lib
-set(LDFLAGS_ "-L${CMAKE_BINARY_DIR}/lib -Wl,-rpath,${CMAKE_BINARY_DIR}/lib ${CONFIG_LDFLAGS} -ldl -lz -lpthread -latomic -lhwloc -lstdc++")
+set(LDFLAGS_ "-L${PROJECT_BINARY_DIR}/lib -Wl,-rpath,${PROJECT_BINARY_DIR}/lib ${CONFIG_LDFLAGS} -ldl -lz -lpthread -latomic -lhwloc -lstdc++")
 set(SHARED_LIB_FLAGS_ "-shared -fPIC")
 set(STATIC_LIB_FLAGS_ "-fPIC")
 
@@ -44,18 +44,18 @@ ExternalProject_Add(
     umd_device
     PREFIX ${UMD_HOME}
     SOURCE_DIR ${UMD_HOME}
-    BINARY_DIR ${CMAKE_BINARY_DIR}
-    INSTALL_DIR ${CMAKE_BINARY_DIR}
-    STAMP_DIR "${CMAKE_BINARY_DIR}/tmp/umd_stamp"
-    TMP_DIR "${CMAKE_BINARY_DIR}/tmp/umd_tmp"
+    BINARY_DIR ${PROJECT_BINARY_DIR}
+    INSTALL_DIR ${PROJECT_BINARY_DIR}
+    STAMP_DIR "${PROJECT_BINARY_DIR}/tmp/umd_stamp"
+    TMP_DIR "${PROJECT_BINARY_DIR}/tmp/umd_tmp"
     DOWNLOAD_COMMAND ""
     CONFIGURE_COMMAND ""
     INSTALL_COMMAND ""
     BUILD_COMMAND
         make -f ${UMD_HOME}/device/module.mk umd_device
-        OUT=${CMAKE_BINARY_DIR}
-        LIBDIR=${CMAKE_BINARY_DIR}/lib
-        OBJDIR=${CMAKE_BINARY_DIR}/obj
+        OUT=${PROJECT_BINARY_DIR}
+        LIBDIR=${PROJECT_BINARY_DIR}/lib
+        OBJDIR=${PROJECT_BINARY_DIR}/obj
         UMD_HOME=${UMD_HOME}
         UMD_VERSIM_STUB=${UMD_VERSIM_STUB}
         UMD_VERSIM_HEADERS=${TT_METAL_VERSIM_ROOT}/versim/
@@ -77,21 +77,21 @@ endif()
 if(NOT BUILD_SHARED_LIBS)
     set(UMD_OBJS
         ${UMD_OBJS}
-        ${CMAKE_BINARY_DIR}/obj/umd/device/architecture_implementation.o
-        ${CMAKE_BINARY_DIR}/obj/umd/device/blackhole_implementation.o
-        ${CMAKE_BINARY_DIR}/obj/umd/device/cpuset_lib.o
-        ${CMAKE_BINARY_DIR}/obj/umd/device/grayskull_implementation.o
-        ${CMAKE_BINARY_DIR}/obj/umd/device/tt_cluster_descriptor.o
-        ${CMAKE_BINARY_DIR}/obj/umd/device/tt_device.o
-        ${CMAKE_BINARY_DIR}/obj/umd/device/tt_emulation_stub.o
-        ${CMAKE_BINARY_DIR}/obj/umd/device/tt_silicon_driver_common.o
-        ${CMAKE_BINARY_DIR}/obj/umd/device/tt_silicon_driver.o
-        ${CMAKE_BINARY_DIR}/obj/umd/device/tt_soc_descriptor.o
-        ${CMAKE_BINARY_DIR}/obj/umd/device/tt_versim_stub.o
-        ${CMAKE_BINARY_DIR}/obj/umd/device/tlb.o
-        ${CMAKE_BINARY_DIR}/obj/umd/device/wormhole_implementation.o
+        ${PROJECT_BINARY_DIR}/obj/umd/device/architecture_implementation.o
+        ${PROJECT_BINARY_DIR}/obj/umd/device/blackhole_implementation.o
+        ${PROJECT_BINARY_DIR}/obj/umd/device/cpuset_lib.o
+        ${PROJECT_BINARY_DIR}/obj/umd/device/grayskull_implementation.o
+        ${PROJECT_BINARY_DIR}/obj/umd/device/tt_cluster_descriptor.o
+        ${PROJECT_BINARY_DIR}/obj/umd/device/tt_device.o
+        ${PROJECT_BINARY_DIR}/obj/umd/device/tt_emulation_stub.o
+        ${PROJECT_BINARY_DIR}/obj/umd/device/tt_silicon_driver_common.o
+        ${PROJECT_BINARY_DIR}/obj/umd/device/tt_silicon_driver.o
+        ${PROJECT_BINARY_DIR}/obj/umd/device/tt_soc_descriptor.o
+        ${PROJECT_BINARY_DIR}/obj/umd/device/tt_versim_stub.o
+        ${PROJECT_BINARY_DIR}/obj/umd/device/tlb.o
+        ${PROJECT_BINARY_DIR}/obj/umd/device/wormhole_implementation.o
     )
-    set(UMD_STATIC_LIB ${CMAKE_BINARY_DIR}/lib/libdevice.a)
+    set(UMD_STATIC_LIB ${PROJECT_BINARY_DIR}/lib/libdevice.a)
 
     # Build static lib with objs created after umd_device is built
     add_custom_command(

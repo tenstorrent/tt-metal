@@ -117,12 +117,14 @@ class TestEltwiseBinary:
         )
 
     @pytest.mark.parametrize("cmp_kind", ["lt", "gt", "lte", "gte", "ne", "eq"])
+    @pytest.mark.parametrize("pass_queue_id", [True, False])
     def test_run_eltwise_binary_cmp_ops(
         self,
         input_shapes,
         input_mem_config,
         cmp_kind,
         device,
+        pass_queue_id,
         function_level_defaults,
     ):
         datagen_func = [
@@ -135,8 +137,16 @@ class TestEltwiseBinary:
         test_args.update(
             {
                 "input_mem_config": [input_mem_config, input_mem_config, input_mem_config],
+                "queue_id": "skip",
             }
         )
+        if cmp_kind == "eq":
+            test_args.update(
+                {
+                    "queue_id": pass_queue_id,
+                }
+            )
+
         comparison_func = comparison_funcs.comp_equal
         run_single_pytorch_test(
             f"eltwise-{cmp_kind}-optional",
