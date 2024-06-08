@@ -1008,6 +1008,21 @@ Tensor div_no_nan(const Tensor& input_a, float value, const MemoryConfig& output
     return operation::decorate_as_composite(__func__, _div_no_nan_overload)(input_a, value, output_mem_config);
 }
 
+Tensor _remainder(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+    DataType input_dtype = input_a.get_dtype();
+    Tensor a = typecast(input_a, DataType::FLOAT32);
+    Tensor b = typecast(input_b, DataType::FLOAT32);
+    Tensor result = ttnn::subtract(a, ttnn::multiply(b, floor_div(a, b), std::nullopt, output_mem_config));
+    result = where(ttnn::ge(result, b), ttnn::subtract(result, b), result);
+    result = where(ltz(b), ttnn::add(result, b), result);
+    result = where(ttnn::eq(a, b), 0, result);
+    return typecast(result, input_dtype);
+}
+Tensor remainder(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _remainder)(input_a, input_b, output_mem_config);
+}
+
+
 // logit(input, eps)=log(input / 1 - input)
 Tensor _logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_config) {
     Tensor t_eps = full_like(input_a, eps, output_mem_config);
