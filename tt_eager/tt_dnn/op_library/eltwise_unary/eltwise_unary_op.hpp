@@ -81,7 +81,8 @@ enum class UnaryOpType {
     TYPECAST,
     RIGHT_SHIFT,
     FLOOR,
-    LEFT_SHIFT
+    LEFT_SHIFT,
+    REMAINDER
 };
 
 template <typename T>
@@ -110,7 +111,8 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::UNARY_LT:
         case UnaryOpType::TYPECAST:
         case UnaryOpType::RIGHT_SHIFT:
-        case UnaryOpType::LEFT_SHIFT: return true;
+        case UnaryOpType::LEFT_SHIFT:
+        case UnaryOpType::REMAINDER: return true;
         default: return false;
     }
     return false;
@@ -410,6 +412,7 @@ constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
 constexpr auto right_shift = make_eltwise_unary_with_param<UnaryOpType::RIGHT_SHIFT>{};
 constexpr auto left_shift = make_eltwise_unary_with_param<UnaryOpType::LEFT_SHIFT>{};
+constexpr auto remainder = make_eltwise_unary_with_param<UnaryOpType::REMAINDER>{};
 constexpr auto unary_ne = make_eltwise_unary_with_param<UnaryOpType::UNARY_NE>{};
 constexpr auto rsub = make_eltwise_unary_with_param<UnaryOpType::RSUB>{};
 constexpr auto silu = make_eltwise_unary<UnaryOpType::SILU>{};
