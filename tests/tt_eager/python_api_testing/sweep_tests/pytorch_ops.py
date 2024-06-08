@@ -545,6 +545,11 @@ def unary_remainder(x, *args, **kwargs):
     return result
 
 
+def remainder(x, y, *args, **kwargs):
+    result = torch.remainder(x, y)
+    return result
+
+
 def unary_ne(x, *args, **kwargs):
     value = kwargs.pop("scalar")
     result = torch.ne(x, value)
