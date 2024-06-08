@@ -2576,6 +2576,7 @@ bmm = make_binary_op(ttl.tensor.bmm)
 
 eltwise_scatter = make_binary_op(ttl.tensor.scatter)
 eltwise_nextafter = make_binary_op(ttl.tensor.nextafter)
+eltwise_remainder = make_binary_op(ttl.tensor.remainder)
 eltwise_isfinite = make_unary_op(ttl.tensor.isfinite)
 eltwise_isinf = make_unary_op(ttl.tensor.isinf)
 eltwise_isposinf = make_unary_op(ttl.tensor.isposinf)
