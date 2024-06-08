@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/op_library/reduction/reduction_op.hpp"
+#include "argmax_op.hpp"
+#include "argmax_program_factory.hpp"
 
 namespace ttnn {
 

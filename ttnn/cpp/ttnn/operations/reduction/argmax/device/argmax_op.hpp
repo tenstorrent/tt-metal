@@ -17,11 +17,6 @@ namespace reduction {
 
 constexpr uint8_t DefaultQueueId = 0;
 
-namespace detail {
-operation::ProgramWithCallbacks argmax_multi_core(
-    const Tensor& input, const Tensor& output, const std::optional<int> dim);
-}  // namespace detail
-
 struct ArgMax {
     const DataType output_dtype;
     const std::optional<int> dim;
