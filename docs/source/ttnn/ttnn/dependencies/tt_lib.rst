@@ -409,6 +409,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.left_shift
 
+.. autofunction:: tt_lib.tensor.remainder
+
 .. autofunction:: tt_lib.tensor.atan
 
 .. autofunction:: tt_lib.tensor.atanh

@@ -648,6 +648,38 @@ class TestEltwiseUnary:
             test_args,
         )
 
+    @skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder op")
+    @pytest.mark.parametrize("value", [-0.5, -1, 0.5, 1, 2, 3, 4])
+    def test_run_eltwise_remainder(
+        self,
+        input_shapes,
+        value,
+        device,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
+        ]
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        test_args.update({"value": value})
+        test_args.update(
+            {
+                "input_mem_config": [input_mem_config],
+                "output_mem_config": output_mem_config,
+            }
+        )
+        comparison_func = comparison_funcs.comp_pcc
+        run_single_pytorch_test(
+            "eltwise-remainder",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            device,
+            test_args,
+        )
+
     @pytest.mark.parametrize("unary_comp", ["unary_ne"])
     @pytest.mark.parametrize("scalar", [0.5, 1.0, -1.0, 0.0])
     def test_run_eltwise_unary_comp(
