@@ -61,7 +61,6 @@ namespace tt::tt_metal::detail {
         this shouldn't normally be used; users should normally use clone operation instead for same functionality as this would be lower performance.
         Use this version of identity only if input is in uint32 format
         )doc");
-        detail::bind_unary_op(m_tensor, "recip", recip, R"doc(Returns a new tensor with the reciprocal of the elements of the input tensor ``recip``.)doc");
         detail::bind_unary_op(m_tensor, "relu", relu, R"doc(Applies the rectified linear unit (ReLU) function to the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "relu6", relu6, R"doc(Returns tensor with the relu6 activation on elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(
@@ -205,6 +204,35 @@ namespace tt::tt_metal::detail {
             R"doc("value", "float", "")doc"
 
         );
+
+        m_tensor.def("recip",
+        [](const Tensor& input,
+            const MemoryConfig& output_mem_config,
+            std::optional<Tensor> output_tensor,
+            uint8_t queue_id){
+                return recip(queue_id, input, output_mem_config, output_tensor);
+            },
+            py::arg("input"),
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("output_tensor").noconvert() = std::nullopt,
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
+            Returns a new tensor with the reciprocal of the elements of the input tensor ``recip``.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Tensor recip is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        )doc");
+
         m_tensor.def("right_shift",right_shift,
             py::arg("input").noconvert(),py::arg("shift_amt"),py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
             Computes right shift of input tensor ``input`` by ``shift_amt`` bits. ``shift_amt`` range must be [0, 31]. Support provided only for Wormhole_B0.
@@ -294,8 +322,20 @@ namespace tt::tt_metal::detail {
         detail::bind_unary_op(m_tensor, "rad2deg", &rad2deg, R"doc(Returns tensor with the rad2deg conversion of elements of the input tensor ``{0}``.)doc");
 
 
-        m_tensor.def("mul_unary", py::overload_cast<float, const Tensor&, const MemoryConfig&>(&mul_unary),
-            py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("mul_unary",
+        [](float value,
+            const Tensor& input_tensor,
+            const MemoryConfig& output_mem_config,
+            std::optional<Tensor> output_tensor,
+            uint8_t queue_id){
+                return mul_unary(queue_id, value, input_tensor, output_mem_config, output_tensor);
+            },
+            py::arg("scalar"),
+            py::arg("input"),
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("output_tensor").noconvert() = std::nullopt,
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
             Perform an eltwise-binary mul on one tensor and one scalar.
 
             Both inputs, the tensor and scalar, must have BFLOAT16 data type.
@@ -308,16 +348,56 @@ namespace tt::tt_metal::detail {
                 "scalar", "Scalar", "float", "", "Yes"
                 "input", "Tensor to mul", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
 
         )doc");
 
-    m_tensor.def(
-        "div_unary",
-        py::overload_cast<float, const Tensor &, const MemoryConfig &>(&div_unary),
-        py::arg("scalar"),
-        py::arg("input"),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
+        m_tensor.def("mul_unary",
+        [](const Tensor& input_tensor,
+            float value,
+            const MemoryConfig& output_mem_config,
+            std::optional<Tensor> output_tensor,
+            uint8_t queue_id){
+                return mul_unary(queue_id, input_tensor, value, output_mem_config, output_tensor);
+            },
+            py::arg("input"),
+            py::arg("scalar"),
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("output_tensor").noconvert() = std::nullopt,
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
+            Perform an eltwise-binary mul on one tensor and one scalar.
+
+            Both inputs, the tensor and scalar, must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Tensor to mul", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "scalar", "Scalar", "float", "", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        )doc");
+
+        m_tensor.def("div_unary",
+        [](float value,
+            const Tensor& input_tensor,
+            const MemoryConfig& output_mem_config,
+            std::optional<Tensor> output_tensor,
+            uint8_t queue_id){
+                return div_unary(queue_id, value, input_tensor, output_mem_config, output_tensor);
+            },
+            py::arg("scalar"),
+            py::arg("input"),
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("output_tensor").noconvert() = std::nullopt,
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
             Perform an eltwise-binary div on one tensor and one scalar.
 
             Both inputs, the tensor and scalar, must have BFLOAT16 data type.
@@ -330,6 +410,39 @@ namespace tt::tt_metal::detail {
                 "scalar", "Scalar", "float", "", "Yes"
                 "input", "Tensor to div", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        )doc");
+
+        m_tensor.def("div_unary",
+        [](const Tensor& input_tensor,
+            float value,
+            const MemoryConfig& output_mem_config,
+            std::optional<Tensor> output_tensor,
+            uint8_t queue_id){
+                return div_unary(queue_id, input_tensor, value, output_mem_config, output_tensor);
+            },
+            py::arg("input"),
+            py::arg("scalar"),
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("output_tensor").noconvert() = std::nullopt,
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
+            Perform an eltwise-binary div on one tensor and one scalar.
+
+            Both inputs, the tensor and scalar, must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Tensor to div", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "scalar", "Scalar", "float", "", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
 
         )doc");
 
@@ -355,13 +468,20 @@ namespace tt::tt_metal::detail {
 
         )doc");
 
-    m_tensor.def(
-        "add_unary",
-        py::overload_cast<float, const Tensor &, const MemoryConfig &>(&add_unary),
-        py::arg("scalar"),
-        py::arg("input"),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
+        m_tensor.def("add_unary",
+        [](float value,
+            const Tensor& input_tensor,
+            const MemoryConfig& output_mem_config,
+            std::optional<Tensor> output_tensor,
+            uint8_t queue_id){
+                return add_unary(queue_id, value, input_tensor, output_mem_config, output_tensor);
+            },
+            py::arg("scalar"),
+            py::arg("input"),
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("output_tensor").noconvert() = std::nullopt,
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
             Perform an eltwise-binary add on one tensor and one scalar.
 
             Both inputs, the tensor and scalar, must have BFLOAT16 data type.
@@ -374,6 +494,40 @@ namespace tt::tt_metal::detail {
                 "scalar", "Scalar", "float", "", "Yes"
                 "input", "Tensor to add", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
+        )doc");
+
+        m_tensor.def("add_unary",
+        [](const Tensor& input_tensor,
+            float value,
+            const MemoryConfig& output_mem_config,
+            std::optional<Tensor> output_tensor,
+            uint8_t queue_id){
+                return add_unary(queue_id, input_tensor, value, output_mem_config, output_tensor);
+            },
+            py::arg("input"),
+            py::arg("scalar"),
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("output_tensor").noconvert() = std::nullopt,
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
+            Perform an eltwise-binary add on one tensor and one scalar.
+
+            Both inputs, the tensor and scalar, must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Tensor to add", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "scalar", "Scalar", "float", "", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
+
         )doc");
 
     detail::bind_unary_op_with_param(
@@ -382,27 +536,6 @@ namespace tt::tt_metal::detail {
         py::overload_cast<const Tensor &, float, const MemoryConfig &>(&sub_unary),
         py::arg("scalar"),
         R"doc(Perform an eltwise-binary sub on one tensor ``{0}`` and one scalar ``{1}``.)doc",
-        R"doc("Scalar", "float", "")doc");
-    detail::bind_unary_op_with_param(
-        m_tensor,
-        "mul_unary",
-        py::overload_cast<const Tensor &, float, const MemoryConfig &>(&mul_unary),
-        py::arg("scalar"),
-        R"doc(Perform an eltwise-binary mul on one tensor ``{0}`` and one scalar ``{1}``.)doc",
-        R"doc("Scalar", "float", "")doc");
-    detail::bind_unary_op_with_param(
-        m_tensor,
-        "div_unary",
-        py::overload_cast<const Tensor &, float, const MemoryConfig &>(&div_unary),
-        py::arg("scalar"),
-        R"doc(Perform an eltwise-binary div on one tensor ``{0}`` and one scalar ``{1}``.)doc",
-        R"doc("Scalar", "float", "")doc");
-    detail::bind_unary_op_with_param(
-        m_tensor,
-        "add_unary",
-        py::overload_cast<const Tensor &, float, const MemoryConfig &>(&add_unary),
-        py::arg("scalar"),
-        R"doc(Perform an eltwise-binary add on one tensor ``{0}`` and one scalar ``{1}``.)doc",
         R"doc("Scalar", "float", "")doc");
 
     // softmax
