@@ -103,9 +103,14 @@ namespace tt::tt_metal::detail{
                         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 )doc");
 
-        m_tensor.def("assign", py::overload_cast<const Tensor&, const Tensor&>(&assign),
-            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), R"doc(
-            Copies input tensor ``arg0`` (given by input_a) to ``arg1`` (given by input_b) if their
+        m_tensor.def("assign",
+        [](const Tensor& input_a, const Tensor& input_b, uint8_t queue_id){
+            return assign(queue_id, input_a, input_b); },
+            py::arg("input_a").noconvert(),
+            py::arg("input_b").noconvert(),
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
+            Copies input tensor ``input_a`` to ``input_b`` if their
             shapes and memory layouts match, and returns input_b tensor.
 
             Input tensors can be of any data type.
@@ -117,23 +122,7 @@ namespace tt::tt_metal::detail{
 
                 "input_a", "Tensor assign is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "input_b", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-        )doc");
-
-        m_tensor.def("assign", py::overload_cast<uint8_t, const Tensor&, const Tensor& >(&assign),
-            py::arg("queue_id").noconvert() = 0, py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), R"doc(
-            Copies input tensor ``arg0`` (given by input_a) to ``arg1`` (given by input_b) if their
-            shapes and memory layouts match, and returns input_b tensor.
-
-            Input tensors can be of any data type.
-
-            Output tensor will be of same data type as Input tensor.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "queue_id", "queue_id", "uint8_t", "Default is 0", "No"
-                "input_a", "Tensor assign is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "input_b", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
         )doc");
 
         m_tensor.def("reshape", &reshape,
@@ -342,8 +331,24 @@ namespace tt::tt_metal::detail{
         )doc");
 
         // *** broadcast and reduce ***
-        m_tensor.def("bcast", &bcast,
-            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("bcast",
+        [](const Tensor &input_tensor_a,
+            const Tensor &input_tensor_b,
+            BcastOpMath bcast_op,
+            BcastOpDim bcast_dim,
+            const MemoryConfig &mem_config,
+            std::optional<Tensor> output_tensor,
+            uint8_t queue_id){
+            return bcast(queue_id, input_tensor_a, input_tensor_b, bcast_op, bcast_dim, mem_config, output_tensor);
+        },
+            py::arg("input_a").noconvert(),
+            py::arg("input_b").noconvert(),
+            py::arg("math_op"),
+            py::arg("dim"),
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("output_tensor").noconvert() = std::nullopt,
+            py::arg("queue_id").noconvert() = 0,
+            R"doc(
             Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
 
             Let tensor ``input_a`` have shape ``[W0, Z0, Y0, X0]`` and tensor ``input_b`` shape ``[W1, Z1, Y1, X1]``. ``dim`` determines the type of broadcast performed.
@@ -366,6 +371,8 @@ namespace tt::tt_metal::detail{
                 "math_op", "Aggregating math operation", " BcastOpMath", "ADD, SUB, MUL", "Yes"
                 "dim", "Dimension on which to broadcast", "BcastOpDim", "W, H, HW", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "Optional output tensor", "Tensor", "Default is None", "No"
+                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
         )doc");
 
         m_tensor.def("reduce", &reduce,

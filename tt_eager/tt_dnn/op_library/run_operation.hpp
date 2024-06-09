@@ -341,6 +341,7 @@ Tensors run_with_autoformat(
     const DeviceOperation<Tensors>& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors = {},
+    const OptionalTensors& optional_output_tensors = {},
     const float pad_value = 0,
     const bool pad_c = false,
     uint8_t cq_id = 0
@@ -351,13 +352,14 @@ inline auto run_with_autoformat(
     ConcreteOperation&& concrete_op,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {},
     const float pad_value = 0,
     const bool pad_c = false,
     uint8_t cq_id = 0
 )-> Tensors {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     const auto operation = DeviceOperation<Tensors>(concrete_op);
-    return run_with_autoformat(operation, input_tensors, optional_input_tensors, pad_value, pad_c, cq_id);
+    return run_with_autoformat(operation, input_tensors, optional_input_tensors, optional_output_tensors, pad_value, pad_c, cq_id);
 }
 
 Tensors run_with_autoformat(
@@ -367,6 +369,7 @@ Tensors run_with_autoformat(
     const std::vector<Layout>& output_layouts,
     const OptionalConstTensors& optional_input_tensors = {},
     const std::vector<std::optional<FormatParams>>& optional_input_formatting = {},
+    const OptionalTensors& optional_output_tensors = {},
     uint8_t cq_id = 0
 );
 template<typename ConcreteOperation>
@@ -377,11 +380,12 @@ inline auto run_with_autoformat(
     const std::vector<Layout>& output_layouts,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
     const std::vector<std::optional<FormatParams>>& optional_input_formatting = {},
+    const OptionalTensors& optional_output_tensors = {},
     uint8_t cq_id = 0
 )-> ProgramOutputTensors<ConcreteOperation> {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     const auto operation = DeviceOperation<OutputTensors>(concrete_op);
-    return run_with_autoformat(operation, input_tensors, input_formatting, output_layouts, optional_input_tensors, optional_input_formatting, cq_id);
+    return run_with_autoformat(operation, input_tensors, input_formatting, output_layouts, optional_input_tensors, optional_input_formatting, optional_output_tensors, cq_id);
 }
 
 void launch_op(
