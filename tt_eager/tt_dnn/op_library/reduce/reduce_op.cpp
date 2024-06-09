@@ -182,7 +182,7 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim 
         operation::launch_with_autoformat(
         [reduce_math, reduce_dim, pad_value, scaler, output_dtype, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
-            return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler, output_mem_config, output_dtype.value_or(input_tensor.get_dtype())}, {input_tensor}, {}, pad_value);
+            return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler, output_mem_config, output_dtype.value_or(input_tensor.get_dtype())}, {input_tensor}, {}, {}, pad_value);
         }, {input_tensor}, output_tensors);
     }
     return output_tensors.at(0);

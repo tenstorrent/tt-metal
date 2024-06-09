@@ -820,6 +820,8 @@ void py_module(py::module& m_primary) {
         py::arg("dim"),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("in_place") = false,
+        py::arg("output_tensor").noconvert() = std::nullopt,
+        py::arg("queue_id").noconvert() = 0,
         R"doc(
         Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
 
@@ -846,6 +848,7 @@ void py_module(py::module& m_primary) {
             "dim", "Dimension on which to broadcast", "BcastOpDim", "W, H, HW", "Yes"
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
             "in_place", "Whether to perform bcast in place, without allocating space for output tensor", "Bool", "Default is false", "No"
+            "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
     )doc");
 
     py::enum_<MorehSoftmaxOpParallelizationStrategy>(m_primary, "MorehSoftmaxOpParallelizationStrategy")

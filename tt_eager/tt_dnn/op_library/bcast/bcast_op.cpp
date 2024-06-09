@@ -43,7 +43,7 @@ namespace tt {
 
 namespace tt_metal {
 
-void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) const {
+void EltwiseBinaryBroadcast::validate_with_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
@@ -57,24 +57,31 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE);
     TT_FATAL(input_tensor_b.get_layout() == Layout::TILE);
     TT_FATAL(is_floating_point(input_tensor_a.get_dtype()), "Unsupported data format");
+    if(!output_tensors.empty() && output_tensors.at(0).has_value()){
+        TT_FATAL(is_floating_point(output_tensors.at(0).value().get_dtype()), "Unsupported data format");
+        const auto output_shape_required = this->compute_output_shapes(input_tensors);
+        const auto& out_tensor = output_tensors.at(0).value();
+        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required.at(0), fmt::format("The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape()));
+    }
     if (this->in_place) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout);
         TT_FATAL(input_tensor_a.memory_config().buffer_type == this->output_mem_config.buffer_type);
     }
+    auto out_mem_config = (!output_tensors.empty() && output_tensors.at(0).has_value()) ? output_tensors.at(0).value().memory_config() : this->output_mem_config;
     if (this->dim == BcastOpDim::W){
         TT_FATAL(
             input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED &&
-                this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+                out_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
             "Bcast does not currently support input0 sharding, except if dim is W");
     } else if (this->dim == BcastOpDim::H) {
         if(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED){
             TT_FATAL(
             input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED &&
-                this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+                out_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
             "Bcast does not currently support input0 sharding, except if dim is HW");
         }else{
             TT_FATAL(
-            input_tensor_a.memory_config().is_sharded() && this->output_mem_config.is_sharded(),
+            input_tensor_a.memory_config().is_sharded() && out_mem_config.is_sharded(),
             "Input and output mem layouts must be the same for bcast H op!");
         }
     } else {
@@ -83,7 +90,7 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
                 input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
             "HW bcast in0 supports Height Sharding or Interleaving");
         TT_FATAL(
-            input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout,
+            input_tensor_a.memory_config().memory_layout == out_mem_config.memory_layout,
             "Input and output mem layouts must be the same for bcast HW op!");
     }
 
@@ -120,7 +127,10 @@ std::vector<Shape> EltwiseBinaryBroadcast::compute_output_shapes(const std::vect
 }
 
 
-std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    if(!output_tensors.empty() && output_tensors.at(0).has_value()){
+        return {output_tensors.at(0).value()};
+    }
     if (this->in_place) {
         return {};
     }
