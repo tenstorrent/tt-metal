@@ -20,10 +20,12 @@
 #include "pybind11/operations/normalization.hpp"
 #include "pybind11/operations/pool.hpp"
 #include "pybind11/operations/copy.hpp"
-#include "pybind11/operations/reduction.hpp"
 #include "pybind11/operations/ternary.hpp"
 #include "pybind11/operations/transformer.hpp"
 #include "pybind11/operations/unary.hpp"
+
+
+#include "ttnn/operations/reduction/reduction_pybind.hpp"
 
 namespace py = pybind11;
 
