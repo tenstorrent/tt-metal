@@ -5,11 +5,7 @@
 #include "argmax_op.hpp"
 #include "argmax_program_factory.hpp"
 
-namespace ttnn {
-
-namespace operations {
-
-namespace reduction {
+namespace ttnn::operations::reduction {
 
 void ArgMax::validate_with_output_tensors(
     const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
@@ -84,8 +80,4 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     return detail::argmax_multi_core(input_tensor, output_tensor, this->dim);
 }
 
-}  // namespace reduction
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::reduction

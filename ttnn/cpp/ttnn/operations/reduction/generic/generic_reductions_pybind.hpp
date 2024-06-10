@@ -9,17 +9,11 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 
-#include "reduction.hpp"
-
-namespace py = pybind11;
-
-namespace ttnn {
-namespace operations {
-namespace reduction {
-namespace detail {
+namespace ttnn::operations::reduction::detail {
 
 template <typename reduction_operation_t>
 void bind_reduction_operation(py::module& module, const reduction_operation_t& operation) {
+    namespace py = pybind11;
     auto doc = fmt::format(
         R"doc({0}(input_tensor: ttnn.Tensor, dim: Optional[Union[int, Tuple[int]]] = None, keepdim: bool = True, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor)doc",
         operation.name());
@@ -35,7 +29,4 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
             py::arg("memory_config") = std::nullopt});
 }
 
-}  // namespace detail
-}  // namespace reduction
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::reduction::detail

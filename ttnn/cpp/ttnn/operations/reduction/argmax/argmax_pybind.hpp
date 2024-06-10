@@ -11,13 +11,8 @@
 
 #include "argmax.hpp"
 
+namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
-
-namespace ttnn {
-namespace operations {
-namespace reduction {
-namespace detail {
-
 void bind_reduction_argmax_operation(py::module& module) {
     auto doc =
         R"doc(argmax(input_tensor: ttnn.Tensor, *, dim: Optional[int] = None, memory_config: MemoryConfig = std::nullopt, output_tensor : Optional[ttnn.Tensor] = std::nullopt, queue_id : [int] = 0) -> ttnn.Tensor
@@ -67,7 +62,4 @@ void bind_reduction_argmax_operation(py::module& module) {
                 py::arg("queue_id") = 0});
 }
 
-}  // namespace detail
-}  // namespace reduction
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::reduction::detail

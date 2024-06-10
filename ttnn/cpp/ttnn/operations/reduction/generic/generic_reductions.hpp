@@ -13,8 +13,7 @@
 #include "ttnn/validation.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace reduction {
+namespace operations::reduction {
 
 enum class ReduceType {
     Sum,
@@ -162,8 +161,7 @@ struct Reduce {
     }
 };
 
-}  // namespace reduction
-}  // namespace operations
+}  // namespace operations::reduction
 
 // Generic reductions
 constexpr auto sum =

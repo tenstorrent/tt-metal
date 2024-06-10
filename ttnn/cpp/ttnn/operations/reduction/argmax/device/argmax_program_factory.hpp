@@ -4,21 +4,13 @@
 
 #include <algorithm>
 
-#include "ttnn/cpp/ttnn/op_library/reduction/reduction_op.hpp"
-
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
-namespace ttnn {
-
-namespace operations {
-
-namespace reduction {
-
-namespace detail {
+namespace ttnn::operations::reduction::detail {
 
 using namespace tt::constants;
 
@@ -130,10 +122,4 @@ operation::ProgramWithCallbacks argmax_multi_core(
     return {std::move(program), override_runtime_args_callback};
 }
 
-}  // namespace detail
-
-}  // namespace reduction
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::reduction::detail

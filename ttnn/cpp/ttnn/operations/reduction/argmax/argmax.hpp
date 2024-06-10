@@ -13,10 +13,7 @@
 #include "device/argmax_op.hpp"
 
 namespace ttnn {
-
-namespace operations {
-
-namespace reduction {
+namespace operations::reduction {
 
 struct ExecuteArgMax {
     static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
@@ -54,8 +51,7 @@ struct ExecuteArgMax {
     }
 };
 
-}  // namespace reduction
-}  // namespace operations
+}  // namespace operations::reduction
 
 constexpr auto argmax = ttnn::register_operation<ttnn::operations::reduction::ExecuteArgMax>("ttnn::argmax");
 
