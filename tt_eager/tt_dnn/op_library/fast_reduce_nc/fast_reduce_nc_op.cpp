@@ -19,7 +19,6 @@ namespace tt_metal {
 //                         FastReduceNC
 ////////////////////////////////////////////////////////////////////////////
 namespace {
-    // TODO: move these check functions to a common header.
     inline void check_tensor(
         const Tensor& tensor,
         const std::string& op_name,

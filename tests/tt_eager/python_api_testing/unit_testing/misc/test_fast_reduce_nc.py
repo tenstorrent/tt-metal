@@ -8,7 +8,7 @@ from loguru import logger
 
 import ttnn.experimental as ttl
 import ttnn
-from models.utility_functions import comp_allclose_and_pcc, comp_pcc
+from models.utility_functions import comp_allclose_and_pcc, comp_pcc, skip_for_grayskull
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
@@ -47,13 +47,18 @@ def get_tensors(input_shape, output_shape, device, *, with_padding=True, use_ran
         [1, 8, 128, 4096],
         [1, 8, 1024, 4096],
         [1, 8, 2048, 4096],
+        [8, 1, 128, 4096],
+        [4, 2, 1024, 4096],
     ),
     ids=[
         "mixtral_128",
         "mixtral_1k",
         "mixtral_2k",
+        "dim0_reduce",
+        "dim01_reduce",
     ],
 )
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "dims",
     ([0], [1], [0, 1]),
@@ -96,6 +101,7 @@ def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, d
     ([0], [1], [0, 1]),
     ids=["0", "1", "0_1"],
 )
+@skip_for_grayskull()
 def test_fast_reduce_nc_with_prgm_caching(dims, device, use_program_cache):
     torch.manual_seed(2023)
 

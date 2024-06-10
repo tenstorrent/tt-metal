@@ -215,17 +215,14 @@ operation::ProgramWithCallbacks reduce_nc_impl(const Tensor &input, const Tensor
         log_debug(LogOp, "{}:{} args_callback ", __func__, __LINE__);
         const auto *input_buffer = input_tensors.at(0).buffer();
         const auto *output_buffer = output_tensors.at(0).buffer();
+        auto& reader_kernel_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        auto& writer_kernel_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
         for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
-            {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = input_buffer->address();
-            }
-
-            {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = output_buffer->address();
-            }
+            auto& reader_kernel_args = reader_kernel_args_by_core[core.x][core.y];
+                reader_kernel_args[0] = input_buffer->address();
+            auto& writer_kernel_args = writer_kernel_args_by_core[core.x][core.y];
+                writer_kernel_args[0] = output_buffer->address();
         }
     };
 
