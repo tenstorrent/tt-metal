@@ -147,6 +147,7 @@ tt::stl::reflection::Attributes Unpad::attributes() const {
 
 const operation::Hash Unpad::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     auto input_tensor = input_tensors.at(0);
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor.storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor.get_storage()),__FILE__, __LINE__));
     auto input_mem_config = std::get<DeviceStorage>(input_tensor.storage()).memory_config();
     auto output_mem_config = this->output_mem_config;
     auto dtype = input_tensor.dtype();
