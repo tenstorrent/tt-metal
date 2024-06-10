@@ -88,7 +88,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     std::map<string, string> kernel_defines;
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/op_library/reduction/kernels/reader_argmax_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
