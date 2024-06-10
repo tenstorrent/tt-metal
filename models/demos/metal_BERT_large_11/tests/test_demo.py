@@ -80,6 +80,7 @@ def test_demo_batch_12(batch, input_path, model_location_generator, device, use_
 
 
 @skip_for_grayskull()
+@skip_for_wormhole_b0(reason_str="#7525: hangs on wh b0")
 @pytest.mark.parametrize(
     "batch, exact, f1",
     (
