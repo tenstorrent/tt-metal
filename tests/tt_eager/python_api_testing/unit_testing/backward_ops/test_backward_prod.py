@@ -56,9 +56,90 @@ def test_bw_prod(input_shapes, all_dimensions, dim, device):
     tt_output_tensor_on_device = tt_lib.tensor.prod_bw(grad_tensor, input_tensor, all_dimensions, dim)
     in_data.retain_grad()
     pyt_y.backward(gradient=grad_data)
-
     golden_tensor = [in_data.grad]
-
     comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
-
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 4, 320, 384])),
+        (torch.Size([32, 64, 64, 64])),
+    ),
+)
+@pytest.mark.parametrize(
+    "dim",
+    [-4, -3, -2, -1, 0, 1, 2, 3],
+)
+@pytest.mark.parametrize("all_dimensions", [True, False])
+@pytest.mark.parametrize("are_required_outputs", [[True], [False]])
+def test_bw_prod_opt_output(input_shapes, all_dimensions, dim, are_required_outputs, device):
+    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
+    grad_data, grad_tensor = data_gen_pt_tt_prod(input_shapes, device, all_dimensions, dim)
+    input_grad = None
+    if are_required_outputs[0]:
+        _, input_grad = data_gen_pt_tt(input_shapes, device)
+    tt_output_tensor_on_device = tt_lib.tensor.prod_bw(
+        grad_tensor,
+        input_tensor,
+        all_dimensions,
+        dim,
+        are_required_outputs=are_required_outputs,
+        input_grad=input_grad,
+    )
+    if all_dimensions == False:
+        pyt_y = torch.prod(in_data, dim=dim, keepdim=True)
+    else:
+        pyt_y = torch.prod(in_data).view(1, 1, 1, 1)
+    in_data.retain_grad()
+    pyt_y.backward(gradient=grad_data)
+    golden_tensor = [in_data.grad]
+    status = True
+    if are_required_outputs[0]:
+        status = status & compare_results(tt_output_tensor_on_device, golden_tensor)
+    assert status
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 4, 320, 384])),
+        (torch.Size([32, 64, 64, 64])),
+    ),
+)
+@pytest.mark.parametrize(
+    "dim",
+    [-4, -3, -2, -1, 0, 1, 2, 3],
+)
+@pytest.mark.parametrize("all_dimensions", [True, False])
+@pytest.mark.parametrize("are_required_outputs", [[True], [False]])
+def test_bw_prod_opt_output_qid(input_shapes, all_dimensions, dim, are_required_outputs, device):
+    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
+    grad_data, grad_tensor = data_gen_pt_tt_prod(input_shapes, device, all_dimensions, dim)
+    input_grad = None
+    if are_required_outputs[0]:
+        _, input_grad = data_gen_pt_tt(input_shapes, device)
+    queue_id = 0
+    tt_output_tensor_on_device = tt_lib.tensor.prod_bw(
+        grad_tensor,
+        input_tensor,
+        all_dimensions,
+        dim,
+        are_required_outputs=are_required_outputs,
+        input_grad=input_grad,
+        queue_id=queue_id,
+    )
+    if all_dimensions == False:
+        pyt_y = torch.prod(in_data, dim=dim, keepdim=True)
+    else:
+        pyt_y = torch.prod(in_data).view(1, 1, 1, 1)
+    in_data.retain_grad()
+    pyt_y.backward(gradient=grad_data)
+    golden_tensor = [in_data.grad]
+    status = True
+    if are_required_outputs[0]:
+        status = status & compare_results(tt_output_tensor_on_device, golden_tensor)
+    assert status
