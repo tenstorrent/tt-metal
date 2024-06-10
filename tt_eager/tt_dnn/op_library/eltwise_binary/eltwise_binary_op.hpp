@@ -41,7 +41,9 @@ enum class BinaryOpType {
 
 namespace eltwise_binary_op_utils {
 
-std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<DataType> out_dtype = std::nullopt,
+std::map<string, string> get_defines(BinaryOpType op_type,
+                                    const std::optional<DataType> in_dtype = std::nullopt,
+                                    const std::optional<DataType> out_dtype = std::nullopt,
                                     const std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt);
 
 }  // namespace eltwise_binary_op_utils
