@@ -1349,6 +1349,11 @@ void noc_async_write_multicast(
  * way of a synchronization mechanism. The same as *noc_async_write_multicast*
  * with preset size of 4 Bytes.
  *
+ * With this API, the multicast sender cannot be part of the multicast
+ * destinations. If the multicast sender has to be in the multicast
+ * destinations (i.e. must perform a local L1 write), the other API variant
+ * *noc_semaphore_set_multicast_loopback_src* can be used.
+ *
  * Return value: None
  *
  * | Argument               | Description                                                              | Type     | Valid Range                                               | Required |
@@ -1375,7 +1380,29 @@ void noc_semaphore_set_multicast(
         multicast_path_reserve);
     DEBUG_STATUS("NSMD");
 }
-
+/**
+ * Initiates an asynchronous write from a source address in L1 memory on the
+ * Tensix core executing this function call to a rectangular destination grid.
+ * The destinations are specified using a uint64_t encoding referencing an
+ * on-chip grid of nodes located at NOC coordinate range
+ * (x_start,y_start,x_end,y_end) and a local address created using
+ * *get_noc_multicast_addr* function. The size of data that is sent is 4 Bytes.
+ * This is usually used to set a semaphore value at the destination nodes, as a
+ * way of a synchronization mechanism. The same as *noc_async_write_multicast*
+ * with preset size of 4 Bytes.
+ *
+ * With this API, you cannot send data only to the source node. That is, if
+ * num_dests is 1 and the encoded destniation nodes consist of the node
+ * sending the data, then no data will be sent. The method call will be a no-op.
+ *
+ * Return value: None
+ *
+ * | Argument               | Description                                                              | Type     | Valid Range                                               | Required |
+ * |------------------------|--------------------------------------------------------------------------|----------|-----------------------------------------------------------|----------|
+ * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                    | True     |
+ * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
+ * | num_dests              | Number of destinations that the multicast source is targetting | uint32_t | 0..119                                                    | True     |
+ */
 inline
 void noc_semaphore_set_multicast_loopback_src(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t num_dests, bool linked = false, bool multicast_path_reserve = true) {
