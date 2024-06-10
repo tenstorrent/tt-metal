@@ -10,14 +10,11 @@ import tt_lib as ttl
 import pytest
 from models.utility_functions import skip_for_wormhole_b0, comp_allclose_and_pcc, comp_pcc, is_wormhole_b0
 from loguru import logger
-
-fp32_dest_acc_en = [
-    False,  # for grayskull
-]
-fp32_dest_acc_en_ids = ["fp32_dest_acc_en=False"]
-if is_wormhole_b0:
-    fp32_dest_acc_en.append(True)
-    fp32_dest_acc_en_ids.append("fp32_dest_acc_en=True")
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+    get_compute_kernel_options,
+    compute_kernel_options,
+    compute_kernel_ids,
+)
 
 
 def create_tt_tensor(tensor, device):
@@ -33,26 +30,6 @@ def create_tt_tensor(tensor, device):
     return ret
 
 
-def get_compute_kernel_options(fp32_dest_acc_en):
-    if fp32_dest_acc_en is None:
-        return None
-
-    if is_wormhole_b0:
-        compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            packer_l1_acc=False,
-        )
-    else:
-        # Grayskull doesn't support fp32 but test passing a GS config is ok
-        compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
-            math_approx_mode=True,
-        )
-    return compute_kernel_config
-
-
 @pytest.mark.parametrize(
     "shape",
     [[32, 32], [2, 2, 2, 2, 2, 2, 64, 64]],
@@ -62,7 +39,7 @@ def get_compute_kernel_options(fp32_dest_acc_en):
 @pytest.mark.parametrize("eps", [1e-06, 1e-08])
 @pytest.mark.parametrize("weight_decay", [0.0, 0.3])
 @pytest.mark.parametrize("amsgrad", [True, False])
-@pytest.mark.parametrize("fp32_dest_acc_en", fp32_dest_acc_en, ids=fp32_dest_acc_en_ids)
+@pytest.mark.parametrize("fp32_dest_acc_en", compute_kernel_options, ids=compute_kernel_ids)
 def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device):
     torch.manual_seed(0)
 

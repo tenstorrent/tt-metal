@@ -26,8 +26,6 @@ struct MorehAdam {
     uint32_t step;
     bool amsgrad;
 
-    bool given_max_exp_avg_sq_in;
-
     MemoryConfig output_mem_config;
     const DeviceComputeKernelConfig compute_kernel_config;
 

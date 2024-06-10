@@ -12,6 +12,12 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "tt_eager/tt_dnn/kernels/compute/moreh_common.hpp"
 
+#ifdef FP32_DEST_ACC_EN
+#define WITH_FP32_DEST_ACC(x) x
+#else
+#define WITH_FP32_DEST_ACC(x)
+#endif
+
 namespace NAMESPACE {
 void MAIN {
     uint32_t step = get_arg_val<uint32_t>(0);
@@ -133,7 +139,7 @@ void MAIN {
         tile_regs_acquire();
         cb_wait_front(cb_tmp1, onetile);
         cb_reserve_back(cb_tmp1, onetile);
-        unpack_reconfig_data_format(cb_one, cb_tmp1);
+        WITH_FP32_DEST_ACC(unpack_reconfig_data_format(cb_one, cb_tmp1));
         sub_tiles_init();
         sub_tiles(cb_one, cb_tmp1, first_tile, first_tile, dst0);
         recip_tile_init();
@@ -184,11 +190,11 @@ void MAIN {
 
 #ifdef AMSGRAD
         mul_tiles_init();
-        unpack_reconfig_data_format(tmp_cb_max_exp_avg_sq, cb_tmp1);
+        WITH_FP32_DEST_ACC(unpack_reconfig_data_format(tmp_cb_max_exp_avg_sq, cb_tmp1));
         mul_tiles(tmp_cb_max_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
 #else
         mul_tiles_init();
-        unpack_reconfig_data_format(tmp_cb_exp_avg_sq, cb_tmp1);
+        WITH_FP32_DEST_ACC(unpack_reconfig_data_format(tmp_cb_exp_avg_sq, cb_tmp1));
         mul_tiles(tmp_cb_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
 #endif
         sqrt_tile_init();
@@ -209,7 +215,7 @@ void MAIN {
         tile_regs_acquire();
         cb_wait_front(cb_tmp1, onetile);
         cb_reserve_back(cb_tmp1, onetile);
-        unpack_reconfig_data_format(cb_tmp1, cb_scalar_args);
+        WITH_FP32_DEST_ACC(unpack_reconfig_data_format(cb_tmp1, cb_scalar_args));
         add_tiles_init();
         add_tiles(cb_tmp1, cb_scalar_args, first_tile, eps_tile, dst0);
         recip_tile_init();
@@ -240,7 +246,7 @@ void MAIN {
         // cb_tmp2 = 1 / (1 - cb_tmp2);
         tile_regs_acquire();
         cb_wait_front(cb_tmp2, onetile);
-        unpack_reconfig_data_format(cb_one, cb_tmp2);
+        WITH_FP32_DEST_ACC(unpack_reconfig_data_format(cb_one, cb_tmp2));
         sub_tiles_init();
         sub_tiles(cb_one, cb_tmp2, first_tile, first_tile, dst0);
         recip_tile_init();

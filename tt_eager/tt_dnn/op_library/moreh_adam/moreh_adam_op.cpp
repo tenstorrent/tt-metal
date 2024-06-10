@@ -112,7 +112,7 @@ std::vector<Tensor> MorehAdam::create_output_tensors(
 
     if (output_tensors.at(idx).has_value()) {
         result.push_back(output_tensors.at(idx).value());
-    } else if (given_max_exp_avg_sq_in) {
+    } else if (amsgrad) {
         result.push_back(create_device_tensor(output_shapes.at(idx), dtype, layout, device, this->output_mem_config));
     }
 
@@ -139,7 +139,7 @@ operation::ProgramWithCallbacks MorehAdam::create_program(
     const auto& exp_avg_out = output_tensors.at(1);
     const auto& exp_avg_sq_out = output_tensors.at(2);
     const auto& max_exp_avg_sq_out =
-        given_max_exp_avg_sq_in ? std::make_optional<Tensor>(output_tensors.at(3)) : std::nullopt;
+        amsgrad ? std::make_optional<Tensor>(output_tensors.at(3)) : std::nullopt;
 
     return moreh_adam_(
         param_in,
@@ -182,7 +182,10 @@ std::vector<std::optional<Tensor>> moreh_adam(
     const std::optional<const Tensor> max_exp_avg_sq_out,
     const MemoryConfig& mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    TT_ASSERT(not max_exp_avg_sq_in.has_value() && max_exp_avg_sq_out.has_value());
+
+    if(amsgrad){
+        TT_ASSERT(max_exp_avg_sq_in.has_value());
+    }
 
     auto device = param_in.device();
 
@@ -199,7 +202,6 @@ std::vector<std::optional<Tensor>> moreh_adam(
             operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})));
     }
 
-    auto given_max_exp_avg_sq_in = max_exp_avg_sq_in.has_value();
 
     operation::launch_op(
         [lr,
@@ -209,7 +211,6 @@ std::vector<std::optional<Tensor>> moreh_adam(
          weight_decay,
          step,
          amsgrad,
-         given_max_exp_avg_sq_in,
          mem_config,
          compute_kernel_config_val](
             const std::vector<Tensor>& input_tensors,
@@ -224,7 +225,6 @@ std::vector<std::optional<Tensor>> moreh_adam(
                     .weight_decay = weight_decay,
                     .step = step,
                     .amsgrad = amsgrad,
-                    .given_max_exp_avg_sq_in = given_max_exp_avg_sq_in,
                     .output_mem_config = mem_config,
                     .compute_kernel_config = compute_kernel_config_val},
                 input_tensors,
