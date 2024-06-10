@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_eager/tt_dnn/op_library/moreh_adamw/moreh_adamw_op.hpp"
+
 #include <optional>
 #include <utility>
 
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_adamw/moreh_adamw_op.hpp"
 
 using namespace tt::constants;
 using namespace std;
@@ -30,62 +31,98 @@ inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
 
 }  // namespace
 
-void MorehAdamW::validate(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+void MorehAdamW::validate_with_output_tensors(
+        const std::vector<Tensor> &input_tensors,
+        const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+        const std::vector<std::optional<Tensor>> &output_tensors) const {
     TT_ASSERT(
         input_tensors.size() == 4 and optional_input_tensors.size() <= 1,
-        "moreh_adamw must have between 4 to 6 input tensors");
+        "moreh_adamw must have between 4 to 5 input tensors");
 
-    const auto& param = input_tensors.at(0);
+    const auto& param_in = input_tensors.at(0);
     const auto& grad = input_tensors.at(1);
-    const auto& exp_avg = input_tensors.at(2);
-    const auto& exp_avg_sq = input_tensors.at(3);
+    const auto& exp_avg_in = input_tensors.at(2);
+    const auto& exp_avg_sq_in = input_tensors.at(3);
 
-    const auto& max_exp_avg_sq = optional_input_tensors.at(0);
+    const auto& max_exp_avg_sq_in = optional_input_tensors.at(0);
 
-    check_tensor(param, "moreh_adamw");
+    check_tensor(param_in, "moreh_adamw");
     check_tensor(grad, "moreh_adamw");
-    check_tensor(exp_avg, "moreh_adamw");
-    check_tensor(exp_avg_sq, "moreh_adamw");
+    check_tensor(exp_avg_in, "moreh_adamw");
+    check_tensor(exp_avg_sq_in, "moreh_adamw");
 
-    if (max_exp_avg_sq.has_value()) {
-        check_tensor(max_exp_avg_sq.value(), "moreh_adamw");
+    if (max_exp_avg_sq_in.has_value()) {
+        check_tensor(max_exp_avg_sq_in.value(), "moreh_adamw");
+    }
+
+    const auto& param_out = output_tensors.at(0);
+    const auto& exp_avg_out = output_tensors.at(1);
+    const auto& exp_avg_sq_out = output_tensors.at(2);
+    const auto& max_exp_avg_sq_out = output_tensors.at(3);
+
+    if (param_out.has_value()) {
+        check_tensor(param_out.value(), "moreh_adamw");
+    }
+    if (exp_avg_out.has_value()) {
+        check_tensor(exp_avg_out.value(), "moreh_adamw");
+    }
+    if (exp_avg_sq_out.has_value()) {
+        check_tensor(exp_avg_sq_out.value(), "moreh_adamw");
+    }
+    if (max_exp_avg_sq_out.has_value()) {
+        check_tensor(max_exp_avg_sq_out.value(), "moreh_adamw");
     }
 }
 
 std::vector<Shape> MorehAdamW::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    // inplace
-    return {};
+    auto output_shape = input_tensors.at(0).get_legacy_shape();
+    return {output_shape, output_shape, output_shape, output_shape};
 }
 
-std::vector<Tensor> MorehAdamW::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    // inplace
-    return {};
-}
+std::vector<Tensor> MorehAdamW::create_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
 
-tt::stl::reflection::Attributes MorehAdamW::attributes() const {
-    return {
-        {"inplace", this->inplace},
-        {"output_mem_config", this->output_mem_config},
-    };
+    const auto& output_shapes = this->compute_output_shapes(input_tensors);
+    auto dtype = input_tensors.at(0).get_dtype();
+    Layout layout{Layout::TILE};
+    auto device = input_tensors.at(0).device();
+
+    std::vector<Tensor> result;
+
+    for (uint32_t idx = 0 ; idx < 4; idx++) {
+        if (output_tensors.at(idx).has_value()) {
+            result.push_back(output_tensors.at(idx).value());
+        } else {
+            result.push_back(create_device_tensor(output_shapes.at(idx), dtype, layout, device, this->output_mem_config));
+        }
+    }
+
+    return result;
 }
 
 operation::ProgramWithCallbacks MorehAdamW::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    const auto& param = input_tensors.at(0);
+    const auto& param_in = input_tensors.at(0);
     const auto& grad = input_tensors.at(1);
-    const auto& exp_avg = input_tensors.at(2);
-    const auto& exp_avg_sq = input_tensors.at(3);
-    const auto& max_exp_avg_sq = optional_input_tensors.at(0);
+    const auto& exp_avg_in = input_tensors.at(2);
+    const auto& exp_avg_sq_in = input_tensors.at(3);
+
+    const auto& max_exp_avg_sq_in = optional_input_tensors.at(0);
+
+    const auto& param_out = output_tensors.at(0);
+    const auto& exp_avg_out = output_tensors.at(1);
+    const auto& exp_avg_sq_out = output_tensors.at(2);
+
+    const auto& max_exp_avg_sq_out =
+        this->amsgrad ? std::make_optional<Tensor>(output_tensors.at(3)) : std::nullopt;
 
     return moreh_adamw_(
-        param,
+        param_in,
         grad,
-        exp_avg,
-        exp_avg_sq,
+        exp_avg_in,
+        exp_avg_sq_in,
         this->lr,
         this->beta1,
         this->beta2,
@@ -93,14 +130,21 @@ operation::ProgramWithCallbacks MorehAdamW::create_program(
         this->weight_decay,
         this->step,
         this->amsgrad,
-        max_exp_avg_sq);
+        max_exp_avg_sq_in,
+        param_out,
+        exp_avg_out,
+        exp_avg_sq_out,
+        max_exp_avg_sq_out,
+        this->core_range,
+        this->compute_kernel_config);
 }
 
 std::vector<std::optional<Tensor>> moreh_adamw(
-    const Tensor& param,
+    const Tensor& param_in,
     const Tensor& grad,
-    const Tensor& exp_avg,
-    const Tensor& exp_avg_sq,
+    const Tensor& exp_avg_in,
+    const Tensor& exp_avg_sq_in,
+
     float lr,
     float beta1,
     float beta2,
@@ -108,19 +152,36 @@ std::vector<std::optional<Tensor>> moreh_adamw(
     float weight_decay,
     uint32_t step,
     bool amsgrad,
-    const std::optional<std::reference_wrapper<const Tensor>> max_exp_avg_sq,
-    const MemoryConfig& mem_config) {
-    std::vector<Tensor> dummy_output_tensors = {
-        Tensor(operation::get_workers_for_op_output({param, grad, exp_avg, exp_avg_sq}, {max_exp_avg_sq}))};
+
+    const std::optional<const Tensor> max_exp_avg_sq_in,
+    const std::optional<const Tensor> param_out,
+    const std::optional<const Tensor> exp_avg_out,
+    const std::optional<const Tensor> exp_avg_sq_out,
+    const std::optional<const Tensor> max_exp_avg_sq_out,
+    const MemoryConfig& mem_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+
+    auto device = param_in.device();
+    auto grid_coord = device->compute_with_storage_grid_size();
+    const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
+
+    auto compute_kernel_config_val =
+        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+
+    std::vector<Tensor> output_tensors = {
+        Tensor(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
+        Tensor(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
+        Tensor(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
+        Tensor(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in}))
+        };
 
     operation::launch_op(
-        [lr, beta1, beta2, eps, weight_decay, step, amsgrad, mem_config](
+        [lr, beta1, beta2, eps, weight_decay, step, amsgrad, all_cores, mem_config, compute_kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(
                 MorehAdamW{
-                    .inplace = true,
                     .lr = lr,
                     .beta1 = beta1,
                     .beta2 = beta2,
@@ -128,24 +189,26 @@ std::vector<std::optional<Tensor>> moreh_adamw(
                     .weight_decay = weight_decay,
                     .step = step,
                     .amsgrad = amsgrad,
-                    .output_mem_config = mem_config},
+                    .core_range = all_cores,
+                    .output_mem_config = mem_config,
+                    .compute_kernel_config = compute_kernel_config_val},
                 input_tensors,
                 optional_input_tensors,
                 optional_output_tensors);
         },
-        {param, grad, exp_avg, exp_avg_sq},
-        dummy_output_tensors,
-        {max_exp_avg_sq});
+        {param_in, grad, exp_avg_in, exp_avg_sq_in},
+        output_tensors,
+        {max_exp_avg_sq_in},
+        {param_out, exp_avg_out, exp_avg_sq_out, max_exp_avg_sq_out});
 
-    std::vector<std::optional<Tensor>> outputs(5);
-    outputs[0] = param;
-    outputs[1] = grad;
-    outputs[2] = exp_avg;
-    outputs[3] = exp_avg_sq;
-    if (max_exp_avg_sq.has_value()) {
-        outputs[4] = max_exp_avg_sq.value();
+    std::vector<std::optional<Tensor>> optional_outputs(4);
+    optional_outputs[0] = output_tensors[0]; // param_out
+    optional_outputs[1] = output_tensors[1]; // exp_avg_out
+    optional_outputs[2] = output_tensors[2]; // exp_avg_sq_out
+    if (max_exp_avg_sq_out.has_value()) {
+        optional_outputs[3] = output_tensors[3]; // max_exp_avg_sq_out
     }
-    return outputs;
+    return optional_outputs;
 }
 
 }  // namespace primary

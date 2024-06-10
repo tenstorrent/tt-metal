@@ -566,10 +566,10 @@ void py_module(py::module& m_primary) {
     m_primary.def(
         "moreh_adamw",
         &moreh_adamw,
-        py::arg("param").noconvert(),
+        py::arg("param_in").noconvert(),
         py::arg("grad").noconvert(),
-        py::arg("exp_avg").noconvert(),
-        py::arg("exp_avg_sq").noconvert(),
+        py::arg("exp_avg_in").noconvert(),
+        py::arg("exp_avg_sq_in").noconvert(),
         py::arg("lr").noconvert() = 0.001f,
         py::arg("beta1").noconvert() = 0.9f,
         py::arg("beta2").noconvert() = 0.999f,
@@ -577,8 +577,13 @@ void py_module(py::module& m_primary) {
         py::arg("weight_decay").noconvert() = 0.01f,
         py::arg("step").noconvert(),
         py::arg("amsgrad").noconvert() = false,
-        py::arg("max_exp_avg_sq").noconvert() = std::nullopt,
+        py::arg("max_exp_avg_sq_in").noconvert() = std::nullopt,
+        py::arg("param_out").noconvert() = std::nullopt,
+        py::arg("exp_avg_out").noconvert() = std::nullopt,
+        py::arg("exp_avg_sq_out").noconvert() = std::nullopt,
+        py::arg("max_exp_avg_sq_out").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
         "Performs a moreh_adamw operation.
         )doc");
