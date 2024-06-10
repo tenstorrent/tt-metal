@@ -175,6 +175,27 @@ struct CQDispatchWritePackedMulticastSubCmd {
     uint32_t num_mcast_dests;
 } __attribute__((packed));
 
+struct CQDispatchWritePackedLargeSubCmd {
+    uint32_t noc_xy_addr;
+    uint32_t addr;
+    uint16_t length;          // multiples of L1 cache line alignment
+    uint16_t num_mcast_dests;
+} __attribute__((packed));
+
+// Current implementation limit is based on size of the l1_cache which stores the sub_cmds
+const uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS = 35;
+
+// More flexible/slower than WritePacked
+// Removes size constraints
+// Implicitly mcast
+struct CQDispatchWritePackedLargeCmd {
+    uint8_t pad1;
+    uint16_t count;           // number of sub-cmds
+    uint32_t pad2;
+    uint32_t pad3;
+    uint32_t pad4;
+} __attribute__((packed));
+
 struct CQDispatchWaitCmd {
     uint8_t barrier;          // if true, issue write barrier
     uint8_t notify_prefetch;  // if true, inc prefetch sem
@@ -200,6 +221,7 @@ struct CQDispatchCmd {
         CQDispatchWriteHostCmd write_linear_host;
         CQDispatchWritePagedCmd write_paged;
         CQDispatchWritePackedCmd write_packed;
+        CQDispatchWritePackedLargeCmd write_packed_large;
         CQDispatchWaitCmd wait;
         CQGenericDebugCmd debug;
         CQDispatchDelayCmd delay;
