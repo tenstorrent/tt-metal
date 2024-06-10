@@ -94,6 +94,7 @@ void kernel_main() {
     }
     const uint64_t in0_multicast_data_noc = get_noc_multicast_addr(
         in0_mcast_dest_noc_start_x, in0_mcast_dest_noc_start_y, in0_mcast_dest_noc_end_x, in0_mcast_dest_noc_end_y, 0);
+    const bool single_core_grid = (in0_mcast_dest_noc_end_x == in0_mcast_dest_noc_start_x) && (in0_mcast_dest_noc_end_y == in0_mcast_dest_noc_start_y);
 
     uint64_t in0_mcast_receiver_semaphore_noc_addr =
         in0_multicast_data_noc | (uint64_t)in0_mcast_receiver_semaphore_addr;
@@ -164,13 +165,17 @@ void kernel_main() {
                     // Mcast from/to same CB
                     if constexpr (extract_shard_sub_blocks) {
                         // multicast to every core in receiver grid EXCLUDING myself
-                        noc_async_write_multicast(
-                            local_read_addr,
-                            in0_multicast_data_addr,
-                            in0_block_size_bytes,
-                            in0_mcast_num_cores - 1,
-                            false,
-                            false);
+                        // Skip if there are no other cores since this core already has the data.
+                        // Note: noc_async_write_multicast would hang if called with 0 cores.
+                        if (in0_mcast_num_cores > 1) {
+                            noc_async_write_multicast(
+                                    local_read_addr,
+                                    in0_multicast_data_addr,
+                                    in0_block_size_bytes,
+                                    in0_mcast_num_cores - 1,
+                                    false,
+                                    false);
+                        }
                     }
                     // Mcast from different CB to another CB
                     else {
@@ -185,12 +190,19 @@ void kernel_main() {
                     }
 
                     // We should also multicast the flag to destinations
-                    noc_semaphore_set_multicast_loopback_src(
-                        in0_mcast_sender_semaphore_valid_addr,
-                        in0_mcast_receiver_semaphore_noc_addr,
-                        in0_mcast_num_cores,
-                        false,
-                        false);
+                    if (single_core_grid) {
+                        // All work is done on one core (the current one).
+                        // noc_semaphore_set_multicast_loopback_src is a no-op in this case.
+                        // Data needs to be written directly in the core.
+                        in0_mcast_receiver_semaphore_addr_ptr[0] = in0_mcast_sender_semaphore_valid_addr_ptr[0];
+                    } else {
+                        noc_semaphore_set_multicast_loopback_src(
+                                in0_mcast_sender_semaphore_valid_addr,
+                                in0_mcast_receiver_semaphore_noc_addr,
+                                in0_mcast_num_cores,
+                                false,
+                                false);
+                    }
                 } else {
                     // If we are not part of receiver grid, always do a regular noc_async_write_multicast to all cores
                     // in receiver grid
