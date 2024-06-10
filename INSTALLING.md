@@ -26,12 +26,11 @@ Note the current compatability matrix:
 
 ```sh
 sudo apt update
-sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.9 libyaml-cpp-dev=0.6.2-4ubuntu1 libhwloc-dev graphviz
-
-# Install Clang-17 for C++20 support!!
+sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.9 libhwloc-dev graphviz
 wget https://apt.llvm.org/llvm.sh
 chmod u+x llvm.sh
 sudo ./llvm.sh 17
+sudo apt install libc++-17-dev libc++abi-17-dev
 ```
 
 ---

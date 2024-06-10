@@ -414,8 +414,7 @@ const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tenso
     const auto& input_tensor = input_tensors.at(0);
     const auto& input_shape = input_tensor.legacy_shape();
 
-    operation::Hash hash = tt::stl::hash::hash_objects_with_default_seed(
-        typeid(*this).hash_code(),
+    operation::Hash hash = operation::hash_operation<EltwiseUnary>(
         compute_volume(input_shape),
         input_tensor.dtype(),
         std::get<DeviceStorage>(input_tensor.storage()).memory_config(),

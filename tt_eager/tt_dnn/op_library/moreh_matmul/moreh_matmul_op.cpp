@@ -276,8 +276,7 @@ const operation::Hash MorehMatmul::compute_program_hash(
     const auto& other = input_tensors.at(1);
     const auto& bias = optional_input_tensors.at(0);
 
-    operation::Hash hash = tt::stl::hash::hash_objects_with_default_seed(
-        typeid(*this).hash_code(), input, other, bias, this->transpose_input, this->transpose_other);
+    operation::Hash hash = operation::hash_operation<MorehMatmul>(input, other, bias, this->transpose_input, this->transpose_other);
     return hash;
 }
 

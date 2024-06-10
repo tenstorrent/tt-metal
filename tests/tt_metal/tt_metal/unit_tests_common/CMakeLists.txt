@@ -27,7 +27,7 @@ set(UNIT_TESTS_COMMON_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_waypoint.cpp
 )
 add_library(unit_tests_common_o OBJECT ${UNIT_TESTS_COMMON_SRC})
-target_link_libraries(unit_tests_common_o PUBLIC compiler_flags metal_header_directories)
+target_link_libraries(unit_tests_common_o PUBLIC compiler_flags metal_header_directories umd_device gtest gtest_main)
 target_include_directories(unit_tests_common_o PUBLIC
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}
@@ -36,5 +36,4 @@ target_include_directories(unit_tests_common_o PUBLIC
     ${PROJECT_SOURCE_DIR}/tt_metal/common
     ${PROJECT_SOURCE_DIR}/tests
     ${CMAKE_CURRENT_SOURCE_DIR}/common
-    ${gtest_SOURCE_DIR}/include
 )

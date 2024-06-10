@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <climits>
 #include <cstdint>
+#include <cstring>
 
 // Given a source array of 32-bit elements that contains a densely-packed array of elements of another size,
 // extract the packed elements and store each element in the destination array.
@@ -29,7 +31,7 @@ void extract_bit_array(uint32_t *src_array, int src_element_bits, uint32_t *dest
             int bits_to_take = bits_to_process < bits_available ? bits_to_process : bits_available; // Bits to take from the current src_array element
 
             // Extract the bits
-            uint32_t mask = (1 << bits_to_take) - 1; // Mask to extract_bit_array the bits
+            uint32_t mask = (1 << bits_to_take) - 1u; // Mask to extract_bit_array the bits
             current_value |= ((src_array[src_index] >> bits_processed) & mask) << (src_element_bits - bits_to_process);
 
             bits_processed += bits_to_take;
@@ -52,7 +54,9 @@ void extract_bit_array(uint32_t *src_array, int src_element_bits, uint32_t *dest
 void pack_bit_array(uint32_t *src_array, int src_element_bits, uint32_t *dest_array, int num_src_elements) {
     int dest_index = 0;           // Index for the current destination array element being filled
     int bits_filled = 0;          // Tracks the number of bits filled in the current dest_array element
-    dest_array[dest_index] = 0;   // Initialize the first destination element
+
+    auto dest_bytes = num_src_elements * src_element_bits / CHAR_BIT;
+    memset(dest_array, 0, dest_bytes);
 
     for (int i = 0; i < num_src_elements; i++) {
         uint32_t current_value = src_array[i]; // Current source element to pack
@@ -71,7 +75,6 @@ void pack_bit_array(uint32_t *src_array, int src_element_bits, uint32_t *dest_ar
 
             if (bits_filled == 32) { // If the current dest_array element is full, move to the next
                 dest_index++;
-                dest_array[dest_index] = 0; // Initialize the next destination element
                 bits_filled = 0;            // Reset bits filled counter
             }
         }

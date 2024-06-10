@@ -1,0 +1,80 @@
+
+set(ENV{CPM_SOURCE_CACHE} "${PROJECT_SOURCE_DIR}/.cpmcache")
+
+############################################################################################################################
+# Boost
+############################################################################################################################
+
+include(${PROJECT_SOURCE_DIR}/cmake/CPM.cmake)
+set(BoostPackages
+    Align
+    Config
+    Container_Hash
+    Core
+    Describe
+    Detail
+    Format
+    Interprocess
+    Intrusive
+    Smart_Ptr
+    Assert
+    Integer
+    Type_Traits
+    Optional
+    Static_Assert
+    Throw_Exception
+    Move
+    Utility
+    Preprocessor
+    Date_Time
+    Numeric_Conversion
+    Mpl
+    Mp11
+)
+
+foreach(package ${BoostPackages})
+    CPMAddPackage(
+        NAME Boost${package}
+        GITHUB_REPOSITORY boostorg/${package}
+        GIT_TAG boost-1.85.0
+        DOWNLOAD_ONLY YES
+    )
+endforeach()
+
+############################################################################################################################
+# yaml-cpp
+############################################################################################################################
+
+CPMAddPackage(
+  NAME yaml-cpp
+  GITHUB_REPOSITORY jbeder/yaml-cpp
+  GIT_TAG 0.8.0
+  OPTIONS
+    "YAML_CPP_BUILD_TESTS OFF"
+    "YAML_CPP_BUILD_TOOLS OFF"
+)
+
+if (yaml-cpp_ADDED)
+    target_compile_options(yaml-cpp PUBLIC -stdlib=libc++)
+    target_link_libraries(yaml-cpp PUBLIC c++ c++abi)
+    set_target_properties(yaml-cpp PROPERTIES DEBUG_POSTFIX "")
+endif()
+
+############################################################################################################################
+# googletest
+############################################################################################################################
+
+CPMAddPackage(
+  NAME googletest
+  GITHUB_REPOSITORY google/googletest
+  GIT_TAG v1.13.0
+  VERSION 1.13.0
+  OPTIONS "INSTALL_GTEST OFF"
+)
+
+if (googletest_ADDED)
+    target_compile_options(gtest PRIVATE -stdlib=libc++ -Wno-implicit-int-float-conversion)
+    target_compile_options(gtest_main PRIVATE -stdlib=libc++)
+    target_link_libraries(gtest PRIVATE c++ c++abi)
+    target_link_libraries(gtest_main PRIVATE c++ c++abi)
+endif()

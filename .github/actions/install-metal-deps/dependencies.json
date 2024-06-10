@@ -3,7 +3,6 @@
     "software-properties-common=0.99.9.12",
     "build-essential=12.8ubuntu1.1",
     "python3.8-venv=3.8.10-0ubuntu1~20.04.9",
-    "libyaml-cpp-dev=0.6.2-4ubuntu1",
     "libhwloc-dev",
     "graphviz",
     "patchelf"
@@ -12,7 +11,6 @@
     "software-properties-common",
     "build-essential",
     "python3.10-venv",
-    "libyaml-cpp-dev",
     "libhwloc-dev",
     "graphviz",
     "patchelf"

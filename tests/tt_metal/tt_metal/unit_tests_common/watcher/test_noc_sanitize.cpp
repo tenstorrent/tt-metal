@@ -181,10 +181,10 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
     log_info(LogTest, "Expected error: {}", expected);
     std::string exception = "";
     do {
-        exception = watcher_server_get_exception_message();
+        exception = get_watcher_exception_message();
     } while (exception == "");
     log_info(LogTest, "Reported error: {}", exception);
-    EXPECT_TRUE(watcher_server_get_exception_message() == expected);
+    EXPECT_TRUE(get_watcher_exception_message() == expected);
 }
 
 static void RunTestEth(WatcherFixture* fixture, Device* device) {

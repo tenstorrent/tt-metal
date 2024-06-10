@@ -304,8 +304,7 @@ const operation::Hash Binary::compute_program_hash(const std::vector<Tensor>& in
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     auto program_type = get_program_type(*this, input_tensors);
-    operation::Hash hash = tt::stl::hash::hash_objects_with_default_seed(
-        typeid(*this).hash_code(),
+    operation::Hash hash = operation::hash_operation<Binary>(
         this->program_config,
         program_type,
         input_tensor_a.dtype(),

@@ -30,3 +30,10 @@ runs:
         echo $DEPENDENCIES
         sudo apt update
         sudo apt install -y $DEPENDENCIES
+    - name: Install Clang-17
+      shell: bash
+      run: |
+        wget https://apt.llvm.org/llvm.sh
+        chmod u+x llvm.sh
+        sudo ./llvm.sh 17
+        sudo apt install -y libc++-17-dev libc++abi-17-dev

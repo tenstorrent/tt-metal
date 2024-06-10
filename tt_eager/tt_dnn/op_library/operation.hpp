@@ -23,7 +23,7 @@ using Hash = tt::stl::hash::hash_t;
 
 template <typename OperationType, typename... Types>
 static Hash hash_operation(const Types&... objects) {
-    return stl::hash::hash_objects_with_default_seed(typeid(OperationType).hash_code(), objects...);
+    return stl::hash::hash_objects_with_default_seed(tt::stl::hash::type_hash<OperationType>, objects...);
 }
 
 using OverrideAddressesCallback =

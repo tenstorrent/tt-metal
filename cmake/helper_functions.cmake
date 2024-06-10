@@ -34,7 +34,7 @@ function(CREATE_PGM_EXAMPLES_EXE TESTLIST SUBDIR)
         get_filename_component(TEST_TARGET ${TEST} NAME)
 
         add_executable(${TEST_TARGET} ${TEST})
-        target_link_libraries(${TEST_TARGET} PUBLIC tt_metal stdc++fs yaml-cpp m pthread)
+        target_link_libraries(${TEST_TARGET} PUBLIC tt_metal yaml-cpp::yaml-cpp m pthread)
         target_include_directories(${TEST_TARGET} PRIVATE
             ${UMD_HOME}
             ${PROJECT_SOURCE_DIR}

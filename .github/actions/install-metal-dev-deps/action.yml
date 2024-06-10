@@ -37,9 +37,3 @@ runs:
         tar -xvf doxygen-1.9.6.linux.bin.tar.gz
         cd doxygen-1.9.6
         sudo make install
-    - name: Install Clang-17
-      shell: bash
-      run: |
-        wget https://apt.llvm.org/llvm.sh
-        chmod u+x llvm.sh
-        sudo ./llvm.sh 17
