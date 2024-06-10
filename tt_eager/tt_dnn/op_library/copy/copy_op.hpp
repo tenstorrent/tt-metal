@@ -26,9 +26,9 @@ struct Copy {
     const MemoryConfig output_mem_config;
     const DataType output_dtype;
 
-    void validate(const std::vector<Tensor> &input_tensors) const;
+    void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     CopyOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
@@ -43,7 +43,10 @@ Tensor clone(const Tensor& input, const MemoryConfig& output_mem_config = operat
 Tensor typecast(const Tensor& input_tensor, const DataType& dtype, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //unary assign
-Tensor assign(const Tensor& input, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype = std::nullopt);
+Tensor assign(const Tensor& input, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype = std::nullopt, std::optional<Tensor> output_tensor = std::nullopt);
+
+//unary assign with queue_id
+Tensor assign(uint8_t queue_id, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype = std::nullopt, std::optional<Tensor> output_tensor = std::nullopt);
 
 // binary assign
 Tensor assign(const Tensor& input_a, const Tensor& input_b);

@@ -990,6 +990,27 @@ def eltwise_logical_xori(
 
 
 @setup_host_and_device
+def eltwise_assign_unary(
+    x,
+    y=None,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    if y != None:
+        t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+        ttl.tensor.assign(t0, output_tensor=t1)
+        return tt2torch_tensor(t1)
+
+    t2 = ttl.tensor.assign(t0)
+    return tt2torch_tensor(t2)
+
+
+@setup_host_and_device
 def eltwise_assign_binary(
     x,
     y,
@@ -2487,7 +2508,6 @@ eltwise_lez = make_unary_op(ttl.tensor.lez)
 eltwise_gez = make_unary_op(ttl.tensor.gez)
 eltwise_nez = make_unary_op(ttl.tensor.nez)
 eltwise_eqz = make_unary_op(ttl.tensor.eqz)
-eltwise_assign_unary = make_unary_op(ttl.tensor.assign)
 zeros_like = make_unary_op(ttl.tensor.zeros_like)
 ones_like = make_unary_op(ttl.tensor.ones_like)
 # eltwise_logical_not = make_unary_op(ttl.tensor.logical_not)

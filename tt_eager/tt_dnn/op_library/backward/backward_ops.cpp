@@ -279,17 +279,55 @@ std::vector<Tensor> addcmul_bw(
         grad, input, tensor1, tensor2, value, output_mem_config);
 }
 
-std::vector<Tensor> _unary_assign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+std::vector<std::optional<Tensor>> _unary_assign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> result;
+
+    if (are_required_outputs.at(0)) {
+        if(input_grad.has_value()){
+            assign(grad, input_grad.value());
+        } else {
+            input_grad = grad;
+        }
+        result.push_back(input_grad.value());
+    } else {
+        result.push_back(std::nullopt);
+    }
+
+    return std::move(result);
+}
+std::vector<std::optional<Tensor>> unary_assign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    return operation::decorate_as_composite(__func__, _unary_assign_bw)(grad, input, output_mem_config, are_required_outputs, input_grad);
+}
+
+std::vector<std::optional<Tensor>> _unary_assign_bw_overload(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> result;
+
+    if (are_required_outputs.at(0)) {
+        if(input_grad.has_value()){
+            assign(queue_id, grad, input_grad.value());
+        } else {
+            input_grad = grad;
+        }
+        result.push_back(input_grad.value());
+    } else {
+        result.push_back(std::nullopt);
+    }
+
+    return std::move(result);
+}
+std::vector<std::optional<Tensor>> unary_assign_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    return operation::decorate_as_composite(__func__, _unary_assign_bw_overload)(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
+}
+
+std::vector<Tensor> _binary_assign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     return grad_tensor;
 }
-std::vector<Tensor> unary_assign_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _unary_assign_bw)(grad, input, output_mem_config);
-}
+
 std::vector<Tensor> binary_assign_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _unary_assign_bw)(grad, input, output_mem_config);
+    return operation::decorate_as_composite(__func__, _binary_assign_bw)(grad, input, output_mem_config);
 }
 
 std::vector<Tensor> _sqrt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
