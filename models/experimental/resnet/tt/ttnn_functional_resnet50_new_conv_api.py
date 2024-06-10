@@ -208,6 +208,7 @@ class resnet50Bottleneck:
             and self.conv1_output_channels == 128
         ):
             # TODO: fix the need to do the reshard here
+            ## reshard to 49 cores
             ## TensorMemoryLayout::HEIGHT_SHARDED;(grid={[(x=0;y=0) - (x=7;y=5)]; [(x=0;y=6) - (x=0;y=6)]}; shape={1280; 256}; orientation=ShardOrientation::ROW_MAJOR; halo=false
             mem_config = ttnn.create_sharded_memory_config_(
                 ttnn.Shape([batch_size * input_height * input_width, 256]),
@@ -266,13 +267,24 @@ class resnet50Bottleneck:
             not is_wormhole_b0() and input_height == 56 and self.conv1_input_channels == 256
         ):
             run_downsample_before_conv2 = True
+        if (
+            is_wormhole_b0()
+            and batch_size == 20
+            and input_height == 56
+            and self.conv1_input_channels == 256
+            and self.conv1_output_channels == 128
+        ):
+            run_downsample_before_conv2 = True
 
         if run_downsample_before_conv2:
             ttnn.dump_device_memory_state(device, "before_reallocate_")
             if (
                 input_height == 56
                 and self.conv1_input_channels == 256
-                and self.conv1_output_channels != 128
+                and (
+                    (self.conv1_output_channels != 128 and is_grayskull())
+                    or (self.conv1_output_channels == 128 and is_wormhole_b0())
+                )
                 and self.downsample
             ):
                 x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
