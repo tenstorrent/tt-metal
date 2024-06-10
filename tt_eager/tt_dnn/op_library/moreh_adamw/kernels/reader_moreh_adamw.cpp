@@ -2,35 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
+
 #include <stdint.h>
 
 #include "dataflow_api.h"
 
-void fill_cb_with_value(uint32_t cb_id, uint32_t value) {
-    cb_reserve_back(cb_id, 1);
-    auto ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_id));
-    for (int j = 0; j < 1024; j++) {
-        ptr[j] = uint16_t(value >> 16);
-    }
-    cb_push_back(cb_id, 1);
-}
-
 void kernel_main() {
-    const auto param_addr = get_arg_val<uint32_t>(0);
-    const auto grad_addr = get_arg_val<uint32_t>(1);
-    const auto exp_avg_addr = get_arg_val<uint32_t>(2);
-    const auto exp_avg_sq_addr = get_arg_val<uint32_t>(3);
+    uint32_t i = 0;
+    const auto param_addr = get_arg_val<uint32_t>(i++);
+    const auto grad_addr = get_arg_val<uint32_t>(i++);
+    const auto exp_avg_addr = get_arg_val<uint32_t>(i++);
+    const auto exp_avg_sq_addr = get_arg_val<uint32_t>(i++);
+    const auto max_exp_avg_sq_addr = get_arg_val<uint32_t>(i++);
 
-    const auto lr = get_arg_val<uint32_t>(5);
-    const auto beta1 = get_arg_val<uint32_t>(6);
-    const auto beta2 = get_arg_val<uint32_t>(7);
-    const auto eps = get_arg_val<uint32_t>(8);
-    const auto weight_decay = get_arg_val<uint32_t>(9);
+    const auto lr = get_arg_val<uint32_t>(i++);
+    const auto beta1 = get_arg_val<uint32_t>(i++);
+    const auto beta2 = get_arg_val<uint32_t>(i++);
+    const auto eps = get_arg_val<uint32_t>(i++);
+    const auto weight_decay = get_arg_val<uint32_t>(i++);
 
-    const auto step = get_arg_val<uint32_t>(10);
-    const auto amsgrad = get_arg_val<uint32_t>(11) == 1;
-    const auto num_tiles_per_core = get_arg_val<uint32_t>(12);
-    const auto start_id = get_arg_val<uint32_t>(13);
+    const auto step = get_arg_val<uint32_t>(i++);
+    const auto amsgrad = get_arg_val<uint32_t>(i++) == 1;
+    const auto num_tiles_per_core = get_arg_val<uint32_t>(i++);
+    const auto start_id = get_arg_val<uint32_t>(i++);
 
     constexpr uint32_t cb_id_param = tt::CB::c_in0;
     constexpr uint32_t cb_id_grad = tt::CB::c_in1;
@@ -75,7 +70,6 @@ void kernel_main() {
 
 #ifdef AMSGRAD
     constexpr uint32_t cb_id_max_exp_avg_sq = tt::CB::c_in4;
-    const auto max_exp_avg_sq_addr = get_arg_val<uint32_t>(4);
     const uint32_t max_exp_avg_sq_tile_bytes = get_tile_size(cb_id_max_exp_avg_sq);
     const auto max_exp_avg_sq_data_format = get_dataformat(cb_id_max_exp_avg_sq);
     const InterleavedAddrGenFast<max_exp_avg_sq_is_dram> max_exp_avg_sq_addrg = {
