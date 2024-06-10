@@ -11,6 +11,15 @@ Inputs by default are provided from `input_data.json`. If you wish to change the
 
 ## How to Run
 
+> [!NOTE]
+>
+> You must set the `WH_ARCH_YAML` environment variable to be able to use the entire
+> Wormhole Tensix grid.
+>
+> ```
+> export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+> ```
+
 To run the demo, make sure to build the project, activate the environment, and set the appropriate environment variables.
 For more information, refer [installation and build guide](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md).
 
