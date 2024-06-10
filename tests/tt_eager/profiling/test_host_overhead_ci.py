@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 from tests.tt_eager.profiling.profile_host_overhead_with_tracy import profile_host_overhead
 from loguru import logger
 import csv
