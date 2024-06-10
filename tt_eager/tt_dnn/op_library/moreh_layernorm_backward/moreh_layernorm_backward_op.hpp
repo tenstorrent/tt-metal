@@ -65,7 +65,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
     const Tensor &rstd,
     uint32_t normalized_dims,
     const Tensor &input_grad,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma = std::nullopt);
+    const std::optional<const Tensor> gamma = std::nullopt);
 
 operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const Tensor &output_grad,
@@ -73,8 +73,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const Tensor &mean,
     const Tensor &rstd,
     uint32_t normalized_dims,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma_grad = std::nullopt,
-    const std::optional<std::reference_wrapper<const Tensor>> beta_grad = std::nullopt);
+    const std::optional<const Tensor> gamma_grad = std::nullopt,
+    const std::optional<const Tensor> beta_grad = std::nullopt);
 
 Tensor moreh_layernorm_backward_input_grad(
     const Tensor &output_grad,
@@ -83,7 +83,7 @@ Tensor moreh_layernorm_backward_input_grad(
     const Tensor &rstd,
     uint32_t normalized_dims,
     const Tensor &input_grad,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma = std::nullopt,
+    const std::optional<const Tensor> gamma = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
@@ -92,8 +92,8 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
     const Tensor &mean,
     const Tensor &rstd,
     uint32_t normalized_dims,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma_grad = std::nullopt,
-    const std::optional<std::reference_wrapper<const Tensor>> beta_grad = std::nullopt,
+    const std::optional<const Tensor> gamma_grad = std::nullopt,
+    const std::optional<const Tensor> beta_grad = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<std::optional<Tensor>> moreh_layernorm_backward(
@@ -102,10 +102,10 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward(
     const Tensor &mean,
     const Tensor &rstd,
     uint32_t normalized_dims,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma = std::nullopt,
-    const std::optional<std::reference_wrapper<const Tensor>> input_grad = std::nullopt,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma_grad = std::nullopt,
-    const std::optional<std::reference_wrapper<const Tensor>> beta_grad = std::nullopt,
+    const std::optional<const Tensor> gamma = std::nullopt,
+    const std::optional<const Tensor> input_grad = std::nullopt,
+    const std::optional<const Tensor> gamma_grad = std::nullopt,
+    const std::optional<const Tensor> beta_grad = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary

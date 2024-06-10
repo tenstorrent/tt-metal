@@ -29,8 +29,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t normalized_dims,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma_grad,
-    const std::optional<std::reference_wrapper<const Tensor>> beta_grad) {
+    const std::optional<const Tensor> gamma_grad,
+    const std::optional<const Tensor> beta_grad) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -228,8 +228,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const auto mean_addr = mean.buffer()->address();
     const auto rstd_addr = rstd.buffer()->address();
 
-    const auto gamma_grad_addr = gamma_grad_has_value ? gamma_grad->get().buffer()->address() : 0;
-    const auto beta_grad_addr = beta_grad_has_value ? beta_grad->get().buffer()->address() : 0;
+    const auto gamma_grad_addr = gamma_grad_has_value ? gamma_grad.value().buffer()->address() : 0;
+    const auto beta_grad_addr = beta_grad_has_value ? beta_grad.value().buffer()->address() : 0;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
