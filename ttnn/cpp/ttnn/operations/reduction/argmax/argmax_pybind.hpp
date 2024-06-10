@@ -8,35 +8,12 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/reduction.hpp"
 
+#include "argmax.hpp"
+
+namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
-
-namespace ttnn {
-namespace operations {
-namespace reduction {
-
-namespace detail {
-
-template <typename reduction_operation_t>
-void bind_reduction_operation(py::module& module, const reduction_operation_t& operation) {
-    auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, dim: Optional[Union[int, Tuple[int]]] = None, keepdim: bool = True, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor)doc",
-        operation.name());
-
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_arguments_t{
-            py::arg("input_tensor"),
-            py::arg("dim") = std::nullopt,
-            py::arg("keepdim") = true,
-            py::arg("memory_config") = std::nullopt});
-}
-
-using argmax_operation_t = decltype(ttnn::argmax);
-void bind_reduction_argmax_operation(py::module& module, const argmax_operation_t& operation) {
+void bind_reduction_argmax_operation(py::module& module) {
     auto doc =
         R"doc(argmax(input_tensor: ttnn.Tensor, *, dim: Optional[int] = None, memory_config: MemoryConfig = std::nullopt, output_tensor : Optional[ttnn.Tensor] = std::nullopt, queue_id : [int] = 0) -> ttnn.Tensor
 
@@ -63,12 +40,13 @@ void bind_reduction_argmax_operation(py::module& module, const argmax_operation_
                 * :attr:`queue_id` (Optional[uint8]): command queue id
         )doc";
 
+    using OperationType = decltype(ttnn::argmax);
     bind_registered_operation(
         module,
-        operation,
+        ttnn::argmax,
         doc,
         ttnn::pybind_overload_t{
-            [] (const argmax_operation_t& self,
+            [] (const OperationType& self,
                 const ttnn::Tensor& input_tensor,
                 const std::optional<int> dim,
                 const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -84,21 +62,4 @@ void bind_reduction_argmax_operation(py::module& module, const argmax_operation_
                 py::arg("queue_id") = 0});
 }
 
-}  // namespace detail
-
-void py_module(py::module& module) {
-    // Generic reductions
-    detail::bind_reduction_operation(module, ttnn::sum);
-    detail::bind_reduction_operation(module, ttnn::mean);
-    detail::bind_reduction_operation(module, ttnn::max);
-    detail::bind_reduction_operation(module, ttnn::min);
-    detail::bind_reduction_operation(module, ttnn::std);
-    detail::bind_reduction_operation(module, ttnn::var);
-
-    // Special reductions
-    detail::bind_reduction_argmax_operation(module, ttnn::argmax);
-}
-
-}  // namespace reduction
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::reduction::detail

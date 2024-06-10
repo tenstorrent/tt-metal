@@ -9,18 +9,9 @@
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 
-namespace ttnn {
-
-namespace operations {
-
-namespace reduction {
+namespace ttnn::operations::reduction {
 
 constexpr uint8_t DefaultQueueId = 0;
-
-namespace detail {
-operation::ProgramWithCallbacks argmax_multi_core(
-    const Tensor& input, const Tensor& output, const std::optional<int> dim);
-}  // namespace detail
 
 struct ArgMax {
     const DataType output_dtype;
@@ -39,8 +30,4 @@ struct ArgMax {
 };
 
 
-}  // namespace reduction
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::reduction
