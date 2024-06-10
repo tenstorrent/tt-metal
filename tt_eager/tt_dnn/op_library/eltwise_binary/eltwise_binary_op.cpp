@@ -280,8 +280,7 @@ const operation::Hash EltwiseBinary::compute_program_hash(const std::vector<Tens
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
-    operation::Hash hash = tt::stl::hash::hash_objects_with_default_seed(
-        typeid(*this).hash_code(),
+    operation::Hash hash = operation::hash_operation<EltwiseBinary>(
         this->op_type,
         parallelization_strategy,
         input_tensor_a.dtype(),

@@ -4,7 +4,7 @@ set(QUEUE_SRCS
 )
 
 add_library(queue OBJECT ${QUEUE_SRCS})
-target_link_libraries(queue PUBLIC metal_header_directories compiler_flags)
+target_link_libraries(queue PUBLIC metal_header_directories compiler_flags umd_device)
 target_include_directories(queue PUBLIC
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}

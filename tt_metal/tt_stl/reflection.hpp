@@ -39,6 +39,11 @@ constexpr bool DEBUG_HASH_OBJECT_FUNCTION = false;
 using hash_t = std::uint64_t;
 constexpr hash_t DEFAULT_SEED = 1234;
 
+// stuff this in a header somewhere
+inline int type_hash_counter = 0;
+template <typename T>
+inline const int type_hash = type_hash_counter++;
+
 namespace detail {
 
 template <typename T, std::size_t N>
@@ -356,7 +361,7 @@ template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::vector<T>& vector) {
     os << "{";
     for (auto index = 0; index < vector.size(); index++) {
-        const auto& element = vector[index];
+        const T& element = vector[index];
         os << element;
         if (index != vector.size() - 1) {
             os << ", ";
