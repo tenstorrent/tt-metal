@@ -50,10 +50,10 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     uint32_t normalized_dims,
     float eps,
     Tensor& output,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma,
-    const std::optional<std::reference_wrapper<const Tensor>> beta,
-    const std::optional<std::reference_wrapper<const Tensor>> mean,
-    const std::optional<std::reference_wrapper<const Tensor>> rstd) {
+    const std::optional<const Tensor> gamma,
+    const std::optional<const Tensor> beta,
+    const std::optional<const Tensor> mean,
+    const std::optional<const Tensor> rstd) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -334,10 +334,10 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const auto input_addr = input.buffer()->address();
     const auto output_addr = output.buffer()->address();
 
-    const auto gamma_addr = gamma_has_value ? gamma->get().buffer()->address() : 0;
-    const auto beta_addr = beta_has_value ? beta->get().buffer()->address() : 0;
-    const auto mean_addr = mean_has_value ? mean->get().buffer()->address() : 0;
-    const auto rstd_addr = rstd_has_value ? rstd->get().buffer()->address() : 0;
+    const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0;
+    const auto beta_addr = beta_has_value ? beta.value().buffer()->address() : 0;
+    const auto mean_addr = mean_has_value ? mean.value().buffer()->address() : 0;
+    const auto rstd_addr = rstd_has_value ? rstd.value().buffer()->address() : 0;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -496,10 +496,10 @@ Tensor moreh_layernorm(
     const Tensor& input,
     uint32_t normalized_dims,
     float eps,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma,
-    const std::optional<std::reference_wrapper<const Tensor>> beta,
-    const std::optional<std::reference_wrapper<const Tensor>> mean,
-    const std::optional<std::reference_wrapper<const Tensor>> rstd,
+    const std::optional<const Tensor> gamma,
+    const std::optional<const Tensor> beta,
+    const std::optional<const Tensor> mean,
+    const std::optional<const Tensor> rstd,
     const MemoryConfig& output_mem_config) {
     std::vector<Tensor> output_tensors = {
         Tensor(operation::get_workers_for_op_output({input}, {gamma, beta, mean, rstd}))};
@@ -533,10 +533,10 @@ Tensor moreh_layernorm(
     const Tensor& input,
     uint32_t normalized_dims,
     float eps,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma,
-    const std::optional<std::reference_wrapper<const Tensor>> beta,
-    const std::optional<std::reference_wrapper<const Tensor>> mean,
-    const std::optional<std::reference_wrapper<const Tensor>> rstd,
+    const std::optional<const Tensor> gamma,
+    const std::optional<const Tensor> beta,
+    const std::optional<const Tensor> mean,
+    const std::optional<const Tensor> rstd,
     const MemoryConfig& output_mem_config) {
     std::vector<Tensor> output_tensors = {
         Tensor(operation::get_workers_for_op_output({input}, {gamma, beta, mean, rstd}))};

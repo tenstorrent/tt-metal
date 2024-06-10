@@ -30,7 +30,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
     const Tensor& rstd,
     uint32_t normalized_dims,
     const tt_metal::Tensor& input_grad,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma) {
+    const std::optional<const Tensor> gamma) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -264,7 +264,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
     const auto mean_addr = mean.buffer()->address();
     const auto rstd_addr = rstd.buffer()->address();
 
-    const auto gamma_addr = gamma_has_value ? gamma->get().buffer()->address() : 0;
+    const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0;
 
     const auto input_grad_addr = input_grad.buffer()->address();
 

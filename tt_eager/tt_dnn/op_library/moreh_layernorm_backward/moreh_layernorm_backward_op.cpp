@@ -154,7 +154,7 @@ Tensor moreh_layernorm_backward_input_grad(
     const Tensor& rstd,
     uint32_t normalized_dims,
     const tt_metal::Tensor& input_grad,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma,
+    const std::optional<const Tensor> gamma,
     const MemoryConfig& output_mem_config) {
     std::vector<Tensor> dummy_output_tensors = {
         Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd, input_grad}, {gamma}))};
@@ -185,8 +185,8 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t normalized_dims,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma_grad,
-    const std::optional<std::reference_wrapper<const Tensor>> beta_grad,
+    const std::optional<const Tensor> gamma_grad,
+    const std::optional<const Tensor> beta_grad,
     const MemoryConfig& output_mem_config) {
     std::vector<std::optional<Tensor>> outputs(2);
     if (!gamma_grad.has_value() && !beta_grad.has_value()) {
@@ -228,10 +228,10 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward(
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t normalized_dims,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma,
-    const std::optional<std::reference_wrapper<const Tensor>> input_grad,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma_grad,
-    const std::optional<std::reference_wrapper<const Tensor>> beta_grad,
+    const std::optional<const Tensor> gamma,
+    const std::optional<const Tensor> input_grad,
+    const std::optional<const Tensor> gamma_grad,
+    const std::optional<const Tensor> beta_grad,
     const MemoryConfig& output_mem_config) {
     std::vector<std::optional<Tensor>> outputs;
     outputs.reserve(3);
@@ -239,7 +239,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward(
     // input_grad
     if (input_grad.has_value()) {
         outputs.push_back(moreh_layernorm_backward_input_grad(
-            output_grad, input, mean, rstd, normalized_dims, input_grad->get(), gamma, output_mem_config));
+            output_grad, input, mean, rstd, normalized_dims, input_grad.value(), gamma, output_mem_config));
     } else {
         outputs.push_back(std::nullopt);
     }
