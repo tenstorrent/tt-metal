@@ -406,6 +406,10 @@ k_id[15]: tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp
     - The waypoint field show the latest waypoint that each kernel has run past. The typical application of these is to put a waypoint before and after any kernel code that could hang, which can be used to pinpoint a hang from the log.
     - Further debug features are available, such as a debug ring buffer on each core. For more information, see the [Watcher documentation](docs/source/tt-metalium/tools/watcher.rst).
   - If you're able to deterministically reproduce the hang, the relevant kernel code can be instrumented with more debug features and iterated on to find the source of the hang.
+    - For multicast operations, you should check that the parameters are correct and you are calling the right variant of the method. Some examples of what to watch out for are the following:
+      - The number of destinations has to be non-zero.
+      - If the source node is in the destination set, you need to use the `loopback_src` variant of the method.
+      - The `loopback_src` variant will not do anything if the set of destination nodes consists entirely of the source node.
 - If a hang happens only when watcher is disabled, it is likely that the extra code added by watcher is affecting a timing-related issue. In this case you can try disabling certain watcher features to attempt to bring the timing closer.
   - The most invasive watcher features is the NoC sanitization, try disabling it with:
 ```
