@@ -54,6 +54,7 @@ inline void _llk_math_eltwise_binary_sfpu_inc_dst_face_addr_() {
 }
 
 inline void _llk_math_eltwise_binary_sfpu_init_() {
+    sfpu::_init_sfpu_config_reg();
     eltwise_binary_sfpu_configure_addrmod();
     math::reset_counters(p_setrwc::SET_ABD_F);
 }

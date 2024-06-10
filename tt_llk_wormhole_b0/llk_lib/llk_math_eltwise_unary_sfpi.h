@@ -56,6 +56,7 @@ inline void llk_math_eltwise_unary_sfpi(
 
 inline void llk_math_eltwise_unary_sfpi_init(
     uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0) {
+    sfpu::_init_sfpu_config_reg();
     eltwise_unary_sfpi_configure_addrmod();
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
