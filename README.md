@@ -48,7 +48,7 @@
 | [Mistral-7B-decode](./models/demos/wormhole/mistral7b)                               | 33rd               | 32                   | 11.7 t/s/u - 374 t/s         | 16.7 t/s/u - 538 t/s        | 21             |
 | [Mamba-2.8B-decode](./models/demos/mamba)                                            | any                | 32                   | 9.6 t/s/u - 307 t/s          | 15.8 t/s/u - 506 t/s        | 22             |
 | [BERT-Large](./models/demos/metal_BERT_large_11/) (sen/s) [4]                        |                    | 8                    | 270                          | 340                         | 400            |
-| [Stable Diffusion 1.4](./models/demos/wormhole/stable_diffusion) 512x512  (sec/img)  |                    | 1                    | 8                            | 5                           |                |
+| [Stable Diffusion 1.4](./models/demos/wormhole/stable_diffusion) 512x512  (sec/img)  |                    | 1                    | 6                            | 5                           |                |
 
 [1] - Observed from the host. Includes dispatch overhead and kernel execution time.
 

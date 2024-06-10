@@ -18,6 +18,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import (
     AutoencoderKL,
     UNet2DConditionModel,
+    StableDiffusionPipeline,
 )
 from models.utility_functions import skip_for_grayskull
 from models.utility_functions import (
@@ -30,7 +31,7 @@ from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_p
 from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_unet_2d_condition_model import (
     UNet2DConditionModel as UNet2D,
 )
-
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import round_up_to_tile_dim
 from torchvision.transforms import ToTensor
 from torchmetrics.multimodal.clip_score import CLIPScore
 from torchmetrics.image.fid import FrechetInceptionDistance
@@ -129,7 +130,13 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
-        beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000, device=device
+        beta_start=0.00085,
+        beta_end=0.012,
+        beta_schedule="scaled_linear",
+        num_train_timesteps=1000,
+        skip_prk_steps=True,
+        steps_offset=1,
+        device=device,
     )
 
     text_encoder.to(torch_device)
@@ -280,7 +287,13 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
-        beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000, device=device
+        beta_start=0.00085,
+        beta_end=0.012,
+        beta_schedule="scaled_linear",
+        num_train_timesteps=1000,
+        skip_prk_steps=True,
+        steps_offset=1,
+        device=device,
     )
 
     text_encoder.to(torch_device)
@@ -439,7 +452,13 @@ def run_demo_inference_diffusiondb(
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
-        beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000, device=device
+        beta_start=0.00085,
+        beta_end=0.012,
+        beta_schedule="scaled_linear",
+        num_train_timesteps=1000,
+        skip_prk_steps=True,
+        steps_offset=1,
+        device=device,
     )
 
     text_encoder.to(torch_device)
@@ -587,7 +606,7 @@ def run_demo_inference_diffusiondb(
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((30),),
+    ((50),),
 )
 @pytest.mark.parametrize(
     "image_size",
@@ -605,7 +624,7 @@ def test_demo(device, reset_seeds, input_path, num_prompts, num_inference_steps,
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((30),),
+    ((50),),
 )
 @pytest.mark.parametrize(
     "image_size",
