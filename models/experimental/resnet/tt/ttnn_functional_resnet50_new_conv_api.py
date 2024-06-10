@@ -224,7 +224,6 @@ class resnet50Bottleneck:
         # conv1 is 1x1 conv
         # print("Running conv1")
         module_input_height = input_height
-        ttnn.dump_device_memory_state(device, "before_conv1_")
         out, input_height, input_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.conv1_weight_tensor,
@@ -274,10 +273,9 @@ class resnet50Bottleneck:
             and self.conv1_input_channels == 256
             and self.conv1_output_channels == 128
         ):
-            run_downsample_before_conv2 = True
+            run_downsample_before_conv2 = False
 
         if run_downsample_before_conv2:
-            ttnn.dump_device_memory_state(device, "before_reallocate_")
             if (
                 input_height == 56
                 and self.conv1_input_channels == 256
@@ -292,10 +290,23 @@ class resnet50Bottleneck:
                 if is_wormhole_b0():
                     out = ttnn.reallocate(out)
                 x = ttnn.reallocate(x_rm)
-            ttnn.dump_device_memory_state(device, "before_downsample_")
             ds_out = self.run_downsample_if_req(
                 x, device, batch_size, input_height, input_width, conv_op_cache, reshard_if_not_optimal, height_sharding
             )
+
+        run_downsample_before_conv3 = False
+        if (
+            is_wormhole_b0()
+            and batch_size == 20
+            and input_height == 56
+            and self.conv1_input_channels == 256
+            and self.conv1_output_channels == 128
+            and self.downsample
+            and not run_downsample_before_conv2
+        ):
+            ds_input_height = input_height
+            ds_input_width = input_width
+            run_downsample_before_conv3 = True
 
         reallocate_halo_output = (
             batch_size
@@ -332,6 +343,7 @@ class resnet50Bottleneck:
         )
 
         logger.info(f"{batch_size} and {input_height} and {self.conv1_input_channels} and {self.conv1_output_channels}")
+
         if (
             is_wormhole_b0()
             and batch_size == 20
@@ -341,6 +353,22 @@ class resnet50Bottleneck:
         ):
             logger.info(f"==== Reallocating conv2 output")
             out = ttnn.reallocate(out)
+
+        if run_downsample_before_conv3:
+            x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(x)
+            out = ttnn.reallocate(out)
+            x = ttnn.reallocate(x_rm)
+            ds_out = self.run_downsample_if_req(
+                x,
+                device,
+                batch_size,
+                ds_input_height,
+                ds_input_width,
+                conv_op_cache,
+                reshard_if_not_optimal,
+                height_sharding,
+            )
 
         # conv3 is 1x1 conv
         # print("Running conv3")
@@ -367,7 +395,7 @@ class resnet50Bottleneck:
             conv_op_cache=conv_op_cache,
         )
 
-        if not run_downsample_before_conv2:
+        if not run_downsample_before_conv2 and not run_downsample_before_conv3:
             ds_out = self.run_downsample_if_req(
                 x, device, batch_size, input_height, input_width, conv_op_cache, reshard_if_not_optimal, height_sharding
             )
@@ -680,6 +708,7 @@ class resnet50:
             )
         else:
             x, x_height, x_width = self.layer2_module1(x, device, batch_size, x_height, x_width, conv_op_cache)
+
         x_memory_config = ttnn.get_memory_config(x)
         ops_parallel_config["layer2_module1_input"] = ttnn.create_sharded_memory_config_(
             layer2_module1_input_shape,
@@ -688,6 +717,7 @@ class resnet50:
             x_memory_config.shard_spec.orientation,
             tile_layout=True,
         )
+
         logger.debug(f"==== Running layer 2 module 2")
         x, x_height, x_width = self.layer2_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
         logger.debug(f"==== Running layer 2 module 3")
