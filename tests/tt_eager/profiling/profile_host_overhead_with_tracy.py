@@ -13,12 +13,7 @@ from pathlib import Path
 from loguru import logger
 
 
-@click.command()
-@click.option(
-    "-o", "--output_directory", default="host_overhead_profile/", type=str, help="Ouput folder path for csv's"
-)
-@click.option("-c", "--output_csv", default="final.csv", type=str, help="Ouput csv filename")
-def main(output_directory, output_csv):
+def profile_host_overhead(output_directory, output_csv):
     currentEnvs = dict(os.environ)
     currentEnvs["TT_METAL_DEVICE_PROFILER"] = "1"
 
@@ -111,6 +106,15 @@ def main(output_directory, output_csv):
 
     # Write the final dataframe to a csv file
     final_df.to_csv(output_csv, index=False)
+
+
+@click.command()
+@click.option(
+    "-o", "--output_directory", default="host_overhead_profile/", type=str, help="Ouput folder path for csv's"
+)
+@click.option("-c", "--output_csv", default="final.csv", type=str, help="Ouput csv filename")
+def main(output_directory, output_csv):
+    profile_host_overhead(output_directory, output_csv)
 
 
 if __name__ == "__main__":
