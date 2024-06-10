@@ -94,7 +94,6 @@ void kernel_main() {
     }
     const uint64_t in0_multicast_data_noc = get_noc_multicast_addr(
         in0_mcast_dest_noc_start_x, in0_mcast_dest_noc_start_y, in0_mcast_dest_noc_end_x, in0_mcast_dest_noc_end_y, 0);
-    const bool single_core_grid = (in0_mcast_dest_noc_end_x == in0_mcast_dest_noc_start_x) && (in0_mcast_dest_noc_end_y == in0_mcast_dest_noc_start_y);
 
     uint64_t in0_mcast_receiver_semaphore_noc_addr =
         in0_multicast_data_noc | (uint64_t)in0_mcast_receiver_semaphore_addr;
@@ -167,7 +166,7 @@ void kernel_main() {
                         // multicast to every core in receiver grid EXCLUDING myself
                         // Skip if there are no other cores since this core already has the data.
                         // Note: noc_async_write_multicast would hang if called with 0 cores.
-                        if (in0_mcast_num_cores > 1) {
+                        if constexpr (in0_mcast_num_cores > 1) {
                             noc_async_write_multicast(
                                     local_read_addr,
                                     in0_multicast_data_addr,
@@ -191,7 +190,7 @@ void kernel_main() {
                     }
 
                     // We should also multicast the flag to destinations
-                    if (single_core_grid) {
+                    if constexpr (in0_mcast_num_cores == 1) {
                         // All work is done on one core (the current one).
                         // noc_semaphore_set_multicast_loopback_src is a no-op in this case.
                         // Data needs to be written directly in the core.
