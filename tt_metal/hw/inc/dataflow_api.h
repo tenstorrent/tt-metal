@@ -188,10 +188,10 @@ inline __attribute__((always_inline)) constexpr static std::uint32_t MUL_WITH_TI
  *
  * Return value: None
  *
- * | Argument  | Description                          | Type     | Valid Range | Required |
- * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31     | True     |
- * | num_tiles | The number of tiles to be pushed     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
+ * | Argument  | Description                           | Type     | Valid Range | Required |
+ * |-----------|---------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
+ * | cb_id     | The index of the circular buffer (CB) | uint32_t | 0 to 31     | True     |
+ * | num_tiles | The number of tiles to be pushed      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
 FORCE_INLINE
 void cb_push_back(const int32_t operand, const int32_t num_pages) {
@@ -229,10 +229,10 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
  *
  * Return value: None
  *
- * | Argument  | Description                          | Type     | Valid Range | Required |
- * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31 | True     |
- * | num_tiles | The number of tiles to be popped     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
+ * | Argument  | Description                           | Type     | Valid Range | Required |
+ * |-----------|---------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
+ * | cb_id     | The index of the circular buffer (CB) | uint32_t | 0 to 31 | True     |
+ * | num_tiles | The number of tiles to be popped      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
 FORCE_INLINE
 void cb_pop_front(int32_t operand, int32_t num_pages) {
@@ -282,9 +282,9 @@ constexpr inline DataFormat get_dataformat(const std::int32_t operand) {
  *
  * Return value: None
  *
- * | Argument  | Description                          | Type     | Valid Range | Required |
- * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | operand   | The index of the cirular buffer (CB) | uint32_t | 0 to 31     | True     |
+ * | Argument  | Description                           | Type     | Valid Range | Required |
+ * |-----------|---------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
+ * | operand   | The index of the circular buffer (CB) | uint32_t | 0 to 31     | True     |
  */
 inline __attribute__((always_inline)) uint32_t get_write_ptr(uint32_t operand) {
     // return byte address (fifo_wr_ptr is 16B address)
@@ -300,9 +300,9 @@ inline __attribute__((always_inline)) uint32_t get_write_ptr(uint32_t operand) {
  *
  * Return value: None
  *
- * | Argument  | Description                          | Type     | Valid Range | Required |
- * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | operand   | The index of the cirular buffer (CB) | uint32_t | 0 to 31     | True     |
+ * | Argument  | Description                           | Type     | Valid Range | Required |
+ * |-----------|---------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
+ * | operand   | The index of the circular buffer (CB) | uint32_t | 0 to 31     | True     |
  */
 inline __attribute__((always_inline)) uint32_t get_read_ptr(uint32_t operand) {
 
@@ -329,10 +329,10 @@ inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
  *
  * Return value: None
  *
- * | Argument  | Description                          | Type     | Valid Range | Required |
- * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31     | True     |
- * | num_tiles | The number of free tiles to wait for | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
+ * | Argument  | Description                           | Type     | Valid Range | Required |
+ * |-----------|---------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
+ * | cb_id     | The index of the circular buffer (CB) | uint32_t | 0 to 31     | True     |
+ * | num_tiles | The number of free tiles to wait for  | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
 FORCE_INLINE
 void cb_reserve_back(int32_t operand, int32_t num_pages) {
@@ -363,7 +363,7 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
 
 /**
  * A blocking call that waits for the specified number of tiles to be available in the specified circular buffer (CB).
- * This call is used by the consumer of the CB to wait for the producer to fill the CB with at least the specfied number
+ * This call is used by the consumer of the CB to wait for the producer to fill the CB with at least the specified number
  * of tiles. Important note: in case multiple calls of cb_wait_front(n) are issued without a paired cb_pop_front() call,
  * n is expected to be incremented by the user to be equal to a cumulative total of tiles. Example: 4 calls of
  * cb_wait_front(8) followed by a cb_pop_front(32) would produce incorrect behavior. Instead 4 calls of cb_wait_front()
@@ -378,10 +378,10 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
  *
  * Return value: None
  *
- * | Argument  | Description                          | Type     | Valid Range | Required |
- * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31     | True     |
- * | num_tiles | The number of tiles to wait for      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) |          |
+ * | Argument  | Description                           | Type     | Valid Range | Required |
+ * |-----------|---------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
+ * | cb_id     | The index of the circular buffer (CB) | uint32_t | 0 to 31     | True     |
+ * | num_tiles | The number of tiles to wait for       | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) |          |
  * */
 FORCE_INLINE
 void cb_wait_front(int32_t operand, int32_t num_pages) {
@@ -1295,9 +1295,10 @@ void noc_semaphore_set_remote(std::uint32_t src_local_l1_addr, std::uint64_t dst
  * destinations (i.e. must perform a local L1 write), the other API variant
  * *noc_async_write_multicast_loopback_src* can be used.
  *
- * Note: there is no restriction on the number of destinations, i.e. the
+ * Note: The number of destinations needs to be non-zero. Besides that,
+ * there is no restriction on the number of destinations, i.e. the
  * multicast destinations can span the full chip. However, as mentioned
- * previosuly, the multicast source cannot be part of the destinations. So, the
+ * previously, the multicast source cannot be part of the destinations. So, the
  * maximum number of destinations is 119.
  *
  * Return value: None
@@ -1392,7 +1393,7 @@ void noc_semaphore_set_multicast(
  * with preset size of 4 Bytes.
  *
  * With this API, you cannot send data only to the source node. That is, if
- * num_dests is 1 and the encoded destniation nodes consist of the node
+ * num_dests is 1 and the encoded destination nodes consist of the node
  * sending the data, then no data will be sent. The method call will be a no-op.
  *
  * Return value: None
