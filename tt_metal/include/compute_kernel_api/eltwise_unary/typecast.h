@@ -24,6 +24,8 @@ namespace ckernel {
  *  Float16_b -> UInt32
  *  Float16_b -> UInt16
  *  UInt16 -> Float16_b
+ *  Int32 -> Float16_b
+ *
  * For output to be UInt32, Dest must be in 32 bit mode.
  *
  * Return value: None
