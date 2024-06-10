@@ -537,7 +537,7 @@ class cross_attention:
             block_h=height_per_core // 32,
             block_w=key_len // 32,
         )
-        use_mask = seq_len > key_len
+        use_mask = attn_type == "cross"
         if use_mask:
             attention_scores = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
                 attention_scores,

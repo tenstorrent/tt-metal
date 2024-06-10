@@ -22,6 +22,7 @@
 #include "tt_dnn/op_library/pool/average_pool.hpp"
 #include "tt_dnn/op_library/pool/max_pool.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "tt_dnn/op_library/fast_reduce_nc/fast_reduce_nc_op.hpp"
 #include "tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
 #include "tt_dnn/op_library/rotary_embedding/rotary_embedding_llama_op.hpp"
 #include "tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
@@ -389,6 +390,17 @@ void TensorModule(py::module& m_tensor) {
         py::arg("dim"),
         R"doc(Returns a tensor that is a max  of input tensor with shape ``[W, Z, Y, X]`` along dimensions ``{1}``; input tensor in TILE LAYOUT.)doc",
         R"doc("dimension along which to apply max", "int", "0, 1, 2, or 3")doc");
+
+    m_tensor.def(
+        "fast_reduce_nc",
+        &fast_reduce_nc,
+        py::arg("input").noconvert(),
+        py::kw_only(),
+        py::arg("dims").noconvert() = std::vector<int64_t>(),
+        py::arg("output").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        "Performs optimized reduction operation on dim 0, 1, or [0,1]. Returns an output tensor.");
 
     m_tensor.def(
         "downsample",
