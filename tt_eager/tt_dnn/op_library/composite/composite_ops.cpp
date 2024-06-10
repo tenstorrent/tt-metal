@@ -1072,7 +1072,7 @@ Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     return tt::operations::primary::prod_all(formatted_input_tensor, output_mem_config);
 }
 
-Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& output_mem_config) {
+Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor = std::nullopt) {
     // layout conversion
     auto formatted_input_tensor = temp;
     if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
@@ -1086,43 +1086,44 @@ Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& output_mem_c
     }
     // Apply prod
     std::vector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};
-    Shape input_shape = formatted_input_tensor.get_legacy_shape();
-    Shape required = {
-        ((dim == 1 || dim == -3) ? input_shape[0] : 1),
-        ((dim == 1 || dim == -3) ? 1 : input_shape[1]),
-        input_shape[2],
-        input_shape[3]};
-    return tt::operations::primary::prod_nc(
-        formatted_input_tensor,
-        zeros(
-            required,
-            formatted_input_tensor.get_dtype(),
-            formatted_input_tensor.get_layout(),
-            formatted_input_tensor.device(),
-            output_mem_config),
-        dimension,
-        output_mem_config);
+    if(output_tensor.has_value()){
+        tt::operations::primary::prod_nc(
+            formatted_input_tensor,
+            output_tensor.value(), //optional output tensor
+            dimension,
+            output_mem_config);
+    } else {
+        Shape input_shape = formatted_input_tensor.get_legacy_shape();
+        Shape required = { ((dim == 1 || dim == -3) ? input_shape[0] : 1), ((dim == 1 || dim == -3) ? 1 : input_shape[1]), input_shape[2], input_shape[3]};
+        output_tensor = zeros( required, formatted_input_tensor.get_dtype(), formatted_input_tensor.get_layout(), formatted_input_tensor.device(), output_mem_config);
+        output_tensor = tt::operations::primary::prod_nc(
+            formatted_input_tensor,
+            output_tensor.value(),
+            dimension,
+            output_mem_config);
+    }
+    return output_tensor.value();
 }
 
-Tensor _prod(const Tensor& input_a, bool all_dimensions, int64_t dim, const MemoryConfig& output_mem_config) {
+Tensor _prod(const Tensor& input_a, bool all_dimensions, int64_t dim, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
     if (all_dimensions) {
         return tt::tt_metal::prod_all(input_a, output_mem_config);
     }
     TT_FATAL(dim >= -4 && dim <= 3 && "Dimension out of range (expected to be in range of [-4, 3]");
-    Tensor temp = input_a;
-    // Permute for dim 2,3
-    if (dim == 2 || dim == -2) {
-        std::vector<int64_t> permute_dims = {2, 0, 1, 3};
-        temp = permute(input_a, permute_dims, output_mem_config);
-    } else if (dim == 3 || dim == -1) {
-        std::vector<int64_t> permute_dims = {3, 0, 1, 2};
-        temp = permute(input_a, permute_dims, output_mem_config);
-    }
-    Tensor result = tt::tt_metal::prod_nc(temp, dim, output_mem_config);
-    // Permute and unpad result for dim 2,3
     if (dim == 0 || dim == 1 || dim == -4 || dim == -3) {
-        return result;
+        if(output_tensor.has_value()){
+            tt::tt_metal::prod_nc(input_a, dim, output_mem_config, output_tensor);
+        } else {
+            output_tensor = tt::tt_metal::prod_nc(input_a, dim, output_mem_config);
+        }
+        return output_tensor.value();
     } else if (dim == 2 || dim == -2) {
+        //Permute
+        std::vector<int64_t> permute_dims = {2, 0, 1, 3};
+        Tensor result = permute(input_a, permute_dims, output_mem_config);
+        //Prod along N,C
+        result = tt::tt_metal::prod_nc(result, dim, output_mem_config);
+        // Permute and unpad
         std::vector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = permute(result, after_permute_dims, output_mem_config);
         Shape input_shape = input_a.get_legacy_shape();
@@ -1130,6 +1131,11 @@ Tensor _prod(const Tensor& input_a, bool all_dimensions, int64_t dim, const Memo
         const Shape end_index = {input_shape[0] - 1, input_shape[1] - 1, 0, input_shape[3] - 1};
         return unpad(required, start_index, end_index);
     } else {  // dim 3
+        //Permute
+        std::vector<int64_t> permute_dims = {3, 0, 1, 2};
+        Tensor result = permute(input_a, permute_dims, output_mem_config);
+        //Prod along N,C
+        result = tt::tt_metal::prod_nc(result, dim, output_mem_config);
         // permute
         std::vector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = permute(result, after_permute_dims, output_mem_config);
@@ -1144,8 +1150,8 @@ Tensor _prod(const Tensor& input_a, bool all_dimensions, int64_t dim, const Memo
     }
 }
 
-Tensor prod(const Tensor& input_a, bool all_dimensions, int64_t dim, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _prod)(input_a, all_dimensions, dim, output_mem_config);
+Tensor prod(const Tensor& input_a, bool all_dimensions, int64_t dim, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return operation::decorate_as_composite(__func__, _prod)(input_a, all_dimensions, dim, output_mem_config, output_tensor);
 }
 
 Tensor _variance_impl(

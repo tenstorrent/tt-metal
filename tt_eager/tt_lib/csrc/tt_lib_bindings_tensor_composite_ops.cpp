@@ -212,9 +212,10 @@ namespace tt::tt_metal::detail{
         R"doc(dimension to split)doc"
         );
         m_tensor.def("prod", &prod,
-            py::arg("input").noconvert(), py::arg("all_dimensions") = false, py::arg("dim") = 0, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("input").noconvert(), py::arg("all_dimensions") = false, py::arg("dim") = 0, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_tensor").noconvert() = std::nullopt, R"doc(
             Computes the prod function along specified ``dim`` or all dimensions on the ``input`` tensor.
             If ``all_dimensions`` is set to ``true`` irrespective of given dimension it will prod along all dimensions.
+            Optional ``output_tensor`` support provided only for ``dim = 0, 1`` .
 
             Input tensor must have BFLOAT16 data type.
 
@@ -227,6 +228,7 @@ namespace tt::tt_metal::detail{
                 "all_dimensions", "Consider all dimension (ignores ``dim`` param)", "bool", "default to false", "No"
                 "dim", "Dimension to perform prod", "int", "default to 0", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
         )doc");
         detail::bind_unary_op_with_param(
             m_tensor, "geglu", &geglu,
