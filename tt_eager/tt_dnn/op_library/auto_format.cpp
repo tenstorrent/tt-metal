@@ -40,6 +40,24 @@ Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryCo
     }
 }
 
+// This code is a workaround for cases where we need to remove autoformat but other dependent ops
+// are not quite ready. So here we basically just put the tensor back on device.
+// Used in backward_ops.cpp
+// See: Remove auto format within permute_op.cpp #9404
+Tensor AutoFormat::move_tensor_to_device_and_pad(const Tensor& input, Device *device, Layout target_layout, std::optional<MemoryConfig> target_mem_config){
+    const auto intended_shape = input.get_shape();
+    const auto device_shape = input.get_legacy_shape();
+    const auto new_intended_shape = std::array<std::uint32_t, 4>{intended_shape[0], intended_shape[1], intended_shape[-2], intended_shape[-1]};
+    const auto new_device_shape =  std::array<std::uint32_t, 4>{
+        device_shape[0],
+        device_shape[1],
+        (device_shape[-2] % TILE_HEIGHT != 0 ? (device_shape[-2] / TILE_HEIGHT + 1) * TILE_HEIGHT : device_shape[-2]),
+        (device_shape[-1] % TILE_WIDTH != 0 ? (device_shape[-1] / TILE_WIDTH + 1) * TILE_WIDTH : device_shape[-1])
+        };
+    const auto new_shape = tt_metal::Shape(new_intended_shape, new_device_shape);
+    return AutoFormat::format_input_tensor(input, device, new_shape, 0.0, target_layout, target_mem_config);
+}
+
 Tensor AutoFormat::format_input_tensor(
     const Tensor& input,
     Device* device,

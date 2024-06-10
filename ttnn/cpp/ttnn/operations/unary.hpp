@@ -222,6 +222,18 @@ Tensor triu(
     return tt::tt_metal::triu(input_tensor, diag, memory_config.value_or(input_tensor.memory_config()));
 }
 
+// TODO
+// Tensor hardshrink(
+//     const Tensor& input_tensor,
+//     float32 lambda,
+//     const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+//     return tt::tt_metal::hardshrink(input_tensor, lambda, memory_config.value_or(input_tensor.memory_config()));
+// }
+//     ("hardshrink", ttl.tensor.hardshrink, "lambda"),  # composite
+//     ("celu", ttl.tensor.celu, "alpha"),  # composite
+//     ("softshrink", ttl.tensor.softshrink, "lambda"),  # composite
+
+
 }  // namespace unary
 }  // namespace operations
 

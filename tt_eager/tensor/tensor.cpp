@@ -813,6 +813,8 @@ const Shape Tensor::strides() const { return detail::compute_strides(this->get_l
 
 uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->get_legacy_shape()); }
 
+uint32_t Tensor::intended_volume() const { return tt::tt_metal::compute_volume(this->get_shape()); }
+
 Tensor create_device_tensor(
     const Shape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config) {
     ZoneScoped;
