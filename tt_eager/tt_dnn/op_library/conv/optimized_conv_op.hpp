@@ -43,6 +43,32 @@ struct OptimizedConvParallelizationConfig {
     }
 };
 
+struct OptimizedConvParallelizationConfigNew {
+    CoreCoord grid_size; // (x,y)
+    uint32_t num_cores_nhw;
+    uint32_t per_core_out_matrix_height;
+    uint32_t per_core_out_matrix_width;
+    // std::size_t in0_block_w;
+    // std::size_t out_subblock_h;
+    // std::size_t out_subblock_w;
+    // std::size_t per_core_M;
+    // std::size_t per_core_N;
+
+    static constexpr auto attribute_names =
+        std::make_tuple("grid_size", "num_cores_nhw", "per_core_out_matrix_height", "per_core_weight_matrix_width");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->grid_size),
+            std::cref(this->num_cores_nhw),
+            std::cref(this->per_core_out_matrix_height),
+            std::cref(this->per_core_out_matrix_width));
+    }
+
+    CoreCoord get_grid_size() const {
+        return this->grid_size;
+    }
+};
+
 struct OptimizedConvBlockConfig {
     uint32_t act_block_h_ntiles;
     uint32_t act_block_w_ntiles;
@@ -70,7 +96,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
     vector<int> conv_params,
     uint32_t output_channels,
     bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
-    const OptimizedConvParallelizationConfig& parallelization_config,
+    const OptimizedConvParallelizationConfigNew& parallelization_config,
     const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment,
     DataType output_dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
@@ -168,7 +194,7 @@ Tensor optimized_conv(const Tensor& a, const Tensor &b, std::optional<const Tens
 
 // new micro op
 struct OptimizedConvNew {
-    OptimizedConvParallelizationConfig parallelization_config;
+    OptimizedConvParallelizationConfigNew parallelization_config;
     OptimizedConvBlockConfig block_config;
     const std::vector<int> conv_params;
     const uint32_t output_channels;
@@ -183,7 +209,7 @@ struct OptimizedConvNew {
     OptimizedConvNew(const vector<int>& c_params,
         uint32_t output_channels, bool untile_out,
         bool has_bias, bool fuse_relu,
-        MathFidelity mfidelity, const OptimizedConvParallelizationConfig& p_config,
+        MathFidelity mfidelity, const OptimizedConvParallelizationConfigNew& p_config,
         const OptimizedConvBlockConfig& b_config,
         uint32_t e_padding_for_32B_alignment, MemoryConfig out_mem_config,
         DataType output_dtype,
@@ -244,7 +270,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     const vector<int> conv_params,
     uint32_t output_channels,
     bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
-    const OptimizedConvParallelizationConfig& parallelization_config,
+    const OptimizedConvParallelizationConfigNew& parallelization_config,
     const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment,
     MemoryConfig output_mem_config,
     DataType output_dtype,
@@ -264,6 +290,6 @@ using namespace tt::tt_metal;
 
 pair<uint32_t, uint32_t> compute_opt_conv_output_face_shape(uint32_t conv_activation_h, uint32_t conv_activation_w, uint32_t filter_h, uint32_t filter_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w, uint32_t padding_for_32B_alignment=0);
 
-pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(Shape conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t padding_for_32B_alignment);
+pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(Shape conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_datums, uint32_t padding_for_32B_alignment);
 
 } // optimized_conv_op_utils

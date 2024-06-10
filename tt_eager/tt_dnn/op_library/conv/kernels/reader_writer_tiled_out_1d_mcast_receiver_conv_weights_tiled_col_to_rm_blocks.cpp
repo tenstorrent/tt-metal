@@ -237,51 +237,6 @@ void kernel_main() {
             }
             #endif
 
-            #ifndef SHARDED_OUT
-            uint32_t out_sbh_start_tile_id = out_block_h_start_tile_id;
-            uint32_t out_sbh_start_tile_id_h = out_block_h_start_tile_id_h; //
-            for(uint32_t sbh = 0; sbh < out_num_subblocks_h; sbh++) {
-                uint32_t out_sbw_start_tile_id = out_sbh_start_tile_id;
-                uint32_t out_sbw_start_tile_id_w = out_block_w_start_tile_id_w;
-                for(uint32_t sbw = 0; sbw < out_num_subblocks_w; sbw++) {
-                    uint32_t out_sb_row_start_tile_id = out_sbw_start_tile_id;
-                    // wait for one subblock worth tiles
-                    cb_wait_front(cb_id_out0, out_subblock_tile_count);
-                    uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-                    for(uint32_t h = 0; h < out_subblock_h; h++) {
-                        uint32_t out_tile_id = out_sb_row_start_tile_id;
-                        uint32_t out_tile_id_h = out_sbh_start_tile_id_h + h;
-                        if (out_tile_id_h >= out_height_num_tiles) { // block shape height padding
-                            break;
-                        }
-                        for(uint32_t w = 0; w < out_subblock_w; w++) {
-                            uint32_t out_tile_id_w = out_sbw_start_tile_id_w + w;
-                            if (out_tile_id_w >= out_width_num_tiles) { // block shape width padding
-                                l1_read_addr += tile_nbytes;
-                            } else {
-                                //DPRINT << "out_tile_id - " << out_tile_id << ENDL();
-                                uint64_t out_tile_noc_addr = get_noc_addr(out_tile_id, s);
-                                //DPRINT << "out_tile_id=" << out_tile_id << ENDL();
-                                noc_async_write(l1_read_addr, out_tile_noc_addr, tile_nbytes);
-                                l1_read_addr += tile_nbytes;
-                                out_tile_id += out_next_tile_stride_w;
-                            }
-                        } // out_subblock_w (ntiles)
-                        out_sb_row_start_tile_id += out_next_tile_stride_h;
-                    } // out_subblock_h (ntiles)
-                    noc_async_write_barrier();
-                    //DPRINT << "Done writing subblock." << ENDL();
-                    cb_pop_front(cb_id_out0, out_subblock_tile_count);
-                    out_sbw_start_tile_id += out_next_subblock_stride_w;
-                    out_sbw_start_tile_id_w += out_subblock_w;
-                } // out_num_subblocks_w
-                out_sbh_start_tile_id += out_next_subblock_stride_h;
-                out_sbh_start_tile_id_h += out_subblock_h;
-            } // out_num_subblocks_h
-            out_block_h_start_tile_id += out_next_block_stride_h;
-            out_block_h_start_tile_id_h += out_block_height_num_tiles;
-            #endif
-
             start_reader_idx = reader_idx + act_block_h_datums_read;
         } // out_num_blocks_h
         out_block_w_start_tile_id += out_next_block_stride_w;

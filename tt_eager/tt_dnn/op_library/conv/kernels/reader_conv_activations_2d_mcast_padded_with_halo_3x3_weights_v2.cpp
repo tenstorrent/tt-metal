@@ -24,7 +24,7 @@ inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uin
 
 FORCE_INLINE
 void read_channels(uint32_t& l1_write_addr_act, const uint32_t act_l1_read_addr, const uint32_t reader_channel_idx,
-        const uint32_t conv_act_c_read_bytes, const uint32_t coalesced_read_bytes, const uint32_t stride_h_bytes) {
+        const uint32_t conv_act_c_read_bytes, const uint32_t coalesced_read_bytes, const uint32_t stride_h_bytes, const uint32_t extra_align_bytes) {
 
     constexpr uint32_t unroll_factor = WINDOW_INNER;
     uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_read_bytes);
@@ -32,9 +32,9 @@ void read_channels(uint32_t& l1_write_addr_act, const uint32_t act_l1_read_addr,
     for (uint32_t inner = 0; inner < WINDOW_INNER; inner++) {
         noc_async_read_one_packet_with_state<true>(act_l1_read_addr_plus_offset, l1_write_addr_act);
         l1_write_addr_act += coalesced_read_bytes;
-        // +2 is hard-coded, TODO: generalize
         act_l1_read_addr_plus_offset += stride_h_bytes;
     }
+    l1_write_addr_act += extra_align_bytes;
 }
 
 void kernel_main() {
@@ -46,6 +46,7 @@ void kernel_main() {
     constexpr uint32_t window_inner = get_compile_time_arg_val(7);
     constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(8);
     constexpr uint32_t weight_size_w = get_compile_time_arg_val(10);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(12);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(14);
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(15);
     constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(16);
@@ -128,8 +129,8 @@ void kernel_main() {
         // #pragma GCC unroll 4 // didn't seem to help (neutral), manual unroll 2x perf drop
         for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
             uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-            read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
-            read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
+            read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes, act_block_w_extra_align_bytes);
+            read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes, act_block_w_extra_align_bytes);
 
             reader_idx++;
         }

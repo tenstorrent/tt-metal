@@ -53,7 +53,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     bool skip_untilize = input_tensor.get_layout() == Layout::ROW_MAJOR;
-
     Shape input_shape = input_tensor.get_legacy_shape();
     Shape output_shape = output_tensor.get_legacy_shape();
 
@@ -72,7 +71,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t input_npages = ntiles_per_block * input_nblocks_per_core;
 
     uint32_t out_stick_nbytes = output_shard_shape[1] * out_nbytes;
-
     uint32_t in_page_size = detail::TileSize(in_df);
     uint32_t out_tile_size = detail::TileSize(out_df);
 

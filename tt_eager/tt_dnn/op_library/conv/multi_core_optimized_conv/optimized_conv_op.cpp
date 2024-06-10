@@ -177,7 +177,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
                         weight_size_h == 7 && weight_size_w == 8 &&
                         stride_h == 2 && stride_w == 2);
     // Compute the 2d matrix shape
-    auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(ashape, conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
+    auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(ashape, conv_params, out_block_h_ntiles * TILE_HEIGHT, extra_padding_for_32B_alignment);
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];

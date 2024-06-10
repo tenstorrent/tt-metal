@@ -195,6 +195,219 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
         conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
 }
 
+template <typename T>
+Tensor to_weight_tile_layout_block_sharded(
+    const Tensor& conv_weight_tensor, uint32_t num_channel_shards, DataType output_dtype) {
+    auto w_shape = conv_weight_tensor.get_legacy_shape();
+    auto compute = [&w_shape, &num_channel_shards, &output_dtype](const auto& input_buffer) {
+        auto weight_matrix_cols = w_shape[0];
+        TT_FATAL(weight_matrix_cols % num_channel_shards == 0);
+        auto conv_output_shard_width = weight_matrix_cols / num_channel_shards;
+        auto conv_output_shard_width_padded = (uint32_t)std::ceil((double)conv_output_shard_width / (double)constants::TILE_WIDTH) * constants::TILE_WIDTH;
+        if (conv_output_shard_width < conv_output_shard_width_padded) {
+            // width padding for conv output shard padding
+            weight_matrix_cols = conv_output_shard_width_padded * num_channel_shards;
+        }
+
+        auto weight_matrix_rows = w_shape[1] * w_shape[2] * w_shape[3];
+        TT_FATAL(w_shape[1] % num_channel_shards == 0);
+        auto conv_input_shard_width = w_shape[1] / num_channel_shards;
+        auto weight_block_height = conv_input_shard_width * w_shape[2] * w_shape[3];
+        auto weight_block_height_padded = (uint32_t)std::ceil((double)weight_block_height / (double)constants::TILE_HEIGHT) * constants::TILE_HEIGHT;
+        if (weight_block_height < weight_block_height_padded) {
+            // height padding for non tile multiple block height
+            weight_matrix_rows = weight_block_height_padded * num_channel_shards;
+        }
+        Shape output_shape = {1, 1, weight_matrix_rows, weight_matrix_cols};
+        auto output_buffer = owned_buffer::create<T>(compute_volume(output_shape));
+        for (auto ic = 0; ic < num_channel_shards; ic++) {
+            for (auto r = 0; r < w_shape[2]; r++) {
+                for (auto s = 0; s < w_shape[3]; s++) {
+                    for (auto c_s = 0; c_s < conv_input_shard_width; c_s++) {
+                        for (auto oc = 0; oc < num_channel_shards; oc++) {
+                            for (auto k_s = 0; k_s < conv_output_shard_width; k_s++) {
+                                auto matrix_idx = (oc * conv_output_shard_width_padded + k_s) + c_s * weight_matrix_cols + s * conv_input_shard_width * weight_matrix_cols +
+                                                  r * w_shape[3] * conv_input_shard_width * weight_matrix_cols + ic * weight_block_height_padded * weight_matrix_cols;
+                                auto idx =
+                                    (oc * conv_output_shard_width + k_s) * w_shape[1] * w_shape[2] * w_shape[3] + (ic * conv_input_shard_width + c_s) * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
+                                output_buffer[matrix_idx] = input_buffer[idx];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if constexpr (std::is_same<T, float>::value) {
+            if (output_dtype == DataType::BFLOAT8_B) {
+                auto output_float_data = output_buffer.get();
+                auto output_packed_data =
+                    pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+                auto rm_tensor = Tensor(
+                    std::move(OwnedStorage{std::move(output_uint32_buffer)}),
+                    output_shape,
+                    output_dtype,
+                    Layout::ROW_MAJOR);
+                return rm_tensor.to(Layout::TILE);
+            }
+            if (output_dtype == DataType::BFLOAT4_B) {
+                auto output_float_data = output_buffer.get();
+                auto output_packed_data =
+                    pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+                auto rm_tensor = Tensor(
+                    std::move(OwnedStorage{std::move(output_uint32_buffer)}),
+                    output_shape,
+                    output_dtype,
+                    Layout::ROW_MAJOR);
+                return rm_tensor.to(Layout::TILE);
+            }
+        } else {
+            TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));
+        }
+        auto rm_tensor =
+            Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
+        return rm_tensor.to(Layout::TILE);
+    };
+    return std::visit(
+        [&compute](auto&& storage) -> Tensor {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                return compute(owned_buffer::get_as<T>(storage.buffer));
+            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                return compute(borrowed_buffer::get_as<T>(storage.buffer));
+            } else {
+                TT_THROW("Unsupported storage type");
+            }
+        },
+        conv_weight_tensor.get_storage());
+}
+
+
+// Converts convolution weights to tilized 2d matrix layout for block sharded conv.
+// Returns a new tensor with layout=Tile
+Tensor convert_conv_weight_tensor_to_tiled_layout_block_sharded(
+    Tensor conv_weight_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype) {
+    TT_ASSERT(
+        conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
+        "Convolution weights should be in row major layout for conversion to tilized layout.");
+    const static std::map<
+        DataType,
+        std::function<Tensor(const Tensor&, uint32_t num_channel_shards, DataType output_dtype)>>
+        to_w_tile_layout_map = {
+            {DataType::BFLOAT16, &to_weight_tile_layout_block_sharded<bfloat16>},
+            {DataType::FLOAT32, &to_weight_tile_layout_block_sharded<float>},
+            {DataType::UINT32, &to_weight_tile_layout_block_sharded<uint32_t>},
+        };
+    if (output_dtype.has_value()) {
+        if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
+            TT_ASSERT(conv_weight_tensor.get_dtype() == DataType::FLOAT32);
+        } else {
+            TT_ASSERT(conv_weight_tensor.get_dtype() == conv_weight_tensor.get_dtype());
+        }
+    }
+    return to_w_tile_layout_map.at(conv_weight_tensor.get_dtype())(
+        conv_weight_tensor, num_channel_shards, output_dtype.value_or(conv_weight_tensor.get_dtype()));
+}
+
+template <typename T>
+Tensor to_bias_tile_layout_block_sharded(
+    const Tensor& conv_bias_tensor, uint32_t num_channel_shards, DataType output_dtype) {
+    auto b_shape = conv_bias_tensor.get_legacy_shape();
+    TT_FATAL(b_shape[0] == 1 && b_shape[1] == 1 && b_shape[2] == 1);
+    auto compute = [&b_shape, &num_channel_shards, &output_dtype](const auto& input_buffer) {
+        auto bias_matrix_cols = b_shape[3];
+        TT_FATAL(bias_matrix_cols % num_channel_shards == 0);
+        auto conv_output_shard_width = bias_matrix_cols / num_channel_shards;
+        auto conv_output_shard_width_padded = (uint32_t)std::ceil((double)conv_output_shard_width / (double)constants::TILE_WIDTH) * constants::TILE_WIDTH;
+        if (conv_output_shard_width < conv_output_shard_width_padded) {
+            // width padding for conv output shard padding
+            bias_matrix_cols = conv_output_shard_width_padded * num_channel_shards;
+        }
+
+        auto bias_matrix_rows = 32;
+        Shape output_shape = {1, 1, bias_matrix_rows, bias_matrix_cols};
+        auto output_buffer = owned_buffer::create<T>(compute_volume(output_shape));
+        for (auto oc = 0; oc < num_channel_shards; oc++) {
+            for (auto k_s = 0; k_s < conv_output_shard_width; k_s++) {
+                auto matrix_idx = oc * conv_output_shard_width_padded + k_s;
+                auto idx = oc * conv_output_shard_width + k_s;
+                output_buffer[matrix_idx] = input_buffer[idx];
+            }
+        }
+        if constexpr (std::is_same<T, float>::value) {
+            if (output_dtype == DataType::BFLOAT8_B) {
+                auto output_float_data = output_buffer.get();
+                auto output_packed_data =
+                    pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+                auto rm_tensor = Tensor(
+                    std::move(OwnedStorage{std::move(output_uint32_buffer)}),
+                    output_shape,
+                    output_dtype,
+                    Layout::ROW_MAJOR);
+                return rm_tensor.to(Layout::TILE);
+            }
+            if (output_dtype == DataType::BFLOAT4_B) {
+                auto output_float_data = output_buffer.get();
+                auto output_packed_data =
+                    pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+                auto rm_tensor = Tensor(
+                    std::move(OwnedStorage{std::move(output_uint32_buffer)}),
+                    output_shape,
+                    output_dtype,
+                    Layout::ROW_MAJOR);
+                return rm_tensor.to(Layout::TILE);
+            }
+        } else {
+            TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));
+        }
+        auto rm_tensor =
+            Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
+        return rm_tensor.to(Layout::TILE);
+    };
+    return std::visit(
+        [&compute](auto&& storage) -> Tensor {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                return compute(owned_buffer::get_as<T>(storage.buffer));
+            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                return compute(borrowed_buffer::get_as<T>(storage.buffer));
+            } else {
+                TT_THROW("Unsupported storage type");
+            }
+        },
+        conv_bias_tensor.get_storage());
+}
+
+// Converts convolution bias to tilized 2d matrix layout for block sharded conv.
+// Returns a new tensor with layout=Tile
+Tensor convert_conv_bias_tensor_to_tiled_layout_block_sharded(
+    Tensor conv_bias_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype) {
+    TT_ASSERT(
+        conv_bias_tensor.get_layout() == Layout::ROW_MAJOR &&
+        "Convolution weights should be in row major layout for conversion to tilized layout.");
+    const static std::map<
+        DataType,
+        std::function<Tensor(const Tensor&, uint32_t num_channel_shards, DataType output_dtype)>>
+        to_b_tile_layout_map = {
+            {DataType::BFLOAT16, &to_bias_tile_layout_block_sharded<bfloat16>},
+            {DataType::FLOAT32, &to_bias_tile_layout_block_sharded<float>},
+            {DataType::UINT32, &to_bias_tile_layout_block_sharded<uint32_t>},
+        };
+    if (output_dtype.has_value()) {
+        if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
+            TT_ASSERT(conv_bias_tensor.get_dtype() == DataType::FLOAT32);
+        } else {
+            TT_ASSERT(conv_bias_tensor.get_dtype() == conv_bias_tensor.get_dtype());
+        }
+    }
+    return to_b_tile_layout_map.at(conv_bias_tensor.get_dtype())(
+        conv_bias_tensor, num_channel_shards, output_dtype.value_or(conv_bias_tensor.get_dtype()));
+}
+
+
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(

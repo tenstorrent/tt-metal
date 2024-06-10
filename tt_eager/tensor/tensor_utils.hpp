@@ -19,6 +19,20 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
     uint32_t in1_block_w,
     std::optional<DataType> output_dtype = std::nullopt);
 
+// Converts convolution weights to tilized 2d matrix layout for block sharded conv. Adds zero padding between weight blocks based on output shard width padding.
+// Returns a new tensor with layout=Tile
+Tensor convert_conv_weight_tensor_to_tiled_layout_block_sharded(
+    Tensor conv_weight_tensor,
+    uint32_t num_channel_shards,
+    std::optional<DataType> output_dtype = std::nullopt);
+
+// Converts convolution bias to tilized layout for block sharded conv. Adds zero padding between bias blocks based on output shard width padding.
+// Returns a new tensor with layout=Tile
+Tensor convert_conv_bias_tensor_to_tiled_layout_block_sharded(
+    Tensor conv_bias_tensor,
+    uint32_t num_channel_shards,
+    std::optional<DataType> output_dtype = std::nullopt);
+
 // Converts convolution weights to tilized 2d matrix layout with special block height padding
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
