@@ -1,18 +1,8 @@
 # Mamba Model
+
 ## Inference Demo
 
-
 This demo is designed to run Mamba-2.8b on  a `wormhole` card and generate outputs for a set of prompts. We used finetuned version [state-spaces/mamba-2.8b-slimpj](https://huggingface.co/state-spaces/mamba-2.8b-slimpj) for quality outputs. Follow the instructions below to run the demo successfully.
-
-### Prerequisites
-
-Before running the demo, ensure that you have cloned and installed the `ttnn` library and installed required dependencies. Additionally, make sure to build library using release mode to get the optimized performance:
-
-```bash
-make build CONFIG=release
-export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": true}'
-```
-
 
 ### How to Run
 
@@ -34,53 +24,63 @@ pytest --disable-warnings -q -s --input-method=json --input-path='path_to_input_
 ```
 Note: We currently only support json file with strictly 32 user prompts with same token length. Check the `models/demos/mamba/demo/prompts.json` file for reference.
 
-
 ---
 
 Feel free to reach out if you have any questions or need further assistance!
+
 ## Mamba Unit Tests
+
 These unit tests are designed to test the Mamba model and its components. The tests are written using the `pytest` framework.
 
 **Navigate to the `tt-metal` directory**
 ```bash
 cd tt-metal
 ```
+
 ### SSM Block
+
 ```
 pytest -svv models/demos/mamba/tests/test_mamba_ssm.py
 ```
+
 ### Mamba Block
+
 ```
 pytest -svv models/demos/mamba/tests/test_mamba_block.py
 ```
+
 ### Residual Block
+
 ```
 pytest -svv models/demos/mamba/tests/test_residual_block.py
 ```
+
 ### Full Model
+
 Note : input embedding layer amd TopK are on CPU
 
 ```
-pytest -svv models/demos/mamba/tests/test_full_model.py::test_inference[state-spaces/mamba-2.8b-32-None-0.985-64-1]
+pytest -svv models/demos/mamba/tests/test_full_model.py::test_inference[state-spaces/mamba-2.8b-32-0.98-64-1]
 ```
+
 ## Mamba Model Performance Tests
+
 These tests are designed to evaluate device-side and host performance of Mamba model. The tests are written using the `pytest` framework.
 **Navigate to the `tt-metal` directory**
 
 ### End-to-End Model Performance
+
 ```bash
 pytest -svv models/demos/mamba/tests/test_mamba_perf.py -m models_performance_bare_metal
 ```
+
 ### Device-Side Performance
-Build the library using profile mode:
-```bash
-make clean
-make build ENABLE_TRACY=1 ENABLE_PROFILER=1
-```
-Run the following command to test device-side performance:
+
+Build with profiler support enabled (use flags `ENABLE_PROFILER=1 ENABLE_TRACY=1`) and run the following command to test device-side performance:
 
 ```
 pytest -svv models/demos/mamba/tests/test_mamba_perf.py -m models_device_performance_bare_metal
 
 ```
+
 This will also generate device and host profiling logs in directory `generated/profiler/reports/ttnn_mamba`
