@@ -24,7 +24,7 @@ def test_demo_batch_7(batch, input_path, model_location_generator, device, use_p
         0: "scientific archaeology",
         1: "Richard I",
         2: "males",
-        3: "married outside their immediate French communities,",
+        3: "The Huguenots adapted quickly and often married outside their immediate French communities,",
         4: "biostratigraphers",
         5: "chemotaxis,",
         6: "1992,",
