@@ -5,12 +5,14 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    const auto param_addr = get_arg_val<uint32_t>(0);
-    const auto exp_avg_addr = get_arg_val<uint32_t>(1);
-    const auto exp_avg_sq_addr = get_arg_val<uint32_t>(2);
+    uint32_t i = 0;
+    const auto param_addr = get_arg_val<uint32_t>(i++);
+    const auto exp_avg_addr = get_arg_val<uint32_t>(i++);
+    const auto exp_avg_sq_addr = get_arg_val<uint32_t>(i++);
+    const auto max_exp_avg_sq_addr = get_arg_val<uint32_t>(i++);
 
-    const auto num_tiles_per_core = get_arg_val<uint32_t>(4);
-    const auto start_id = get_arg_val<uint32_t>(5);
+    const auto num_tiles_per_core = get_arg_val<uint32_t>(i++);
+    const auto start_id = get_arg_val<uint32_t>(i++);
 
     constexpr uint32_t cb_id_param = tt::CB::c_out0;
     constexpr uint32_t cb_id_exp_avg = tt::CB::c_out1;
@@ -43,7 +45,6 @@ void kernel_main() {
 
 #ifdef AMSGRAD
     constexpr uint32_t cb_id_max_exp_avg_sq = tt::CB::c_out3;
-    const auto max_exp_avg_sq_addr = get_arg_val<uint32_t>(3);
     const uint32_t max_exp_avg_sq_tile_bytes = get_tile_size(cb_id_max_exp_avg_sq);
     const auto max_exp_avg_sq_data_format = get_dataformat(cb_id_max_exp_avg_sq);
     const InterleavedAddrGenFast<max_exp_avg_sq_is_dram> max_exp_avg_sq_addrg = {
