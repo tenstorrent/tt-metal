@@ -25,9 +25,9 @@ The table below summarizes the information above.
 
 | Batch size | Supported on Grayskull (E150) | Supported on Wormhole (N300)         |
 |------------|-------------------------------|--------------------------------------|
-| 7          | :x:                           | :x:                                  |
+| 7          | :x:                           | :white_check_mark:                   |
 | 8          | :x:                           | See under construction section below |
-| 12         | :white_check_mark:            | :white_check_mark:                   |
+| 12         | :white_check_mark:            | :x:                                  |
 
 ## Inputs
 
