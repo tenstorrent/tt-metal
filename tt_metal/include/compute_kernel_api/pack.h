@@ -12,17 +12,21 @@ namespace ckernel {
 
 /**
  * Copies a single tile from the DST register buffer at a specified index to a
- * specified CB at a given index. For the out_tile_index to be valid for this
- * call, cb_reserve_back(n) has to be called first to reserve at least some
- * number n > 0 of tiles in the output CB. out_tile_index = 0 then references
- * the first tile in the reserved section of the CB, up to index n - 1, which will
- * then be visible to the consumer in the same order after a cb_push_back call.
+ * specified CB at a given index. For default case with out_of_order_output = false,
+ * then icb_tile is ignored, and tiles will be packed from the start
+ * of the reserved section of the CB. Every subsequent call of pack_tile will increment an
+ * internal write pointer by a single tile size, until cb_push_back(cb_id) is used,
+ * and resets the internal write pointer to 0. If out_of_order_output = true, then the tiles
+ * will be packed in the order specified by icb_tile.
+ *
+ * cb_reserve_back(n) has to be called first to reserve at least some
+ * number n > 0 of tiles in the output CB. If out_of_order_output = false, make sure
+ * to only call pack_tile n times before calling cb_push_back(cb_id) to avoid overwriting.
+ * If out_of_order_output = true, then the icb_tile can be any value between 0 and n-1.
+ * The tiles will be visible to the consumer in the same order after a cb_push_back call.
+ *
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * This call is blocking and is only available on the compute engine.
- *
- * Each subsequent pack call will increment the write pointer in the cb by single
- * tile size. The pointer is then again set to a valid position with space for n
- * reserved tiles by another cb_reserve_back call.
  *
  * Operates in tandem with functions cb_reserve_back and cb_push_back.
  *
@@ -38,12 +42,12 @@ namespace ckernel {
  * |----------------|---------------------------------------------------|----------|-----------------------------------------------------|----------|
  * | ifrom_dst      | The index of the tile in the DST register         | uint32_t | Must be less than the size of the DST register (16) | True     |
  * | icb            | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                             | True     |
- * | icb_tile       | The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                | True     |
+ * | icb_tile       | The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                | False    |
  */
 template <bool out_of_order_output = false>
-ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0)
+ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t icb_tile = 0)
 {
-    PACK((  llk_pack<out_of_order_output, false, DST_ACCUM_MODE>(ifrom_dst, icb, output_tile_index)  ));
+    PACK((  llk_pack<out_of_order_output, false, DST_ACCUM_MODE>(ifrom_dst, icb, icb_tile)  ));
 }
 
 /**
@@ -78,6 +82,14 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
 ALWI void matmul_pack_tile(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles)
 {
     PACK((  llk_matmul_pack<false, false, DST_ACCUM_MODE>(ifrom_dst, icb, ntiles)  ));
+}
+
+ALWI void configure_pack(uint32_t out_cb_id)
+{
+    PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(out_cb_id) ));
+    PACK(( llk_pack_init(out_cb_id)  ));
+    PACK(( llk_setup_outputs()  ));
+    PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>()  ));
 }
 
 /**
