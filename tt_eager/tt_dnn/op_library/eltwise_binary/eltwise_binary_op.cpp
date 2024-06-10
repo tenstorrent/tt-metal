@@ -19,7 +19,11 @@ namespace eltwise_binary_op_utils {
 using namespace tt::tt_metal;
 
 std::map<string, string> get_defines(
-    BinaryOpType op_type, const std::optional<DataType> output_dtype, const std::optional<std::vector<UnaryWithParam>> fused_activations) {
+    BinaryOpType op_type,
+    const std::optional<DataType> in_dtype,
+    const std::optional<DataType> output_dtype,
+    const std::optional<std::vector<UnaryWithParam>> fused_activations) {
+
     std::map<string, string> defines;
     string op_name = "sub_tiles";
     string op_binary_type = "EltwiseBinaryType::ELWSUB";
@@ -106,12 +110,13 @@ std::map<string, string> get_defines(
         default: TT_ASSERT(false && "Undefined op type");
     }
 
-    if(output_dtype.has_value() && (output_dtype.value() == DataType::UINT32 || output_dtype.value() == DataType::UINT16)){
+    if(in_dtype.has_value() && output_dtype.has_value() && (output_dtype.value() == DataType::UINT32 || output_dtype.value() == DataType::UINT16)){
         TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0 && "SFPU_OP_CHAIN_0 already defined");
 
-        auto dataformat = std::to_string((uint32_t)datatype_to_dataformat_converter(output_dtype.value()));
+        auto in_dataformat =  std::to_string((uint32_t)datatype_to_dataformat_converter(in_dtype.value()));
+        auto out_dataformat = std::to_string((uint32_t)datatype_to_dataformat_converter(output_dtype.value()));
         defines.insert({"SFPU_OP_CHAIN_0",
-                        fmt::format("typecast_tile_init(); typecast_tile<{0}u>(i);", dataformat)});
+                        fmt::format("typecast_tile_init(); typecast_tile<{0}u, {1}u>(i);", in_dataformat, out_dataformat)});
         defines.insert({"SFPU_OP_TYPECAST_INCLUDE", "1"});
     }
 
