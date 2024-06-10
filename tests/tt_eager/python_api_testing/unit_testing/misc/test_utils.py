@@ -15,6 +15,8 @@ if is_wormhole_b0:
 
 
 def get_compute_kernel_options(compute_kernel_options):
+    if compute_kernel_options is None:
+        return None
     if is_wormhole_b0():
         fp32_dest_acc_en = compute_kernel_options
         packer_l1_acc = False
