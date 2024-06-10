@@ -3,6 +3,8 @@ set(TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/async_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/op_library/binary/binary_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/op_library/to_layout/to_layout_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/op_library/reduction/reduction_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/op_library/reduction/argmax_create_program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv2d.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/matmul.cpp
 

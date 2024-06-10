@@ -524,6 +524,10 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_addalpha,
         "pytorch_op": pytorch_ops.addalpha,
     },
+    "eltwise-addalpha-optional": {
+        "tt_op": tt_lib_ops.eltwise_addalpha_optional,
+        "pytorch_op": pytorch_ops.addalpha,
+    },
     "lamb-optimizer": {
         "tt_op": tt_lib_ops.lamb_optimizer,
         "pytorch_op": pytorch_ops.lamb_optimizer,
