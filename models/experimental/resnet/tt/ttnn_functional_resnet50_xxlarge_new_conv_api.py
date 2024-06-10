@@ -605,8 +605,10 @@ class resnet50:
 
         if is_wormhole_b0() and (self.batch_size == 20 or self.batch_size == 1):
             # TODO: fix the need to do the reshard here
-            x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            # x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+            x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(x)
+            x = ttnn.reallocate(x_rm)
             x = ttnn.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
         x = self.max_pool(x)
 
@@ -895,8 +897,10 @@ class resnet50:
 
         if is_wormhole_b0() and self.batch_size == 20 or self.batch_size == 1:
             # TODO: fix the need to do the reshard here
-            x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            # x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+            x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(x)
+            x = ttnn.reallocate(x_rm)
             x = ttnn.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
         x = self.max_pool(x)
 
