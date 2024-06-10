@@ -38,7 +38,7 @@ Buffer<T> get_as(BorrowedBuffer& buffer) {
 }
 
 template <typename T>
-const Buffer<T> get_as(const BorrowedBuffer& buffer) {
+Buffer<T> get_as(const BorrowedBuffer& buffer) {
     return std::get<Buffer<T>>(buffer);
 }
 
@@ -58,10 +58,10 @@ Buffer<T> get_as(Tensor& tensor) {
 }
 
 template <typename T>
-const Buffer<T> get_as(const Tensor& tensor) {
+Buffer<T> get_as(const Tensor& tensor) {
     validate_datatype<T>(tensor);
     return std::visit(
-        [](auto&& storage) -> const Buffer<T> {
+        [](auto&& storage) -> Buffer<T> {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 return get_as<T>(storage.buffer);
@@ -111,7 +111,7 @@ Buffer<T> get_as(OwnedBuffer& buffer) {
 }
 
 template <typename T>
-const Buffer<T> get_as(const OwnedBuffer& buffer) {
+Buffer<T> get_as(const OwnedBuffer& buffer) {
     return std::get<Buffer<T>>(buffer);
 }
 
@@ -131,10 +131,10 @@ Buffer<T> get_as(Tensor& tensor) {
 }
 
 template <typename T>
-const Buffer<T> get_as(const Tensor& tensor) {
+Buffer<T> get_as(const Tensor& tensor) {
     validate_datatype<T>(tensor);
     return std::visit(
-        [](auto&& storage) -> const Buffer<T> {
+        [](auto&& storage) -> Buffer<T> {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 return get_as<T>(storage.buffer);
@@ -156,7 +156,7 @@ borrowed_buffer::Buffer<T> get_as(OwnedBuffer& buffer) {
 }
 
 template <typename T>
-const borrowed_buffer::Buffer<T> get_as(const OwnedBuffer& buffer) {
+borrowed_buffer::Buffer<T> get_as(const OwnedBuffer& buffer) {
     auto owned_buffer = std::get<owned_buffer::Buffer<T>>(buffer);
     return borrowed_buffer::Buffer<T>(owned_buffer.begin(), owned_buffer.size());
 }
@@ -172,7 +172,7 @@ borrowed_buffer::Buffer<T> get_as(BorrowedBuffer& buffer) {
 }
 
 template <typename T>
-const borrowed_buffer::Buffer<T> get_as(const BorrowedBuffer& buffer) {
+borrowed_buffer::Buffer<T> get_as(const BorrowedBuffer& buffer) {
     return borrowed_buffer::get_as<T>(buffer);
 }
 
@@ -193,9 +193,9 @@ borrowed_buffer::Buffer<T> get_as(Tensor& tensor) {
 }
 
 template <typename T>
-const borrowed_buffer::Buffer<T> get_as(const Tensor& tensor) {
+borrowed_buffer::Buffer<T> get_as(const Tensor& tensor) {
     return std::visit(
-        [](auto&& storage) -> const borrowed_buffer::Buffer<T> {
+        [](auto&& storage) -> borrowed_buffer::Buffer<T> {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 return host_buffer::get_as<T>(storage.buffer);
