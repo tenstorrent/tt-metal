@@ -32,6 +32,16 @@ constexpr std::string_view get_type_name(const T& object) {
     return get_type_name<T>();
 }
 
+template <typename T>
+concept IsVariant = requires { typename std::variant_size<T>::type; };
+
+template <IsVariant Variant>
+constexpr auto get_active_type_name_in_variant(const Variant& v) {
+    return std::visit([](auto&& arg) -> std::string_view {
+        return short_type_name<std::decay_t<decltype(arg)>>;
+    }, v);
+}
+
 // Forward Declare hash_object
 namespace hash {
 

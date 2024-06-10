@@ -188,6 +188,7 @@ void Tensor::deallocate(bool force) {
                             auto dealloc_lambda = std::make_shared<std::function<void(Device*)>>(
                                 [force, attr = this->tensor_attributes](Device* worker) mutable {
                                     ZoneScopedN("ShardDeallocate");
+                                    TT_ASSERT(std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(attr->storage), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(attr->storage),__FILE__, __LINE__));
                                     auto& s = std::get<MultiDeviceStorage>(attr->storage);
                                     if (s.has_buffer_for_device(worker)) {
                                         auto& device_buffer = s.get_buffer_for_device(worker);
@@ -809,6 +810,8 @@ const Shape Tensor::strides() const { return detail::compute_strides(this->get_l
 
 uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->get_legacy_shape()); }
 
+uint32_t Tensor::intended_volume() const { return tt::tt_metal::compute_volume(this->get_shape()); }
+
 Tensor create_device_tensor(
     const Shape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config) {
     ZoneScoped;
@@ -1037,6 +1040,7 @@ void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id) {
                             auto host_storage = std::get<BorrowedStorage>(async_safe_tensor.get_storage());
                             std::visit([&host_data](auto&& b) { host_data = b.data(); }, host_storage.buffer);
                         } else {
+                            TT_ASSERT(std::holds_alternative<OwnedStorage>(async_safe_tensor.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(async_safe_tensor.get_storage()),__FILE__, __LINE__));
                             auto host_storage = std::get<OwnedStorage>(async_safe_tensor.get_storage());
                             std::visit([&host_data](auto&& b) { host_data = b.begin(); }, host_storage.get_buffer());
                         }

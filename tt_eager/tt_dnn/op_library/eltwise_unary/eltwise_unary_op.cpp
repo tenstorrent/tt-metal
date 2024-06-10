@@ -482,8 +482,14 @@ const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tenso
 
 // unary op version tie
 template <BcastOpMath OP>
-Tensor tie_binop_to_unary(uint8_t queue_id, const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor = std::nullopt) {
-    Tensor t_value = mk_tiled_scalar(value, input_tensor.get_dtype());
+Tensor tie_binop_to_unary(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    float value,
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor = std::nullopt) {
+    const DataType& dtype = output_tensor.has_value() ? output_tensor.value().get_dtype() : input_tensor.get_dtype();
+    Tensor t_value = ttnn::operations::creation::create_scalar(value, dtype, Layout::TILE, input_tensor.device());
     return bcast(queue_id, input_tensor, t_value, OP, BcastOpDim::HW, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
 }
 

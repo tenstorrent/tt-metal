@@ -363,6 +363,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
     std::vector<OwnedBuffer> host_owned_buffers;
     std::vector<Shape> host_owned_shapes;
     for (const auto &shard : tt_shards) {
+        TT_ASSERT(std::holds_alternative<OwnedStorage>(shard.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(shard.get_storage()),__FILE__, __LINE__));
         host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
         host_owned_shapes.push_back(shard.get_legacy_shape());
     }
@@ -428,12 +429,14 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
         auto tt_dtype = tt_tensor.get_dtype();
         if (tt_dtype == DataType::BFLOAT8_B) {
+            TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(buffer),__FILE__, __LINE__));
             auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
             auto float_unpacked_data = unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
             buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
             tt_dtype = DataType::FLOAT32;
         }
         if (tt_dtype == DataType::BFLOAT4_B) {
+            TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(buffer),__FILE__, __LINE__));
             auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
             auto float_unpacked_data = unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
             buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
@@ -489,6 +492,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
         auto tt_dtype = tt_tensor.get_dtype();
         if (tt_dtype == DataType::BFLOAT8_B) {
+            TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(buffer),__FILE__, __LINE__));
             auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
             auto float_unpacked_data =
                 unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
@@ -496,6 +500,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
             tt_dtype = DataType::FLOAT32;
         }
         if (tt_dtype == DataType::BFLOAT4_B) {
+            TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(buffer),__FILE__, __LINE__));
             auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
             auto float_unpacked_data =
                 unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);

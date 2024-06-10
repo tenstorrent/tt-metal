@@ -286,6 +286,8 @@ tt::stl::reflection::Attributes AttnMatmul::attributes() const {
 }
 
 const operation::Hash AttnMatmul::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensors.at(0).storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensors.at(0).get_storage()),__FILE__, __LINE__));
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensors.at(1).storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensors.at(1).get_storage()),__FILE__, __LINE__));
     return operation::hash_operation<AttnMatmul>(
         this->transpose_hw,
         this->output_mem_config,
@@ -491,6 +493,9 @@ tt::stl::reflection::Attributes GroupAttnMatmul::attributes() const {
 const operation::Hash GroupAttnMatmul::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
+
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_a.storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()),__FILE__, __LINE__));
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_b.storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor_b.storage()),__FILE__, __LINE__));
 
     return operation::hash_operation<GroupAttnMatmul>(
         this->transpose_hw,
