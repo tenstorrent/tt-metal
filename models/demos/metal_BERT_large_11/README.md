@@ -8,12 +8,22 @@
 
 > [!NOTE]
 >
-> You must set the `WH_ARCH_YAML` environment variable to be able to use the entire
-> Wormhole Tensix grid.
+> If you are using Wormhole, you must set the `WH_ARCH_YAML` environment variable to use  the following batch sizes:
+>
+> - `batch_8`
 >
 > ```
 > export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 > ```
+>
+> You must unset this environment variable for the following batch sizes:
+>
+> - `batch_7`
+> - `batch_12`
+
+>[!WARNING]
+>
+> This model demo does not work on N150 Wormhole cards.
 
 The optimized demos will parallelize batch on one of the device grid dimensions. The grid size used is `batch x 8` or `8 x batch` depending on your device grid.
 

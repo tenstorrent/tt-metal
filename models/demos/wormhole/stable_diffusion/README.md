@@ -13,8 +13,7 @@ Inputs by default are provided from `input_data.json`. If you wish to change the
 
 > [!NOTE]
 >
-> You must set the `WH_ARCH_YAML` environment variable to be able to use the entire
-> Wormhole Tensix grid.
+> If you are using Wormhole, you must set the `WH_ARCH_YAML` environment variable.
 >
 > ```
 > export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
