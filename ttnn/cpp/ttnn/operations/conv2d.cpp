@@ -72,6 +72,7 @@ ParallelConfig determine_parallel_config(
     Device& device,
     ShardOrientation block_shard_orientation,
     bool is_out_tiled) {
+    cout << "out tiled = " << is_out_tiled << endl;
     uint32_t conv_out_2d_matrix_height = batch_size * output_height * output_width;
     // pad height to 32
     conv_out_2d_matrix_height = round_up(conv_out_2d_matrix_height, 32);
@@ -115,13 +116,14 @@ ParallelConfig determine_parallel_config(
             uint32_t total_cores_for_channels =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? device_grid_size[1] : device_grid_size[0];
             uint32_t num_cores_channels = find_closest_common_largest_divisor(
-                conv_out_2d_matrix_width_ntiles, ceil((double)input_channels / (double)32), total_cores_for_channels);
+                conv_out_2d_matrix_width_ntiles, is_out_tiled ? ceil((double)input_channels / (double)32) : input_channels, total_cores_for_channels);
             uint32_t cores_x =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_channels;
             uint32_t cores_y =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_channels : num_cores_nhw;
             CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
             CoreRangeSet grid = CoreRangeSet({core_range});
+            cout << "cores_x = " << cores_x << " cores_y = " << cores_y << endl;
             return grid;
         }
     };
@@ -189,6 +191,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     TT_ASSERT(channels % num_cores_channels == 0);
     uint32_t channel_shard = channels / num_cores_channels;
     auto shard_spec = ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
+    cout << "nhw_shard = " << nhw_shard << " channel_shard = " << channel_shard << endl;
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
 }
 
@@ -197,13 +200,14 @@ tt::tt_metal::OptimizedConvParallelizationConfig determine_conv_op_parallel_conf
     TT_ASSERT(conv_output_mem_config.shard_spec.has_value());
     const auto& shard_spec = conv_output_mem_config.shard_spec.value();
     const auto& shard_shape = shard_spec.shape;
+    cout << "shard height = " << shard_shape[0] << " shard width = " << shard_shape[1] << endl;
     TT_ASSERT(shard_shape[0] % 32 == 0);
-    TT_ASSERT(shard_shape[1] % 32 == 0);
+    //TT_ASSERT(shard_shape[1] % 32 == 0);
     return {
         .grid_size = shard_spec.grid.bounding_box().grid_size(),
         .num_cores_nhw = num_cores_nhw,
         .per_core_out_matrix_height_ntiles = shard_shape[0] / 32,
-        .per_core_out_matrix_width_ntiles = shard_shape[1] / 32,
+        .per_core_out_matrix_width_ntiles = std::ceil((double) shard_shape[1] / (double)32),
     };
 }
 
@@ -267,6 +271,10 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(
         out_subblock_h_ntiles = act_block_h_ntiles / 2;
         TT_ASSERT((out_subblock_h_ntiles * out_subblock_w_ntiles) <= 8);
     }
+    cout << "act_block_h_ntiles = " << act_block_h_ntiles << " act_block_w_ntiles = " << act_block_w_ntiles
+         << " act_c_num_blocks = " << act_c_num_blocks << " out_block_h_ntiles = " << out_block_h_ntiles
+         << " out_subblock_h_ntiles = " << out_subblock_h_ntiles << " out_subblock_w_ntiles = " << out_subblock_w_ntiles
+         << endl;
     return {
         .act_block_h_ntiles = act_block_h_ntiles,
         .act_block_w_ntiles = act_block_w_ntiles,
@@ -343,7 +351,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_requir
             width,
             out_channels,
             device,
-            block_shard_orientation);
+            block_shard_orientation,
+            conv_config.output_layout == Layout::TILE);
 
         if (conv_config.override_sharding_config) {
             TT_FATAL(conv_config.core_grid.has_value());
