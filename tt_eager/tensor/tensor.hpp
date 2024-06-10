@@ -311,6 +311,7 @@ struct Tensor {
     StorageType storage_type() const;
     const Shape strides() const;
     uint32_t volume() const;
+    uint32_t intended_volume() const;
 
     bool is_allocated() const;
 

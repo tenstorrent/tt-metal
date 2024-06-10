@@ -2218,6 +2218,11 @@ std::vector<Tensor> _prod_bw(
         std::vector<int64_t> after_permute_dims = {0, 2, 3, 1};
         Tensor tensor_1 = permute(tensor_1_temp, after_permute_dims, output_mem_config);
         Tensor tensor_2 = permute(temp, after_permute_dims, output_mem_config);
+
+        // put the tensor back on device because permute throws it off device
+        // See: Remove auto format within permute_op.cpp #9404
+        tensor_2 = AutoFormat::move_tensor_to_device_and_pad(tensor_2, tensor_1.device(),tensor_1.get_layout(), tensor_1.memory_config());
+
         after_permute_dims = {0, 3, 1, 2};
         Tensor result = permute(
             bcast(tensor_1, tensor_2, BcastOpMath::MUL, BcastOpDim::W, output_mem_config),
@@ -2250,6 +2255,11 @@ std::vector<Tensor> _prod_bw(
     std::vector<int64_t> after_permute_dims = {3, 1, 2, 0};
     Tensor tensor_1 = permute(tensor_1_temp, after_permute_dims, output_mem_config);
     Tensor tensor_2 = permute(temp, after_permute_dims, output_mem_config);
+
+    // put the tensor back on device because permute throws it off device
+    // See: Remove auto format within permute_op.cpp #9404
+    tensor_2 = AutoFormat::move_tensor_to_device_and_pad(tensor_2, tensor_1.device(),tensor_1.get_layout(), tensor_1.memory_config());
+
     Tensor result = permute(
         bcast(tensor_1, tensor_2, BcastOpMath::MUL, BcastOpDim::W, output_mem_config),
         after_permute_dims,

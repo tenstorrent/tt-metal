@@ -8,6 +8,7 @@
 
 #include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
+#include "tt_metal/tt_stl/reflection.hpp"
 
 namespace tt {
 
@@ -41,6 +42,7 @@ Buffer<T> get_as(BorrowedBuffer& buffer) {
 
 template <typename T>
 Buffer<T> get_as(const BorrowedBuffer& buffer) {
+    TT_ASSERT(std::holds_alternative<Buffer<T>>(buffer), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(buffer),__FILE__, __LINE__));
     return std::get<Buffer<T>>(buffer);
 }
 
@@ -155,12 +157,14 @@ namespace host_buffer {
 
 template <typename T>
 borrowed_buffer::Buffer<T> get_as(OwnedBuffer& buffer) {
+    TT_ASSERT(std::holds_alternative<owned_buffer::Buffer<T>>(buffer), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(buffer),__FILE__, __LINE__));
     auto& owned_buffer = std::get<owned_buffer::Buffer<T>>(buffer);
     return borrowed_buffer::Buffer<T>(owned_buffer.begin(), owned_buffer.size());
 }
 
 template <typename T>
 borrowed_buffer::Buffer<T> get_as(const OwnedBuffer& buffer) {
+    TT_ASSERT(std::holds_alternative<owned_buffer::Buffer<T>>(buffer), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(buffer),__FILE__, __LINE__));
     auto owned_buffer = std::get<owned_buffer::Buffer<T>>(buffer);
     return borrowed_buffer::Buffer<T>(owned_buffer.begin(), owned_buffer.size());
 }
