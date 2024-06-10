@@ -180,6 +180,7 @@ void kernel_main() {
                     // Mcast from different CB to another CB
                     else {
                         // multicast to every core in receiver grid
+                        // will be a no-op if there is only one core that is the sender and receiver.
                         noc_async_write_multicast_loopback_src(
                             local_read_addr,
                             in0_multicast_data_addr,
