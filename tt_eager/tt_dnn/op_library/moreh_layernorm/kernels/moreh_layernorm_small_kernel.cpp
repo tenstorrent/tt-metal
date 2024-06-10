@@ -12,9 +12,6 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
-
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
 }
@@ -92,7 +89,7 @@ void MAIN {
             for (uint32_t j = 0; j < block_size; j++) {
                 const uint32_t w_idx = wt + j;
                 if (w_idx == 0) {
-                    ACQ();
+                    tile_regs_acquire();
                     cb_reserve_back(cb_xsum, onetile);
 
                     copy_tile_init();
@@ -109,12 +106,14 @@ void MAIN {
                         mask_tile_init();
                         mask_tile(dst0, dst1);
                     }
+                    tile_regs_commit();
 
+                    tile_regs_wait();
                     pack_tile(dst0, cb_xsum);
                     cb_push_back(cb_xsum, onetile);
-                    REL();
+                    tile_regs_release();
                 } else {
-                    ACQ();
+                    tile_regs_acquire();
                     // I use cb_ex temporarily.
                     constexpr auto cb_tmp = cb_ex;
                     cb_reserve_back(cb_tmp, onetile);
@@ -135,24 +134,29 @@ void MAIN {
                         mask_tile_init();
                         mask_tile(dst0, mask_dst);
                     }
+                    tile_regs_commit();
 
+                    tile_regs_wait();
                     pack_tile(dst0, cb_tmp);
                     cb_push_back(cb_tmp, onetile);
-                    REL();
+                    tile_regs_release();
 
-                    ACQ();
+                    tile_regs_acquire();
                     cb_wait_front(cb_tmp, onetile);
                     cb_wait_front(cb_xsum, onetile);
                     cb_reserve_back(cb_xsum, onetile);
 
                     add_tiles_init();
                     add_tiles(cb_xsum, cb_tmp, first_tile, first_tile, dst0);
+                    tile_regs_commit();
+
+                    tile_regs_wait();
                     pack_tile(dst0, cb_xsum);
 
                     cb_pop_front(cb_tmp, onetile);
                     cb_pop_front(cb_xsum, onetile);
                     cb_push_back(cb_xsum, onetile);
-                    REL();
+                    tile_regs_release();
                 }
             }  // block_size loop
         }      // Wt loop
@@ -162,33 +166,37 @@ void MAIN {
          * E[x]
          * cb_ex
          */
-        ACQ();
+        tile_regs_acquire();
         cb_wait_front(cb_xsum, onetile);
         cb_reserve_back(cb_ex, onetile);
 
         reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
         reduce_tile(cb_xsum, cb_scaler, first_tile, first_tile, dst0);
         reduce_revert_delta();
+        tile_regs_commit();
 
+        tile_regs_wait();
         pack_tile(dst0, cb_ex);
 
         cb_pop_front(cb_xsum, onetile);
         cb_push_back(cb_ex, onetile);
-        REL();
+        tile_regs_release();
 
         cb_wait_front(cb_ex, onetile);
         if (mean_has_value) {
             // Write on cb_mean.
-            ACQ();
+            tile_regs_acquire();
             cb_reserve_back(cb_mean, onetile);
 
             copy_tile_init();
             copy_tile(cb_ex, first_tile, dst0);
+            tile_regs_commit();
 
+            tile_regs_wait();
             pack_tile(dst0, cb_mean);
 
             cb_push_back(cb_mean, onetile);
-            REL();
+            tile_regs_release();
         }
         // We don't pop cb_ex here.
 
@@ -200,7 +208,7 @@ void MAIN {
         for (uint32_t wt = 0; wt < Wt; wt += block_size) {
             for (uint32_t j = 0; j < block_size; j++) {
                 const uint32_t w_idx = wt + j;
-                ACQ();
+                tile_regs_acquire();
                 if (is_lastdim_layernorm) {
                     sub_bcast_cols_init_short();
                     sub_tiles_bcast_cols(cb_x, cb_ex, w_idx, first_tile, j);
@@ -222,8 +230,11 @@ void MAIN {
                         mask_tile(j, mask_dst);
                     }
                 }
+                tile_regs_commit();
+
+                tile_regs_wait();
                 pack_tile(j, cb_xmm);
-                REL();
+                tile_regs_release();
             }  // block_size loop
             cb_push_back(cb_xmm, block_size);
         }  // Wt loop
@@ -236,41 +247,50 @@ void MAIN {
          */
         cb_wait_front(cb_xmm, Wt);
         for (uint32_t wt = 0; wt < Wt; wt++) {
-            ACQ();
+            tile_regs_acquire();
             cb_reserve_back(cb_xmm2, onetile);
 
             mul_tiles_init();
             mul_tiles(cb_xmm, cb_xmm, wt, wt, dst0);
+            tile_regs_commit();
+
+            tile_regs_wait();
             pack_tile(dst0, cb_xmm2);
 
             cb_push_back(cb_xmm2, onetile);
-            REL();
+            tile_regs_release();
             if (wt == 0) {
-                ACQ();
+                tile_regs_acquire();
                 cb_wait_front(cb_xmm2, onetile);
                 cb_reserve_back(cb_xmm2sum, onetile);
 
                 copy_tile_init();
                 copy_tile(cb_xmm2, first_tile, dst0);
+                tile_regs_commit();
+
+                tile_regs_wait();
                 pack_tile(dst0, cb_xmm2sum);
 
                 cb_pop_front(cb_xmm2, onetile);
                 cb_push_back(cb_xmm2sum, onetile);
-                REL();
+                tile_regs_release();
             } else {
-                ACQ();
+                tile_regs_acquire();
                 cb_wait_front(cb_xmm2sum, onetile);
                 cb_wait_front(cb_xmm2, onetile);
                 cb_reserve_back(cb_xmm2sum, onetile);
 
                 add_tiles_init();
                 add_tiles(cb_xmm2sum, cb_xmm2, first_tile, first_tile, dst0);
+                tile_regs_commit();
+
+                tile_regs_wait();
                 pack_tile(dst0, cb_xmm2sum);
 
                 cb_pop_front(cb_xmm2sum, onetile);
                 cb_pop_front(cb_xmm2, onetile);
                 cb_push_back(cb_xmm2sum, onetile);
-                REL();
+                tile_regs_release();
             }
         }  // Wt loop
         // We don't pop cb_xmm here.
@@ -279,25 +299,27 @@ void MAIN {
          * E[(x-E[x])^2 = Var[x]
          * cb_var
          */
-        ACQ();
+        tile_regs_acquire();
         cb_wait_front(cb_xmm2sum, onetile);
         cb_reserve_back(cb_var, onetile);
 
         reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
         reduce_tile(cb_xmm2sum, cb_scaler, first_tile, first_tile, dst0);
         reduce_revert_delta();
+        tile_regs_commit();
 
+        tile_regs_wait();
         pack_tile(dst0, cb_var);
 
         cb_pop_front(cb_xmm2sum, onetile);
         cb_push_back(cb_var, onetile);
-        REL();
+        tile_regs_release();
 
         /*
          * 1.0/(sqrt(E[(x-E[x])^2] + eps))
          * cb_recip_std
          */
-        ACQ();
+        tile_regs_acquire();
         cb_wait_front(cb_var, onetile);
         cb_reserve_back(cb_recip_std, onetile);
 
@@ -307,25 +329,30 @@ void MAIN {
         rsqrt_tile_init();
         rsqrt_tile(dst0);
 
+        tile_regs_commit();
+
+        tile_regs_wait();
         pack_tile(dst0, cb_recip_std);
 
         cb_pop_front(cb_var, onetile);
         cb_push_back(cb_recip_std, onetile);
-        REL();
+        tile_regs_release();
 
         cb_wait_front(cb_recip_std, onetile);
         if (rstd_has_value) {
             // Write on cb_rstd.
-            ACQ();
+            tile_regs_acquire();
             cb_reserve_back(cb_rstd, onetile);
 
             copy_tile_init();
             copy_tile(cb_recip_std, first_tile, dst0);
+            tile_regs_commit();
 
+            tile_regs_wait();
             pack_tile(dst0, cb_rstd);
 
             cb_push_back(cb_rstd, onetile);
-            REL();
+            tile_regs_release();
         }
 
         /*
@@ -337,7 +364,7 @@ void MAIN {
         for (uint32_t wt = 0; wt < Wt; wt += block_size) {
             cb_reserve_back(cb_gamma_beta_or_out, block_size);
             for (uint32_t j = 0; j < block_size; j++) {
-                ACQ();
+                tile_regs_acquire();
                 if (is_lastdim_layernorm) {
                     mul_bcast_cols_init_short();
                     mul_tiles_bcast_cols(cb_xmm, cb_recip_std, wt + j, first_tile, j);
@@ -345,8 +372,11 @@ void MAIN {
                     mul_tiles_bcast_scalar_init_short();
                     mul_tiles_bcast_scalar(cb_xmm, cb_recip_std, wt + j, first_tile, j);
                 }
+                tile_regs_commit();
+
+                tile_regs_wait();
                 pack_tile(j, cb_gamma_beta_or_out);
-                REL();
+                tile_regs_release();
             }  // block_size loop
             cb_push_back(cb_gamma_beta_or_out, block_size);
 
@@ -357,7 +387,7 @@ void MAIN {
                 cb_wait_front(cb_gamma, block_size);
                 cb_reserve_back(cb_outg, block_size);
                 for (uint32_t j = 0; j < block_size; j++) {
-                    ACQ();
+                    tile_regs_acquire();
                     if (is_groupnorm) {
                         mul_tiles_bcast_scalar_init_short();
                         mul_tiles_bcast_scalar(cb_gamma_beta_or_out, cb_gamma, j, j, j);
@@ -370,8 +400,11 @@ void MAIN {
                             mul_tiles(cb_gamma_beta_or_out, cb_gamma, j, j, j);
                         }
                     }
+                    tile_regs_commit();
+
+                    tile_regs_wait();
                     pack_tile(j, cb_outg);
-                    REL();
+                    tile_regs_release();
                 }  // block_size loop
                 cb_pop_front(cb_gamma_beta_or_out, block_size);
                 cb_pop_front(cb_gamma, block_size);
@@ -384,7 +417,7 @@ void MAIN {
                 cb_wait_front(cb_beta, block_size);
                 cb_reserve_back(cb_out, block_size);
                 for (uint32_t j = 0; j < block_size; j++) {
-                    ACQ();
+                    tile_regs_acquire();
                     if (is_groupnorm) {
                         add_bcast_scalar_init_short();
                         add_tiles_bcast_scalar(cb_gamma_beta, cb_beta, j, j, j);
@@ -397,8 +430,11 @@ void MAIN {
                             add_tiles(cb_gamma_beta, cb_beta, j, j, j);
                         }
                     }
+                    tile_regs_commit();
+
+                    tile_regs_wait();
                     pack_tile(j, cb_out);
-                    REL();
+                    tile_regs_release();
                 }  // block_size loop
                 cb_pop_front(cb_gamma_beta, block_size);
                 cb_pop_front(cb_beta, block_size);
