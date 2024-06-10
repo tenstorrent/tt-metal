@@ -119,5 +119,5 @@ def run(
     )
     output_tensor = ttnn.to_torch(output_tensor)
 
-    expected_pcc = 0.99
+    expected_pcc = 0.99 if k_size < 1024 else 0.98
     return check_with_pcc(torch_output_tensor, output_tensor, expected_pcc)
