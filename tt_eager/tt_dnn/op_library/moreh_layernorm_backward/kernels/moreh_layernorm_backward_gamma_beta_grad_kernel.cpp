@@ -11,9 +11,6 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
-
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t num_cols_per_core = get_compile_time_arg_val(0);
@@ -89,7 +86,7 @@ void MAIN {
 
             // Compute cb_dycopy
             // deepcopy and mask(optional)
-            ACQ();
+            tile_regs_acquire();
             cb_wait_front(cb_dy, onetile);  // comes from the reader
             cb_reserve_back(cb_dycopy, onetile);
 
@@ -111,40 +108,46 @@ void MAIN {
                 mask_tile_init();
                 mask_tile(dst0, dst1);
             }
+            tile_regs_commit();
 
+            tile_regs_wait();
             pack_tile(dst0, cb_dycopy);
 
             cb_pop_front(cb_dy, onetile);
             cb_push_back(cb_dycopy, onetile);
-            REL();
+            tile_regs_release();
 
             // Compute cb_dyadd
             cb_wait_front(cb_dycopy, onetile);
             if (beta_grad_has_value) {
                 if (inner_idx == 0) {
-                    ACQ();
+                    tile_regs_acquire();
                     cb_reserve_back(cb_dyadd, onetile);
 
                     copy_tile_init();
                     copy_tile(cb_dycopy, 0, dst0);
+                    tile_regs_commit();
 
+                    tile_regs_wait();
                     pack_tile(dst0, cb_dyadd);
 
                     cb_push_back(cb_dyadd, onetile);
-                    REL();
+                    tile_regs_release();
                 } else {
-                    ACQ();
+                    tile_regs_acquire();
                     cb_wait_front(cb_dyadd, onetile);
                     cb_reserve_back(cb_dyadd, onetile);
 
                     add_tiles_init();
                     add_tiles(cb_dyadd, cb_dycopy, 0, 0, dst0);
+                    tile_regs_commit();
 
+                    tile_regs_wait();
                     pack_tile(dst0, cb_dyadd);
 
                     cb_pop_front(cb_dyadd, onetile);
                     cb_push_back(cb_dyadd, onetile);
-                    REL();
+                    tile_regs_release();
                 }
             }  // beta_grad_has_value
             // We don't pop cb_dycopy here.
@@ -152,7 +155,7 @@ void MAIN {
             if (gamma_grad_has_value) {
                 // Compute cb_xmm
                 // x - mean and mask(optional)
-                ACQ();
+                tile_regs_acquire();
                 cb_wait_front(cb_x, onetile);     // comes from the reader
                 cb_wait_front(cb_mean, onetile);  // comes from the reader
                 cb_reserve_back(cb_xmm, onetile);
@@ -180,17 +183,19 @@ void MAIN {
                     mask_tile_init();
                     mask_tile(dst0, dst1);
                 }
+                tile_regs_commit();
 
+                tile_regs_wait();
                 pack_tile(dst0, cb_xmm);
 
                 cb_pop_front(cb_x, onetile);
                 cb_pop_front(cb_mean, onetile);
                 cb_push_back(cb_xmm, onetile);
-                REL();
+                tile_regs_release();
 
                 // Compute cb_y
                 // (x - mean) / rstd
-                ACQ();
+                tile_regs_acquire();
                 cb_wait_front(cb_xmm, onetile);
                 cb_wait_front(cb_rstd, onetile);  // comes from the reader
                 cb_reserve_back(cb_y, onetile);
@@ -202,57 +207,65 @@ void MAIN {
                     mul_tiles_bcast_scalar_init_short();
                     mul_tiles_bcast_scalar(cb_xmm, cb_rstd, 0, 0, dst0);
                 }
+                tile_regs_commit();
 
+                tile_regs_wait();
                 pack_tile(dst0, cb_y);
 
                 cb_pop_front(cb_xmm, onetile);
                 cb_pop_front(cb_rstd, onetile);
                 cb_push_back(cb_y, onetile);
-                REL();
+                tile_regs_release();
 
                 // Compute cb_ydy
-                ACQ();
+                tile_regs_acquire();
                 cb_wait_front(cb_y, onetile);
                 cb_reserve_back(cb_ydy, onetile);
 
                 mul_tiles_init();
                 mul_tiles(cb_y, cb_dycopy, 0, 0, dst0);
+                tile_regs_commit();
 
+                tile_regs_wait();
                 pack_tile(dst0, cb_ydy);
 
                 cb_pop_front(cb_y, onetile);
                 cb_push_back(cb_ydy, onetile);
-                REL();
+                tile_regs_release();
 
                 // Compute cb_ydyadd
                 if (inner_idx == 0) {
-                    ACQ();
+                    tile_regs_acquire();
                     cb_wait_front(cb_ydy, onetile);
                     cb_reserve_back(cb_ydyadd, onetile);
 
                     copy_tile_init();
                     copy_tile(cb_ydy, 0, dst0);
+                    tile_regs_commit();
 
+                    tile_regs_wait();
                     pack_tile(dst0, cb_ydyadd);
 
                     cb_pop_front(cb_ydy, onetile);
                     cb_push_back(cb_ydyadd, onetile);
-                    REL();
+                    tile_regs_release();
                 } else {
-                    ACQ();
+                    tile_regs_acquire();
                     cb_wait_front(cb_ydy, onetile);
                     cb_wait_front(cb_ydyadd, onetile);
                     cb_reserve_back(cb_ydyadd, onetile);
 
                     add_tiles_init();
                     add_tiles(cb_ydyadd, cb_ydy, 0, 0, dst0);
+                    tile_regs_commit();
 
+                    tile_regs_wait();
                     pack_tile(dst0, cb_ydyadd);
 
                     cb_pop_front(cb_ydy, onetile);
                     cb_pop_front(cb_ydyadd, onetile);
                     cb_push_back(cb_ydyadd, onetile);
-                    REL();
+                    tile_regs_release();
                 }
             }  // gamma_grad_has_value
 
@@ -261,7 +274,7 @@ void MAIN {
 
         if (gamma_grad_has_value) {
             // Compute cb_dgamma
-            ACQ();
+            tile_regs_acquire();
             cb_wait_front(cb_ydyadd, onetile);
             cb_reserve_back(cb_dgamma, onetile);
 
@@ -275,17 +288,19 @@ void MAIN {
                 copy_tile_init();
                 copy_tile(cb_ydyadd, 0, dst0);
             }
+            tile_regs_commit();
 
+            tile_regs_wait();
             pack_tile(dst0, cb_dgamma);
 
             cb_pop_front(cb_ydyadd, onetile);
             cb_push_back(cb_dgamma, onetile);
-            REL();
+            tile_regs_release();
         }  // gamma_grad_has_value
 
         if (beta_grad_has_value) {
             // Compute cb_dbeta
-            ACQ();
+            tile_regs_acquire();
             cb_wait_front(cb_dyadd, onetile);
             cb_reserve_back(cb_dbeta, onetile);
 
@@ -299,12 +314,14 @@ void MAIN {
                 copy_tile_init();
                 copy_tile(cb_dyadd, 0, dst0);
             }
+            tile_regs_commit();
 
+            tile_regs_wait();
             pack_tile(dst0, cb_dbeta);
 
             cb_pop_front(cb_dyadd, onetile);
             cb_push_back(cb_dbeta, onetile);
-            REL();
+            tile_regs_release();
         }  // beta_grad_has_value
 
     }  // outer_idx loop
