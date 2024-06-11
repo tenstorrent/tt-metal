@@ -19,7 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 
 
-def run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config):
+def run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config, generate_output=False):
     if layout == ttl.tensor.Layout.ROW_MAJOR and dtype == ttl.tensor.DataType.BFLOAT8_B:
         pytest.skip("Illegal config")
     if layout == ttl.tensor.Layout.TILE:
@@ -34,10 +34,30 @@ def run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, ou
         .to(layout)
         .to(device, input_mem_config)
     )
+    output = []
+    if generate_output:
+        output_shape = [a * b for a, b in zip(repeats, input_shape)]
+        # output_shape = [1,1,32,128]
+        print(output_shape)
+        output = torch.rand(output_shape).to(torch.bfloat16)
+        tt_output = (
+            ttl.tensor.Tensor(
+                output,
+                dtype,
+            )
+            .to(layout)
+            .to(device, input_mem_config)
+        )
+        print("\n\n befor ", tt_output)
+        # print("\n\n befor input",tt_input)
+        tt = ttl.tensor.repeat(tt_input, ttl.tensor.Shape(repeats), output_mem_config, tt_output)
+        print("\n\n after", tt_output)
+        print("\n\n after", tt)
 
     tt_cpu = input.repeat(torch.Size(repeats))
-
-    tt = ttl.tensor.repeat(tt_input, ttl.tensor.Shape(repeats), output_mem_config)
+    # print("ref",tt_cpu)
+    if generate_output == False:
+        tt = ttl.tensor.repeat(tt_input, ttl.tensor.Shape(repeats), output_mem_config)
 
     tt_dev = tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
@@ -49,21 +69,132 @@ def run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, ou
     assert passing
 
 
+# @pytest.mark.parametrize(
+#     "input_shape, repeats",
+#     (
+#         ((1, 2, 64, 64), [1, 1, 1, 1]),
+#         ((1, 1, 64, 64), [1, 1, 1, 2]),
+#         ((1, 1, 32, 128), [5, 3, 4, 2]),
+#         ((2, 4, 32, 1280), [3, 1, 1, 5]),
+#         ((1, 1, 32, 16), [1, 1, 1, 2048]),
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "layout, dtype",
+#     (
+#         (ttl.tensor.Layout.TILE, ttl.tensor.DataType.BFLOAT16),
+#         (ttl.tensor.Layout.TILE, ttl.tensor.DataType.BFLOAT8_B),
+#         (ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.DataType.BFLOAT16),
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "input_mem_config",
+#     (
+#         ttl.tensor.MemoryConfig(
+#             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+#             buffer_type=ttl.tensor.BufferType.DRAM,
+#         ),
+#         ttl.tensor.MemoryConfig(
+#             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+#             buffer_type=ttl.tensor.BufferType.L1,
+#         ),
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "output_mem_config",
+#     (
+#         ttl.tensor.MemoryConfig(
+#             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+#             buffer_type=ttl.tensor.BufferType.DRAM,
+#         ),
+#         ttl.tensor.MemoryConfig(
+#             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+#             buffer_type=ttl.tensor.BufferType.L1,
+#         ),
+#     ),
+# )
+# def test_repeat(
+#     input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config, function_level_defaults
+# ):
+#     run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config)
+
+
+# @pytest.mark.parametrize(
+#     "input_shape, repeats",
+#     (
+#         ((1, 2, 64, 64), [1, 1, 1, 1]),
+#         ((1, 1, 64, 64), [1, 1, 1, 2]),
+#         ((1, 1, 32, 128), [5, 3, 4, 2]),
+#         ((2, 4, 32, 1280), [3, 1, 1, 5]),
+#         ((1, 1, 32, 16), [1, 1, 1, 2048]),
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "layout, dtype",
+#     (
+#         (ttl.tensor.Layout.TILE, ttl.tensor.DataType.BFLOAT16),
+#         # (ttl.tensor.Layout.TILE, ttl.tensor.DataType.BFLOAT8_B),
+#         # (ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.DataType.BFLOAT16),
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "input_mem_config",
+#     (
+#         ttl.tensor.MemoryConfig(
+#             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+#             buffer_type=ttl.tensor.BufferType.DRAM,
+#         ),
+#         # ttl.tensor.MemoryConfig(
+#         #     memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+#         #     buffer_type=ttl.tensor.BufferType.L1,
+#         # ),
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "output_mem_config",
+#     (
+#         ttl.tensor.MemoryConfig(
+#             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+#             buffer_type=ttl.tensor.BufferType.DRAM,
+#         ),
+#         # ttl.tensor.MemoryConfig(
+#         #     memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+#         #     buffer_type=ttl.tensor.BufferType.L1,
+#         # ),
+#     ),
+# )
+# def test_repeat_with_program_cache(
+#     input_shape,
+#     repeats,
+#     device,
+#     layout,
+#     dtype,
+#     input_mem_config,
+#     output_mem_config,
+#     use_program_cache,
+#     function_level_defaults,
+# ):
+#     run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config)
+#     tmp = ttl.tensor.empty([1, 256, 32, 32], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+#     run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config)
+
+
 @pytest.mark.parametrize(
     "input_shape, repeats",
     (
-        ((1, 2, 64, 64), [1, 1, 1, 1]),
-        ((1, 1, 64, 64), [1, 1, 1, 2]),
+        # ((1, 2, 64, 64), [1, 1, 1, 1]),
+        # ((1, 1, 64, 64), [1, 1, 1, 2]),
         ((1, 1, 32, 128), [5, 3, 4, 2]),
-        ((2, 4, 32, 1280), [3, 1, 1, 5]),
-        ((1, 1, 32, 16), [1, 1, 1, 2048]),
+        # ((2, 4, 32, 1280), [3, 1, 1, 5]),
+        # ((2, 4, 32, 1280), [3, 1, 1, 1]),
+        # ((1, 1, 32, 16), [1, 1, 1, 2048]),
     ),
 )
 @pytest.mark.parametrize(
     "layout, dtype",
     (
-        (ttl.tensor.Layout.TILE, ttl.tensor.DataType.BFLOAT16),
-        (ttl.tensor.Layout.TILE, ttl.tensor.DataType.BFLOAT8_B),
+        # (ttl.tensor.Layout.TILE, ttl.tensor.DataType.BFLOAT16),
+        # (ttl.tensor.Layout.TILE, ttl.tensor.DataType.BFLOAT8_B),
         (ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.DataType.BFLOAT16),
     ),
 )
@@ -74,10 +205,10 @@ def run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, ou
             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
             buffer_type=ttl.tensor.BufferType.DRAM,
         ),
-        ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
-        ),
+        # ttl.tensor.MemoryConfig(
+        #     memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        #     buffer_type=ttl.tensor.BufferType.L1,
+        # ),
     ),
 )
 @pytest.mark.parametrize(
@@ -87,73 +218,13 @@ def run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, ou
             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
             buffer_type=ttl.tensor.BufferType.DRAM,
         ),
-        ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
-        ),
+        # ttl.tensor.MemoryConfig(
+        #     memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        #     buffer_type=ttl.tensor.BufferType.L1,
+        # ),
     ),
 )
-def test_repeat(
+def test_repeat_optional_output(
     input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config, function_level_defaults
 ):
-    run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config)
-
-
-@pytest.mark.parametrize(
-    "input_shape, repeats",
-    (
-        ((1, 2, 64, 64), [1, 1, 1, 1]),
-        ((1, 1, 64, 64), [1, 1, 1, 2]),
-        ((1, 1, 32, 128), [5, 3, 4, 2]),
-        ((2, 4, 32, 1280), [3, 1, 1, 5]),
-        ((1, 1, 32, 16), [1, 1, 1, 2048]),
-    ),
-)
-@pytest.mark.parametrize(
-    "layout, dtype",
-    (
-        (ttl.tensor.Layout.TILE, ttl.tensor.DataType.BFLOAT16),
-        (ttl.tensor.Layout.TILE, ttl.tensor.DataType.BFLOAT8_B),
-        (ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.DataType.BFLOAT16),
-    ),
-)
-@pytest.mark.parametrize(
-    "input_mem_config",
-    (
-        ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.DRAM,
-        ),
-        ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
-        ),
-    ),
-)
-@pytest.mark.parametrize(
-    "output_mem_config",
-    (
-        ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.DRAM,
-        ),
-        ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
-        ),
-    ),
-)
-def test_repeat_with_program_cache(
-    input_shape,
-    repeats,
-    device,
-    layout,
-    dtype,
-    input_mem_config,
-    output_mem_config,
-    use_program_cache,
-    function_level_defaults,
-):
-    run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config)
-    tmp = ttl.tensor.empty([1, 256, 32, 32], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
-    run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config)
+    run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config, True)

@@ -17,9 +17,9 @@ struct Repeat {
     const uint32_t repeat_dim;
     const uint32_t num_repeats;
     const MemoryConfig output_mem_config;
-    void validate(const std::vector<Tensor> &input_tensors) const;
+    void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     RepeatOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
@@ -39,7 +39,17 @@ operation::ProgramWithCallbacks repeat_single_core(
 Tensor repeat(
     const Tensor &input_tensor,
     const Shape &shape,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+
+// with cq_id
+Tensor repeat(
+    uint8_t cq_id,
+    const Tensor &input_tensor,
+    const Shape &shape,
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+
 
 }  // namespace tt_metal
 

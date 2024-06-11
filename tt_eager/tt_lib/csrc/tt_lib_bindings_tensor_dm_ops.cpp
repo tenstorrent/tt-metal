@@ -90,8 +90,8 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("repeat", &tt::tt_metal::repeat,
-            py::arg("input"), py::arg("size"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("repeat", py::overload_cast<const Tensor&, const Shape&, const MemoryConfig&, std::optional<Tensor>>(&repeat),
+            py::arg("input"), py::arg("size"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_tensor").noconvert() = std::nullopt, R"doc(
                     Returns a new tensor filled with repetition of input ``input`` tensor according to number of times specified in ``size``. The rank of ``size`` should be less than or equal to the rank of tensor ``input_a``.
 
                     Output tensor will have same data type as input.
@@ -102,6 +102,23 @@ namespace tt::tt_metal::detail{
                         "input", "Input tensor for which repetition is computed", "Tensor", "Tensor of any shape", "Yes"
                         "size", "The number of times to repeat this tensor along each dimension", "List[Int]", "Positive repetition values", "Yes"
                         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                        "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
+                )doc");
+
+        m_tensor.def("repeat", py::overload_cast<uint8_t, const Tensor&, const Shape&, const MemoryConfig&, std::optional<Tensor>>(&repeat),
+            py::arg("cq_id").noconvert() = 0, py::arg("input"), py::arg("size"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_tensor").noconvert() = std::nullopt, R"doc(
+                    Returns a new tensor filled with repetition of input ``input`` tensor according to number of times specified in ``size``. The rank of ``size`` should be less than or equal to the rank of tensor ``input_a``.
+
+                    Output tensor will have same data type as input.
+
+                    .. csv-table::
+                        :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                        "cq_id", "cq_id", "uint8_t", "Default is 0", "No"
+                        "input", "Input tensor for which repetition is computed", "Tensor", "Tensor of any shape", "Yes"
+                        "size", "The number of times to repeat this tensor along each dimension", "List[Int]", "Positive repetition values", "Yes"
+                        "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                        "output_tensor", "Optional Output Tensor", "Tensor", "Default value is None", "No"
                 )doc");
 
         m_tensor.def("assign", py::overload_cast<const Tensor&, const Tensor&>(&assign),
