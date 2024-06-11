@@ -13,8 +13,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
     skip_for_grayskull,
 )
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upblock_2d import upblock_2d as ttnn_upblock_2d
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_upblock_2d import (
+
+# from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upblock_2d import upblock_2d as ttnn_upblock_2d
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_upblock_2d_new_conv import (
     upblock_2d as tt2_ttnn_upblock_2d,
 )
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor

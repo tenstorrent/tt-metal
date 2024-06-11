@@ -7,7 +7,11 @@ import torch
 import warnings
 import math
 import ttnn
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils import calculate_shard_grid, roundup
+from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_utils import (
+    calculate_shard_grid,
+    roundup,
+    get_output_dim as get_conv_output_dim,
+)
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv import (
     TTPyCompositeConv,
     SlidingWindowOpParams,

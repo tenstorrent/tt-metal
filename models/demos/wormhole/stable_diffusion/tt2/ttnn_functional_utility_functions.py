@@ -26,6 +26,9 @@ def pre_process_input(device, tensor):
     input_height = tensor.shape[2]
     input_width = tensor.shape[3]
     tensor = fallback_ops.permute(tensor, (0, 2, 3, 1), output_layout=ttnn.ROW_MAJOR_LAYOUT, output_on_device=False)
+    tensor = ttnn.to_device(tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    return tensor
     import math
 
     assert input_channels == tensor.get_legacy_shape()[3]

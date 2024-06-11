@@ -13,8 +13,9 @@ from models.utility_functions import (
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d import transformer_2d_model
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_transformer_2d import (
+
+# from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d import transformer_2d_model
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_transformer_2d_new_conv import (
     transformer_2d_model as transformer_2d_model_tt2,
 )
 from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
@@ -277,10 +278,10 @@ def test_transformer_2d_model_512x512(
         output = post_process_output(
             model.device,
             output,
-            model.proj_out.batch_size,
-            model.proj_out.input_height,
-            model.proj_out.input_width,
-            model.proj_out.out_channels,
+            model.batch_size,
+            model.input_height,
+            model.input_width,
+            model.proj_out_out_channels,
         )
     ttnn_output_torch = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(output), layout=ttnn.ROW_MAJOR_LAYOUT))
 

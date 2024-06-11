@@ -5,10 +5,17 @@
 import torch
 import ttnn
 from typing import Optional, Dict
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_upsample_2d import upsample2d
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_resnetblock2d import resnetBlock2D
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_transformer_2d import transformer_2d_model
+
+
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_upsample_2d_new_conv import upsample2d
+
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
+
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_transformer_2d_new_conv import (
+    transformer_2d_model,
+)
 from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import dealloc_input
+from loguru import logger
 
 
 def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
@@ -53,6 +60,9 @@ class cross_attention_upblock2d:
 
             self.output_height = self.upsample_2d.output_height
             self.output_width = self.upsample_2d.output_width
+        logger.info(
+            f"Cross Attention UpBlock Input = {input_height}x{input_width} Output = {self.output_height}x{self.output_width}"
+        )
 
     def __call__(
         self,
@@ -131,7 +141,6 @@ class cross_attention_upblock2d:
                     ttnn.clone, hidden_states, memory_config=ttnn.get_memory_config(hidden_states), dtype=ttnn.bfloat8_b
                 )
             hidden_states = dealloc_input(ttnn.concat, [hidden_states, on_dev_res_hidden_states], dim=3)
-
             ttnn.deallocate(on_dev_res_hidden_states)
             hidden_states = resnet(
                 hidden_states,

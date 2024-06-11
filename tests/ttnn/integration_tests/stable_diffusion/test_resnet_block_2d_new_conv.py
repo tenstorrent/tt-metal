@@ -212,6 +212,19 @@ def test_resnet_block_2d_512x512(
     temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT)
     temb = ttnn.to_device(temb, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+    ttnn_output_ = resnet_block(
+        input,
+        temb=temb,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        temb_channels=temb_channels,
+        use_in_shortcut=use_in_shortcut,
+        eps=1e-6,
+        groups=groups,
+        time_embedding_norm=time_embedding_norm,
+        non_linearity="silu",
+        output_scale_factor=output_scale_factor,
+    )
     ttnn_output = resnet_block(
         input,
         temb=temb,
@@ -224,12 +237,6 @@ def test_resnet_block_2d_512x512(
         time_embedding_norm=time_embedding_norm,
         non_linearity="silu",
         output_scale_factor=output_scale_factor,
-        # pre_norm=resnet_pre_norm,
-        # group_norm_sharded_config={
-        #     "shard_strategy": resnet_block.conv1s[0].conv.input_shard_scheme,
-        #     "shard_orientation": resnet_block.conv1s[0].conv.input_shard_orientation,
-        #     "grid_size": resnet_block.conv1s[0].conv.grid_size,
-        # },
     )
     ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
     ttnn_output = ttnn_to_torch(ttnn_output)

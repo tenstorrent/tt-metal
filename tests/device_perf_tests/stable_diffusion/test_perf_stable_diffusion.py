@@ -33,7 +33,7 @@ from ttnn.operations.core import unsqueeze_to_4D
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import TtLMSDiscreteScheduler
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_unet_2d_condition_model import (
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
 
@@ -215,6 +215,46 @@ def test_stable_diffusion_device_perf(expected_perf):
     batch = 1
     iterations = 1
     command = f"pytest tests/ttnn/integration_tests/stable_diffusion/test_unet_2d_condition_model.py::test_unet_2d_condition_model_512x512[batch_size=2-in_channels=4-input_height=64-input_width=64-device_params=l1_small_size_24576]"
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
+
+    inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
+    expected_perf_cols = {inference_time_key: expected_perf}
+
+    # back-up the value of WH_ARCH_YAML if exist
+    wh_arch_yaml_backup = None
+    if "WH_ARCH_YAML" in os.environ:
+        wh_arch_yaml_backup = os.environ["WH_ARCH_YAML"]
+
+    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
+    post_processed_results = run_device_perf(command, subdir, iterations, cols, batch, has_signposts=True)
+    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
+    prep_device_perf_report(
+        model_name=f"stable_diffusion_{batch}batch",
+        batch_size=batch,
+        post_processed_results=post_processed_results,
+        expected_results=expected_results,
+        comments="",
+    )
+
+    # set WH_ARCH_YAML back to the original value
+    if wh_arch_yaml_backup is not None:
+        os.environ["WH_ARCH_YAML"] = wh_arch_yaml_backup
+    else:
+        del os.environ["WH_ARCH_YAML"]
+
+
+@skip_for_grayskull()
+@pytest.mark.models_device_performance_bare_metal
+@pytest.mark.parametrize(
+    "expected_perf",
+    ((10.4),),
+)
+def test_stable_diffusion_device_perf_new_conv(expected_perf):
+    subdir = "ttnn_stable_diffusion"
+    margin = 0.01
+    batch = 1
+    iterations = 1
+    command = f"pytest tests/ttnn/integration_tests/stable_diffusion/test_unet_2d_condition_model_new_conv.py::test_unet_2d_condition_model_512x512[batch_size=2-in_channels=4-input_height=64-input_width=64-device_params=l1_small_size_24576]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
