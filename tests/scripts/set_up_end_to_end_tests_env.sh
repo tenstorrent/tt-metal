@@ -3,10 +3,8 @@
 set -eo pipefail
 
 validate_env_vars() {
-  # if [[ -n "${TT_METAL_HOME}" || -n "${PYTHONPATH}" || -n "${ARCH_NAME}" ]]; then
-  if [[ -n "${TT_METAL_HOME}" || -n "${PYTHONPATH}" ]]; then
-    # echo "Developer-level environment variables seem set. This is not allowed in production environments"
-    echo "TT_METAL_HOME / PYTHONPATH is set. This is not allowed in production environments"
+  if [[ -n "${TT_METAL_HOME}" || -n "${PYTHONPATH}" || -n "${ARCH_NAME}" ]]; then
+    echo "TT_METAL_HOME / PYTHONPATH / ARCH_NAME is set. This is not allowed in production environments"
     exit 1
   fi
 }

@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch
 
+import ttnn
 import tt_lib as ttl
 from tt_lib.fallback_ops import fallback_ops
 from models.experimental.stable_diffusion.sd_utils import make_linear
@@ -205,7 +206,7 @@ class TtResnetBlock2D(nn.Module):
         # create a tensor of size output_scale_factor
         output_sc_recip = 1 / self.output_scale_factor
         output_sc_recip = ttl.tensor.full(input_tensor.get_legacy_shape(), output_sc_recip)
-        output_tensor = ttl.tensor.add(input_tensor, hidden_states)
-        output_tensor = ttl.tensor.mul(output_tensor, output_sc_recip)
+        output_tensor = ttnn.add(input_tensor, hidden_states)
+        output_tensor = ttnn.mul(output_tensor, output_sc_recip)
 
         return output_tensor

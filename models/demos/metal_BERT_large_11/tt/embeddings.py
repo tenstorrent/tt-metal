@@ -4,6 +4,7 @@
 
 from typing import List, Optional, Tuple, Union
 import torch
+import ttnn
 import tt_lib as ttl
 from models.utility_functions import torch2tt_tensor
 
@@ -153,7 +154,7 @@ class TtEmbeddings:
         token_type_ids.deallocate()
 
         if self.position_embedding_type == "absolute":
-            inputs_plus_token_type_embeddings_tt_tensor = ttl.tensor.add(
+            inputs_plus_token_type_embeddings_tt_tensor = ttnn.add(
                 inputs_embeds, token_type_embeddings, output_mem_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"]
             )
             if not self.model_config["DEALLOC_INPUT_EMBEDS_AFTER_POSITION_EMBEDS"]:

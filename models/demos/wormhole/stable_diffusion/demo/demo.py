@@ -28,7 +28,7 @@ from models.utility_functions import (
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_unet_2d_condition_model import (
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
 from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import round_up_to_tile_dim
@@ -644,5 +644,5 @@ def test_demo_diffusiondb(device, reset_seeds, input_path, num_prompts, num_infe
     "image_size",
     ((512, 512),),
 )
-def test_interactve_demo(device, num_inference_steps, image_size):
+def test_interactive_demo(device, num_inference_steps, image_size):
     return run_interactive_demo_inference(device, num_inference_steps, image_size)

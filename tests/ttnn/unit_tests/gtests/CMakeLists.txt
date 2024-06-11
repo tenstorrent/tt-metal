@@ -15,5 +15,6 @@ target_include_directories(unit_tests_ttnn PRIVATE
     ${PROJECT_SOURCE_DIR}/tt_metal
     ${PROJECT_SOURCE_DIR}/tests
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${gtest_SOURCE_DIR}/include
 )
 set_target_properties(unit_tests_ttnn PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/ttnn)

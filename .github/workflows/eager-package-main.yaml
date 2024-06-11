@@ -26,9 +26,6 @@ jobs:
         arch: [grayskull, wormhole_b0]
     runs-on: ${{ matrix.os }}
     environment: production
-    env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/install-metal-deps
@@ -56,9 +53,6 @@ jobs:
         ]
     runs-on: ["Linux", "${{ matrix.runner-hw-info.arch }}"]
     environment: production
-    env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-hw-info.arch }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4

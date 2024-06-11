@@ -9,6 +9,7 @@ from loguru import logger
 import torch.nn as nn
 import torch
 
+import ttnn
 import tt_lib as ttl
 from tt_lib.fallback_ops import fallback_ops
 from models.experimental.stable_diffusion.tt.cross_attention import TtCrossAttention
@@ -247,7 +248,7 @@ class TtBasicTransformerBlock(nn.Module):
         if self.use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
-        hidden_states = ttl.tensor.add(
+        hidden_states = ttnn.add(
             attn_output,
             hidden_states,
         )
@@ -263,7 +264,7 @@ class TtBasicTransformerBlock(nn.Module):
                 **cross_attention_kwargs,
             )
 
-            hidden_states = ttl.tensor.add(
+            hidden_states = ttnn.add(
                 attn_output,
                 hidden_states,
             )
@@ -277,7 +278,7 @@ class TtBasicTransformerBlock(nn.Module):
         if self.use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
-        hidden_states = ttl.tensor.add(
+        hidden_states = ttnn.add(
             ff_output,
             hidden_states,
         )
@@ -513,7 +514,7 @@ class TtTransformer2DModel(nn.Module):
                 hidden_states = fallback_ops.reshape(hidden_states, batch, height, width, inner_dim)
                 hidden_states = ttl.tensor.permute(hidden_states, (0, 3, 1, 2))
 
-            output = ttl.tensor.add(
+            output = ttnn.add(
                 hidden_states,
                 residual,
             )
