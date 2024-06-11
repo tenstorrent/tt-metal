@@ -81,6 +81,7 @@ enum class UnaryOpType {
     TYPECAST,
     BITWISE_XOR,
     BITWISE_NOT,
+    BITWISE_AND,
     RIGHT_SHIFT,
     FLOOR,
     LEFT_SHIFT,
@@ -115,6 +116,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::TYPECAST:
         case UnaryOpType::BITWISE_XOR:
         case UnaryOpType::BITWISE_NOT:
+        case UnaryOpType::BITWISE_AND:
         case UnaryOpType::RIGHT_SHIFT:
         case UnaryOpType::LEFT_SHIFT:
         case UnaryOpType::REMAINDER:
@@ -597,6 +599,7 @@ constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
 constexpr auto bitwise_xor = make_eltwise_unary_with_param<UnaryOpType::BITWISE_XOR>{};
 constexpr auto bitwise_not = make_eltwise_unary_with_param<UnaryOpType::BITWISE_NOT>{};
+constexpr auto bitwise_and = make_eltwise_unary_with_param<UnaryOpType::BITWISE_AND>{};
 constexpr auto right_shift = make_eltwise_unary_with_param<UnaryOpType::RIGHT_SHIFT>{};
 constexpr auto left_shift = make_eltwise_unary_with_param<UnaryOpType::LEFT_SHIFT>{};
 constexpr auto unary_remainder = make_eltwise_unary_with_param<UnaryOpType::REMAINDER>{};

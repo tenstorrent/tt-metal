@@ -67,6 +67,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::TYPECAST: defines["SFPU_OP_TYPECAST_INCLUDE"] = "1"; break;
         case UnaryOpType::BITWISE_XOR: defines["SFPU_OP_BITWISE_XOR_INCLUDE"] = "1"; break;
         case UnaryOpType::BITWISE_NOT: defines["SFPU_OP_BITWISE_NOT_INCLUDE"] = "1"; break;
+        case UnaryOpType::BITWISE_AND: defines["SFPU_OP_BITWISE_AND_INCLUDE"] = "1"; break;
         case UnaryOpType::RIGHT_SHIFT: defines["SFPU_OP_RIGHT_SHIFT_INCLUDE"] = "1"; break;
         case UnaryOpType::FLOOR: defines["SFPU_OP_FLOOR_INCLUDE"] = "1"; break;
         case UnaryOpType::LEFT_SHIFT: defines["SFPU_OP_LEFT_SHIFT_INCLUDE"] = "1"; break;
@@ -122,6 +123,9 @@ std::pair<string, string> get_op_init_and_func_parameterized(
         case UnaryOpType::BITWISE_NOT:
             op_init_and_name = {
                 "bitwise_not_tile_init();", fmt::format("bitwise_not_tile({}, {}u);", idst, std::to_string((uint)param0))};
+        case UnaryOpType::BITWISE_AND:
+            op_init_and_name = {
+                "bitwise_and_tile_init();", fmt::format("bitwise_and_tile({}, {}u);", idst, std::to_string((uint)param0))};
             break;
         case UnaryOpType::RIGHT_SHIFT:
             op_init_and_name = {

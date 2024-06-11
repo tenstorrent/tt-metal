@@ -30,5 +30,6 @@
 #include "llk_math_eltwise_unary_sfpu_bitwise_xor.h"
 #include "llk_math_eltwise_unary_sfpu_bitwise_not.h"
 #include "llk_math_eltwise_unary_sfpu_fmod.h"
+#include "llk_math_eltwise_unary_sfpu_bitwise_and.h"
 #include "llk_math_eltwise_unary_sfpu_right_shift.h"
 #include "llk_math_eltwise_unary_sfpu_left_shift.h"
