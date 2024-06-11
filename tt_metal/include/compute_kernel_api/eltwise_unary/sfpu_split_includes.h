@@ -80,6 +80,10 @@
 #include "compute_kernel_api/eltwise_unary/right_shift.h"
 #endif
 
+#if SFPU_OP_BITWISE_AND_INCLUDE
+#include "compute_kernel_api/eltwise_unary/bitwise_and.h"
+#endif
+
 #if SFPU_OP_FLOOR_INCLUDE
 #include "compute_kernel_api/eltwise_unary/floor.h"
 #endif

@@ -77,6 +77,7 @@ enum SfpuType {
     tiled_prod,
     bitwise_xor,
     bitwise_not,
+    bitwise_and,
     right_shift,
     floor,
     left_shift,
