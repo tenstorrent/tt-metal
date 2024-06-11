@@ -737,7 +737,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     model_config["KV_CACHE_MEMCFG"] = DRAM_MEMCFG
     model_config["KV_CACHE_DTYPE"] = BFP8_DTYPE
 
-    model_config["ATTN_MASK_DTYPE"] = BFP8_DTYPE  # BFP4_DTYPE generally works, but not supported by SDPA op
+    # model_config["ATTN_MASK_DTYPE"] = BFP8_DTYPE  # SPDA op requires all inputs to have the same dtype and only supposts bfp8 and fp16
 
     model_config["WORD_EMBEDDING_OUTPUT_DTYPE"] = BFLOAT16_DTYPE  # embeddings output and the residual stream
 
@@ -780,8 +780,8 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
 
     model_config["layernorm_params"] = layernorm_params
 
-    q_chunk_size = min(seq_len, 128)
-    k_chunk_size = min(seq_len, 64 if seq_len == 128 else 256)
+    q_chunk_size = min(seq_len, 256)
+    k_chunk_size = min(seq_len, 256)
 
     model_config["SDPA_PROGCFG"] = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
         compute_with_storage_grid_size=[8, 7],
