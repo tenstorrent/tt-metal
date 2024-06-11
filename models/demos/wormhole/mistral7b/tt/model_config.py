@@ -2,9 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import ttnn
 from pathlib import Path
 from models.utility_functions import is_wormhole_b0
+from loguru import logger
+import tarfile
+import urllib.request
 
 
 class TtModelArgs:
@@ -24,6 +28,11 @@ class TtModelArgs:
     max_batch_size = 32
     max_seq_len = 4096
     kv_seq_len = 1024  # TODO Update the initial cache size when scaling up (Should be window_size == 4096)
+
+    # Default folder location for weights and cached files
+    DEFAULT_CKPT_DIR = os.getenv("MISTRAL_CKPT_DIR", "/proj_sw/user_dev/hf_data/mistral/mistral-7B-v0.1/")
+    DEFAULT_TOKENIZER_PATH = os.getenv("MISTRAL_TOKENIZER_PATH", "/proj_sw/user_dev/hf_data/mistral/mistral-7B-v0.1/")
+    DEFAULT_CACHE_PATH = os.getenv("MISTRAL_CACHE_PATH", "/proj_sw/user_dev/hf_data/mistral/mistral-7B-v0.1/")
 
     OP_KEYS = (
         # Embedding
@@ -49,15 +58,35 @@ class TtModelArgs:
         "DEC_SKIP_OUTPUT",
     )
 
-    def __init__(self, device, model_base_path="/mnt/MLPerf/ttnn/models/demos/mistral7b", instruct=False):
-        self.model_base_path = Path(model_base_path)
+    def __init__(self, device, instruct=False):
+        # Assert if all folders and files exist
+        assert os.path.exists(
+            self.DEFAULT_CKPT_DIR
+        ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please use export MISTRAL_CKPT_DIR=..."
+        assert os.path.isfile(
+            self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
+        ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please use export MISTRAL_TOKENIZER_PATH=..."
+        assert os.path.exists(
+            self.DEFAULT_CACHE_PATH
+        ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please use export MISTRAL_CACHE_PATH=..."
+        # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
+        assert os.path.isfile(
+            self.DEFAULT_CACHE_PATH + "/consolidated.00.pth"
+        ), f"weights consolidated.00.pth file does not exist. Please use the script `models/demos/wormhole/mistral7b/scripts/get_weights.py` to download and untar the weights."
+
+        logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
+        logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
+        logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
+
         # Some consumers like SentencePiece only accept str not Path for files
-        if instruct:  # Load instruct weights and tokenizer (Mistral-7B-Instruct-v0.2)
-            self.consolidated_weights_path = str(self.model_base_path / "consolidated_instruct.00.pth")
-            self.tokenizer_path = str(self.model_base_path / "tokenizer_instruct.model")
-        else:  # Load generative weights and tokenizer (Mistral-7B-v0.1)
-            self.consolidated_weights_path = str(self.model_base_path / "consolidated.00.pth")
-            self.tokenizer_path = str(self.model_base_path / "tokenizer.model")
+        self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
+        self.model_cache_path = Path(self.DEFAULT_CACHE_PATH)
+
+        # Load weights and tokenizer
+        self.consolidated_weights_path = self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
+        self.tokenizer_path = self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
+
+        self.instruct = instruct
 
         DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
         L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
@@ -116,16 +145,16 @@ class TtModelArgs:
                 packer_l1_acc=True,
             )
 
-    def weight_cache_path(self, dtype, instruct=False):
+    def weight_cache_path(self, dtype):
         # Keep the weight cache separate for generative and instruct weights
-        if instruct:
+        if self.instruct:
             return (
-                self.model_base_path
+                self.model_cache_path
                 / {ttnn.bfloat16: "tensor_cache_instruct_bf16", ttnn.bfloat8_b: "tensor_cache_instruct_bfp8"}[dtype]
             )
         else:
             return (
-                self.model_base_path / {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
+                self.model_cache_path / {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
             )
 
     def get_model_config(self):

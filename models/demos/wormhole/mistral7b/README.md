@@ -1,47 +1,77 @@
 # Mistral7B Demo
 
-Demo showcasing Mistral-7B-instruct running on Wormhole, using ttnn.
+Demo showcasing Mistral-7B running on Wormhole, using ttnn.
 
 ## How to Run
 
-If you are running on a T3000 please set the following:
+### Download the weights
 
-`export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml`
+Download the weights tarfile directly from Mistral-AI:
+- General weights: [Mistral-7B-v0.1](https://models.mistralcdn.com/mistral-7b-v0-1/mistral-7B-v0.1.tar)
+- Finetune instruct weights: [Mistral-7B-Instruct-v0.2](https://models.mistralcdn.com/mistral-7b-v0-2/Mistral-7B-v0.2-Instruct.tar)
 
-To run the model for a single user you can use the command line input:
+Both the above tarfiles consolidate the weights into a single file `consolidated.00.pth`. They also contain the tokenizer `tokenizer.model`.
 
-`pytest --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/mistral7b/demo/demo.py`
+We also include a script to download and untar the weight files inside `models/demos/wormhole/mistral7b/scripts/get_mistral_weights.py`.
 
-To run the demo using pre-written prompts for a batch of 32 users run (currently only supports same token-length inputs):
+```
+# Download general weights
+python models/demos/wormhole/mistral7b/scripts/get_mistral_weights.py --weights_path=<FOLDER_TO_SAVE_WEIGHTS>
 
-`pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mistral7b/demo/input_data_questions.json' models/demos/wormhole/mistral7b/demo/demo.py`
+# To download instruct weights add --instruct flag
 
+python models/demos/wormhole/mistral7b/scripts/get_mistral_weights.py --weights_path=<FOLDER_TO_SAVE_WEIGHTS> --instruct
+```
 
-## Inputs
+### Set up environment
 
-A sample of input prompts for 32 users is provided in `input_data_question.json` in the demo directory. These are to be used in instruct-mode (default).
-We also provide another set of generative inputs `input_data.json` for generative-mode of open-ended generation.
+1. Prepare the weight cache directory:
 
-If you wish you to run the model using a different set of input prompts you can provide a different path, e.g.:
+```
+# Make a directory for ttnn to cache weights into. This speeds up subsequent runs.
+mkdir <weight_cache_dir>
+```
 
-`pytest --disable-warnings -q -s --input-method=json --input-path='path_to_input_prompts.json' models/demos/wormhole/mistral7b/demo/demo.py`
+2. Set up environment variables:
+```
+export MISTRAL_CKPT_DIR=<weights_dir>
+export MISTRAL_TOKENIZER_PATH=<path_to_tokenizer_dir>
+export MISTRAL_CACHE_PATH=<weights_cache_dir>
+```
 
-Keep in mind that for the instruct-mode, the prompts are automatically prefixed and suffixed by `[INST]` and `[/INST]`, respectively.
+A typical environment will have all the above point to the same folder.
 
+Note that the cached weights folder structure will contain, after being generated, the general and instruct cached weights in separate directories, like so:
 
-## Details
+```
+<weights_cache_dir>
+  /mistral_tensor_cache_bfp8
+  /mistral_tensor_cache_instruct_bfp8
+  ...
+```
 
-This model can be used with the general weights from Mistral-AI [Mistral-7B-v0.1](https://models.mistralcdn.com/mistral-7b-v0-1/mistral-7B-v0.1.tar) or the instruct weights
- [Mistral-7B-Instruct-v0.2](https://models.mistralcdn.com/mistral-7b-v0-2/Mistral-7B-v0.2-Instruct.tar).
+3. Cache the weights (first-time setup).
+If the cached weights have not yet been created the first execution will take care of generating them. You can run the model test for this step:
 
-Both these weights are consolidated into a single file `consolidated.00.pth`.
-Keep in mind that the demo code expects the instruct weights to be named `consolidated_instruct.00.pth` instead, and the tokenizer to be named `tokenizer_instruct.model`.
+```
+# Build a full 32 layer model to cache the weights. This will take some time (1 time only).
+pytest models/demos/wormhole/mistral7b/tests/test_mistral_model.py::test_mistral_model_inference[17-generative]
+```
 
-You can provide a custom path to the folder containing the weights by adding the path argument to `TtModelArgs(model_base_path=<weights_folder>)`.
+### Run the demo
 
-For more configuration settings, please check the file `tt/model_config.py`.
+Mistral-7B is running on a single chip. If you are running on a T3000 please set the following: `export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml`
 
-The `demo.py` code is set to run in instruct-mode by default. Change the hardcoded flag inside the code for the general weights.
-The `test_mistral_model.py` is currently parametrized to choose between the general generative weights or the instruct weights.
+```
+# Run the demo with a pre-written batch of 32 user prompts:
+pytest models/demos/wormhole/mistral7b/demo/demo.py::test_demo[general_weights]
+```
 
-The first time you run the model, the weights will be processed into the target data type and stored on your machine, which will take a few minutes for the full model. In future runs, the weights will be loaded from your machine and it will be faster.
+We also provide an input file with 32 user question-prompt for instruct weights (don't forget to update your env flags to the correct instruct weights folder):
+```
+pytest models/demos/wormhole/mistral7b/demo/demo.py::test_demo[instruct_weights]
+```
+
+Both input files are provided inside `models/demos/wormhole/mistral7b/demo/`.
+
+If you wish you to run the model using a different set of input prompts you can provide a different path to pytest inside the demo code. Keep in mind that for the instruct-mode, the prompts are automatically prefixed and suffixed by `[INST]` and `[/INST]`, respectively, so there's no need to add them to your file.
