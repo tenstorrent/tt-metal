@@ -1,73 +1,17 @@
+
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <functional>
-#include <optional>
+#include "device/binary_op.hpp"
 
-#include "tensor/tensor.hpp"
-#include "third_party/magic_enum/magic_enum.hpp"
-#include "tt_eager/tensor/host_buffer/functions.hpp"
-#include "tt_eager/tensor/tensor_utils.hpp"
-#include "tt_eager/tt_dnn/op_library/compute_kernel_config.hpp"
-#include "tt_eager/tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
-#include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
-#include "tt_eager/tt_dnn/op_library/run_operation.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "ttnn/core.hpp"
-#include "ttnn/decorators.hpp"
-#include "ttnn/types.hpp"
+#include "ttnn/operations/data_movement.hpp"
 
 namespace ttnn {
 
-namespace operations {
-
-namespace binary {
-
-using BinaryOpType = tt::tt_metal::BinaryOpType;
-
-constexpr uint8_t DefaultQueueId = 0;
-
-struct BinaryProgramConfig {
-    BinaryOpType binary_op_type;
-    bool in_place;
-    const std::optional<std::vector<std::string>> activations;
-    const MemoryConfig memory_config;
-    const DataType dtype;
-
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("binary_op_type", "in_place", "activations", "memory_config", "dtype");
-    const auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->binary_op_type, this->in_place, this->activations, this->memory_config, this->dtype);
-    }
-};
-
-struct Binary {
-    const BinaryProgramConfig program_config;
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config;
-
-    void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-
-    const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
-
-    operation::OpPerformanceModel create_op_performance_model(
-        const std::vector<Tensor> &input_tensors,
-        const std::vector<std::optional<const Tensor>> &optional_input_tensors,
-        std::vector<Tensor> &output_tensors) const;
-
-    static constexpr auto attribute_names = std::forward_as_tuple("program_config", "compute_kernel_config");
-    const auto attribute_values() const {
-        return std::forward_as_tuple(this->program_config, this->compute_kernel_config);
-    }
-};
+namespace operations::binary {
 
 template <BinaryOpType binary_op_type, bool in_place>
 struct ExecuteBinary {
@@ -102,8 +46,8 @@ struct ExecuteBinary {
         uint8_t queue_id,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::optional<const DataType> &output_dtype = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
         std::optional<std::vector<std::string>> activations = std::nullopt) {
 
@@ -131,7 +75,7 @@ struct ExecuteBinary {
             input_shape_a[-3] == input_shape_b[-3]) {
             tt::log_warning(tt::LogOp, "Using repeat op to broadcast batch dim");
             Shape repeats({input_shape_a[0], 1, 1, 1});
-            input_tensor_b = tt::tt_metal::repeat(input_tensor_b, repeats.value(), output_memory_config);
+            input_tensor_b = ttnn::repeat(input_tensor_b, repeats.value(), output_memory_config);
         }
 
         DataType dtype = output_dtype.value_or(input_tensor_a.get_dtype());
@@ -160,12 +104,12 @@ struct ExecuteBinary {
     static Tensor execute_on_worker_thread(
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::optional<const DataType> &output_dtype = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
         std::optional<std::vector<std::string>> activations = std::nullopt)
     {
-        return execute_on_worker_thread(DefaultQueueId, input_tensor_a_arg, input_tensor_b_arg, memory_config, output_dtype, optional_output_tensor, activations);
+        return execute_on_worker_thread(DefaultQueueId, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations);
     }
 
     template <typename... Args>
@@ -214,8 +158,77 @@ struct ExecuteBinary {
     }
 };
 
-}  // namespace binary
+}  // operations::binary
 
-}  // namespace operations
+template <ttnn::operations::binary::BinaryOpType OpType, bool InPlace>
+constexpr auto register_op(const char* name) {
+    return ttnn::register_operation<ttnn::operations::binary::ExecuteBinary<OpType, InPlace>>(name);
+}
+
+constexpr auto add = register_op<ttnn::operations::binary::BinaryOpType::ADD, false>("ttnn::add");
+constexpr auto add_ = register_op<ttnn::operations::binary::BinaryOpType::ADD, true>("ttnn::add_");
+constexpr auto subtract = register_op<ttnn::operations::binary::BinaryOpType::SUB, false>("ttnn::subtract");
+constexpr auto subtract_ = register_op<ttnn::operations::binary::BinaryOpType::SUB, true>("ttnn::subtract_");
+constexpr auto mul = register_op<ttnn::operations::binary::BinaryOpType::MUL, false>("ttnn::multiply");
+constexpr auto multiply_ = register_op<ttnn::operations::binary::BinaryOpType::MUL, true>("ttnn::multiply_");
+
+constexpr auto eq = register_op<ttnn::operations::binary::BinaryOpType::EQ, false>("ttnn::eq");
+constexpr auto ne = register_op<ttnn::operations::binary::BinaryOpType::NE, false>("ttnn::ne");
+constexpr auto ge = register_op<ttnn::operations::binary::BinaryOpType::GTE, false>("ttnn::ge");
+constexpr auto gt = register_op<ttnn::operations::binary::BinaryOpType::GT, false>("ttnn::gt");
+constexpr auto le = register_op<ttnn::operations::binary::BinaryOpType::LTE, false>("ttnn::le");
+constexpr auto lt = register_op<ttnn::operations::binary::BinaryOpType::LT, false>("ttnn::lt");
+constexpr auto logical_and = register_op<ttnn::operations::binary::BinaryOpType::LOGICAL_AND, false>("ttnn::logical_and");
+constexpr auto logical_or = register_op<ttnn::operations::binary::BinaryOpType::LOGICAL_OR, false>("ttnn::logical_or");
+constexpr auto ldexp = register_op<ttnn::operations::binary::BinaryOpType::LDEXP, false>("ttnn::ldexp");
+
+constexpr auto logaddexp = register_op<ttnn::operations::binary::BinaryOpType::LOGADDEXP, false>("ttnn::logaddexp");
+constexpr auto logaddexp2 = register_op<ttnn::operations::binary::BinaryOpType::LOGADDEXP2, false>("ttnn::logaddexp2");
+constexpr auto squared_difference = register_op<ttnn::operations::binary::BinaryOpType::SQUARED_DIFFERENCE, false>("ttnn::squared_difference");
+
+template <typename InputBType>
+ttnn::Tensor operator+(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
+    return add(input_tensor_a, scalar);
+}
+
+template <typename InputBType>
+ttnn::Tensor operator-(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
+    return subtract(input_tensor_a, scalar);
+}
+
+template <typename InputBType>
+ttnn::Tensor operator*(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
+    return multiply(input_tensor_a, scalar);
+}
+
+template <typename InputBType>
+ttnn::Tensor operator==(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
+    return eq(input_tensor_a, scalar);
+}
+
+template <typename InputBType>
+ttnn::Tensor operator!=(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
+    return ne(input_tensor_a, scalar);
+}
+
+template <typename InputBType>
+ttnn::Tensor operator>(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
+    return gt(input_tensor_a, scalar);
+}
+
+template <typename InputBType>
+ttnn::Tensor operator>=(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
+    return ge(input_tensor_a, scalar);
+}
+
+template <typename InputBType>
+ttnn::Tensor operator<(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
+    return lt(input_tensor_a, scalar);
+}
+
+template <typename InputBType>
+ttnn::Tensor operator<=(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
+    return le(input_tensor_a, scalar);
+}
 
 }  // namespace ttnn

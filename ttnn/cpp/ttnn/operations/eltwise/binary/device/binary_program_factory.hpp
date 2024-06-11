@@ -14,9 +14,10 @@
 
 using namespace tt::constants;
 
-namespace tt {
+namespace ttnn::operations::binary {
 
-namespace tt_metal {
+using tt::tt_metal;
+
 template <bool initialize_args>
 inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
     Program& program,
@@ -361,7 +362,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
 
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/eltwise_binary/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
@@ -374,7 +375,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
     bool fp32_dest_acc_en = dst_cb_data_format == tt::DataFormat::UInt32 || dst_cb_data_format == tt::DataFormat::Int32 || dst_cb_data_format == tt::DataFormat::Float32;
     auto eltwise_binary_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/eltwise_binary/kernels/compute/eltwise_binary.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp",
         all_device_cores,
         tt_metal::ComputeConfig{.fp32_dest_acc_en=fp32_dest_acc_en, .defines = eltwise_defines});
 
@@ -439,6 +440,4 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}

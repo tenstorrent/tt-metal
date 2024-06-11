@@ -18,9 +18,13 @@
 #include "tt_numpy/functions.hpp"
 #include "tt_dnn/op_library/copy/copy_op.hpp"
 
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+
 namespace tt {
 
 namespace tt_metal {
+
+using namespace ttnn;
 
 std::vector<std::optional<Tensor>> _addalpha_bw(
     const Tensor& grad,
@@ -45,7 +49,7 @@ std::vector<std::optional<Tensor>> _addalpha_bw(
     }
     if (are_required_outputs.at(1)) {
         if(other_grad.has_value()){
-            mul(grad, full_like(grad, alpha, output_mem_config), std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, other_grad.value() );
+            mul(grad, full_like(grad, alpha, output_mem_config), std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, other_grad.value(), std::nullopt);
         } else {
             other_grad = mul_unary(grad, alpha, output_mem_config);
         }

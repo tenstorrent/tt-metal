@@ -18,6 +18,8 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
 

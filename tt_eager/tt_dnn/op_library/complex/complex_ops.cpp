@@ -10,9 +10,13 @@
 #include "tt_numpy/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+
 namespace tt {
 
 namespace tt_metal {
+
+using namespace ttnn;
 
 //TODO: add profiling hooks
 
@@ -95,8 +99,8 @@ Tensor complex_recip(const Tensor& input, const MemoryConfig& output_mem_config)
     Tensor real = get_real(input, output_mem_config);
     Tensor imag = get_imag(input, output_mem_config);
 
-    Tensor a_plus_b = add(real,imag,{},output_mem_config);
-    Tensor a_minus_b = sub(real, imag,{},output_mem_config);
+    Tensor a_plus_b = add(real,imag, std::nullopt, output_mem_config);
+    Tensor a_minus_b = sub(real, imag, std::nullopt,output_mem_config);
     Tensor asqr_plus_bsqr = add(square(real,output_mem_config),square(imag,output_mem_config),
                                 {},output_mem_config);
     Tensor inv_dr = recip( asqr_plus_bsqr, output_mem_config );

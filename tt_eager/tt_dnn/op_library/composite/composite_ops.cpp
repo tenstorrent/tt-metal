@@ -20,9 +20,13 @@
 #include "tt_eager/tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_numpy/functions.hpp"
 
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+
 namespace tt {
 
 namespace tt_metal {
+
+using namespace ttnn;
 
 Tensor mk_zero_tensor_like(const Tensor& reference_tensor, const MemoryConfig& output_mem_config) {
     // Tensor zero_like = bcast(reference_tensor, , BcastOpMath::MUL, BcastOpDim::HW);
