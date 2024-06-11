@@ -512,12 +512,12 @@ Tensor _acosh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
         // input < 1, output is nan
         // input > 1, output is acosh(input)
         Tensor nan_res = bcast(
-            ttnn::lt(input_a, t_one, std::nullopt, output_mem_config),
+            ttnn::le(input_a, t_one, std::nullopt, output_mem_config),
             mk_tiled_scalar(std::nanf("")),
             BcastOpMath::MUL,
             BcastOpDim::HW,
             output_mem_config);
-        t_result = ttnn::multiply(ttnn::lt(input_a, t_one, std::nullopt, output_mem_config), ln_res, std::nullopt, output_mem_config);
+        t_result = ttnn::multiply(ttnn::gt(input_a, t_one, std::nullopt, output_mem_config), ln_res, std::nullopt, output_mem_config);
         t_result = ttnn::add(nan_res, t_result, std::nullopt, output_mem_config);
     }
     // input == 1, output is 0
@@ -804,7 +804,7 @@ Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const MemoryConf
         Tensor eps_gt(input_a);
         {
             eps_gt = where(
-                ttnn::lt(input_a, input_b, std::nullopt, output_mem_config),
+                ttnn::gt(input_a, input_b, std::nullopt, output_mem_config),
                 add_unary(input_a, eps, output_mem_config),
                 input_a,
                 output_mem_config);
@@ -1007,7 +1007,7 @@ Tensor _logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_c
         where(
             ttnn::lt(input_a, t_eps, std::nullopt, output_mem_config),
             t_eps,
-            where(ttnn::lt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a, output_mem_config),
+            where(ttnn::gt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a, output_mem_config),
             output_mem_config),
         output_mem_config);
     t_eps.deallocate();
