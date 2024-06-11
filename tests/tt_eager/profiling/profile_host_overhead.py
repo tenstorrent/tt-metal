@@ -249,11 +249,11 @@ def test_host_overhead(device, user_input):
     Run witout tracy:
     pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile
 
+    Run only for one op:
+    pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile::tt_lib.tensor.isclose
+
     Run with tracy:
     python -m tracy -v -r -p -o host_overhead_profile -m "pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile"
-
-    Run only for one op:
-    python -m tracy -v -r -p -o host_overhead_profile -m "pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile::tt_lib.tensor.atan2"
     """
 
     if "::" in user_input[0]:
