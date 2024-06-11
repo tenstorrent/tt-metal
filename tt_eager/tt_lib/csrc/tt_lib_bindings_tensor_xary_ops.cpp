@@ -123,6 +123,8 @@ namespace tt::tt_metal::detail {
 
             Output tensor will have tt_output_dtype data type.
 
+            Note: This operation is not supported on Grayskull.
+
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 

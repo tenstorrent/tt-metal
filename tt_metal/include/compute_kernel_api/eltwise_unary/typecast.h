@@ -30,6 +30,8 @@ namespace ckernel {
  *
  * Return value: None
  *
+ * Note: This operation is not supported on Grayskull.
+ *
  * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | tile_index     | The index of the tile in DST register buffer to perform typecast operation | uint32_t | Must be less than the size of the DST register buffer | True     |
