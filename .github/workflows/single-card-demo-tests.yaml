@@ -56,7 +56,7 @@ jobs:
         run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run demo regression tests
-        timeout-minutes: 150
+        timeout-minutes: 45
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME

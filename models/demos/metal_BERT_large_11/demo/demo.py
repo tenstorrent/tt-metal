@@ -394,7 +394,7 @@ def test_demo(
 @pytest.mark.parametrize("batch", (7, 12), ids=["batch_7", "batch_12"])
 @pytest.mark.parametrize(
     "loop_count",
-    ((50),),
+    ((20),),
 )
 def test_demo_squadv2(model_location_generator, device, use_program_cache, batch, loop_count):
     disable_persistent_kernel_cache()

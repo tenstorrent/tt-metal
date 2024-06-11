@@ -644,5 +644,5 @@ def test_demo_diffusiondb(device, reset_seeds, input_path, num_prompts, num_infe
     "image_size",
     ((512, 512),),
 )
-def test_interactve_demo(device, num_inference_steps, image_size):
+def test_interactive_demo(device, num_inference_steps, image_size):
     return run_interactive_demo_inference(device, num_inference_steps, image_size)
