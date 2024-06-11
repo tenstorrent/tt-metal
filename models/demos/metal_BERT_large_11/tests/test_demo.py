@@ -16,6 +16,7 @@ from models.utility_functions import is_e75, skip_for_wormhole_b0, skip_for_gray
     (("models/demos/metal_BERT_large_11/demo/input_data.json"),),
     ids=["default_input"],
 )
+@skip_for_wormhole_b0(reason_str="#7525: hangs on wh b0")
 def test_demo_batch_7(batch, input_path, model_location_generator, device, use_program_cache):
     if is_e75(device):
         pytest.skip(f"Bert large 11 is not supported on E75")
