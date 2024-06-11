@@ -107,6 +107,9 @@ void Tensor::deallocate(bool force) {
                         std::visit([](auto&& buffer) { buffer.reset(); }, storage.buffer);
                     }
                 } else if constexpr (std::is_same_v<T, DeviceStorage>) {
+                    if (this->workers.at(0) == nullptr or not this->workers.at(0)->is_initialized()) {
+                        return;
+                    }
                     if (this->workers.at(0)->in_main_thread() or not this->tensor_attributes->main_thread_tensor) {
                         if (not this->tensor_attributes->main_thread_tensor) {
                             TT_ASSERT(
@@ -172,6 +175,9 @@ void Tensor::deallocate(bool force) {
                         TT_THROW("Cannot deallocate tensor with borrowed storage!");
                     }
                 } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                    if (this->workers.at(0) == nullptr or not this->workers.at(0)->is_initialized()) {
+                        return;
+                    }
                     if (this->workers.at(0)->in_main_thread() or not this->tensor_attributes->main_thread_tensor) {
                         // If owned by the main thread, deallocate this tensor only from the main thread. If owned by
                         // worker thread, allow deallocation in worker and use shared_ptr ref count, since this is a
