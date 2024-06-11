@@ -221,7 +221,7 @@ class ResNet50TestInfra:
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
 
         ## ttnn
-        # breakpoint()
+
         self.ttnn_resnet50_model = resnet50(
             device=device, parameters=parameters, batch_size=batch_size, model_config=model_config
         )
