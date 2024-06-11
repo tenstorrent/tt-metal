@@ -9,6 +9,7 @@
 
 #include "pybind11/operations/ccl.hpp"
 #include "pybind11/operations/conv2d.hpp"
+#include "pybind11/operations/depthwise_conv1d.hpp"
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
 #include "pybind11/operations/data_movement.hpp"
@@ -60,6 +61,9 @@ void py_module(py::module& module) {
 
     auto m_conv2d = module.def_submodule("conv2d", "conv2d operation");
     conv2d::py_module(m_conv2d);
+
+    auto m_depthwise_conv1d = module.def_submodule("depthwise_conv1d", "depthwise conv1d operation");
+    depthwise_conv1d::py_module(m_depthwise_conv1d);
 
     auto m_maxpool2d = module.def_submodule("maxpool2d", "maxpool 2d operation");
     maxpool2d::py_module(m_maxpool2d);
