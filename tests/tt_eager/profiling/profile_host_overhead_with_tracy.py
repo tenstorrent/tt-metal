@@ -7,6 +7,7 @@ import os
 import glob
 import csv
 import click
+import time
 import subprocess
 from tests.tt_eager.profiling import ops_for_profiling
 from pathlib import Path
@@ -16,6 +17,7 @@ from loguru import logger
 def profile_host_overhead(output_directory, output_csv):
     currentEnvs = dict(os.environ)
     currentEnvs["TT_METAL_DEVICE_PROFILER"] = "1"
+    start_time = time.time()
 
     all_ops = []
 
@@ -99,7 +101,8 @@ def profile_host_overhead(output_directory, output_csv):
                 host_duration = round(host_duration / (op_count * 1000 * 1000), 2)
                 final_df.loc[index, "HOST DURATION [ms]"] = host_duration
 
-    logger.info(f"Total ops profiled {len(all_ops)}")
+    duration = (time.time() - start_time) / 60
+    logger.info(f"Total ops profiled {len(all_ops)} in {duration:.2f}min")
 
     # Sort output
     final_df = final_df.sort_values("op")
