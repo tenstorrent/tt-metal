@@ -1489,7 +1489,7 @@ std::vector<Tensor> _acosh_bw(const Tensor& grad, const Tensor& input, const Mem
     float t_inf = std::numeric_limits<float>::infinity();
     Tensor cond_result = ttnn::logical_or(
         ttnn::lt(input, full_like(input, -1.0, output_mem_config), std::nullopt, output_mem_config),
-        ttnn::lt(input, full_like(input, 1.0, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::gt(input, full_like(input, 1.0, output_mem_config), std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
     grad_a = where(eqz(cond_result, output_mem_config), t_nan, grad_a, output_mem_config);
@@ -1525,7 +1525,7 @@ std::vector<Tensor> _acos_bw(const Tensor& grad, const Tensor& input, const Memo
     grad_a = where(
         ttnn::logical_or(
             ttnn::lt(input, neg_one, std::nullopt, output_mem_config),
-            ttnn::lt(input, pos_one, std::nullopt, output_mem_config),
+            ttnn::gt(input, pos_one, std::nullopt, output_mem_config),
             std::nullopt,
             output_mem_config),
         std::nanf(" "),
@@ -1614,7 +1614,7 @@ std::vector<Tensor> _sinh_bw(const Tensor& grad, const Tensor& input, const Memo
     std::vector<Tensor> grad_tensor;
     Tensor t_inf = mul_unary(sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), output_mem_config);
     Tensor grad_a = where(
-        ttnn::lt(input, full_like(input, 88.5, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::gt(input, full_like(input, 88.5, output_mem_config), std::nullopt, output_mem_config),
         t_inf,
         where(
             ttnn::lt(input, full_like(input, -88.5, output_mem_config), std::nullopt, output_mem_config),
@@ -1648,7 +1648,7 @@ std::vector<Tensor> _celu_bw(
         input, recip(full_like(input, alpha, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     Tensor exp_result = exp(div_result, output_mem_config);
     Tensor grad_result = where(
-        ttnn::lt(input, zeros_like(input, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::gt(input, zeros_like(input, output_mem_config), std::nullopt, output_mem_config),
         grad,
         ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config),
         output_mem_config);
@@ -1694,7 +1694,7 @@ std::vector<Tensor> _erfinv_bw(const Tensor& grad, const Tensor& input, const Me
     result = where(
         ttnn::logical_or(
             ttnn::lt(input, neg_one, std::nullopt, output_mem_config),
-            ttnn::lt(input, pos_one, std::nullopt, output_mem_config),
+            ttnn::gt(input, pos_one, std::nullopt, output_mem_config),
             std::nullopt,
             output_mem_config),
         std::nanf(" "),
@@ -2362,7 +2362,7 @@ std::vector<Tensor> _logiteps_bw(
     Tensor t_high = full_like(input, high, output_mem_config);
     Tensor ltl_gth = ttnn::logical_or(
         ttnn::lt(input, t_low, std::nullopt, output_mem_config),
-        ttnn::lt(input, t_high, std::nullopt, output_mem_config),
+        ttnn::gt(input, t_high, std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
     grad_result = where(
