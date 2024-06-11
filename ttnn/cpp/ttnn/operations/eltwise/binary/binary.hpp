@@ -75,7 +75,7 @@ struct ExecuteBinary {
             input_shape_a[-3] == input_shape_b[-3]) {
             tt::log_warning(tt::LogOp, "Using repeat op to broadcast batch dim");
             Shape repeats({input_shape_a[0], 1, 1, 1});
-            input_tensor_b = ttnn::repeat(input_tensor_b, repeats.value(), output_memory_config);
+            input_tensor_b = ttnn::repeat(input_tensor_b, repeats, output_memory_config);
         }
 
         DataType dtype = output_dtype.value_or(input_tensor_a.get_dtype());
@@ -122,12 +122,12 @@ struct ExecuteBinary {
     static Tensor execute_on_worker_thread(
         const ttnn::Tensor &input_tensor_a,
         const float scalar,
-        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<const DataType> &dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
         std::optional<std::vector<std::string>> activations = std::nullopt) {
 
-        return ExecuteBinary::execute_on_worker_thread(DefaultQueueId, input_tensor_a, scalar, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, optional_output_tensor, activations);
+        return ExecuteBinary::execute_on_worker_thread(DefaultQueueId, input_tensor_a, scalar, dtype, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, optional_output_tensor, activations);
     }
 
     template <typename... Args>
@@ -139,8 +139,8 @@ struct ExecuteBinary {
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor_a,
         const float scalar,
-        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<const DataType> &dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
         std::optional<std::vector<std::string>> activations = std::nullopt) {
         // Cast Float Scalar to a device tensor
@@ -154,7 +154,7 @@ struct ExecuteBinary {
         Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.device());
         // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
         return ExecuteBinary::execute_on_worker_thread(
-            input_tensor_a, scalar_tensor_device, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, dtype, optional_output_tensor, activations);
+            input_tensor_a, scalar_tensor_device, dtype, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, optional_output_tensor, activations);
     }
 };
 
@@ -169,7 +169,7 @@ constexpr auto add = register_op<ttnn::operations::binary::BinaryOpType::ADD, fa
 constexpr auto add_ = register_op<ttnn::operations::binary::BinaryOpType::ADD, true>("ttnn::add_");
 constexpr auto subtract = register_op<ttnn::operations::binary::BinaryOpType::SUB, false>("ttnn::subtract");
 constexpr auto subtract_ = register_op<ttnn::operations::binary::BinaryOpType::SUB, true>("ttnn::subtract_");
-constexpr auto mul = register_op<ttnn::operations::binary::BinaryOpType::MUL, false>("ttnn::multiply");
+constexpr auto multiply = register_op<ttnn::operations::binary::BinaryOpType::MUL, false>("ttnn::multiply");
 constexpr auto multiply_ = register_op<ttnn::operations::binary::BinaryOpType::MUL, true>("ttnn::multiply_");
 
 constexpr auto eq = register_op<ttnn::operations::binary::BinaryOpType::EQ, false>("ttnn::eq");
@@ -185,6 +185,8 @@ constexpr auto ldexp = register_op<ttnn::operations::binary::BinaryOpType::LDEXP
 constexpr auto logaddexp = register_op<ttnn::operations::binary::BinaryOpType::LOGADDEXP, false>("ttnn::logaddexp");
 constexpr auto logaddexp2 = register_op<ttnn::operations::binary::BinaryOpType::LOGADDEXP2, false>("ttnn::logaddexp2");
 constexpr auto squared_difference = register_op<ttnn::operations::binary::BinaryOpType::SQUARED_DIFFERENCE, false>("ttnn::squared_difference");
+constexpr auto div_fast = register_op<ttnn::operations::binary::BinaryOpType::DIV_FAST, false>("ttnn::div_fast");
+
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor &input_tensor_a, InputBType scalar) {

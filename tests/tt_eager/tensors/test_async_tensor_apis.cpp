@@ -119,7 +119,7 @@ TEST_F(CommonFixture, TestAsyncEltwiseBinary) {
             tt::numpy::full<float>(Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE).to(device);
         Tensor input_tensor_c =
             tt::numpy::full<float>(Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE).to(device);
-        Tensor output_tensor_device = ttnn::multiply(add(input_tensor_a, input_tensor_b), input_tensor_c);
+        Tensor output_tensor_device = ttnn::multiply(ttnn::add(input_tensor_a, input_tensor_b), input_tensor_c);
         Tensor output_tensor_device_2 = neg(ttnn::subtract(output_tensor_device, input_tensor_c));
 
         EXPECT_EQ(output_tensor_device.get_shape(), ttnn::Shape(Shape({1, 1, 1024, 1024})));
@@ -231,7 +231,7 @@ TEST_F(CommonFixture, TestAsyncRefCountManager) {
 //             tt::numpy::full<float>(Shape({1, 1, 1023, 1023}), static_cast<float>(i), DataType::BFLOAT16);
 //         Tensor input_tensor_c =
 //             tt::numpy::full<float>(Shape({1, 1, 1023, 1023}), static_cast<float>(i), DataType::BFLOAT16);
-//         Tensor output_tensor_device = ttnn::multiply(add(input_tensor_a, input_tensor_b), input_tensor_c);
+//         Tensor output_tensor_device = ttnn::multiply(ttnn::add(input_tensor_a, input_tensor_b), input_tensor_c);
 //         Tensor output_tensor_device_2 = neg(ttnn::subtract(output_tensor_device, input_tensor_c));
 
 //         EXPECT_EQ(output_tensor_device.get_shape(), ttnn::Shape(Shape({1, 1, 1023, 1023})));

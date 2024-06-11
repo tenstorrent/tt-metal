@@ -66,8 +66,8 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("activations") = std::nullopt,
             py::arg("queue_id") = 0},
@@ -87,8 +87,8 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("activations") = std::nullopt,
             py::arg("queue_id") = 0});
@@ -124,7 +124,7 @@ void py_module(py::module& module) {
 
     detail::bind_binary_operation(
         module,
-        ttnn::mul,
+        ttnn::multiply,
         R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{ input\_tensor\_a }}_i \times \mathrm{{ input\_tensor\_b }}_i)doc");
 

@@ -17,7 +17,7 @@
 
 namespace ttnn::operations::binary {
 
-namespace eltwise_binary_op_utils {
+namespace utils {
 using namespace tt::tt_metal;
 
 std::map<string, string> get_defines(
@@ -131,7 +131,7 @@ std::map<string, string> get_defines(
     return defines;
 }
 
-}  // namespace eltwise_binary_op_utils
+}  // namespace utils
 
 
 enum class BinaryProgramType {
