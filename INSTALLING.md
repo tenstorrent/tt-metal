@@ -26,7 +26,7 @@ Note the current compatability matrix:
 
 ```sh
 sudo apt update
-sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.9 libyaml-cpp-dev=0.6.2-4ubuntu1 libhwloc-dev graphviz
+sudo apt install python3.8-venv=3.8.10-0ubuntu1~20.04.9 libyaml-cpp-dev=0.6.2-4ubuntu1 libhwloc-dev graphviz
 
 # Install Clang-17 for C++20 support!!
 wget https://apt.llvm.org/llvm.sh
@@ -124,7 +124,7 @@ Please follow the next additional steps if you want to contribute to the codebas
 1. Install dependencies
 
 ```sh
-sudo apt install git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc libtbb-dev libcapstone-dev pkg-config ninja-build patchelf
+sudo apt install git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 libtbb-dev libcapstone-dev ninja-build patchelf
 ```
 
 2. Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)

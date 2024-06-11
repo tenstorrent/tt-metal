@@ -6,16 +6,13 @@
     "pandoc",
     "libtbb-dev",
     "libcapstone-dev",
-    "pkg-config",
     "ninja-build"
   ],
   "ubuntu-22.04": [
     "git",
     "git-lfs",
-    "pandoc",
     "libtbb-dev",
     "libcapstone-dev",
-    "pkg-config",
     "ninja-build"
   ]
 }
