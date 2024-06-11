@@ -8,7 +8,7 @@ jobs:
   build-lib:
     strategy:
       matrix:
-        type: [ Debug, Release, RelWithDebInfo ]
+        type: [ Debug, RelWithDebInfo ]
         arch: [grayskull, wormhole_b0, blackhole]
         os: [ubuntu-20.04]
     env:
