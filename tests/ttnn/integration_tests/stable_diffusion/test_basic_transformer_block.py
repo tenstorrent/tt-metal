@@ -179,7 +179,7 @@ def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: basic_transformer, custom_preprocessor=custom_preprocessor, device=device
     )
-    model = tt2_ttnn_basic_transformer_block(device, parameters)
+    model = tt2_ttnn_basic_transformer_block(device, parameters, seq_len=H)
 
     hidden_states = ttnn.from_torch(hidden_states, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     hidden_states = ttnn.to_device(hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)

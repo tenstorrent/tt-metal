@@ -768,20 +768,26 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
             if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
                 block_start_row_offset = i * block_row_size;
                 block_start_row_id_offset = 0;
-                if (i == last_idx) {
-                    row_size_unpadded = last_block_row_size_unpadded;
-                } else if (i > last_idx) {
+                if (i > last_idx) {
                     row_size_unpadded = 0;
                     num_rows_unpadded = 0;
+                } else {
+                    num_rows_unpadded = num_output_rows_unpadded;
+                    if (i == last_idx) {
+                        row_size_unpadded = last_block_row_size_unpadded;
+                    }
                 }
             } else if (a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                 block_start_row_offset = 0;
                 block_start_row_id_offset = i * num_rows_block;
-                if (i == last_idx) {
-                    num_rows_unpadded = num_output_rows_unpadded;
-                } else if (i > last_idx) {
+                if (i > last_idx) {
                     row_size_unpadded = 0;
                     num_rows_unpadded = 0;
+                } else {
+                    if (i == last_idx) {
+                        num_rows_unpadded = num_output_rows_unpadded;
+                    }
+                    row_size_unpadded = last_block_row_size_unpadded;
                 }
             } else {
                 if (row_major) {

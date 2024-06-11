@@ -114,9 +114,7 @@ Tensor selu(
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 Tensor celu(
-    const Tensor& x,
-    float alpha,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const Tensor& x, float alpha, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // Function Swish = same as SILU
 // use transformation y = x * sigmoid( x ) by broadcast
@@ -195,6 +193,23 @@ Tensor div_no_nan(
     float value,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor trunc(const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor round(
+    const Tensor& input,
+    int64_t decimals = 0,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor floor_div(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor floor_div(
+    const Tensor& input,
+    float value,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 // xlogy(x,y))=x*log(y)
 Tensor xlogy(
     const Tensor& input_a,
@@ -213,13 +228,12 @@ Tensor logical_noti(
     float immediate,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-//prod
+// prod
 Tensor prod(
     const Tensor& input_a,
     bool all_dimensions = false,
     int64_t dim = 0,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 
 /*
 Returns a new tensor with the signed angles in radians between vectors
@@ -250,7 +264,16 @@ Tensor addalpha(
     const Tensor& input_a,
     const Tensor& input_b,
     float alpha,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+
+Tensor addalpha(
+    uint8_t cq_id,
+    const Tensor& input_a,
+    const Tensor& input_b,
+    float alpha,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 
 // repeat interleave
 Tensor repeat_interleave(

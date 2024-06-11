@@ -25,7 +25,6 @@
 #include "tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
 #include "tt_dnn/op_library/all_gather/all_gather_op.hpp"
 #include "tt_dnn/op_library/ccl/reduce_scatter/reduce_scatter_op.hpp"
-#include "tt_dnn/op_library/risc_v/risc_v_op.hpp"
 
 
 namespace tt::tt_metal::detail{
@@ -393,23 +392,6 @@ namespace tt::tt_metal::detail{
                 "output_dtype", "DataType of output tensor", "DataType", "Default is None (use input dtype)", "No"
         )doc");
 
-        m_tensor.def("argmax_int", &argmax_int,
-            py::arg("input").noconvert(), py::arg("dim").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Returns the indices of the maximum value of elements in the ``input`` tensor
-            If no ``dim`` is provided, it will return the indices of maximum value of all elements in given ``input``
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have UINT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor argmax is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "dim", "Dimension to perform argmax", "int", "", "No"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
         // *** experimental operations ***
         m_tensor.def("fill_rm", &fill_rm,
             py::arg("N"), py::arg("C"), py::arg("H"), py::arg("W"), py::arg("hOnes"), py::arg("wOnes"), py::arg("any").noconvert(), py::arg("val_hi"), py::arg("val_lo"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
@@ -539,7 +521,7 @@ namespace tt::tt_metal::detail{
             R"doc(Converts tensor from sharded_to_interleaved memory layout)doc"
         );
         m_tensor.def("reshard", &reshard,
-            py::arg("input"), py::arg("output_mem_config").noconvert(),
+            py::arg("input"), py::arg("output_mem_config").noconvert(), py::arg("output_tensor").noconvert() = std::nullopt,
             R"doc(Converts a tensor sharded one way to another way)doc"
         );
 

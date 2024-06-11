@@ -2,7 +2,6 @@
 FROM ubuntu:20.04
 
 ARG DEBIAN_FRONTEND=noninteractive
-ENV GTEST_VERSION=1.13.0
 ENV DOXYGEN_VERSION=1.9.6
 
 # Install build and runtime deps
@@ -19,7 +18,7 @@ RUN apt-get -y update \
 
 ## Test Related Dependencies
 COPY /scripts/docker/install_test_deps.sh /opt/tt_metal_infra/scripts/docker/install_test_deps.sh
-RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_test_deps.sh ${GTEST_VERSION} ${DOXYGEN_VERSION}
+RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_test_deps.sh ${DOXYGEN_VERSION}
 
 # Copy remaining convenience scripts
 COPY /scripts /opt/tt_metal_infra/scripts

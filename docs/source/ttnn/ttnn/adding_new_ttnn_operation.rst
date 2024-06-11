@@ -1,6 +1,11 @@
 Adding New ttnn Operation
 #########################
 
+.. note::
+   This document is meant for contributors to TT-NN.
+
+   Not all operations may be functional on all Tenstorrent hardware (Grayskull,
+   Wormhole, or others).
 
 C++ Implementation
 ------------------

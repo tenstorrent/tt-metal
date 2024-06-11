@@ -203,8 +203,7 @@ static void append_operation_to_operation_history(
         auto& program_cache = input_tensors[0].device()->program_cache;
         if (program_cache.is_enabled()) {
             program_hash = operation.compute_program_hash(input_tensors, optional_input_tensors);
-            auto program_pointer = program_cache.find(program_hash.value());
-            program_cache_hit = program_pointer.has_value();
+            auto program_cache_hit = program_cache.contains(program_hash.value());
         }
     }
 

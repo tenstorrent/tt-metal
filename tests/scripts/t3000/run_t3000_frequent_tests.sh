@@ -39,6 +39,20 @@ run_t3000_llama2_70b_tests() {
   echo "LOG_METAL: run_t3000_llama2_70b_tests $duration seconds to complete"
 }
 
+run_t3000_llama2_70b_experimental_tests() {
+  # Record the start time
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama2_70b_experimental_tests"
+
+  pytest models/experimental/llama2_70b/tests/test_llama_model_t3000.py
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama2_70b_experimental_tests $duration seconds to complete"
+}
+
 run_t3000_mixtral_tests() {
   # Record the start time
   start_time=$(date +%s)
@@ -91,6 +105,9 @@ run_t3000_tests() {
 
   # Run tteager tests
   #run_t3000_tteager_tests
+
+  # Run llama2-70b experimental tests
+  run_t3000_llama2_70b_experimental_tests
 
   # Run falcon40b tests
   run_t3000_falcon40b_tests

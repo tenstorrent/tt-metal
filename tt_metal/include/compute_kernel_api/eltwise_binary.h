@@ -66,11 +66,16 @@ ALWI void add_tiles_init_nof() { MATH(( llk_math_eltwise_binary_init<ELWADD, NON
 
 
 /**
- * Please refer to documentation for any_init.
+ * Short init function
+ * | Argument       | Description                                                   | Type     | Valid Range                                    | Required |
+ * |----------------|---------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31                                        | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31                                        | True     |
+ * | acc_to_dest    | If true, operation = A + B + dst_tile_idx of add_tiles        | bool     | 0,1                                            | False    |
  */
-ALWI void add_tiles_init(uint32_t icb0 = 0, uint32_t icb1 = 1) {
-    MATH(( llk_math_eltwise_binary_init<ELWADD, NONE>() ));
-    UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1) ));
+ALWI void add_tiles_init(uint32_t icb0 = 0, uint32_t icb1 = 1, bool acc_to_dest = false) {
+    MATH(( llk_math_eltwise_binary_init<ELWADD, NONE>(0/*transpose*/, acc_to_dest) ));
+    UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0/*transpose*/, acc_to_dest) ));
 }
 
 /**
@@ -82,11 +87,16 @@ ALWI void sub_tiles_init_nof() { MATH(( llk_math_eltwise_binary_init<ELWSUB, NON
 
 
 /**
- * Please refer to documentation for any_init.
+ * Short init function
+ * | Argument       | Description                                                   | Type     | Valid Range                                    | Required |
+ * |----------------|---------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31                                        | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31                                        | True     |
+ * | acc_to_dest    | If true, operation = A - B + dst_tile_idx of sub_tiles        | bool     | 0,1                                            | False    |
  */
-ALWI void sub_tiles_init(uint32_t icb0 = 0, uint32_t icb1 = 1) {
-    MATH(( llk_math_eltwise_binary_init<ELWSUB, NONE>() ));
-    UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1) ));
+ALWI void sub_tiles_init(uint32_t icb0 = 0, uint32_t icb1 = 1, bool acc_to_dest = false) {
+    MATH(( llk_math_eltwise_binary_init<ELWSUB, NONE>(0/*transpose*/, acc_to_dest) ));
+    UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0/*transpose*/, acc_to_dest) ));
 }
 
 

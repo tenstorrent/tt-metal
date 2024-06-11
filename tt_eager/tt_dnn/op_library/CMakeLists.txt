@@ -48,6 +48,8 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce/single_core_hw/reduce_op_single_core_hw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce/multi_core_h/reduce_op_multi_core_h.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce/multi_core_w/reduce_op_multi_core_w.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fast_reduce_nc/fast_reduce_nc_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fast_reduce_nc/reduce_nc_impl/reduce_nc_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/bcast_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_multi_core_h.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_sharded_h.cpp
@@ -210,8 +212,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/scan/scan_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/topk/topk_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/topk/single_core/single_core_topk.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/risc_v/risc_v_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/risc_v/argmax_op.cpp
 )
 
 add_library(tt_dnn OBJECT ${TT_DNN_SRCS})
@@ -219,16 +219,16 @@ add_library(tt_dnn OBJECT ${TT_DNN_SRCS})
 target_link_libraries(tt_dnn PUBLIC metal_header_directories compiler_flags)
 target_include_directories(tt_dnn PUBLIC
     ${UMD_HOME}
-    ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/tt_metal
-    ${CMAKE_SOURCE_DIR}/tt_eager
-    ${CMAKE_SOURCE_DIR}/ttnn/cpp
-    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/fmt
+    ${PROJECT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/tt_metal
+    ${PROJECT_SOURCE_DIR}/tt_eager
+    ${PROJECT_SOURCE_DIR}/ttnn/cpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt
 )
 
 target_precompile_headers(tt_dnn PUBLIC
-    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/magic_enum/magic_enum.hpp
-    ${CMAKE_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/magic_enum/magic_enum.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/auto_format.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute_kernel_config.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/operation.hpp

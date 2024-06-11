@@ -37,15 +37,6 @@ runs:
         tar -xvf doxygen-1.9.6.linux.bin.tar.gz
         cd doxygen-1.9.6
         sudo make install
-    - name: Install gtest
-      shell: bash
-      run: |
-        curl -L "https://github.com/google/googletest/archive/refs/tags/v1.13.0.tar.gz" -o v1.13.0.tar.gz
-        tar -xvf v1.13.0.tar.gz
-        cd googletest-1.13.0
-        cmake -DCMAKE_INSTALL_PREFIX=/usr -DBUILD_SHARED_LIBS=ON .
-        make
-        sudo make install
     - name: Install Clang-17
       shell: bash
       run: |

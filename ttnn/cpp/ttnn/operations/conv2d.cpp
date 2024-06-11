@@ -316,7 +316,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_requir
                 needs_shard_or_reshard = true;
             }
             if (conv_config.override_sharding_config) {
-                if (conv_config.core_grid != input_shard_grid) {
+                TT_FATAL(conv_config.core_grid.has_value());
+                if (conv_config.core_grid.value() != input_shard_grid) {
                     needs_shard_or_reshard = true;
                 }
                 bool input_tensor_height_sharded = input_shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED;
@@ -345,19 +346,16 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_requir
             block_shard_orientation);
 
         if (conv_config.override_sharding_config) {
-            if (conv_config.core_grid.ranges().empty()) {
-                parallel_config = optimal_parallel_config;
-            } else {
-                // override parallel config
-                auto shard_scheme = conv_config.height_sharding ? TensorMemoryLayout::HEIGHT_SHARDED
-                                                                : TensorMemoryLayout::BLOCK_SHARDED;
-                auto shard_orientation =
-                    conv_config.height_sharding ? ShardOrientation::ROW_MAJOR : block_shard_orientation;
-                parallel_config = {
-                    .grid = conv_config.core_grid,
-                    .shard_scheme = shard_scheme,
-                    .shard_orientation = shard_orientation};
-            }
+            TT_FATAL(conv_config.core_grid.has_value());
+            // override parallel config
+            auto shard_scheme = conv_config.height_sharding ? TensorMemoryLayout::HEIGHT_SHARDED
+                                                            : TensorMemoryLayout::BLOCK_SHARDED;
+            auto shard_orientation =
+                conv_config.height_sharding ? ShardOrientation::ROW_MAJOR : block_shard_orientation;
+            parallel_config = {
+                .grid = conv_config.core_grid.value(),
+                .shard_scheme = shard_scheme,
+                .shard_orientation = shard_orientation};
         } else {
             parallel_config = optimal_parallel_config;
         }
@@ -733,30 +731,3 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
 }  // namespace conv2d
 }  // namespace operations
 }  // namespace ttnn
-
-auto fmt::formatter<ttnn::operations::conv2d::Conv2dConfig>::format(
-    const ttnn::operations::conv2d::Conv2dConfig& t, fmt::format_context& ctx) {
-    std::string str = fmt::format(
-        "Conv2dConfig(math_fidelity={}, dtype={}, weights_dtype={}, math_approx_mode_enabled={}, "
-        "fp32_dest_acc_enabled={}, packer_l1_accum_enabled={}, activation={}, input_channels_alignment={}, "
-        "deallocate_activation={}, reallocate_halo_output={}, act_block_h_override={}, reshard_if_not_optimal={}, "
-        "override_sharding_config={}, height_sharding={}, core_grid={}, transpose_shards={}, output_layout={})",
-        t.math_fidelity,
-        t.dtype,
-        t.weights_dtype,
-        t.math_approx_mode_enabled,
-        t.fp32_dest_acc_enabled,
-        t.packer_l1_accum_enabled,
-        t.activation,
-        t.input_channels_alignment,
-        t.deallocate_activation,
-        t.reallocate_halo_output,
-        t.act_block_h_override,
-        t.reshard_if_not_optimal,
-        t.override_sharding_config,
-        t.height_sharding,
-        t.core_grid.str(),
-        t.transpose_shards,
-        t.output_layout);
-    return format_to(ctx.out(), "{}", str);
-}

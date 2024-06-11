@@ -312,7 +312,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
-    std::map<string, string> eltwise_defines = eltwise_binary_op_utils::get_defines(op_type, output.get_dtype(), fused_activations);
+    std::map<string, string> eltwise_defines = eltwise_binary_op_utils::get_defines(op_type, a.get_dtype(), output.get_dtype(), fused_activations);
 
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
         tt_metal::CircularBufferConfig cb_interm_config = tt_metal::CircularBufferConfig(1 * src0_single_tile_size, {{CB::c_intermed0, src0_cb_data_format}})

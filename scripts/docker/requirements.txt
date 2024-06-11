@@ -2,12 +2,9 @@ apt-utils
 dialog
 software-properties-common=0.99.9.12
 build-essential=12.8ubuntu1.1
-libgoogle-glog-dev=0.4.0-1build1
 libyaml-cpp-dev=0.6.2-4ubuntu1
 git
 git-lfs
-libboost-all-dev=1.71.0.0ubuntu2
-libsndfile1=1.0.28-7ubuntu0.2
 pandoc
 libtbb-dev
 libcapstone-dev

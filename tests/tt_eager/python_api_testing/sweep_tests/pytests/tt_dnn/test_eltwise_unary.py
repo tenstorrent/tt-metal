@@ -584,6 +584,39 @@ class TestEltwiseUnary:
             test_args,
         )
 
+    @pytest.mark.parametrize("round_off_method", ["floor", "trunc"])
+    @skip_for_grayskull("#ToDo: GS implementation needs to be done for Floor")
+    def test_run_eltwise_round_off_ops(
+        self,
+        round_off_method,
+        input_shapes,
+        device,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=-1000, high=1000), torch.bfloat16
+            )
+        ]
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        test_args.update(
+            {
+                "input_mem_config": [input_mem_config],
+                "output_mem_config": output_mem_config,
+            }
+        )
+        comparison_func = comparison_funcs.comp_equal
+        run_single_pytorch_test(
+            f"eltwise-{round_off_method}",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            device,
+            test_args,
+        )
+
     @pytest.mark.parametrize("scalar", [0.5])
     def test_run_eltwise_heaviside(
         self,

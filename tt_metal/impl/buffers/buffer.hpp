@@ -61,7 +61,11 @@ struct ShardSpec {
 
     const uint32_t num_cores() const { return this->grid.num_cores(); }
     const uint32_t numel() const { return this->shape[0] * this->shape[1]; }
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("grid", "shape", "orientation", "halo");
+    constexpr auto attribute_values() const {
+        return std::forward_as_tuple(this->grid, this->shape, this->orientation, this->halo);
+    }
 };
 
 bool operator==(const ShardSpec &spec_a, const ShardSpec &spec_b);
@@ -271,15 +275,12 @@ class buffer_map_t {
         this->map.erase(buf_attr);
     }
 
-    void clear() {
-        std::scoped_lock<std::mutex> lock(this->map_mutex);
-        this->map.clear();
-    }
-
     std::map<std::tuple<Deviceid, PageAddress>, Buffer *> value() {
         std::scoped_lock<std::mutex> lock(this->map_mutex);
         return this->map;
     }
+
+    ~buffer_map_t() { TT_ASSERT(this->map.empty(), "Not all buffers deallocated by runtime!"); }
 
    private:
     std::mutex map_mutex;

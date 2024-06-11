@@ -492,6 +492,10 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_right_shift,
         "pytorch_op": pytorch_ops.right_shift,
     },
+    "eltwise-left_shift": {
+        "tt_op": tt_lib_ops.eltwise_left_shift,
+        "pytorch_op": pytorch_ops.left_shift,
+    },
     "eltwise-unary_ne": {
         "tt_op": tt_lib_ops.eltwise_unary_ne,
         "pytorch_op": pytorch_ops.unary_ne,
@@ -518,6 +522,10 @@ op_map = {
     },
     "eltwise-addalpha": {
         "tt_op": tt_lib_ops.eltwise_addalpha,
+        "pytorch_op": pytorch_ops.addalpha,
+    },
+    "eltwise-addalpha-optional": {
+        "tt_op": tt_lib_ops.eltwise_addalpha_optional,
         "pytorch_op": pytorch_ops.addalpha,
     },
     "lamb-optimizer": {
@@ -571,6 +579,26 @@ op_map = {
     "eltwise-signbit": {
         "tt_op": tt_lib_ops.eltwise_signbit,
         "pytorch_op": pytorch_ops.signbit,
+    },
+    "eltwise-floor": {
+        "tt_op": tt_lib_ops.eltwise_floor,
+        "pytorch_op": pytorch_ops.floor,
+    },
+    "eltwise-trunc": {
+        "tt_op": tt_lib_ops.eltwise_trunc,
+        "pytorch_op": pytorch_ops.trunc,
+    },
+    "eltwise-floor_div": {
+        "tt_op": tt_lib_ops.eltwise_floor_div,
+        "pytorch_op": pytorch_ops.floor_div,
+    },
+    "eltwise-unary_floor_div": {
+        "tt_op": tt_lib_ops.eltwise_unary_floor_div,
+        "pytorch_op": pytorch_ops.unary_floor_div,
+    },
+    "eltwise-round": {
+        "tt_op": tt_lib_ops.eltwise_round,
+        "pytorch_op": pytorch_ops.round,
     },
     "eltwise-rpow": {
         "tt_op": tt_lib_ops.eltwise_rpow,
@@ -1225,5 +1253,13 @@ op_map = {
     "clamp-bw": {
         "tt_op": tt_lib_ops.clamp_bw,
         "pytorch_op": pytorch_ops.clamp_bw,
+    },
+    "interleaved_to_sharded_partial": {
+        "tt_op": tt_lib_ops.interleaved_to_sharded_partial,
+        "pytorch_op": pytorch_ops.interleaved_to_sharded_partial,
+    },
+    "interleaved_to_sharded_partial_coregrid": {
+        "tt_op": tt_lib_ops.interleaved_to_sharded_partial_coregrid,
+        "pytorch_op": pytorch_ops.interleaved_to_sharded_partial_coregrid,
     },
 }

@@ -52,7 +52,6 @@ Tensor prod_all(const Tensor& input, const MemoryConfig& output_mem_config ) {
     }
     //else --> GS Arch
     return tt::numpy::prod_result_computation_GS<bfloat16>(result, result.get_dtype(), result.get_layout(), result.device(), output_mem_config);
-    return operation::run(Prod_op{.output_mem_config = output_mem_config}, {input}).at(0);
 }
 
 }

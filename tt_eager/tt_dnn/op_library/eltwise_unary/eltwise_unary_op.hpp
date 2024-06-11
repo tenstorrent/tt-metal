@@ -79,7 +79,9 @@ enum class UnaryOpType {
     UNARY_LT,
     TILED_PROD,
     TYPECAST,
-    RIGHT_SHIFT
+    RIGHT_SHIFT,
+    FLOOR,
+    LEFT_SHIFT
 };
 
 template <typename T>
@@ -107,7 +109,8 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::UNARY_GT:
         case UnaryOpType::UNARY_LT:
         case UnaryOpType::TYPECAST:
-        case UnaryOpType::RIGHT_SHIFT: return true;
+        case UnaryOpType::RIGHT_SHIFT:
+        case UnaryOpType::LEFT_SHIFT: return true;
         default: return false;
     }
     return false;
@@ -198,7 +201,7 @@ inline Tensor run_eltwise_unary(
     const std::vector<UnaryWithParam>& ops_chain,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     TT_FATAL(ops_chain.size() > 0, "At least 1 unary op must be specified");
-    DataType output_dtype = (ops_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(ops_chain[0].params[0]) : input_tensor.get_dtype();
+    DataType output_dtype = (ops_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(ops_chain[0].params[1]) : input_tensor.get_dtype();
     bool fp32_dest_acc_en =
         output_dtype == DataType::UINT32 or
         input_tensor.get_dtype() == DataType::UINT32 or
@@ -244,7 +247,7 @@ inline Tensor run_eltwise_unary(
     const std::vector<UnaryWithParam>& ops_chain,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     TT_FATAL(ops_chain.size() > 0, "At least 1 unary op must be specified");
-    DataType output_dtype = (ops_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(ops_chain[0].params[0]) : input_tensor.get_dtype();
+    DataType output_dtype = (ops_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(ops_chain[0].params[1]) : input_tensor.get_dtype();
     bool fp32_dest_acc_en =
         output_dtype == DataType::UINT32 or
         input_tensor.get_dtype() == DataType::UINT32 or
@@ -347,6 +350,7 @@ constexpr auto isneginf = make_eltwise_unary<UnaryOpType::ISNEGINF>{};
 constexpr auto isnan = make_eltwise_unary<UnaryOpType::ISNAN>{};
 constexpr auto sign = make_eltwise_unary<UnaryOpType::SIGN>{};
 constexpr auto signbit = make_eltwise_unary<UnaryOpType::SIGNBIT>{};
+constexpr auto floor = make_eltwise_unary<UnaryOpType::FLOOR>{};
 constexpr auto square = make_eltwise_unary<UnaryOpType::SQUARE>{};
 constexpr auto atan = make_eltwise_unary<UnaryOpType::ATAN>{};
 constexpr auto eqz = make_eltwise_unary<UnaryOpType::EQZ>{};
@@ -368,12 +372,12 @@ constexpr auto prelu = leaky_relu;
 constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
 constexpr auto right_shift = make_eltwise_unary_with_param<UnaryOpType::RIGHT_SHIFT>{};
+constexpr auto left_shift = make_eltwise_unary_with_param<UnaryOpType::LEFT_SHIFT>{};
 constexpr auto unary_ne = make_eltwise_unary_with_param<UnaryOpType::UNARY_NE>{};
 constexpr auto rsub = make_eltwise_unary_with_param<UnaryOpType::RSUB>{};
 constexpr auto silu = make_eltwise_unary<UnaryOpType::SILU>{};
 constexpr auto identity = make_eltwise_unary<UnaryOpType::IDENTITY>{};
 constexpr auto identity_uint32 = make_eltwise_unary<UnaryOpType::IDENTITY_UINT32>{};
-constexpr auto eltwise_typecast = make_eltwise_unary_with_param<UnaryOpType::TYPECAST, uint32_t>{};
 constexpr auto add_unary_sfpu = make_eltwise_symmetric_binop_unary_with_param<UnaryOpType::ADD_UNARY_SFPU>{};
 constexpr auto mul_unary_sfpu = make_eltwise_symmetric_binop_unary_with_param<UnaryOpType::MUL_UNARY_SFPU>{};
 constexpr auto unary_gt = make_eltwise_unary_with_param<UnaryOpType::UNARY_GT>{};
@@ -445,6 +449,18 @@ inline Tensor softplus(
     TT_ASSERT(input_tensor.device()->arch() != tt::ARCH::GRAYSKULL, "Softplus is not currently supported on Grayskull");
     return run_eltwise_unary(
         input_tensor, {UnaryWithParam(UnaryOpType::SOFTPLUS, {beta, threshold})}, output_mem_config);
+}
+
+inline Tensor eltwise_typecast(
+    const Tensor& input_tensor,
+    uint32_t tt_input_dtype,
+    uint32_t tt_output_dtype,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    TT_ASSERT(input_tensor.device()->arch() != tt::ARCH::GRAYSKULL, "eltwise_typecast is not currently supported on Grayskull");
+    return run_eltwise_unary(
+        input_tensor,
+        {UnaryWithParam(UnaryOpType::TYPECAST, {static_cast<float>(tt_input_dtype), static_cast<float>(tt_output_dtype)})},
+        output_mem_config);
 }
 
 inline Tensor unary_chain(

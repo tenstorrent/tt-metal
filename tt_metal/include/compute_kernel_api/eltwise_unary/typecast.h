@@ -21,20 +21,26 @@ namespace ckernel {
 /**
  * Performs an elementwise typecast operation on the input.
  * Supports following typecasts:
- *  fp32/fp16b -> uint32
- *  fp32/fp16b -> uint16
- * For output to be uint32, Dest must be in 32 bit mode.
+ *  Float16_b -> UInt32
+ *  Float16_b -> UInt16
+ *  UInt16 -> Float16_b
+ *  Int32 -> Float16_b
+ *
+ * For output to be UInt32, Dest must be in 32 bit mode.
  *
  * Return value: None
+ *
+ * Note: This operation is not supported on Grayskull.
  *
  * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | tile_index     | The index of the tile in DST register buffer to perform typecast operation | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | IN_DTYPE       | Input data format                                                          | uint32_t | Must be valid tt::DataFormat                          | True     |
  * | OUT_DTYPE      | Desired output data format                                                 | uint32_t | Must be valid tt::DataFormat                          | True     |
  */
-template <uint32_t OUT_DTYPE>
+template <uint32_t IN_DTYPE, uint32_t OUT_DTYPE>
 ALWI void typecast_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_typecast<APPROX, OUT_DTYPE>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_typecast<APPROX, IN_DTYPE, OUT_DTYPE>(idst) ));
 }
 
 /**

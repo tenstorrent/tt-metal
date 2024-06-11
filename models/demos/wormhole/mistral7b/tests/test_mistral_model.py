@@ -4,6 +4,15 @@
 import torch
 import pytest
 from loguru import logger
+import os
+
+# Set Mistral flags for CI, if CI environment is setup
+if os.getenv("CI") == "true":
+    os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+    os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+    os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/ttnn/models/demos/mistral7b/"
+    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
+
 import ttnn
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
     precompute_freqs,
@@ -57,7 +66,7 @@ def test_mistral_model_inference(device, iterations, version, use_program_cache,
 
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(device, instruct=instruct)
+    model_args = TtModelArgs(device)
     model_args.max_batch_size = 32
     model_args.n_layers = 32  # Full model
 
@@ -112,7 +121,7 @@ def test_mistral_model_inference(device, iterations, version, use_program_cache,
         device=device,
         dtype=dtype,
         state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype, instruct=instruct),
+        weight_cache_path=model_args.weight_cache_path(dtype),
         layers=list(range(model_args.n_layers)),
         rot_mat=rot_emb_matrix_list,
         start_pos=generation_start_pos,
