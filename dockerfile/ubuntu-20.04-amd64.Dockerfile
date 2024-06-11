@@ -39,4 +39,19 @@ RUN python3 -m pip config set global.extra-index-url https://download.pytorch.or
 RUN python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt
 RUN python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
 
+# Install Clang-17
+RUN cd $TT_METAL_INFRA_DIR \
+    && wget https://apt.llvm.org/llvm.sh \
+    && chmod u+x llvm.sh \
+    && ./llvm.sh 17
+
+# Install compatible gdb debugger for clang-17
+RUN cd $TT_METAL_INFRA_DIR \
+    && wget https://ftp.gnu.org/gnu/gdb/gdb-14.2.tar.gz \
+    && tar -xvf gdb-14.2.tar.gz \
+    && cd gdb-14.2 \
+    && ./configure \
+    && make -j$(nproc)
+ENV PATH="$TT_METAL_INFRA_DIR/gdb-14.2/gdb:$PATH"
+
 CMD ["tail", "-f", "/dev/null"]
