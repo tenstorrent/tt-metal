@@ -4,8 +4,6 @@
 
 #pragma once
 
-//#define PROFILER_KERNEL_FORCE_INLINE
-
 #include <climits>
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC)
@@ -17,12 +15,6 @@
 
 #include "hostdevcommon/profiler_common.h"
 #include "risc_attribs.h"
-
-#ifdef PROFILER_KERNEL_FORCE_INLINE
-#define PROFILER_INLINE inline __attribute__((always_inline))
-#else
-#define PROFILER_INLINE __attribute__((noinline))
-#endif
 
 #define DO_PRAGMA(x) _Pragma (#x)
 
@@ -93,7 +85,7 @@ namespace kernel_profiler{
 
 #define SrcLocNameToHash( name ) DO_PRAGMA(message(PROFILER_MSG_NAME(name))); auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME( name ));
 
-    inline __attribute__((always_inline)) void init_profiler(uint16_t briscKernelID = 0, uint16_t ncriscKernelID = 0, uint16_t triscsKernelID = 0)
+    __attribute__((noinline)) void init_profiler(uint16_t briscKernelID = 0, uint16_t ncriscKernelID = 0, uint16_t triscsKernelID = 0)
     {
         wIndex = CUSTOM_MARKERS;
         stackSize = 0;
@@ -203,7 +195,7 @@ namespace kernel_profiler{
         return ((timer_id & 0xFFFF) | ((1<<16) & 0x7FFFF));
     }
 
-    uint32_t get_sum_id (uint32_t sum_id)
+    inline __attribute__((always_inline)) uint32_t get_sum_id (uint32_t sum_id)
     {
         return ((sum_id & 0xFFFF) | ((1<<17) & 0x7FFFF));
     }
@@ -216,23 +208,15 @@ namespace kernel_profiler{
         buffer[index+1] = p_reg[WALL_CLOCK_LOW_INDEX];
     }
 
-    inline __attribute__((always_inline)) void mark_start_at_index_inlined(uint32_t index)
-    {
-        volatile tt_l1_ptr uint32_t *buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kernel_profiler::profilerBuffer);
-        volatile tt_reg_ptr uint32_t *p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t *> (RISCV_DEBUG_REG_WALL_CLOCK_L);
-        buffer[index+1] = p_reg[0];
-    }
-
     inline __attribute__((always_inline)) void mark_end_at_index_inlined(uint32_t index, uint32_t timer_id_s, uint32_t timer_id)
     {
         volatile tt_l1_ptr uint32_t *buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kernel_profiler::profilerBuffer);
         volatile tt_reg_ptr uint32_t *p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t *> (RISCV_DEBUG_REG_WALL_CLOCK_L);
-        buffer[index] = 0x80000000 | ((timer_id_s & 0x7FFFF) << 12) | (p_reg[1] & 0xFFF);
-        buffer[index+2] = 0x80000000 | ((timer_id & 0x7FFFF) << 12) | (p_reg[1] & 0xFFF);
-        buffer[index+3] = p_reg[0];
+        buffer[index+2] = 0x80000000 | ((timer_id & 0x7FFFF) << 12) | (p_reg[WALL_CLOCK_HIGH_INDEX] & 0xFFF);
+        buffer[index+3] = p_reg[WALL_CLOCK_LOW_INDEX];
     }
 
-    PROFILER_INLINE void mark_padding()
+    inline __attribute__((always_inline)) void mark_padding()
     {
         if (wIndex < PROFILER_L1_VECTOR_SIZE)
         {
@@ -273,7 +257,7 @@ namespace kernel_profiler{
         profiler_control_buffer[kernel_profiler::deviceBufferEndIndex] = wIndex;
     }
 
-    inline __attribute__((always_inline)) void finish_profiler()
+    __attribute__((noinline)) void finish_profiler()
     {
         risc_finished_profiling();
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_BRISC)

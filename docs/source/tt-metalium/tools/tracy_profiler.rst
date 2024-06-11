@@ -53,8 +53,7 @@ Build with the ``ENABLE_TRACY=1`` flag is required for profiling with tracy.
 
 ..  code-block:: sh
 
-    make clean
-    make build ENABLE_TRACY=1
+    scripts/build_scripts/build_with_profiler_opt.sh
 
 With this build variant, all C++ marked zones will be profiled.
 

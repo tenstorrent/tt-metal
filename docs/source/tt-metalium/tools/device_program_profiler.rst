@@ -24,7 +24,6 @@ The commands to build and run the ``full_buffer`` example after following :ref:`
 
     cd $TT_METAL_HOME
     scripts/build_scripts/build_with_profiler_opt.sh
-    make programming_examples
     TT_METAL_DEVICE_PROFILER=1 ./build/programming_examples/profiler/test_full_buffer
 
 The generated csv is ``profile_log_device.csv`` and is saved under ``{$TT_METAL_HOME}/generated/profiler/.logs`` by default.
