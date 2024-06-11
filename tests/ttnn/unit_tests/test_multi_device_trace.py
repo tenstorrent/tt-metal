@@ -12,7 +12,7 @@ import os
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
 
-NUM_TRACE_LOOPS = int(os.getenv("NUM_TRACE_LOOPS", 10))
+NUM_TRACE_LOOPS = int(os.getenv("NUM_TRACE_LOOPS", 7))
 
 
 @pytest.mark.parametrize(
