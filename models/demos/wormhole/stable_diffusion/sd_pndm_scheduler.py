@@ -150,13 +150,13 @@ class TtPNDMScheduler:
             model_output = model_output
             self.cur_sample = sample
         elif len(self.ets) == 1 and self.counter == 1:
-            model_output = (model_output + self.ets[-1]) / 2
+            model_output = ttnn.mul((model_output + self.ets[-1]), 1 / 2)
             sample = self.cur_sample
             self.cur_sample = None
         elif len(self.ets) == 2:
-            model_output = (3 * self.ets[-1] - self.ets[-2]) / 2
+            model_output = ttnn.mul((3 * self.ets[-1] - self.ets[-2]), 1 / 2)
         elif len(self.ets) == 3:
-            model_output = (23 * self.ets[-1] - 16 * self.ets[-2] + 5 * self.ets[-3]) / 12
+            model_output = ttnn.mul((23 * self.ets[-1] - 16 * self.ets[-2] + 5 * self.ets[-3]), 1 / 12)
         else:
             model_output = (1 / 24) * (55 * self.ets[-1] - 59 * self.ets[-2] + 37 * self.ets[-3] - 9 * self.ets[-4])
 

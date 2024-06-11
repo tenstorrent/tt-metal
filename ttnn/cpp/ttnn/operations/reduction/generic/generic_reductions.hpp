@@ -7,15 +7,13 @@
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_eager/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_eager/tt_dnn/op_library/run_operation.hpp"
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core.hpp"
 #include "ttnn/validation.hpp"
 
 namespace ttnn {
-
-namespace operations {
-
-namespace reduction {
+namespace operations::reduction {
 
 enum class ReduceType {
     Sum,
@@ -163,9 +161,9 @@ struct Reduce {
     }
 };
 
-}  // namespace reduction
-}  // namespace operations
+}  // namespace operations::reduction
 
+// Generic reductions
 constexpr auto sum =
     ttnn::register_operation<ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Sum>>(
         "ttnn::sum");

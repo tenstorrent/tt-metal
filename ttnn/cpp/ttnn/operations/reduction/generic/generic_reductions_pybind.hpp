@@ -8,17 +8,12 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/reduction.hpp"
 
-namespace py = pybind11;
+namespace ttnn::operations::reduction::detail {
 
-namespace ttnn {
-namespace operations {
-namespace reduction {
-
-namespace detail {
 template <typename reduction_operation_t>
 void bind_reduction_operation(py::module& module, const reduction_operation_t& operation) {
+    namespace py = pybind11;
     auto doc = fmt::format(
         R"doc({0}(input_tensor: ttnn.Tensor, dim: Optional[Union[int, Tuple[int]]] = None, keepdim: bool = True, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor)doc",
         operation.name());
@@ -33,17 +28,5 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
             py::arg("keepdim") = true,
             py::arg("memory_config") = std::nullopt});
 }
-}  // namespace detail
 
-void py_module(py::module& module) {
-    detail::bind_reduction_operation(module, ttnn::sum);
-    detail::bind_reduction_operation(module, ttnn::mean);
-    detail::bind_reduction_operation(module, ttnn::max);
-    detail::bind_reduction_operation(module, ttnn::min);
-    detail::bind_reduction_operation(module, ttnn::std);
-    detail::bind_reduction_operation(module, ttnn::var);
-}
-
-}  // namespace reduction
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::reduction::detail

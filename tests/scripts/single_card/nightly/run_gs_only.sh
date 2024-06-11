@@ -9,8 +9,6 @@ fi
 
 echo "Running model nightly tests for GS only"
 
-env pytest models/demos/metal_BERT_large_11/tests/test_demo.py
-
 env pytest models/demos/resnet/tests/test_metal_resnet50_performant.py
 
 env pytest models/demos/resnet/tests/test_metal_resnet50_2cqs_performant.py

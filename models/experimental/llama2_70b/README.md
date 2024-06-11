@@ -1,26 +1,12 @@
 # Llama2-70B Demo
 
+This experimental folder contains the latest performance optimizations and newest features, but is not as stable as the `models/demos/llama2_70b` folder.
+The following commands will run the Llama2-70B or Llama3-70B demo depending on which weights are provided.
+
 ## How to Run
 
-### For Users on TT VPN
-
-If you have access to TT-VPN, you can copy the weights directly to your local machine using the following SCP commands:
-
-1. **Copying repacked Llama2-70B weights:**
-    ```bash
-    scp -r 10.230.36.208:/home/llama-data-repacked-2/llama-2-70b/ <repacked_output_dir>
-    ```
-
-2. **Copying Llama2-70B tokenizer:**
-    ```bash
-    scp -r 10.230.36.208:/home/llama-data/tokenizer.model <path_to_checkpoint_dir>
-    ```
-
-### For Users without TT VPN Access
-
-If you do not have access to TT VPN, follow these steps to download the weights directly from Meta and use the repacking script:
-
-1. **Download the Llama2-70B weights from Meta (https://llama.meta.com/):**
+1. **Download the Llama weights from Meta (https://llama.meta.com/):**
+    We recommend Llama2-70B or Llama3-70B weights for this demo.
 
 2. **Repack the weights:**
     ```bash
@@ -38,31 +24,39 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
     mkdir <weight_cache_dir>
     ```
 
-2. **Set up environment variables:**
+2. **Set up environment:**
+    Follow the Wormhole [installation instructions](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md).
+
     ```bash
     export LLAMA_CKPT_DIR=<repacked_output_dir>
     export LLAMA_TOKENIZER_PATH=<path_to_checkpoint_dir>
     export LLAMA_CACHE_PATH=<weight_cache_dir>
+
+    export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+    export TIKTOKEN_CACHE_DIR=""
+
+    pip install -r models/experimental/llama2_70b/reference/llama/requirements.txt
+    pip install blobfile
     ```
 
-3. **Cache the weights (first-time setup):**
+3. **Run the demo:**
+    The first run will take quite a while to cache the weights. Weight caching tilizes and converts Llama weights to our internal format, stored in `LLAMA_CACHE_PATH`.
+    Subsequent runs will load cached weights much faster.
     ```bash
-    # Build a full 80 layer model to cache the weights. This will take some time.
-    pytest -svv models/demos/t3000/llama2_70b/tests/test_llama_model.py::test_LlamaModel_inference[decode-8chip-T3000-80L]
+    pytest -svv models/experimental/llama2_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-greedy-tt-70b-T3000-80L-decode_only]
     ```
 
-4. **Run the demo:**
+4. **Run the performance test:**
+    The above demo does not achieve peak performance because we log outputs to the screen. The following perf test will print an accurate end-to-end throughput number.
+    For best performance numbers, we recommend building `tt-metal` with `CONFIG=Release` env var, and ensuring the host's CPU governors are set to `performance`.
     ```bash
-    # Run the demo using sampling decode
-    pytest -svv models/demos/t3000/llama2_70b/demo/demo.py::test_LlamaModel_demo[sampling-tt-70b-T3000-80L-decode_only]
+    pytest -svv models/experimental/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_host[wormhole_b0-True-gen128]
     ```
-
 ## Details
 
 - **Batch Size:** Supports batch size 32.
 - **Input File:** Uses `./demo/data/multi_prompt.json`.
 - **Model Configuration:** Utilizes a pretrained model.
 - **Hardware Requirements:** Runs on an 8-chip T3000 machine using tensor parallelism. The host machine must have at least 512 GB of memory.
-- **Model Functionality:** Implements decode-to-prefill strategy, where prompts are processed token-by-token to produce KV caches, followed by token generation in decode mode.
 
 Ensure you follow these guidelines to successfully run the Llama2-70B demo.

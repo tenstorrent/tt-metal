@@ -524,6 +524,10 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_addalpha,
         "pytorch_op": pytorch_ops.addalpha,
     },
+    "eltwise-addalpha-optional": {
+        "tt_op": tt_lib_ops.eltwise_addalpha_optional,
+        "pytorch_op": pytorch_ops.addalpha,
+    },
     "lamb-optimizer": {
         "tt_op": tt_lib_ops.lamb_optimizer,
         "pytorch_op": pytorch_ops.lamb_optimizer,
@@ -1249,5 +1253,13 @@ op_map = {
     "clamp-bw": {
         "tt_op": tt_lib_ops.clamp_bw,
         "pytorch_op": pytorch_ops.clamp_bw,
+    },
+    "interleaved_to_sharded_partial": {
+        "tt_op": tt_lib_ops.interleaved_to_sharded_partial,
+        "pytorch_op": pytorch_ops.interleaved_to_sharded_partial,
+    },
+    "interleaved_to_sharded_partial_coregrid": {
+        "tt_op": tt_lib_ops.interleaved_to_sharded_partial_coregrid,
+        "pytorch_op": pytorch_ops.interleaved_to_sharded_partial_coregrid,
     },
 }

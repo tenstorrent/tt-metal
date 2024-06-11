@@ -25,11 +25,10 @@ def collect_tutorials():
             yield file_name
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("notebook_path", collect_tutorials())
 def test_tutorials(notebook_path):
     with open(notebook_path) as f:
         notebook = nbformat.read(f, as_version=4)
-        ep = ExecutePreprocessor(timeout=600, kernel_name="python3")
+        ep = ExecutePreprocessor(timeout=180, kernel_name="python3")
         ep.preprocess(notebook)
