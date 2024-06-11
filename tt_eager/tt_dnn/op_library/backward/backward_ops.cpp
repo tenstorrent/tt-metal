@@ -1233,7 +1233,7 @@ std::vector<Tensor> _softshrink_bw(
     Tensor result = where(
         ttnn::logical_or(
             ttnn::lt(input_tensor, full_like(input_tensor, -lambd, output_mem_config), std::nullopt, output_mem_config),
-            ttnn::lt(input_tensor, full_like(input_tensor, lambd, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::gt(input_tensor, full_like(input_tensor, lambd, output_mem_config), std::nullopt, output_mem_config),
             std::nullopt,
             output_mem_config),
         grad,
@@ -1441,7 +1441,7 @@ std::vector<Tensor> _cosh_bw(const Tensor& grad, const Tensor& input, const Memo
     Tensor t_neg_inf =
         mul_unary(sign(grad, output_mem_config), -std::numeric_limits<float>::infinity(), output_mem_config);
     Tensor grad_a = where(
-        ttnn::lt(input, full_like(input, 88.50, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::gt(input, full_like(input, 88.50, output_mem_config), std::nullopt, output_mem_config),
         t_inf,
         where(
             ttnn::lt(input, full_like(input, -88.50, output_mem_config), std::nullopt, output_mem_config),
