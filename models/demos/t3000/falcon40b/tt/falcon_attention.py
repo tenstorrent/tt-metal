@@ -254,7 +254,6 @@ class TtFalconAttention:
         # self.scalar = pad_by_zero(torch.Tensor([1 / math.sqrt(self.head_dim)]), self.device)[0]
         self.scalar = 1 / math.sqrt(self.head_dim)
 
-        self.preprocessing(self.model_config["LLM_MODE"], self.model_config["BATCH_SIZE"], self.model_config["SEQ_LEN"])
         self.layer_past = None
 
     def initialize_kvcache(self):
@@ -308,23 +307,6 @@ class TtFalconAttention:
 
     def set_model_config(self, model_config):
         self.model_config = model_config
-        self.preprocessing(self.model_config["LLM_MODE"], self.model_config["BATCH_SIZE"], self.model_config["SEQ_LEN"])
-
-    def preprocessing(self, llm_mode, batch_size, sequence_size):
-        if llm_mode == "prefill":
-            assert self.model_config["row_height"] == sequence_size
-            if self.model_config["attention_params"]["attention_num_slices"] > 1:
-                # Pre-allocate memory to partially slice and sharde attention
-                self.attn_output = []
-                for i in range(len(self.devices)):
-                    self.attn_output.append(
-                        torch2tt_tensor(
-                            torch.zeros([1, self.num_heads_per_device, sequence_size, self.head_dim]),
-                            self.devices[i],
-                            tt_memory_config=self.model_config["DRAM_MEMCFG"],
-                            tt_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],
-                        )
-                    )
 
     def __call__(
         self,
@@ -443,71 +425,25 @@ class TtFalconAttention:
                 user_id,
             )
 
-        # KˆT
-        key_layer_transposed = []
-        for i in range(len(key_layer)):
-            key_layer_transposed.append(
-                ttnn.experimental.tensor.transpose(
+        # SPDA
+        attn_output = []
+        for i in range(len(query_layer)):
+            attn_output.append(
+                ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
+                    query_layer[i],
                     key_layer[i],
-                    -2,
-                    -1,
-                    output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
+                    value_layer[i],
+                    attention_mask[i],
+                    is_causal=True,
+                    scale=self.scalar,
+                    program_config=self.model_config["SDPA_PROGCFG"],
                 )
             )
-            key_layer[i].deallocate(True)
 
-        slice_size = self.model_config["attention_params"]["attention_slice_size"]
-        num_slices = self.model_config["attention_params"]["attention_num_slices"]
-
-        if num_slices > 1:
-            for slice_i in range(num_slices):
-                # Partially slice and convert activations to sharded
-                q_slices = []
-                for i in range(len(query_layer)):
-                    q_slices.append(
-                        ttnn.experimental.tensor.interleaved_to_sharded_partial(
-                            query_layer[i],
-                            (8, 8),
-                            [slice_size * 16 // 64, self.head_dim],  # each slice is [1,16,128,64], we use 64 cores
-                            num_slices,  # num_slices
-                            slice_i,  # slice_index
-                            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
-                        )
-                    )
-
-                attn_output_slice = self.scaled_dot_product_attention(
-                    q_slices, key_layer_transposed, attention_mask, value_layer, q_len
-                )
-
-                # write output slices to attn_output
-                for i in range(len(attn_output_slice)):
-                    ttnn.experimental.tensor.sharded_to_interleaved_partial(
-                        attn_output_slice[i],
-                        self.attn_output[i],
-                        num_slices,
-                        slice_i,
-                        self.model_config["DRAM_MEMCFG"],
-                    )
-                    attn_output_slice[i].deallocate(True)
-                attn_output = self.attn_output
-        else:
-            query_layer = convert_to_layout(
-                query_layer, self.model_config["DRAM_MEMCFG"], self.model_config["QUERY_HEIGHT_SHARDED_MEMCFG"]
-            )
-
-            attn_output = self.scaled_dot_product_attention(
-                query_layer, key_layer_transposed, attention_mask, value_layer, q_len
-            )
-
-            attn_output = convert_to_layout(
-                attn_output, self.model_config["ATTN_OUTPUT_HEIGHT_SHARDED_MEMCFG"], self.model_config["DRAM_MEMCFG"]
-            )
-
-        # Deallocate query, key, value
+        # deallocate query keys and values
         for i in range(len(query_layer)):
             query_layer[i].deallocate(True)
-            key_layer_transposed[i].deallocate(True)
+            key_layer[i].deallocate(True)
             value_layer[i].deallocate(True)
 
         # Output projection
@@ -544,47 +480,6 @@ class TtFalconAttention:
                 hidden_states[i].deallocate(True)
         layer_present = layer_past if use_cache else None
         return attn_output, layer_present
-
-    def scaled_dot_product_attention(self, q_slices, key_layer_transposed, attn_mask_slices, value_layer, q_len):
-        # Q * KˆT
-        attn_weights = []
-        for i in range(len(q_slices)):
-            attn_weights.append(
-                ttnn.experimental.operations.primary.matmul(
-                    q_slices[i],
-                    key_layer_transposed[i],
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
-                    output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-                    program_config=self.model_config["ATTENTION_MM_PROGCFG"],
-                    output_dtype=self.model_config["ATTENTION_DTYPE"],
-                )
-            )
-
-        # Softmax
-        for i in range(len(attn_weights)):
-            attn_weights[i] = scale_causal_mask_hw_dims_softmax_in_place(
-                attn_weights[i],
-                self.scalar,
-                attn_mask_slices[i],
-                program_config=self.model_config["SOFTMAX_PROGCFG"],
-            )
-
-        # Attention score * V
-        attn_output_slice = []
-        for i in range(len(attn_weights)):
-            attn_output_slice.append(
-                ttnn.experimental.operations.primary.matmul(
-                    attn_weights[i],
-                    value_layer[i],
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
-                    output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-                    program_config=self.model_config["ATTENTION_MM_2_PROGCFG"],
-                    output_dtype=self.model_config["ATTENTION_OUT_DTYPE"],
-                )
-            )
-            attn_weights[i].deallocate(True)
-
-        return attn_output_slice
 
     def fwd_decode(
         self,
