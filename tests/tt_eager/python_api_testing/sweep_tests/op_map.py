@@ -641,6 +641,14 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_eq,
         "pytorch_op": pytorch_ops.eq,
     },
+    "eltwise-eq_": {
+        "tt_op": tt_lib_ops.eltwise_eq_,
+        "pytorch_op": pytorch_ops.eq_,
+    },
+    "eltwise-unary_eq_": {
+        "tt_op": tt_lib_ops.eltwise_unary_eq_,
+        "pytorch_op": pytorch_ops.unary_eq_,
+    },
     "eltwise-lt": {
         "tt_op": tt_lib_ops.eltwise_lt,
         "pytorch_op": pytorch_ops.lt,

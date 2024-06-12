@@ -210,6 +210,16 @@ Tensor floor_div(
     float value,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor eq_(
+    Tensor& input_a,
+    Tensor& input_b,
+    std::optional<MemoryConfig> output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor eq_(
+    Tensor& input_a,
+    float value,
+    std::optional<MemoryConfig> output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 // xlogy(x,y))=x*log(y)
 Tensor xlogy(
     const Tensor& input_a,

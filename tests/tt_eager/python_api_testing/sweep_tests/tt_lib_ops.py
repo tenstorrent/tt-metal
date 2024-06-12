@@ -1372,6 +1372,43 @@ def eltwise_unary_lt(
 
 
 @setup_host_and_device
+def eltwise_eq_(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    ttl.tensor.eq_(t0, t1)
+
+    return tt2torch_tensor(t0)
+
+
+@setup_host_and_device
+def eltwise_unary_eq_(
+    x,
+    *args,
+    value,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    ttl.tensor.eq_(t0, value, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t0)
+
+
+@setup_host_and_device
 def full_like(
     x,
     *args,

@@ -987,6 +987,15 @@ def eq(x, y, *args, **kwargs):
         return x == y
 
 
+def eq_(x, y, *args, **kwargs):
+    return x.eq_(y)
+
+
+def unary_eq_(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    return x.eq_(value)
+
+
 def ne(x, y, *args, **kwargs):
     if "scalar" in kwargs:
         scalar = kwargs.pop("scalar")
