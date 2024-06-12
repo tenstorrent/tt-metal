@@ -545,7 +545,7 @@ class TtT5Attention(nn.Module):
             self.cached_key_length = key_length
 
         # scores += position_bias_masked
-        scores = ttnn.add(scores, position_bias, output_mem_config=self.mem_config)
+        scores = ttnn.add(scores, position_bias, memory_config=self.mem_config)
 
         # attn_weights = nn.functional.softmax(scores.float(), dim=-1).type_as(scores)
         attn_weights = tt_lib.operations.primary.softmax_in_place(scores)

@@ -172,9 +172,9 @@ class TtRobertaModel(nn.Module):
         # effectively the same as removing these entirely.
         self.ones_const = tt_lib.tensor.full(extended_attention_mask.get_legacy_shape(), 1.0)
         self.mul_const = tt_lib.tensor.full(extended_attention_mask.get_legacy_shape(), self.dtype_min_const)
-        extended_attention_mask = ttnn.sub(self.ones_const, extended_attention_mask, output_mem_config=self.mem_config)
+        extended_attention_mask = ttnn.sub(self.ones_const, extended_attention_mask, memory_config=self.mem_config)
 
-        extended_attention_mask = ttnn.mul(extended_attention_mask, self.mul_const, output_mem_config=self.mem_config)
+        extended_attention_mask = ttnn.mul(extended_attention_mask, self.mul_const, memory_config=self.mem_config)
         return extended_attention_mask
 
     def invert_attention_mask(self, encoder_attention_mask: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:

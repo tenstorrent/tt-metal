@@ -71,6 +71,6 @@ class TtBloomMLP(torch.nn.Module):
 
         # Dropout is used in training only
         # intermediate_output = F.dropout(intermediate_output, p=self.hidden_dropout, training=self.training)
-        output = ttnn.add(residual, intermediate_output, output_mem_config=self.mem_config)
+        output = ttnn.add(residual, intermediate_output, memory_config=self.mem_config)
 
         return output

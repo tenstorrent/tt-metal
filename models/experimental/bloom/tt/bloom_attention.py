@@ -352,7 +352,7 @@ class TtBloomAttention(torch.nn.Module):
 
         # Dropout is used in training only
         # output_tensor = F.dropout(output_tensor, p=self.hidden_dropout, training=False)
-        output_tensor = ttnn.add(residual, output_tensor, output_mem_config=self.mem_config)
+        output_tensor = ttnn.add(residual, output_tensor, memory_config=self.mem_config)
 
         outputs = (output_tensor, present)
 

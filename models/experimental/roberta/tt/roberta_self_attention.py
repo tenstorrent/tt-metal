@@ -187,7 +187,7 @@ class TtRobertaSelfAttention(nn.Module):
             attention_scores.get_legacy_shape(),
             1.0 / math.sqrt(self.attention_head_size),
         )
-        attention_scores = ttnn.mul(attention_scores, div_const, output_mem_config=self.mem_config)
+        attention_scores = ttnn.mul(attention_scores, div_const, memory_config=self.mem_config)
 
         if attention_mask is not None:
             # Apply the attention mask is (precomputed for all layers in RobertaModel forward() function)
@@ -219,7 +219,7 @@ class TtRobertaSelfAttention(nn.Module):
 
         # Mask heads if we want to
         if head_mask is not None:
-            attention_probs = ttnn.mul(attention_probs, head_mask, output_mem_config=self.mem_config)
+            attention_probs = ttnn.mul(attention_probs, head_mask, memory_config=self.mem_config)
 
         context_layer = tt_lib.tensor.bmm(attention_probs, value_layer, self.mem_config)
         context_layer = tt_lib.tensor.permute(context_layer, (0, 2, 1, 3))

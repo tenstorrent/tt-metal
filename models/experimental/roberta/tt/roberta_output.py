@@ -67,6 +67,6 @@ class TtRobertaOutput(nn.Module):
         hidden_states = self.dense_linear(hidden_states)
         # TODO: Add dropout when supported
         # hidden_states = self.dropout(hidden_states)
-        hidden_states = ttnn.add(hidden_states, input_tensor, output_mem_config=self.mem_config)
+        hidden_states = ttnn.add(hidden_states, input_tensor, memory_config=self.mem_config)
         hidden_states = self.LayerNorm(hidden_states)
         return hidden_states
