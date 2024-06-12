@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
+#include <limits>
 
 #include "sfpi.h"
 
@@ -35,7 +36,7 @@ inline void calculate_typecast_fp16b_to_uint32()
                 dst_reg[0] = 0;
             } v_elseif (exp > 31) {
                 // set to uint32 max value in case of overflow
-                vInt tmp = 2147483647;
+                vInt tmp = std::numeric_limits<int32_t>::max();
                 dst_reg[0] = setsgn(reinterpret<vFloat>(tmp), 1);
             } v_else {
                 // extract mantissa
@@ -107,7 +108,7 @@ inline void calculate_typecast_fp16b_to_int32()
             dst_reg[0] = 0;
         } v_elseif (exp > 30) {
             // set to int32 max value in case of overflow
-            vInt tmp = 2147483647;
+            vInt tmp = std::numeric_limits<int32_t>::max();;
             // check sign
             v_if (in < 0) {
                 tmp = reinterpret<vInt>(setsgn(reinterpret<vFloat>(tmp), 1));

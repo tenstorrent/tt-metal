@@ -20,7 +20,7 @@ using namespace tt::tt_metal;
 
 std::map<string, string> get_defines(
     BinaryOpType op_type,
-    const std::optional<DataType> in_dtype,
+    const std::optional<DataType> input_dtype,
     const std::optional<DataType> output_dtype,
     const std::optional<std::vector<UnaryWithParam>> fused_activations) {
 
@@ -110,10 +110,16 @@ std::map<string, string> get_defines(
         default: TT_ASSERT(false && "Undefined op type");
     }
 
-    if(in_dtype.has_value() && output_dtype.has_value() && (output_dtype.value() == DataType::UINT32 || output_dtype.value() == DataType::UINT16)){
+    if(input_dtype.has_value() && output_dtype.has_value() &&
+        ((input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT32) ||
+        (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT16) ||
+        (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::INT32) ||
+        (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::BFLOAT16) ||
+        (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT16))){
+
         TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0 && "SFPU_OP_CHAIN_0 already defined");
 
-        auto in_dataformat =  std::to_string((uint32_t)datatype_to_dataformat_converter(in_dtype.value()));
+        auto in_dataformat =  std::to_string((uint32_t)datatype_to_dataformat_converter(input_dtype.value()));
         auto out_dataformat = std::to_string((uint32_t)datatype_to_dataformat_converter(output_dtype.value()));
         defines.insert({"SFPU_OP_CHAIN_0",
                         fmt::format("typecast_tile_init(); typecast_tile<{0}u, {1}u>(i);", in_dataformat, out_dataformat)});
