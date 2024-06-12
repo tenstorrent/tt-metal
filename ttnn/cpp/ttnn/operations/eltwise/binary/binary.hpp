@@ -186,6 +186,7 @@ constexpr auto logaddexp = register_op<ttnn::operations::binary::BinaryOpType::L
 constexpr auto logaddexp2 = register_op<ttnn::operations::binary::BinaryOpType::LOGADDEXP2, false>("ttnn::logaddexp2");
 constexpr auto squared_difference = register_op<ttnn::operations::binary::BinaryOpType::SQUARED_DIFFERENCE, false>("ttnn::squared_difference");
 constexpr auto div_fast = register_op<ttnn::operations::binary::BinaryOpType::DIV_FAST, false>("ttnn::div_fast");
+constexpr auto bias_gelu = register_op<ttnn::operations::binary::BinaryOpType::BIAS_GELU, false>("ttnn::bias_gelu");
 
 
 template <typename InputBType>
