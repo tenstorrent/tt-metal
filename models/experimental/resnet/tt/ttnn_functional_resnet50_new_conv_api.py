@@ -262,9 +262,7 @@ class resnet50Bottleneck:
                 act_block_h_override = 160
 
         run_downsample_before_conv2 = False
-        if (not (input_height == 56 and self.conv1_input_channels == 64)) and (
-            not is_wormhole_b0() and input_height == 56 and self.conv1_input_channels == 256
-        ):
+        if not (input_height == 56 and self.conv1_input_channels == 64):
             run_downsample_before_conv2 = True
         if (
             is_wormhole_b0()
@@ -279,35 +277,17 @@ class resnet50Bottleneck:
 
         # ds_mem_config_grid = None
         if run_downsample_before_conv2:
-            if (
-                input_height == 56
-                and self.conv1_input_channels == 256
-                and (
-                    (self.conv1_output_channels != 128 and is_grayskull())
-                    or (self.conv1_output_channels == 128 and is_wormhole_b0())
-                )
-                and self.downsample
-            ):
+            if input_height == 56 and self.conv1_input_channels == 256 and self.downsample:
                 x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
                 ttnn.deallocate(x)
                 if is_wormhole_b0():
                     out = ttnn.reallocate(out)
                 x = ttnn.reallocate(x_rm)
-            # ds_input_mem_config = ttnn.get_memory_config(x)
             ds_out = self.run_downsample_if_req(
                 x, device, batch_size, input_height, input_width, conv_op_cache, reshard_if_not_optimal, height_sharding
             )
-            # ds_output_mem_config = ttnn.get_memory_config(ds_out)
-            # if ds_input_mem_config.shard_spec.grid != ds_output_mem_config.shard_spec.grid:
-            #     ds_mem_config_grid = ds_output_mem_config.shard_spec.grid
 
-        reallocate_halo_output = (
-            batch_size
-            == 20  # and
-            # input_height == 56 and
-            # self.conv1_input_channels == 256 and
-            # self.downsample
-        )
+        reallocate_halo_output = batch_size == 20
         print("Running conv2")
         out, input_height, input_width, self.conv2_weight_tensor, self.conv2_bias_tensor = ttnn.conv2d(
             input_tensor=out,
@@ -374,8 +354,20 @@ class resnet50Bottleneck:
         )
 
         if not run_downsample_before_conv2:
+            ds_reshard = (
+                False
+                if is_grayskull()
+                and batch_size == 20
+                and (
+                    input_height == 28
+                    and self.conv1_input_channels == 256
+                    or input_height == 14
+                    and self.conv1_input_channels == 512
+                )
+                else reshard_if_not_optimal
+            )
             ds_out = self.run_downsample_if_req(
-                x, device, batch_size, input_height, input_width, conv_op_cache, reshard_if_not_optimal, height_sharding
+                x, device, batch_size, input_height, input_width, conv_op_cache, ds_reshard, height_sharding
             )
 
         assert ttnn.get_memory_config(out) == ttnn.get_memory_config(
