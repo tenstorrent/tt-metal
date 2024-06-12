@@ -55,7 +55,7 @@ def test_LlamaAttention_inference_t3000(
             os.environ["LLAMA_TOKENIZER_PATH"] = "/home/llama-data/tokenizer.model"
             os.environ["LLAMA_CACHE_PATH"] = "/home/llama-data-cache/weights-cache-2"
 
-    model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
+    model_config = get_model_config(num_devices=n_devices, batch=batch, seq_len=seq_len, llama_version=llama_version)
 
     if t3k_device_mesh.get_num_devices() < n_devices:
         pytest.skip(f"Requires at {n_devices} devices to run")
@@ -64,15 +64,11 @@ def test_LlamaAttention_inference_t3000(
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
+    if llama_version == "llama2" and seq_len > 2048:
+        pytest.skip("Llama2 supports a maximum sequence length of 2048")
+
     for i in t3k_device_mesh.get_device_ids():
         device = t3k_device_mesh.get_device(i)
         device.enable_program_cache()
 
-    run_test_LlamaAttention_inference(
-        t3k_device_mesh,
-        batch,
-        seq_len,
-        pcc,
-        model_config,
-        n_devices,
-    )
+    run_test_LlamaAttention_inference(t3k_device_mesh, batch, seq_len, pcc, model_config, n_devices, llama_version)

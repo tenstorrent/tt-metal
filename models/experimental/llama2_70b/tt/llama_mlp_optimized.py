@@ -110,7 +110,7 @@ class TtLlamaMLP_optimized:
         x_multichip = ttnn.from_torch(
             x,
             layout=ttnn.TILE_LAYOUT,
-            dtype=self.model_config["LN_MLP_OUTPUT_DTYPE"],
+            dtype=ttnn.bfloat16,
             device=self.device_mesh,
             mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
         )
@@ -192,8 +192,6 @@ class TtLlamaMLP_optimized:
 
     def decode_forward(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
         hidden_states = []
-        w1_outs = []
-        w3_outs = []
 
         w1_out = tt_lib.operations.primary.matmul_1d(
             x,
@@ -221,10 +219,6 @@ class TtLlamaMLP_optimized:
         w1_out.deallocate(True)
         w3_out.deallocate(True)
 
-        # hidden_states = tt_lib.tensor.sharded_to_interleaved(
-        #     hidden_states, output_mem_config=self.model_config["L1_MEMCFG"]
-        # )
-
         hidden_states = ttnn.all_gather(
             hidden_states,
             dim=3,
@@ -232,10 +226,6 @@ class TtLlamaMLP_optimized:
             # memory_config=self.model_config["L1_MEMCFG"],
             memory_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"],
         )
-
-        # hidden_states = tt_lib.tensor.interleaved_to_sharded(
-        #     hidden_states, sharded_mem_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"]
-        # )
 
         hidden_states = tt_lib.operations.primary.matmul_1d(
             hidden_states,

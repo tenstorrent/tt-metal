@@ -26,6 +26,7 @@ from models.experimental.llama2_70b.tt.llama_common import (
     get_llama_path,
     extract_pcc_from_log,
     MAX_SEQ_LEN,
+    MAX_SEQ_LEN_LLAMA3,
     BASE_URL,
     UNIT_TEST_START_POS,
     UNIT_TEST_GENERATION_LENGTH,
@@ -68,6 +69,7 @@ def run_test_LlamaModel_inference(
     model_config,
     n_layers,
     n_devices,
+    llama_version,
     emulated=False,
 ):
     # Prepare paths and devices
@@ -81,7 +83,7 @@ def run_test_LlamaModel_inference(
     hugging_face_reference_model = Llama.build(
         ckpt_dir,
         tokenizer_path,
-        max_seq_len=MAX_SEQ_LEN,
+        max_seq_len=MAX_SEQ_LEN if llama_version == "llama2" else MAX_SEQ_LEN_LLAMA3,
         max_batch_size=batch,
         n_layers=n_layers,
         skip_model_load=skip_model_load,
@@ -215,6 +217,13 @@ def run_test_LlamaModel_inference(
 @pytest.mark.timeout(240000)
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
+    "llama_version",
+    (
+        ("llama2"),
+        ("llama3"),
+    ),
+)
+@pytest.mark.parametrize(
     "pcc,n_layers",
     (
         (0.997, 1),
@@ -243,8 +252,8 @@ def run_test_LlamaModel_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len",
-    ((32, 1), (1, 128), (1, 2048)),
-    ids=("decode", "prefill_128", "prefill_2k"),
+    ((32, 1), (1, 128), (1, 2048), (1, 8192)),
+    ids=("decode", "prefill_128", "prefill_2k", "prefill_8k"),
 )
 def test_LlamaModel_inference(
     batch,
@@ -253,6 +262,7 @@ def test_LlamaModel_inference(
     n_layers,
     n_devices,
     t3k_device_mesh,
+    llama_version,
     emulated,
 ):
     model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
@@ -276,5 +286,6 @@ def test_LlamaModel_inference(
         model_config,
         n_layers,
         n_devices,
+        llama_version,
         emulated,
     )

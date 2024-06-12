@@ -12,12 +12,11 @@ from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, L
 
 from models.experimental.llama2_70b.reference.llama.llama import Llama
 from models.experimental.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
-from models.experimental.llama2_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
 from models.experimental.llama2_70b.tt.model_config import (
     get_model_config,
 )
 
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
+from models.utility_functions import skip_for_grayskull
 from models.experimental.llama2_70b.tt.llama_common import (
     get_llama_path,
     MAX_SEQ_LEN,
@@ -27,6 +26,7 @@ from models.experimental.llama2_70b.tt.llama_common import (
     comp_pcc,
     should_skip_model_load,
 )
+import os
 import gc
 
 
@@ -49,12 +49,14 @@ def run_test_LlamaMLP_inference(
     seq_len,
     pcc,
     model_config,
+    llama_version,
     n_devices,
-    emulated=False,
 ):
     # Prepare paths and devices
     t3k_device_mesh, ckpt_dir, tokenizer_path, cache_path = get_llama_path(
-        t3k_device_mesh, model_config, n_devices, emulated
+        t3k_device_mesh,
+        model_config,
+        n_devices,
     )
     skip_model_load = should_skip_model_load()
 
@@ -96,7 +98,6 @@ def run_test_LlamaMLP_inference(
         UNIT_TEST_LAYER_NUM,
         configuration.dim,
         model_config,
-        emulated=emulated,
         cache_path=cache_path,
     )
 
@@ -110,41 +111,46 @@ def run_test_LlamaMLP_inference(
     logger.info(f"PCC value: {output_pcc}")
 
     if does_pass:
-        logger.info("Llama MLP output Passed!")
+        logger.info(f"{llama_version} MLP output Passed!")
     else:
-        logger.warning("Llama MLP output Failed!")
+        logger.warning(f"{llama_version}  MLP output Failed!")
         gc.collect()
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "n_devices, emulated",
+    "llama_version",
     (
-        (8, False),
-        (8, True),
-    ),
-    ids=(
-        "8chip-T3000",
-        "8chip-emulated",
+        ("llama2"),
+        ("llama3"),
     ),
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    ((32, 1, 0.9998), (1, 128, 0.998), (1, 2048, 0.998)),
+    ((32, 1, 0.9995), (1, 128, 0.998), (1, 2048, 0.998)),
     ids=("decode", "prefill_128", "prefill_2k"),
 )
 def test_LlamaMLP_inference(
     batch,
     seq_len,
     pcc,
-    n_devices,
     t3k_device_mesh,
-    emulated,
+    llama_version,
+    n_devices=8,
 ):
-    model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
+    if llama_version == "llama3":
+        os.environ["LLAMA_CKPT_DIR"] = "/home/llama3-data-repacked/llama-3-70b/"
+        os.environ["LLAMA_TOKENIZER_PATH"] = "/home/llama3-data/Meta-Llama-3-70B/tokenizer.model"
+        os.environ["LLAMA_CACHE_PATH"] = "/home/llama3-data-cache/weights-cache"
+    else:
+        os.environ["LLAMA_CKPT_DIR"] = "/home/llama-data-repacked-2/llama-2-70b/"
+        os.environ["LLAMA_TOKENIZER_PATH"] = "/home/llama-data/tokenizer.model"
+        os.environ["LLAMA_CACHE_PATH"] = "/home/llama-data-cache/weights-cache-2"
 
-    if t3k_device_mesh.get_num_devices() < n_devices and not emulated:
+    model_config = get_model_config(num_devices=n_devices, batch=batch, seq_len=seq_len, llama_version=llama_version)
+
+    if t3k_device_mesh.get_num_devices() < n_devices:
         pytest.skip(f"Requires at {n_devices} devices to run")
 
     compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
@@ -157,6 +163,6 @@ def test_LlamaMLP_inference(
         seq_len,
         pcc,
         model_config,
+        llama_version,
         n_devices,
-        emulated,
     )

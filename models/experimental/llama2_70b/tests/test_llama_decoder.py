@@ -8,26 +8,20 @@ import torch
 from torch import nn
 import tt_lib
 import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
-
+from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
 from models.experimental.llama2_70b.reference.llama.llama import Llama
 from models.experimental.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
-from models.experimental.llama2_70b.tt.llama_decoder_galaxy import TtLlamaDecoder_galaxy
 from models.experimental.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
 from models.experimental.llama2_70b.tt.model_config import (
     get_model_config,
 )
-
-# from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-#     comp_allclose,
-#     comp_pcc,
-# )
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
+from models.utility_functions import skip_for_grayskull
 from models.experimental.llama2_70b.tt.llama_common import (
     get_llama_path,
     extract_pcc_from_log,
     MAX_SEQ_LEN,
+    MAX_SEQ_LEN_LLAMA3,
     BASE_URL,
     UNIT_TEST_N_LAYER,
     UNIT_TEST_LAYER_NUM,
@@ -39,6 +33,7 @@ from models.experimental.llama2_70b.tt.llama_common import (
     check_kv_cache,
 )
 import gc
+import os
 
 
 class PytorchLlamaDecoderModel(torch.nn.Module):
@@ -112,11 +107,13 @@ def run_test_LlamaDecoder_inference(
     pcc,
     model_config,
     n_devices,
-    emulated=False,
+    llama_version,
 ):
     # Prepare paths and devices
     t3k_device_mesh, ckpt_dir, tokenizer_path, cache_path = get_llama_path(
-        t3k_device_mesh, model_config, n_devices, emulated
+        t3k_device_mesh,
+        model_config,
+        n_devices,
     )
     skip_model_load = should_skip_model_load()
 
@@ -124,7 +121,7 @@ def run_test_LlamaDecoder_inference(
     hugging_face_reference_model = Llama.build(
         ckpt_dir,
         tokenizer_path,
-        max_seq_len=MAX_SEQ_LEN,
+        max_seq_len=MAX_SEQ_LEN if llama_version == "llama2" else MAX_SEQ_LEN_LLAMA3,
         max_batch_size=batch,
         n_layers=UNIT_TEST_N_LAYER,
         skip_model_load=skip_model_load,
@@ -162,7 +159,6 @@ def run_test_LlamaDecoder_inference(
         configuration,
         batch,
         transformation_mats,
-        emulated=emulated,
         cache_path=cache_path,
     )
 
@@ -260,39 +256,45 @@ def run_test_LlamaDecoder_inference(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "n_devices, emulated",
+    "llama_version",
     (
-        (8, False),
-        (8, True),
-        (32, True),
-    ),
-    ids=(
-        "8chip-T3000",
-        "8chip-emulated",
-        "32chip-emulated",
+        ("llama2"),
+        ("llama3"),
     ),
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    ((32, 1, 0.9993), (1, 128, 0.998), (1, 2048, 0.998)),
-    ids=("decode", "prefill_128", "prefill_2k"),
+    ((32, 1, 0.9993), (1, 128, 0.998), (1, 2048, 0.998), (1, 8192, 0.998)),
+    ids=("decode", "prefill_128", "prefill_2k", "prefill_8k"),
 )
 def test_LlamaDecoder_inference(
     batch,
     seq_len,
     pcc,
-    n_devices,
     t3k_device_mesh,
-    emulated,
+    llama_version,
+    n_devices=8,
 ):
-    model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
+    if llama_version == "llama3":
+        os.environ["LLAMA_CKPT_DIR"] = "/home/llama3-data-repacked/llama-3-70b/"
+        os.environ["LLAMA_TOKENIZER_PATH"] = "/home/llama3-data/Meta-Llama-3-70B/tokenizer.model"
+        os.environ["LLAMA_CACHE_PATH"] = "/home/llama3-data-cache/weights-cache"
+    else:
+        os.environ["LLAMA_CKPT_DIR"] = "/home/llama-data-repacked-2/llama-2-70b/"
+        os.environ["LLAMA_TOKENIZER_PATH"] = "/home/llama-data/tokenizer.model"
+        os.environ["LLAMA_CACHE_PATH"] = "/home/llama-data-cache/weights-cache-2"
 
-    if t3k_device_mesh.get_num_devices() < n_devices and not emulated:
+    model_config = get_model_config(num_devices=n_devices, batch=batch, seq_len=seq_len, llama_version=llama_version)
+
+    if t3k_device_mesh.get_num_devices() < n_devices:
         pytest.skip(f"Requires at {n_devices} devices to run")
 
     compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
+
+    if llama_version == "llama2" and seq_len > 2048:
+        pytest.skip("Llama2 supports a maximum sequence length of 2048")
 
     for i in t3k_device_mesh.get_device_ids():
         device = t3k_device_mesh.get_device(i)
@@ -307,6 +309,7 @@ def test_LlamaDecoder_inference(
             pcc,
             model_config,
             n_devices,
+            llama_version,
             emulated,
         )
 
