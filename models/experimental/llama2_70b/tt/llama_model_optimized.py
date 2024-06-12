@@ -36,7 +36,6 @@ class TtLlamaModel_optimized:
         model_config,
         configuration,
         batch,
-        emulated=False,
         cache_path=None,
         read_cache=False,
     ):
@@ -44,7 +43,6 @@ class TtLlamaModel_optimized:
         self.device_mesh = device_mesh
         self.num_devices = device_mesh.get_num_devices()
         self.model_config = model_config
-        self.emulated = emulated
         self.read_cache = read_cache
 
         self.hidden_size = configuration.dim
@@ -82,7 +80,6 @@ class TtLlamaModel_optimized:
                 configuration,
                 batch,
                 transformation_mats,
-                emulated=emulated,
                 cache_path=cache_path,
                 read_cache=read_cache,
             )
@@ -331,31 +328,11 @@ class TtLlamaModel_optimized:
         for layer in self.layers:
             xs = layer(xs, rot_mats, start_pos, attn_masks)  # xs is sharded
 
-        # Convert decoder_output to interleaved
-        xs = tt_lib.tensor.sharded_to_interleaved(xs, output_mem_config=self.model_config["L1_MEMCFG"])
-
-        ## Gather fractured layers output
-        # if self.emulated:
-        #     xs = tt_all_gather_torch(xs, dim=-1)
-        # else:
-        #     xs = ttnn.all_gather(
-        #         xs,
-        #         dim=3,
-        #         num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-        #         output_mem_config=self.model_config["L1_MEMCFG"],
-        #     )
-
         xs = ttnn.all_gather(
             xs,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["L1_MEMCFG"],
-        )
-
-        ## Duplicate layernorm
-        # RMSNorm must execute on sharded input
-        xs = tt_lib.tensor.interleaved_to_sharded(
-            xs, sharded_mem_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"]
+            memory_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"],
         )
 
         # In-place RMSNorm
@@ -376,7 +353,7 @@ class TtLlamaModel_optimized:
             if self.llama3
             else self.model_config["LM_HEAD_MM_PROGCFG"],
             output_mem_config=self.model_config["DRAM_MEMCFG"],
-            output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
+            output_dtype=ttnn.bfloat16,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
         norm_out_replicated.deallocate(True)
@@ -451,15 +428,6 @@ class TtLlamaModel_optimized:
             xs = layer(xs, rot_mats, start_pos, attn_masks, user_id)  # xs is sharded
 
         ## Gather fractured layers output
-        # if self.emulated:
-        #     xs = tt_all_gather_torch(xs, dim=-1)
-        # else:
-        #     xs = ttnn.all_gather(
-        #         xs,
-        #         dim=3,
-        #         num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-        #         output_mem_config=self.model_config["DRAM_MEMCFG"],
-        #     )
         xs = ttnn.all_gather(
             xs,
             dim=3,
