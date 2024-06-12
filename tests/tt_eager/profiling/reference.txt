@@ -1,4 +1,4 @@
-op,count,overhead min(ms),overhead mean(ms),total mean(ms),HOST DURATION [ms]
+op,count,python min dispatch time (ms),python mean dispatch time(ms),python mean dispatch + sync time (ms),C++ mean dispatch time (ms)
 tt_lib.fused_ops.linear.Linear,40,2.56,3.9,4.2,3.49
 tt_lib.fused_ops.softmax.softmax,40,3.22,3.36,3.74,3.37
 tt_lib.operations.primary.add_layernorm,40,0.99,1.19,1.65,1.26

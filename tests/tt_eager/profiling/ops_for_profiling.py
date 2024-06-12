@@ -774,6 +774,7 @@ all_binary_ops = [
     {
         "op": polygamma_bw,
         "name": "tt_lib.tensor.polygamma_bw",
+        "num_repeats": 3,
     },
     {
         "op": tt_lib.tensor.atan_bw,
@@ -794,6 +795,7 @@ all_binary_ops = [
     {
         "op": tt_lib.tensor.cosh_bw,
         "name": "tt_lib.tensor.cosh_bw",
+        "num_repeats": 3,
     },
     {
         "op": tt_lib.tensor.cos_bw,
@@ -862,6 +864,7 @@ all_binary_ops = [
     {
         "op": tt_lib.tensor.digamma_bw,
         "name": "tt_lib.tensor.digamma_bw",
+        "num_repeats": 2,
     },
     {
         "op": tt_lib.tensor.deg2rad_bw,
@@ -1874,6 +1877,7 @@ all_unary_ops = [
     {
         "op": tt_lib.tensor.lgamma,
         "name": "tt_lib.tensor.lgamma",
+        "num_repeats": 3,
     },
     {
         "op": logical_andi,
@@ -2031,10 +2035,12 @@ all_unary_ops = [
     {
         "op": tril,
         "name": "tt_lib.tensor.tril",
+        "num_repeats": 3,
     },
     {
         "op": triu,
         "name": "tt_lib.tensor.triu",
+        "num_repeats": 3,
     },
     {
         "op": reduce_sum_h,
@@ -2123,6 +2129,7 @@ all_unary_ops = [
     {
         "op": sum_0,
         "name": "tt_lib.tensor.sum_dim_0",
+        "num_repeats": 2,
     },
     {
         "op": sum_1,
@@ -2259,10 +2266,12 @@ all_unary_ops = [
     {
         "op": repeat_interleave_1,
         "name": "tt_lib.tensor.repeat_interleave_dim_1",
+        "num_repeats": 2,
     },
     {
         "op": repeat_interleave_2,
         "name": "tt_lib.tensor.repeat_interleave_dim_2",
+        "num_repeats": 2,
     },
     {
         "op": pow_int,
@@ -2279,34 +2288,42 @@ all_unary_ops = [
     {
         "op": argmax_1,
         "name": "tt_lib.tensor.argmax_dim_3",
+        "num_repeats": 2,
     },
     {
         "op": argmax_2,
         "name": "tt_lib.tensor.argmax_dim_2",
+        "num_repeats": 2,
     },
     {
         "op": argmax_3,
         "name": "tt_lib.tensor.argmax_dim_1",
+        "num_repeats": 2,
     },
     {
         "op": argmax_all,
         "name": "tt_lib.tensor.argmax_all",
+        "num_repeats": 2,
     },
     {
         "op": argmin_1,
         "name": "tt_lib.tensor.argmin_dim_3",
+        "num_repeats": 2,
     },
     {
         "op": argmin_2,
         "name": "tt_lib.tensor.argmin_dim_2",
+        "num_repeats": 2,
     },
     {
         "op": argmin_3,
         "name": "tt_lib.tensor.argmin_dim_1",
+        "num_repeats": 2,
     },
     {
         "op": argmin_all,
         "name": "tt_lib.tensor.argmin_all",
+        "num_repeats": 2,
     },
     {
         "op": tt_lib.tensor.fill_zero_bw,
@@ -2646,6 +2663,7 @@ all_ternary_ops = [
     {
         "op": lamb_optimizer,
         "name": "tt_lib.tensor.lamb_optimizer",
+        "num_repeats": 2,
     },
     {
         "op": addalpha_bw,
@@ -2666,6 +2684,7 @@ all_ternary_ops = [
     {
         "op": tt_lib.tensor.div_bw,
         "name": "tt_lib.tensor.div_bw",
+        "num_repeats": 3,
     },
     {
         "op": tt_lib.tensor.mul_bw,

@@ -32,7 +32,7 @@ test_sweep_args = [
 ]
 
 all_num_call_to_stack = [1, 3]  # For 10 and more test  execution spills to dispatch
-num_repeats = 5
+NUM_REPEATS = 5
 
 
 def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup):
@@ -46,34 +46,29 @@ def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup
     tt_lib.device.Synchronize(device)
 
     duration = 1000 * (time.time() - start_time)
-    total_op_time = duration / num_call_to_stack
-    logger.info(f"{num_call_to_stack} calls and Synchronize after {duration:.2f}ms ({total_op_time:.2f}ms per call)")
+    avg_op_time = duration / num_call_to_stack
+    logger.info(f"{num_call_to_stack} calls and Synchronize after {duration:.2f}ms ({avg_op_time:.2f}ms per call)")
 
     start_time = time.time()
     for _ in range(num_call_to_stack):
         op_func()
 
-    duration = 1000 * (time.time() - start_time)
-    overhead_ms = duration / num_call_to_stack
-    logger.info(f"{num_call_to_stack} calls without Synchronize {duration:.2f}ms ({overhead_ms:.2f}ms per call)")
-
-    start_time = time.time()
+    dispatch_end_time = time.time()
     tt_lib.device.Synchronize(device)
-    duration = 1000 * (time.time() - start_time)
-    duration_per_call = duration / num_call_to_stack
-    logger.info(f"Synchronize {duration:.2f}ms ({duration_per_call:.2f}ms per call)")
+
+    sync_time = 1000 * (time.time() - dispatch_end_time)
+    dispatch_time = 1000 * (dispatch_end_time - start_time)
+    avg_dispatch_time = dispatch_time / num_call_to_stack
+
+    logger.info(
+        f"{num_call_to_stack} calls without Synchronize {dispatch_time:.2f}ms ({avg_dispatch_time:.2f}ms per call)"
+    )
+    logger.info(f"Synchronize {sync_time:.2f}ms ({(sync_time/num_call_to_stack):.2f}ms per call)")
 
     if not is_warmup:
         signpost(header=f"end {op_name}")
 
-    try:
-        # Dumping profile info
-        logger.info(f"Dumping device profiler data")
-        tt_lib.device.DumpDeviceProfiler(device)
-    except Exception as e:
-        logger.warning(f"DumpDeviceProfiler {e}")
-
-    return overhead_ms, total_op_time
+    return avg_dispatch_time, avg_op_time
 
 
 def measure_host_overhead_binary(
@@ -199,6 +194,7 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
         if "layout" in op and op["layout"] == "ROW_MAJOR":
             dlayout = tt_lib.tensor.Layout.ROW_MAJOR
 
+        num_repeats = op["num_repeats"] if "num_repeats" in op else NUM_REPEATS
         shape_func = None if "shape_func" not in op else op["shape_func"]
 
         # Warmup
@@ -253,7 +249,7 @@ def test_host_overhead(device, user_input):
     pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile::tt_lib.tensor.isclose
 
     Run with tracy:
-    python -m tracy -v -r -p -o host_overhead_profile -m "pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile"
+    python -m tracy -v -r -p -o host_overhead_profile --no-device -m "pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile"
     """
 
     if "::" in user_input[0]:
@@ -270,7 +266,10 @@ def test_host_overhead(device, user_input):
         os.makedirs(out_directory)
 
     with open(out_file_path, "w") as text_file:
-        text_file.write(f"op,count,overhead min(ms),overhead mean(ms),total mean(ms)\n")
+        start_time = time.time()
+        text_file.write(
+            f"op,count,python min dispatch time (ms),python mean dispatch time(ms),python mean dispatch + sync time (ms)\n"
+        )
 
         for op in ops_for_profiling.all_binary_ops:
             if op_name != "":
@@ -292,3 +291,6 @@ def test_host_overhead(device, user_input):
                     continue
 
             run_measure_host_overhead(op, device, text_file, measure_host_overhead_ternary)
+
+        duration = (time.time() - start_time) / 60
+        logger.info(f"Profiling finished in {duration:.2f}min")

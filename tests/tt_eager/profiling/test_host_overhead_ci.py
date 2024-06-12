@@ -16,11 +16,7 @@ def test_host_overhead_ci():
     reference_filename = "tests/tt_eager/profiling/reference.txt"
     measuring_tolerance = 1.1
 
-    start_time = time.time()
     profile_host_overhead(profile_output_folder, profile_output_filename)
-    duration = (time.time() - start_time) / 60
-
-    logger.info(f"Profiled host overhead for all ops in {duration:.2f}min")
 
     with open(measured_filename, mode="r") as infile:
         reader = csv.reader(infile)
