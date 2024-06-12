@@ -1064,7 +1064,6 @@ void Matmul::validate(
                                 input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout);
                         }
 
-                        TT_FATAL(K / (shard_shape[1] / TILE_WIDTH) == div_up(N, program_config.per_core_N));
                     } else if (tensor_a_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                         TT_FATAL(K == program_config.in0_block_w);
                         TT_FATAL(program_config.in0_block_w == (shard_shape[1] / TILE_WIDTH));
