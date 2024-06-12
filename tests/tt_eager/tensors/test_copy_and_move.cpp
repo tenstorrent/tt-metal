@@ -187,6 +187,24 @@ bool test_tensor_deallocate_semantics(Device *device) {
     return pass;
 }
 
+bool test_tensor_deallocate_and_close_device(Device *device) {
+    bool pass = true;
+    Shape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+
+    MemoryConfig dram_mem_config =
+        MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
+    MemoryConfig l1_mem_config =
+        MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1};
+
+    // dev tensor allocate, deallocate, reallocate same address DRAM
+    Tensor dev_a = tt::numpy::random::random(single_tile_shape).to(Layout::TILE).to(device, dram_mem_config);
+    uint32_t address_a = dev_a.buffer()->address();
+    pass &= tt_metal::CloseDevice(device);
+    dev_a.deallocate();
+
+    return pass;
+}
+
 int main(int argc, char **argv) {
     bool pass = true;
 
@@ -204,7 +222,7 @@ int main(int argc, char **argv) {
 
         pass &= test_tensor_deallocate_semantics(device);
 
-        pass &= tt_metal::CloseDevice(device);
+        pass &= test_tensor_deallocate_and_close_device(device);
 
     } catch (const std::exception &e) {
         pass = false;
