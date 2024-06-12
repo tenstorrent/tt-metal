@@ -18,6 +18,8 @@ from models.experimental.llama2_70b.reference.llama.llama.generation import (
     load_chunked_checkpoints,
     load_sharded_checkpoints,
 )
+import pytest
+from models.experimental.llama2_70b.tt.model_config import get_model_config
 
 MAX_SEQ_LEN = 4096
 MAX_SEQ_LEN_LLAMA3 = 8192
@@ -47,10 +49,19 @@ def should_skip_model_load():
     return skip_model_load
 
 
-def get_llama_path(devices, model_config, n_devices, emulated=False):
-    ckpt_dir = model_config["DEFAULT_CKPT_DIR"]
-    tokenizer_path = model_config["DEFAULT_TOKENIZER_PATH"]
-    cache_path = model_config["DEFAULT_CACHE_PATH"]
+def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8):
+    if os.getenv("CI") == "true":
+        os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
+
+    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
+    if llama_version == "llama3":
+        ckpt_dir = os.getenv("LLAMA_CKPT_DIR", "/home/llama3-data-repacked/llama-3-70b/")
+        tokenizer_path = os.getenv("LLAMA_TOKENIZER_PATH", "/home/llama3-data/Meta-Llama-3-70B/tokenizer.model")
+        cache_path = Path(os.getenv("LLAMA_CACHE_PATH", "/home/llama3-data-cache/weights-cache"))
+    else:
+        ckpt_dir = os.getenv("LLAMA_CKPT_DIR", "/home/llama-data-repacked-2/llama-2-70b/")
+        tokenizer_path = os.getenv("LLAMA_TOKENIZER_PATH", "/home/llama-data/tokenizer.model")
+        cache_path = Path(os.getenv("LLAMA_CACHE_PATH", "/home/llama-data-cache/weights-cache-2"))
 
     assert os.path.exists(
         ckpt_dir
@@ -66,14 +77,21 @@ def get_llama_path(devices, model_config, n_devices, emulated=False):
     logger.info(f"Tokenizer file: {tokenizer_path}")
     logger.info(f"Cache directory: {cache_path}")
 
-    if not isinstance(devices, ttnn._ttnn.multi_device.DeviceMesh):
-        if emulated:
-            logger.info(f"Running emulated, replicating on {n_devices} devices")
-            devices = [devices[0] for _ in range(n_devices)]  # Emulate fracturing on N chips
-        else:
-            logger.info(f"Running on {n_devices} devices on T3000 chips")
+    model_config = get_model_config(llama_version=llama_version, batch=batch, seq_len=seq_len, num_devices=n_devices)
 
-    return devices, ckpt_dir, tokenizer_path, cache_path
+    return model_config, ckpt_dir, tokenizer_path, cache_path
+
+
+def check_device_mesh(t3k_device_mesh, model_config):
+    assert t3k_device_mesh.get_num_devices() >= model_config["NUM_DEVICES"], (
+        "Requires at least %d devices to run",
+        model_config["NUM_DEVICES"],
+    )
+
+    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
+    assert not (
+        compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]
+    ), ("Requires grid size of at least %d to run", model_config["MAX_GRID_SIZE"])
 
 
 def extract_pcc_from_log(log):
