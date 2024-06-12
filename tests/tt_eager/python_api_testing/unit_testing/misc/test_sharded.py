@@ -6,6 +6,7 @@ import pytest
 import torch
 import math
 
+import ttnn
 import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
@@ -877,7 +878,7 @@ def test_partial_sharded_op_binary(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        sliced_tensor = ttl.tensor.add(
+        sliced_tensor = ttnn.add(
             in0_t_slice, in1_t_slice, output_mem_config=output_mem_config, output_dtype=output_dtype
         )
         ttl.tensor.sharded_to_interleaved_partial(
@@ -960,7 +961,7 @@ def test_sharded_binary(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    output_t = ttl.tensor.add(in0_t, in1_t, output_mem_config=output_mem_config, output_dtype=output_dtype)
+    output_t = tnn.add(in0_t, in1_t, output_mem_config=output_mem_config, output_dtype=output_dtype)
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 + in1
@@ -1394,7 +1395,7 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
         ttl.tensor.ShardOrientation.ROW_MAJOR,
     )
 
-    output_binary_t = ttl.tensor.add(in0_t, in1_t, output_mem_config=interleaved_mem_config)
+    output_binary_t = ttnn.add(in0_t, in1_t, memory_config=interleaved_mem_config)
     output_binary_t = ttl.tensor.interleaved_to_sharded(
         output_binary_t,
         grid_size_matmul,
@@ -1585,7 +1586,7 @@ def test_sharded_binary_padded_shard(
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
 
-    zt = ttl.tensor.add(xt, yt, output_mem_config=out_mem_config, output_dtype=output_dtype)
+    zt = ttnn.add(xt, yt, memory_config=out_mem_config, dtype=output_dtype)
 
     if out_sharded:
         zt = ttl.tensor.sharded_to_interleaved(

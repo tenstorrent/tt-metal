@@ -81,7 +81,7 @@ def test_eltwise_binary_fused(device):
     xtt = ttnn.add(
         xt,
         yt,
-        fused_activations=[
+        activations=[
             ttl.tensor.FusibleActivation.RELU,
             [ttl.tensor.FusibleActivation.POWER, 2],
         ],

@@ -69,7 +69,7 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("fused_activations") = std::nullopt,
+            py::arg("activations") = std::nullopt,
             py::arg("queue_id") = 0},
 
         // tensor and tensor
@@ -90,7 +90,7 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("fused_activations") = std::nullopt,
+            py::arg("activations") = std::nullopt,
             py::arg("queue_id") = 0});
 }
 
