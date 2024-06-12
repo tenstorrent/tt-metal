@@ -44,6 +44,20 @@ run_t3000_llama2_70b_tests() {
   echo "LOG_METAL: run_t3000_llama2_70b_tests $duration seconds to complete"
 }
 
+run_t3000_falcon40b_tests() {
+  # Record the start time
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_falcon40b_tests"
+
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/falcon40b/tests/test_perf_falcon.py -m "model_perf_t3000"
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_falcon40b_tests $duration seconds to complete"
+}
+
 run_t3000_llm_tests() {
   # Run falcon7b tests
   run_t3000_falcon7b_tests
@@ -53,6 +67,9 @@ run_t3000_llm_tests() {
 
   # Run llama2-70b tests
   run_t3000_llama2_70b_tests
+
+  # Run falcon40b tests
+  run_t3000_falcon40b_tests
 
   # Merge all the generated reports
   env python models/perf/merge_perf_results.py
