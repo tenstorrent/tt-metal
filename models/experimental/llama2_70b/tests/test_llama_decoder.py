@@ -13,12 +13,10 @@ from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 from models.experimental.llama2_70b.reference.llama.llama import Llama
 from models.experimental.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
 from models.experimental.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
-from models.experimental.llama2_70b.tt.model_config import (
-    get_model_config,
-)
 from models.utility_functions import skip_for_grayskull
 from models.experimental.llama2_70b.tt.llama_common import (
-    get_llama_path,
+    setup_llama_env,
+    check_device_mesh,
     extract_pcc_from_log,
     MAX_SEQ_LEN,
     MAX_SEQ_LEN_LLAMA3,
@@ -33,7 +31,6 @@ from models.experimental.llama2_70b.tt.llama_common import (
     check_kv_cache,
 )
 import gc
-import os
 
 
 class PytorchLlamaDecoderModel(torch.nn.Module):
@@ -106,15 +103,12 @@ def run_test_LlamaDecoder_inference(
     seq_len,
     pcc,
     model_config,
-    n_devices,
     llama_version,
+    ckpt_dir,
+    tokenizer_path,
+    cache_path,
 ):
     # Prepare paths and devices
-    t3k_device_mesh, ckpt_dir, tokenizer_path, cache_path = get_llama_path(
-        t3k_device_mesh,
-        model_config,
-        n_devices,
-    )
     skip_model_load = should_skip_model_load()
 
     # Prepare configs
@@ -131,8 +125,6 @@ def run_test_LlamaDecoder_inference(
     logger.info(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
-    model_name = "Llama3-70b" if configuration.vocab_size == 128256 else "Llama2-70b"
-    head_dim = configuration.dim // configuration.n_heads
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(
@@ -211,9 +203,11 @@ def run_test_LlamaDecoder_inference(
         all_pccs.append(extract_pcc_from_log(output_pcc))
 
         if does_pass:
-            logger.info(f"[start_pos={start_pos}] {model_name} Decoder output Passed!")
+            logger.info(f"[start_pos={start_pos}] {llama_version} Decoder output Passed!")
         else:
-            logger.warning(f"[start_pos={start_pos}] {model_name} Decoder output Failed! PCC value is lower than {pcc}")
+            logger.warning(
+                f"[start_pos={start_pos}] {llama_version} Decoder output Failed! PCC value is lower than {pcc}"
+            )
             all_tests_pass = False
 
     logger.info(f"Average PCC over {len(all_pccs)} tokens: {sum(all_pccs) / len(all_pccs)}")
@@ -247,10 +241,10 @@ def run_test_LlamaDecoder_inference(
     all_tests_pass = all_tests_pass and cache_test_pass
 
     if all_tests_pass:
-        logger.info(f"{model_name} Decoder output Passed!")
+        logger.info(f"{llama_version} Decoder output Passed!")
     else:
-        logger.warning(f"{model_name} Decoder output Failed!")
         gc.collect()
+        logger.warning(f"{llama_version} Decoder output Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 
@@ -273,55 +267,21 @@ def test_LlamaDecoder_inference(
     pcc,
     t3k_device_mesh,
     llama_version,
-    n_devices=8,
+    use_program_cache,
 ):
-    if llama_version == "llama3":
-        os.environ["LLAMA_CKPT_DIR"] = "/home/llama3-data-repacked/llama-3-70b/"
-        os.environ["LLAMA_TOKENIZER_PATH"] = "/home/llama3-data/Meta-Llama-3-70B/tokenizer.model"
-        os.environ["LLAMA_CACHE_PATH"] = "/home/llama3-data-cache/weights-cache"
-    else:
-        os.environ["LLAMA_CKPT_DIR"] = "/home/llama-data-repacked-2/llama-2-70b/"
-        os.environ["LLAMA_TOKENIZER_PATH"] = "/home/llama-data/tokenizer.model"
-        os.environ["LLAMA_CACHE_PATH"] = "/home/llama-data-cache/weights-cache-2"
+    model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
+        llama_version=llama_version, batch=batch, seq_len=seq_len
+    )
 
-    model_config = get_model_config(num_devices=n_devices, batch=batch, seq_len=seq_len, llama_version=llama_version)
-
-    if t3k_device_mesh.get_num_devices() < n_devices:
-        pytest.skip(f"Requires at {n_devices} devices to run")
-
-    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
-    if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
-        pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
-
-    if llama_version == "llama2" and seq_len > 2048:
-        pytest.skip("Llama2 supports a maximum sequence length of 2048")
-
-    for i in t3k_device_mesh.get_device_ids():
-        device = t3k_device_mesh.get_device(i)
-        device.enable_program_cache()
-
-    inp = torch.rand(1, 1, 32, 32)
-    for i in range(2):
-        run_test_LlamaDecoder_inference(
-            t3k_device_mesh,
-            batch,
-            seq_len,
-            pcc,
-            model_config,
-            n_devices,
-            llama_version,
-            emulated,
-        )
-
-        for i in t3k_device_mesh.get_device_ids():
-            device = t3k_device_mesh.get_device(i)
-            test_tensor = (
-                ttnn.Tensor(
-                    inp.reshape(-1).tolist(),
-                    inp.shape,
-                    ttnn.bfloat16,
-                    ttnn.Layout.ROW_MAJOR,
-                )
-                .to(ttnn.Layout.TILE)
-                .to(device)
-            )
+    check_device_mesh(t3k_device_mesh, model_config)
+    run_test_LlamaDecoder_inference(
+        t3k_device_mesh,
+        batch,
+        seq_len,
+        pcc,
+        model_config,
+        llama_version,
+        ckpt_dir,
+        tokenizer_path,
+        cache_path,
+    )
