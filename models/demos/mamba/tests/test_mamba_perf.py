@@ -15,11 +15,16 @@ from models.demos.mamba.demo.demo import (
 
 from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import profiler, enable_persistent_kernel_cache, skip_for_grayskull, skip_for_wormhole_b0
+from models.utility_functions import (
+    profiler,
+    enable_persistent_kernel_cache,
+    disable_persistent_kernel_cache,
+    skip_for_grayskull,
+    skip_for_wormhole_b0,
+)
 from tt_metal.tools.profiler.process_model_log import get_samples_per_s
 
 
-@skip_for_wormhole_b0("Non-deterministic hang on CI (#8606)")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
@@ -58,7 +63,8 @@ def test_mamba_e2e_perf(
 
     sequences: torch.Tensor = tokenizer(prompts, return_tensors="pt", padding=True).input_ids
 
-    enable_persistent_kernel_cache()
+    # Required due to non-deterministic hang on CI (#8606)
+    disable_persistent_kernel_cache()
 
     # prefill
     prefill_iterations = sequences.shape[1] - 1
