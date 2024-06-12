@@ -136,12 +136,22 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded_blocks_interleaved_start_id.cpp",
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)input_cb_index, (std::uint32_t)src_is_dram, all_cores.num_cores(), (std::uint32_t)sync_cb_index, (std::uint32_t)0, (std::uint32_t)convert_df};
-        unary_writer_kernel_id = tt_metal::CreateKernel(
-            program,
-            "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded_blocks_interleaved_start_id.cpp",
-            all_cores,
-            tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        if (src_is_dram) {
+            std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
+            unary_writer_kernel_id = tt_metal::CreateKernel(
+                    program,
+                    "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
+                    all_cores,
+                    tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        } else {
+            std::vector<uint32_t> writer_compile_time_args = {
+                (std::uint32_t)input_cb_index, (std::uint32_t)src_is_dram, all_cores.num_cores(), (std::uint32_t)sync_cb_index, (std::uint32_t)0, (std::uint32_t)convert_df};
+            unary_writer_kernel_id = tt_metal::CreateKernel(
+                    program,
+                    "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded_blocks_interleaved_start_id.cpp",
+                    all_cores,
+                    tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        }
     } else {
         bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(num_units_per_row);
         uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(num_units_per_row) : 0;
@@ -216,37 +226,54 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
                 }
             }
             curr_num_units_per_shard = shard_height * num_units_per_shard_width;
-            uint32_t first_shard_height = (shard_height + 1) / 2;
-            uint32_t second_shard_height = shard_height - first_shard_height;
-            uint32_t first_curr_num_units_per_shard = first_shard_height * num_units_per_shard_width;
-            uint32_t second_curr_num_units_per_shard = second_shard_height * num_units_per_shard_width;
-            uint32_t second_curr_idx_h = curr_idx_h + num_units_per_row * first_shard_height;
-            tt_metal::SetRuntimeArgs(
-                program,
-                unary_reader_kernel_id,
-                core,
-                {src_buffer->address(),
-                 first_shard_height,
-                 shard_width,
-                 padded_offset,
-                 num_units_offset,
-                 curr_num_units_per_shard,
-                 curr_idx_h + curr_idx_w,
-                 starting_idx_h,
-                 curr_num_units_per_shard});
+            if (src_is_dram) {
+                tt_metal::SetRuntimeArgs(
+                        program,
+                        unary_reader_kernel_id,
+                        core,
+                        {src_buffer->address(),
+                        shard_height,
+                        shard_width,
+                        padded_offset,
+                        num_units_offset,
+                        curr_num_units_per_shard,
+                        curr_idx_h + curr_idx_w,
+                        starting_idx_h,
+                        curr_num_units_per_shard});
+            } else {
+                uint32_t first_shard_height = (shard_height + 1) / 2;
+                uint32_t second_shard_height = shard_height - first_shard_height;
+                uint32_t first_curr_num_units_per_shard = first_shard_height * num_units_per_shard_width;
+                uint32_t second_curr_num_units_per_shard = second_shard_height * num_units_per_shard_width;
+                uint32_t second_curr_idx_h = curr_idx_h + num_units_per_row * first_shard_height;
+                tt_metal::SetRuntimeArgs(
+                        program,
+                        unary_reader_kernel_id,
+                        core,
+                        {src_buffer->address(),
+                        first_shard_height,
+                        shard_width,
+                        padded_offset,
+                        num_units_offset,
+                        first_curr_num_units_per_shard,
+                        curr_idx_h + curr_idx_w,
+                        starting_idx_h,
+                        curr_num_units_per_shard});
 
-            tt_metal::SetRuntimeArgs(
-                program,
-                unary_writer_kernel_id,
-                core,
-                {src_buffer->address(),
-                 second_shard_height,
-                 shard_width,
-                 num_units_offset,
-                 second_curr_num_units_per_shard,
-                 second_curr_idx_h + curr_idx_w,
-                 starting_idx_h,
-                 curr_num_units_per_shard});
+                tt_metal::SetRuntimeArgs(
+                        program,
+                        unary_writer_kernel_id,
+                        core,
+                        {src_buffer->address(),
+                        second_shard_height,
+                        shard_width,
+                        padded_offset,
+                        num_units_offset,
+                        second_curr_num_units_per_shard,
+                        second_curr_idx_h + curr_idx_w,
+                        starting_idx_h,
+                        curr_num_units_per_shard});
+            }
             curr_idx_w += num_units_per_shard_width;
             if (curr_idx_w >= num_units_per_row) {
                 curr_idx_w = 0;
@@ -323,7 +350,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     }
 
     auto override_runtime_arguments_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, cb_output, cores, num_slices](
+        [unary_reader_kernel_id, unary_writer_kernel_id, cb_output, cores, num_slices, src_is_dram](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -347,9 +374,12 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
                 if (partial_op) {
                     runtime_args[7] = starting_idx_h;
                 }
-                if (is_src_tiled) {
+                if (is_src_tiled && !src_is_dram) {
                     auto& runtime_args2 = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                     runtime_args2[0] = src_buffer->address();
+                    if (partial_op) {
+                        runtime_args2[7] = starting_idx_h;
+                    }
                 }
             }
             UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);

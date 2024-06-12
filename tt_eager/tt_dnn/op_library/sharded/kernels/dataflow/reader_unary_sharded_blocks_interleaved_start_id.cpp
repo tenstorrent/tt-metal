@@ -81,10 +81,17 @@ void kernel_main() {
         } else {
             cb_wait_front(cb_id_sync, 2);
             cb_pop_front(cb_id_sync, 2);
-            // push back per row to avoid issues with odd heights not dividing the CB size evenly
-            for (uint32_t h = 0; h < block_height_tiles; h++) {
-                cb_push_back(cb_id_in0, block_width_tiles);
-            }
+        }
+    }
+    // Push back in0 when
+    // - need to convert data format and
+    //     - the only reader kernel because two kernels are only for L1 or
+    //     - the second  kernel, which is the non-reserving one.
+    constexpr bool push_back_in0 = convert_df && (src_is_dram || !reserving_kernel);
+    if constexpr (push_back_in0) {
+        // push back per row to avoid issues with odd heights not dividing the CB size evenly
+        for (uint32_t h = 0; h < block_height_tiles; h++) {
+            cb_push_back(cb_id_in0, block_width_tiles);
         }
     }
 }
