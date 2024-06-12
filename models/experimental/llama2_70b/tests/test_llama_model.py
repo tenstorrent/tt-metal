@@ -17,13 +17,11 @@ import numpy as np
 
 from models.experimental.llama2_70b.reference.llama.llama import Llama
 from models.experimental.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
-from models.experimental.llama2_70b.tt.model_config import (
-    get_model_config,
-)
 
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
+from models.utility_functions import skip_for_grayskull
 from models.experimental.llama2_70b.tt.llama_common import (
-    get_llama_path,
+    setup_llama_env,
+    check_device_mesh,
     extract_pcc_from_log,
     MAX_SEQ_LEN,
     MAX_SEQ_LEN_LLAMA3,
@@ -68,15 +66,12 @@ def run_test_LlamaModel_inference(
     pcc,
     model_config,
     n_layers,
-    n_devices,
     llama_version,
-    emulated=False,
+    ckpt_dir,
+    tokenizer_path,
+    cache_path,
 ):
     # Prepare paths and devices
-    t3k_device_mesh, ckpt_dir, tokenizer_path, cache_path = get_llama_path(
-        t3k_device_mesh, model_config, n_devices, emulated
-    )
-
     skip_model_load = should_skip_model_load()
 
     logger.info(f"Running num_layer: {n_layers}")
@@ -93,7 +88,6 @@ def run_test_LlamaModel_inference(
     logger.info(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
-    model_name = "Llama3-70b" if configuration.vocab_size == 128256 else "Llama2-70b"
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_model = PytorchLlamaModel(hugging_face_reference_model)
@@ -106,7 +100,6 @@ def run_test_LlamaModel_inference(
         model_config,
         configuration,
         batch,
-        emulated=emulated,
         cache_path=cache_path,
     )
 
@@ -172,9 +165,11 @@ def run_test_LlamaModel_inference(
         logger.info(f"Mean Top-5: {top5_acc}")
 
         if does_pass:
-            logger.info(f"[start_pos={start_pos}] {model_name} Model output Passed!")
+            logger.info(f"[start_pos={start_pos}] {llama_version} Model output Passed!")
         else:
-            logger.warning(f"[start_pos={start_pos}] {model_name} Model output Failed! PCC value is lower than {pcc}")
+            logger.warning(
+                f"[start_pos={start_pos}] {llama_version} Model output Failed! PCC value is lower than {pcc}"
+            )
             all_tests_pass = False
 
     logger.info(f"Average PCC over {len(all_pccs)} tokens: {sum(all_pccs) / len(all_pccs)}")
@@ -207,10 +202,10 @@ def run_test_LlamaModel_inference(
         pcc,
     )
     if all_tests_pass:
-        logger.info(f"{model_name} output Passed!")
+        logger.info(f"{llama_version} output Passed!")
     else:
-        logger.warning(f"{model_name} output Failed!")
         gc.collect()
+        logger.warning(f"{llama_version} output Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 
@@ -240,17 +235,6 @@ def run_test_LlamaModel_inference(
     ids=("1L", "2L", "4L", "6L", "7L", "8L", "10L", "20L", "40L", "80L"),
 )
 @pytest.mark.parametrize(
-    "n_devices, emulated",
-    (
-        (8, False),
-        (8, True),
-    ),
-    ids=(
-        "8chip-T3000",
-        "8chip-emulated",
-    ),
-)
-@pytest.mark.parametrize(
     "batch, seq_len",
     ((32, 1), (1, 128), (1, 2048), (1, 8192)),
     ids=("decode", "prefill_128", "prefill_2k", "prefill_8k"),
@@ -260,23 +244,15 @@ def test_LlamaModel_inference(
     seq_len,
     pcc,
     n_layers,
-    n_devices,
     t3k_device_mesh,
     llama_version,
-    emulated,
+    use_program_cache,
 ):
-    model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
+    model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
+        llama_version=llama_version, batch=batch, seq_len=seq_len
+    )
 
-    if t3k_device_mesh.get_num_devices() < n_devices and not emulated:
-        pytest.skip(f"Requires at {n_devices} devices to run")
-
-    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
-    if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
-        pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
-
-    for i in t3k_device_mesh.get_device_ids():
-        device = t3k_device_mesh.get_device(i)
-        device.enable_program_cache()
+    check_device_mesh(t3k_device_mesh, model_config)
 
     run_test_LlamaModel_inference(
         t3k_device_mesh,
@@ -285,7 +261,8 @@ def test_LlamaModel_inference(
         pcc,
         model_config,
         n_layers,
-        n_devices,
         llama_version,
-        emulated,
+        ckpt_dir,
+        tokenizer_path,
+        cache_path,
     )
