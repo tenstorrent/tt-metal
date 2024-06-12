@@ -23,7 +23,7 @@ pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cl
 After the script is finished profiling results are in the designated output folder in file `host_overhead_profiler_output.csv`. Content of output csv might look like:
 
 ```
-op,count,overhead min(ms),overhead mean(ms),total mean(ms)
+op,count,python min dispatch time (ms),python mean dispatch time(ms),python mean dispatch + sync time (ms)
 tt_lib.tensor.add,8,0.87,0.89,1.08
 tt_lib.tensor.sub,8,0.94,0.94,1.1
 tt_lib.tensor.mul,8,0.82,0.85,1.0
@@ -36,11 +36,11 @@ tt_lib.tensor.atan2,8,40.93,43.69,43.35
 ```
 
 Columns:
-* op: Op being profiled
-* count: Number of profile runs.
-* overhead min(ms): Minimum measured dispatch time (overhead).
-* overhead mean(ms): Mean of measured dispatch times.
-* total mean(ms): Total time needed to run the op (both dispatch and kernel time).
+* `op`: Op being profiled
+* `count`: Number of profile runs.
+* `python min dispatch time (ms)`: Minimum measured dispatch time (overhead).
+* `python mean dispatch time(ms)`: Mean of measured dispatch times.
+* `python mean dispatch + sync time (ms)`: Total time needed to run the op (both dispatch and kernel time). Measured after syncronize.
 
 
 ## profile_host_overhead_with_tracy.py
@@ -56,7 +56,7 @@ python tests/tt_eager/profiling/profile_host_overhead_with_tracy.py -o host_over
 It profiles all tt_lib ops and saves measurement results to `host_overhead_profile/final.csv`. Output might look like:
 
 ```
-op,count,overhead min(ms),overhead mean(ms),total mean(ms),HOST DURATION [ms]
+op,count,python min dispatch time (ms),python mean dispatch time(ms),python mean dispatch + sync time (ms),C++ mean dispatch time (ms)
 tt_lib.tensor.add,40,0.85,0.93,1.21,0.96
 tt_lib.tensor.atan2,40,37.16,40.51,42.17,40.36
 tt_lib.tensor.div,40,0.87,0.92,1.18,0.96
@@ -69,7 +69,7 @@ tt_lib.tensor.squared_difference,40,0.91,1.1,1.39,1.08
 tt_lib.tensor.sub,40,0.88,0.92,1.21,0.98
 ```
 
-Added column is `HOST DURATION [ms]` which is host time parsed from `Tracy` output.
+Added column is `C++ mean dispatch time (ms)` which is host time parsed from `Tracy` output and mean taken from those measurements.
 
 
 ## test_host_overhead_ci.py
