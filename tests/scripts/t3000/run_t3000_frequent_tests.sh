@@ -61,6 +61,8 @@ run_t3000_mixtral_tests() {
 
   # mixtral8x7b 8 chip decode model test (env flags set inside the test)
   pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py::test_mixtral_model_inference[wormhole_b0-True-10-1-pcc]
+  pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_model_prefill.py::test_mixtral_model_inference
+
 
   # Record the end time
   end_time=$(date +%s)

@@ -47,10 +47,7 @@ class Emb(torch.nn.Module):
 )
 @pytest.mark.parametrize(
     "n_layers",
-    (
-        1,
-        32,
-    ),
+    (32,),
 )
 def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds, n_layers, seq_len):
     pcc = 0.96
@@ -102,7 +99,7 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
     start_pos = 0
     current_pos = start_pos % model_args.sliding_window
 
-    for iter in range(1):
+    for iter in range(2):
         start_time = time.time()
         decode_input, attn_mask, attn_mask_torch = prepare_inputs_ttnn_prefill(
             tt_decode_input,
