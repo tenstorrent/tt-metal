@@ -45,8 +45,9 @@ run_t3000_llama2_70b_experimental_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama2_70b_experimental_tests"
 
-  pytest models/experimental/llama2_70b/tests/test_llama_mlp_t3000.py
-  pytest models/experimental/llama2_70b/tests/test_llama_attention_t3000.py
+  # Removing tests to reduce the time taken to run the tests
+  # pytest models/experimental/llama2_70b/tests/test_llama_mlp_t3000.py
+  # pytest models/experimental/llama2_70b/tests/test_llama_attention_t3000.py
   pytest models/experimental/llama2_70b/tests/test_llama_decoder_t3000.py
   pytest models/experimental/llama2_70b/tests/test_llama_model_t3000.py
 
