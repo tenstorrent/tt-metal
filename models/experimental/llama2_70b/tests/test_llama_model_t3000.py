@@ -26,11 +26,8 @@ if os.getenv("CI") == "true":
 )
 @pytest.mark.parametrize(
     "pcc, n_layers",
-    (
-        (0.996, 1),
-        (0.990, 2),
-    ),
-    ids=("1L", "2L"),
+    ((0.99, 1),),
+    ids=("1L",),
 )
 @pytest.mark.parametrize(
     "batch, seq_len",

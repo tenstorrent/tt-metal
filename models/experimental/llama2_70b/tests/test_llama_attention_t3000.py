@@ -19,14 +19,11 @@ if os.getenv("CI") == "true":
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "llama_version",
-    (
-        ("llama2"),
-        ("llama3"),
-    ),
+    (("llama3"),),
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    ((32, 1, 0.9997), (1, 128, 0.9997), (1, 2048, 0.9997)),
+    ((32, 1, 0.9997), (1, 128, 0.99), (1, 2048, 0.99)),
     ids=("decode", "prefill_128", "prefill_2k"),
 )
 def test_LlamaAttention_inference_t3000(

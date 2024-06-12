@@ -27,6 +27,7 @@ from models.experimental.llama2_70b.tt.llama_common import (
     comp_pcc,
     should_skip_model_load,
 )
+import gc
 
 
 class PytorchLlamaMLPModel(torch.nn.Module):
@@ -112,6 +113,7 @@ def run_test_LlamaMLP_inference(
         logger.info("Llama MLP output Passed!")
     else:
         logger.warning("Llama MLP output Failed!")
+        gc.collect()
         assert does_pass, f"PCC value is lower than {pcc}"
 
 

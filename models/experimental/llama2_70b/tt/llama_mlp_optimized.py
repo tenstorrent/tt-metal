@@ -142,14 +142,18 @@ class TtLlamaMLP_optimized:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
     def prefill_forward(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
-        # TODO: Use FP32 accumulate after the issue with primary.matmul with FP32 accumulate is fixed
+        # Prefill Reshape fix
+        _, _, seq_len, _ = x.shape
+        max_seq_len = 1024  # Must be same as in model_config.py
+        batch_dim = 1 if seq_len < max_seq_len else seq_len // max_seq_len  # Find the division factor
+        x = ttnn.reshape(x, (1, batch_dim, seq_len // batch_dim, self.hidden_size))
+
         w1_out = tt_lib.operations.primary.matmul(
             x,
             self.w1,
             program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
-            output_mem_config=self.model_config["MLP_BLOCK_SHARDED_MEMCFG"],
-            compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG_LOFI"],
-            # output_dtype=self.model_config["BFP8_DTYPE"],
+            # output_mem_config=self.model_config["MLP_BLOCK_SHARDED_MEMCFG"],
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
             output_dtype=self.model_config["BFLOAT16_DTYPE"],
         )
 
@@ -157,9 +161,8 @@ class TtLlamaMLP_optimized:
             x,
             self.w3,
             program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
-            output_mem_config=self.model_config["MLP_BLOCK_SHARDED_MEMCFG"],
-            compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG_LOFI"],
-            # output_dtype=self.model_config["BFP8_DTYPE"],
+            # output_mem_config=self.model_config["MLP_BLOCK_SHARDED_MEMCFG"],
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
             output_dtype=self.model_config["BFLOAT16_DTYPE"],
         )
         x.deallocate(True)
@@ -181,6 +184,9 @@ class TtLlamaMLP_optimized:
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
             output_dtype=self.model_config["BFLOAT16_DTYPE"],
         )
+
+        # Prefill Reshape fix (reverse)
+        hidden_states = ttnn.reshape(hidden_states, (1, 1, seq_len, self.hidden_size // self.num_devices))
 
         return hidden_states
 
