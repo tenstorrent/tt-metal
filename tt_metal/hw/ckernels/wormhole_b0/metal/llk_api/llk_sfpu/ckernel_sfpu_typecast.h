@@ -93,5 +93,42 @@ inline void calculate_typecast_int32_to_fp16b()
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_typecast_fp16b_to_int32()
+{
+    #pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat in = dst_reg[0];
+
+        // extract exponent
+        vInt exp = exexp(in);
+
+        v_if (exp < 0) {
+            dst_reg[0] = 0;
+        } v_elseif (exp > 30) {
+            // set to int32 max value in case of overflow
+            vInt tmp = 2147483647;
+            // check sign
+            v_if (in < 0) {
+                tmp = reinterpret<vInt>(setsgn(reinterpret<vFloat>(tmp), 1));
+            } v_endif
+            dst_reg[0] = tmp;
+        } v_else {
+            // extract mantissa
+            vInt man = exman8(in);
+            // shift the mantissa by (23-exponent) to the right
+            vInt shift = exp - 23;
+            man = shft(reinterpret<vUInt>(man), shift);
+            // check sign
+            v_if (in < 0) {
+                man = reinterpret<vInt>(setsgn(reinterpret<vFloat>(man), 1));
+            } v_endif
+            dst_reg[0] = man;
+        } v_endif
+
+        dst_reg++;
+    }
+}
+
 }  // namespace sfpu
 }  // namespace ckernel
