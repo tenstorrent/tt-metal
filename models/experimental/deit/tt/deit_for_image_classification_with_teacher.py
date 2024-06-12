@@ -8,6 +8,7 @@ from torch import nn
 from typing import Optional, Tuple, Union
 from transformers import DeiTForImageClassificationWithTeacher
 
+import ttnn
 import tt_lib
 
 from models.experimental.deit.tt.deit_config import DeiTConfig
@@ -74,9 +75,9 @@ class TtDeiTForImageClassificationWithTeacher(nn.Module):
         distillation_logits = self.distillation_classifier(distillation_classifier_input)
 
         # during inference, return the average of both classifier predictions
-        logits = tt_lib.tensor.add(cls_logits, distillation_logits)
+        logits = ttnn.add(cls_logits, distillation_logits)
         half = tt_lib.tensor.full(logits.get_legacy_shape(), 0.5)
-        logits = tt_lib.tensor.mul(logits, half)
+        logits = ttnn.mul(logits, half)
 
         # if not return_dict:
         output = (logits, cls_logits, distillation_logits) + outputs[1:]

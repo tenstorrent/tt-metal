@@ -123,7 +123,7 @@ class TtGPT(nn.Module):
             tt_temperature = fallback_ops.full(tt_logits.get_legacy_shape(), temperature)
 
             tt_temperature = tt_lib.tensor.recip(tt_temperature)
-            tt_logits = tt_lib.tensor.mul(tt_logits, tt_temperature)
+            tt_logits = ttnn.mul(tt_logits, tt_temperature)
 
             logits = tt_to_torch_tensor(tt_logits)
             # optionally crop the logits to only the top k options

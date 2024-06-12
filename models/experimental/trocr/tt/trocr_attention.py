@@ -7,6 +7,7 @@ import torch.nn as nn
 import math
 from typing import Optional, Tuple
 
+import ttnn
 import tt_lib
 from tt_lib import fallback_ops
 
@@ -173,7 +174,7 @@ class TtTrOCRAttention(nn.Module):
             attn_weights = fallback_ops.reshape(attn_weights, bsz, self.num_heads, tgt_len, src_len)
 
             if attention_mask == None:
-                attn_weights = tt_lib.tensor.add(attn_weights, attention_mask)
+                attn_weights = ttnn.add(attn_weights, attention_mask)
 
             attn_weights = fallback_ops.reshape(attn_weights, 1, bsz * self.num_heads, tgt_len, src_len)
 

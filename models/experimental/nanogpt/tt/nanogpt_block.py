@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
+import ttnn
 import tt_lib
 import models.experimental.nanogpt.tt.nanogpt_mlp as nanogpt_mlp
 import models.experimental.nanogpt.tt.nanogpt_attention as nanogpt_attention
@@ -35,9 +36,9 @@ class TtBlock(nn.Module):
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         tmp = self.attn.forward(self.ln_1(x, eps=1e-5, gamma=self.gamma_1, beta=self.beta_1))
-        x = tt_lib.tensor.add(x, tmp)
+        x = ttnn.add(x, tmp)
 
         tmp = self.mlp.forward(self.ln_2(x, eps=1e-5, gamma=self.gamma_2, beta=self.beta_2))
-        x = tt_lib.tensor.add(x, tmp)
+        x = ttnn.add(x, tmp)
 
         return x

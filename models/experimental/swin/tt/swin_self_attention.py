@@ -106,7 +106,7 @@ class TtSwinSelfAttention(nn.Module):
         attention_head_size_tt = tt_lib.tensor.sqrt(attention_head_size_tt)
         attention_head_size_tt = tt_lib.tensor.recip(attention_head_size_tt)
 
-        attention_scores = tt_lib.tensor.mul(attention_scores, attention_head_size_tt)
+        attention_scores = ttnn.mul(attention_scores, attention_head_size_tt)
         """
         The index value must be long or byte or bool, hence using pytorch tensor
         """

@@ -2601,9 +2601,9 @@ def eltwise_eq_optional(
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
 
     if queue_id == True:
-        ttl.tensor.eq(cq_id, t0, t1, output_tensor=t2)
+        ttnn.eq(cq_id, t0, t1, output_tensor=t2)
     else:
-        ttl.tensor.eq(t0, t1, output_tensor=t2)
+        ttnn.eq(t0, t1, output_tensor=t2)
 
     return tt2torch_tensor(t2)
 

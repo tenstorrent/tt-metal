@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import copy
+import ttnn
 import tt_lib
+
+import copy
 from typing import List, Sequence, Union, Tuple, Optional, Any
 from tt_lib.fallback_ops import fallback_ops
 import torchvision
@@ -176,7 +178,7 @@ class TtEfficientNet(torch.nn.Module):
         x = tt_lib.tensor.matmul(x, self.classifier_weight)
 
         if self.classifier_bias is not None:
-            x = tt_lib.tensor.add(x, self.classifier_bias)
+            x = ttnn.add(x, self.classifier_bias)
 
         return x
 

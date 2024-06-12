@@ -9,6 +9,7 @@ from loguru import logger
 from typing import Optional, Tuple
 from dataclasses import dataclass
 
+import ttnn
 import tt_lib
 from tt_lib import fallback_ops
 
@@ -179,7 +180,7 @@ class TtTrOCRDecoder(nn.Module):
         else:
             embed_pos = self.embed_positions(input_ids, past_key_values_length=past_key_values_length)
 
-        hidden_states = tt_lib.tensor.add(inputs_embeds, embed_pos)
+        hidden_states = ttnn.add(inputs_embeds, embed_pos)
 
         if self.layernorm_embedding is not None:
             hidden_states = self.layernorm_embedding(

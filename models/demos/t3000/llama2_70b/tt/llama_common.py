@@ -74,7 +74,7 @@ def rms_decomp(x, norm_weight, eps):
     rms = tt_lib.tensor.pow(mean_squared_eps, 0.5)
     rms_recip = tt_lib.tensor.recip(rms)
     normed_x = tt_lib.tensor.bcast(x, rms_recip, math_op=tt_lib.tensor.BcastOpMath.MUL, dim=tt_lib.tensor.BcastOpDim.W)
-    norm_out = tt_lib.tensor.mul(normed_x, norm_weight)
+    norm_out = ttnn.mul(normed_x, norm_weight)
     return norm_out
 
 

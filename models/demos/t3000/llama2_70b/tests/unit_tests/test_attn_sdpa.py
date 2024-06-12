@@ -8,6 +8,7 @@ from loguru import logger
 import math
 import torch.nn.functional as F
 
+import ttnn
 import tt_lib
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import repeat_kv
@@ -72,7 +73,7 @@ class TtLlamaSDPA(torch.nn.Module):
         # attn_mask = attn_mask.repeat(1, attn.shape()[1], 1, 1)
         # attn_mask = torch2tt_tensor(attn_mask, self.device)
 
-        attn = tt_lib.tensor.add(attn, attn_mask)
+        attn = ttnn.add(attn, attn_mask)
         attn = tt_lib.tensor.softmax(attn)
         return attn
 
