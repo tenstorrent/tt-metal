@@ -204,6 +204,7 @@ inline Tensor run_eltwise_unary(
     DataType output_dtype = (ops_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(ops_chain[0].params[1]) : input_tensor.get_dtype();
     bool fp32_dest_acc_en =
         output_dtype == DataType::UINT32 or
+        output_dtype == DataType::INT32 or
         input_tensor.get_dtype() == DataType::UINT32 or
         input_tensor.get_dtype() ==
             DataType::INT32;  // MT: Currently only uint32/int32 is moved to DST directly, fp32 is converted to fp16b
@@ -250,6 +251,7 @@ inline Tensor run_eltwise_unary(
     DataType output_dtype = (ops_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(ops_chain[0].params[1]) : input_tensor.get_dtype();
     bool fp32_dest_acc_en =
         output_dtype == DataType::UINT32 or
+        output_dtype == DataType::INT32 or
         input_tensor.get_dtype() == DataType::UINT32 or
         input_tensor.get_dtype() ==
             DataType::INT32;  // MT: Currently only uint32/int32 is moved to DST directly, fp32 is converted to fp16b
