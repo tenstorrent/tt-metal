@@ -35,7 +35,6 @@ class TtLlamaDecoder_optimized:
         configuration,
         batch,
         transformation_mats,
-        emulated=False,
         cache_path=None,
         read_cache=False,
     ):
@@ -45,7 +44,6 @@ class TtLlamaDecoder_optimized:
         self.device_mesh = device_mesh
         self.num_devices = device_mesh.get_num_devices()
         self.model_config = model_config
-        self.emulated = emulated
         self.read_cache = read_cache
 
         self.hidden_size = configuration.dim
@@ -70,7 +68,6 @@ class TtLlamaDecoder_optimized:
             model_config,
             configuration,
             transformation_mats,
-            emulated=emulated,
             cache_path=cache_path,
             read_cache=read_cache,
         )
@@ -82,7 +79,6 @@ class TtLlamaDecoder_optimized:
             layer_num,
             self.hidden_size,
             model_config,
-            emulated=emulated,
             cache_path=cache_path,
             read_cache=read_cache,
         )
@@ -139,9 +135,7 @@ class TtLlamaDecoder_optimized:
         cache_name = lambda name: self.cache_path / (f"{'llama3_' if self.llama3 else ''}{name}")
 
         if self.model_config["LLM_MODE"] == "prefill":
-            assert (
-                seq_len % 128 == 0 and seq_len > 0 and seq_len <= 2048
-            ), "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
+            assert seq_len % 128 == 0 and seq_len > 0, "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
             assert batch == 1, "prefill mode only supports batch size 1"
             x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
 
@@ -290,31 +284,12 @@ class TtLlamaDecoder_optimized:
         attn_masks: List[tt_lib.tensor.Tensor],
     ) -> List[tt_lib.tensor.Tensor]:
         ### xs (residual stream) is fractured on all chips
-        # Put xs back on DRAM and do allgather
-
-        # xs_replicated = tt_lib.tensor.sharded_to_interleaved(xs, output_mem_config=self.model_config["L1_MEMCFG"])
-
-        ### Duplicate inputs for layernorm
-        # if self.emulated:
-        #     xs_replicated = tt_all_gather_torch(xs_replicated, dim=-1)
-        # else:
-        #     xs_replicated = tt_lib.tensor.all_gather(
-        #         xs_replicated,
-        #         dim=3,
-        #         num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-        #         output_mem_config=self.model_config["L1_MEMCFG"],
-        #     )
         xs_replicated = ttnn.all_gather(
             xs,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"],
         )
-
-        # RMSNorm must execute on sharded input
-        # xs_replicated = tt_lib.tensor.interleaved_to_sharded(
-        #     xs_replicated, sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
-        # )
 
         # In-place RMSNorm
         attn_norm_replicated = tt_lib.operations.primary.rmsnorm(
@@ -332,7 +307,6 @@ class TtLlamaDecoder_optimized:
 
         ### Fractured residual add
         # Add attn output to residiual first in place to save memory
-
         residual = xs
         output = ttnn.add(
             residual,
@@ -342,32 +316,12 @@ class TtLlamaDecoder_optimized:
         )
         attn_outs.deallocate(True)
 
-        # Put attn_resid back on DRAM
-        # attn_resid_replicated = tt_lib.tensor.sharded_to_interleaved(
-        #     output, output_mem_config=self.model_config["L1_MEMCFG"]
-        # )
-
-        # ### Duplicate attention residual on all chips
-        # if self.emulated:
-        #     attn_resid_replicated = tt_all_gather_torch(attn_resid_replicated, dim=-1)
-        # else:
-        #     attn_resid_replicated = tt_lib.tensor.all_gather(
-        #         attn_resid_replicated,
-        #         dim=3,
-        #         num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-        #         output_mem_config=self.model_config["L1_MEMCFG"],
-        #     )
         attn_resid_replicated = ttnn.all_gather(
             output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"],
         )
-
-        # # RMSNorm must execute on sharded input
-        # attn_resid_replicated = tt_lib.tensor.interleaved_to_sharded(
-        #     attn_resid_replicated, sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
-        # )
 
         # In-place RMSNorm
         ffn_norm_replicated = tt_lib.operations.primary.rmsnorm(
@@ -464,16 +418,6 @@ class TtLlamaDecoder_optimized:
         #         tt_lib.tensor.typecast(tt_lib.tensor.clone(xs[i]), dtype=tt_lib.tensor.DataType.BFLOAT8_B)
         #     )
 
-        ### Duplicate inputs for layernorm
-        # if self.emulated:
-        #     xs_replicated = tt_all_gather_torch(xs_replicated, dim=-1)
-        # else:
-        #     xs_replicated = tt_lib.tensor.all_gather(
-        #         xs_replicated,
-        #         dim=3,
-        #         num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-        #         output_mem_config=self.model_config["DRAM_MEMCFG"],
-        #     )
         xs_replicated = ttnn.all_gather(
             xs,
             dim=3,
@@ -493,16 +437,6 @@ class TtLlamaDecoder_optimized:
         output = ttnn.add(residual, attn_outs)
         attn_outs.deallocate(True)
 
-        ### Duplicate attention residual on all chips
-        # if self.emulated:
-        #     attn_resid_replicated = tt_all_gather_torch(attn_resid_replicated, dim=-1)
-        # else:
-        #     attn_resid_replicated = tt_lib.tensor.all_gather(
-        #         attn_resid_replicated,
-        #         dim=3,
-        #         num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-        #         output_mem_config=self.model_config["L1_MEMCFG"],
-        #     )
         attn_resid_replicated = ttnn.all_gather(
             output,
             dim=3,
