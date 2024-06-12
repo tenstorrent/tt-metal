@@ -439,6 +439,8 @@ from ttnn.operations.binary import (
     eq,
     ne,
     isclose,
+    bias_gelu,
+    div_fast,
 )
 
 from ttnn.operations.ternary import (

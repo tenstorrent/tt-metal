@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import ttnn
 import tt_lib as ttl
 from functools import partial
 from models.helper_funcs import Linear as tt_Linear
@@ -2503,33 +2504,34 @@ def make_binary_op(ttl_tensor_binop):
     return binary_op
 
 
-eltwise_add = make_binary_op(ttl.tensor.add)
-eltwise_sub = make_binary_op(ttl.tensor.sub)
-eltwise_mul = make_binary_op(ttl.tensor.mul)
-eltwise_bias_gelu = make_binary_op(ttl.tensor.bias_gelu)
-eltwise_squared_difference = make_binary_op(ttl.tensor.squared_difference)
-eltwise_hypot = make_binary_op(ttl.tensor.hypot)
+eltwise_add = make_binary_op(ttnn.add)
+eltwise_sub = make_binary_op(ttnn.sub)
+eltwise_mul = make_binary_op(ttnn.mul)
+eltwise_squared_difference = make_binary_op(ttnn.squared_difference)
+eltwise_hypot = make_binary_op(ttnn.hypot)
 eltwise_scatter = make_binary_op(ttl.tensor.scatter)
-eltwise_atan2 = make_binary_op(ttl.tensor.atan2)
-eltwise_min = make_binary_op(ttl.tensor.min)
-eltwise_max = make_binary_op(ttl.tensor.max)
-eltwise_ne = make_binary_op(ttl.tensor.ne)
-eltwise_eq = make_binary_op(ttl.tensor.eq)
-eltwise_gt = make_binary_op(ttl.tensor.gt)
-eltwise_lt = make_binary_op(ttl.tensor.lt)
-eltwise_gte = make_binary_op(ttl.tensor.gte)
-eltwise_lte = make_binary_op(ttl.tensor.lte)
-eltwise_xlogy = make_binary_op(ttl.tensor.xlogy)
-eltwise_ldexp = make_binary_op(ttl.tensor.ldexp)
-eltwise_logaddexp = make_binary_op(ttl.tensor.logaddexp)
-eltwise_logaddexp2 = make_binary_op(ttl.tensor.logaddexp2)
-eltwise_logical_xor = make_binary_op(ttl.tensor.logical_xor)
-eltwise_logical_and = make_binary_op(ttl.tensor.logical_and)
-eltwise_logical_or = make_binary_op(ttl.tensor.logical_or)
+eltwise_atan2 = make_binary_op(ttnn.atan2)
+eltwise_min = make_binary_op(ttnn.min)
+eltwise_max = make_binary_op(ttnn.max)
+eltwise_ne = make_binary_op(ttnn.ne)
+eltwise_eq = make_binary_op(ttnn.eq)
+eltwise_gt = make_binary_op(ttnn.gt)
+eltwise_lt = make_binary_op(ttnn.lt)
+eltwise_gte = make_binary_op(ttnn.ge)
+eltwise_lte = make_binary_op(ttnn.le)
+eltwise_xlogy = make_binary_op(ttnn.xlogy)
+eltwise_ldexp = make_binary_op(ttnn.ldexp)
+eltwise_logaddexp = make_binary_op(ttnn.logaddexp)
+eltwise_logaddexp2 = make_binary_op(ttnn.logaddexp2)
+eltwise_logical_xor = make_binary_op(ttnn.logical_xor)
+eltwise_logical_and = make_binary_op(ttnn.logical_and)
+eltwise_logical_or = make_binary_op(ttnn.logical_or)
+eltwise_bias_gelu = make_binary_op(ttnn.bias_gelu)
+
 matmul = make_binary_op(ttl.tensor.matmul)
 outer = make_binary_op(ttl.tensor.outer)
 bmm = make_binary_op(ttl.tensor.bmm)
-eltwise_bias_gelu = make_binary_op(ttl.tensor.bias_gelu)
+
 eltwise_nextafter = make_binary_op(ttl.tensor.nextafter)
 eltwise_isfinite = make_unary_op(ttl.tensor.isfinite)
 eltwise_isinf = make_unary_op(ttl.tensor.isinf)
@@ -2564,21 +2566,21 @@ def make_binary_op_optional_output(ttl_tensor_binop):
     return binary_op
 
 
-eltwise_add_optional = make_binary_op_optional_output(ttl.tensor.add)
-eltwise_sub_optional = make_binary_op_optional_output(ttl.tensor.sub)
-eltwise_mul_optional = make_binary_op_optional_output(ttl.tensor.mul)
-eltwise_bias_gelu_optional = make_binary_op_optional_output(ttl.tensor.bias_gelu)
-eltwise_squared_difference_optional = make_binary_op_optional_output(ttl.tensor.squared_difference)
-eltwise_ne_optional = make_binary_op_optional_output(ttl.tensor.ne)
-eltwise_gt_optional = make_binary_op_optional_output(ttl.tensor.gt)
-eltwise_lt_optional = make_binary_op_optional_output(ttl.tensor.lt)
-eltwise_gte_optional = make_binary_op_optional_output(ttl.tensor.gte)
-eltwise_lte_optional = make_binary_op_optional_output(ttl.tensor.lte)
-eltwise_ldexp_optional = make_binary_op_optional_output(ttl.tensor.ldexp)
-eltwise_logaddexp_optional = make_binary_op_optional_output(ttl.tensor.logaddexp)
-eltwise_logaddexp2_optional = make_binary_op_optional_output(ttl.tensor.logaddexp2)
-eltwise_logical_and_optional = make_binary_op_optional_output(ttl.tensor.logical_and)
-eltwise_logical_or_optional = make_binary_op_optional_output(ttl.tensor.logical_or)
+eltwise_add_optional = make_binary_op_optional_output(ttnn.add)
+eltwise_sub_optional = make_binary_op_optional_output(ttnn.sub)
+eltwise_mul_optional = make_binary_op_optional_output(ttnn.mul)
+eltwise_bias_gelu_optional = make_binary_op_optional_output(ttnn.bias_gelu)
+eltwise_squared_difference_optional = make_binary_op_optional_output(ttnn.squared_difference)
+eltwise_ne_optional = make_binary_op_optional_output(ttnn.ne)
+eltwise_gt_optional = make_binary_op_optional_output(ttnn.gt)
+eltwise_lt_optional = make_binary_op_optional_output(ttnn.lt)
+eltwise_gte_optional = make_binary_op_optional_output(ttnn.ge)
+eltwise_lte_optional = make_binary_op_optional_output(ttnn.le)
+eltwise_ldexp_optional = make_binary_op_optional_output(ttnn.ldexp)
+eltwise_logaddexp_optional = make_binary_op_optional_output(ttnn.logaddexp)
+eltwise_logaddexp2_optional = make_binary_op_optional_output(ttnn.logaddexp2)
+eltwise_logical_and_optional = make_binary_op_optional_output(ttnn.logical_and)
+eltwise_logical_or_optional = make_binary_op_optional_output(ttnn.logical_or)
 
 
 def eltwise_eq_optional(
