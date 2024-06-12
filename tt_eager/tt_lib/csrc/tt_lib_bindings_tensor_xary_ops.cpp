@@ -118,6 +118,7 @@ namespace tt::tt_metal::detail {
                 BFLOAT16 -> UINT16
                 UINT16 -> BFLOAT16
                 INT32 -> BFLOAT16
+                BFLOAT16 -> INT32
 
             Input tensor must have tt_input_dtype data type.
 
