@@ -33,7 +33,7 @@ def test_binary_eq(input_shapes, out_dtype, mem_configs, device):
     mem_cfg = mem_configs
 
     tt_output_tensor_on_device = ttnn.eq(
-        cq_id, input_tensor, other_tensor, output_mem_config=mem_cfg, output_dtype=out_dtype
+        input_tensor, other_tensor, memory_config=mem_cfg, dtype=out_dtype, queue_id=cq_id
     )
 
     golden_tensor = torch.eq(in_data, other_data)
