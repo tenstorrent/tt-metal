@@ -185,9 +185,7 @@ class TtLlamaModel_optimized:
         xs = self.tt_embd(x)
 
         if self.model_config["LLM_MODE"] == "prefill":
-            assert (
-                seq_len % 128 == 0 and seq_len > 0 and seq_len <= 2048
-            ), "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
+            assert seq_len % 128 == 0 and seq_len > 0, "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
             assert batch == 1, "prefill mode only supports batch size 1"
             assert xs.shape == (batch, 1, seq_len, self.hidden_size // self.num_devices)
 
@@ -478,6 +476,12 @@ class TtLlamaModel_optimized:
         if self.llama3:
             self.model_config["LM_HEAD_MM_PROGCFG"] = self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
 
+        _, _, seq_len, hidden_size = norm_out_replicated.shape
+
+        max_seq_len = 1024  # Must be same as in model_config.py
+        batch_dim = 1 if seq_len < max_seq_len else seq_len // max_seq_len  # Find the division factor
+        norm_out_replicated = ttnn.reshape(norm_out_replicated, (1, batch_dim, seq_len // batch_dim, -1))
+
         lm_head_out = tt_lib.operations.primary.matmul(
             norm_out_replicated,
             self.lm_head,
@@ -486,5 +490,7 @@ class TtLlamaModel_optimized:
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
         )
         norm_out_replicated.deallocate(True)
+
+        lm_head_out = ttnn.reshape(lm_head_out, (1, 1, seq_len, -1))
 
         return lm_head_out
