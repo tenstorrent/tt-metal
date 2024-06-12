@@ -20,6 +20,7 @@ from models.experimental.llama2_70b.reference.llama.llama.generation import (
 )
 
 MAX_SEQ_LEN = 4096
+MAX_SEQ_LEN_LLAMA3 = 8192
 BASE_URL = "layers"
 UNIT_TEST_N_LAYER = 1
 UNIT_TEST_LAYER_NUM = 0
@@ -46,7 +47,7 @@ def should_skip_model_load():
     return skip_model_load
 
 
-def get_llama_path(devices, model_config, n_devices, emulated):
+def get_llama_path(devices, model_config, n_devices, emulated=False):
     ckpt_dir = model_config["DEFAULT_CKPT_DIR"]
     tokenizer_path = model_config["DEFAULT_TOKENIZER_PATH"]
     cache_path = model_config["DEFAULT_CACHE_PATH"]
