@@ -136,6 +136,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     CoreRangeSet in0_mcast_cores_without_work_and_in_receiver_grid({});
     CoreRangeSet in0_mcast_cores_without_work_and_not_in_receiver_grid({});
     CoreRangeSet in0_mcast_receivers({});
+    std::vector<uint32_t> in0_mcast_noc_x;
+    std::vector<uint32_t> in0_mcast_noc_y;
     if (in0_is_sharded) {
         in0_mcast_cores_with_work_and_in_receiver_grid = all_cores_with_work;
 
@@ -163,6 +165,15 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 in0_mcast_cores_without_work_and_not_in_receiver_grid_num_cores,
                 compute_with_storage_grid_size,
                 row_major);
+        }
+
+        in0_mcast_noc_x.reserve(in0_mcast_sender_cores_grid.x);
+        in0_mcast_noc_y.reserve(in0_mcast_sender_cores_grid.y);
+        for (uint32_t core_idx_x = 0; core_idx_x < in0_mcast_sender_cores_grid.x; ++core_idx_x) {
+            in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+        }
+        for (uint32_t core_idx_y = 0; core_idx_y < in0_mcast_sender_cores_grid.y; ++core_idx_y) {
+            in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
         }
     } else {
         in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
@@ -340,7 +351,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         program,
         in0_is_sharded
             ? "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/"
-              "reader_bmm_tile_layout_in0_sender_receiver_padding_width_sharded.cpp"
+              "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
             : "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
         in0_mcast_cores_with_work_and_in_receiver_grid,
         tt_metal::DataMovementConfig{
@@ -349,8 +360,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             .compile_args = in0_sender_compile_time_args,
             .defines = mm_kernel_in0_sender_writer_defines});
 
-    auto mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id = 0;
-    auto mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = 0;
+    KernelHandle mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id = 0;
+    KernelHandle mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = 0;
     if (in0_is_sharded) {
         if (in0_mcast_cores_without_work_and_in_receiver_grid.num_cores() > 0) {
             in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
@@ -358,12 +369,13 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id = tt_metal::CreateKernel(
                 program,
                 "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/"
-                "reader_bmm_tile_layout_in0_sender_receiver_padding_width_sharded.cpp",
+                "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
                 in0_mcast_cores_without_work_and_in_receiver_grid,
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
-                    .compile_args = in0_sender_compile_time_args});
+                    .compile_args = in0_sender_compile_time_args,
+                    .defines = mm_kernel_in0_sender_writer_defines});
         }
         if (in0_mcast_cores_without_work_and_not_in_receiver_grid.num_cores() > 0) {
             in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
@@ -371,12 +383,13 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = tt_metal::CreateKernel(
                 program,
                 "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/"
-                "reader_bmm_tile_layout_in0_sender_receiver_padding_width_sharded.cpp",
+                "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
                 in0_mcast_cores_without_work_and_not_in_receiver_grid,
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
-                    .compile_args = in0_sender_compile_time_args});
+                    .compile_args = in0_sender_compile_time_args,
+                    .defines = mm_kernel_in0_sender_writer_defines});
         }
     }
 
@@ -579,18 +592,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     uint32_t last_block_padded_block_tiles_h_skip =
         (per_core_M / out_subblock_h - last_block_num_nonzero_subblocks_h) * (per_core_N * out_subblock_h);
 
-    std::vector<uint32_t> in0_mcast_noc_x;
-    std::vector<uint32_t> in0_mcast_noc_y;
-    if (in0_is_sharded) {
-        in0_mcast_noc_x.reserve(in0_mcast_sender_cores_grid.x);
-        in0_mcast_noc_y.reserve(in0_mcast_sender_cores_grid.y);
-        for (uint32_t core_idx_x = 0; core_idx_x < in0_mcast_sender_cores_grid.x; ++core_idx_x) {
-            in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
-        }
-        for (uint32_t core_idx_y = 0; core_idx_y < in0_mcast_sender_cores_grid.y; ++core_idx_y) {
-            in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
-        }
-    }
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
     if (in0_noc == NOC::NOC_1) {
@@ -1538,6 +1539,9 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1;
     uint32_t num_blocks_x = (Nt - 1) / per_core_N + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
+
+    // TODO: Max used grid can actually exceed mcast receiver grid if in0 is sharded
+    // TODO: Move these validates to op validate and properly check for this
     TT_FATAL(
         num_blocks_total <= num_cores_x * num_cores_y,
         "Number of blocks exceeds number of cores: {} blocks > {} cores",
