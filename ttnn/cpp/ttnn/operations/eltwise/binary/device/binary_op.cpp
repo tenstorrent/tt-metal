@@ -382,12 +382,7 @@ operation::ProgramWithCallbacks Binary::create_program(
 
     std::vector<UnaryWithParam> activations;
     if (this->program_config.activations.has_value()) {
-        const auto activations_as_strings = this->program_config.activations.value();
-        std::transform(
-            activations_as_strings.begin(),
-            activations_as_strings.end(),
-            std::back_inserter(activations),
-            [](const std::string& activation) { return string_to_unary_with_param(activation); });
+        activations = this->program_config.activations.value();
     }
 
     auto program_type = get_program_type(*this, input_tensors);

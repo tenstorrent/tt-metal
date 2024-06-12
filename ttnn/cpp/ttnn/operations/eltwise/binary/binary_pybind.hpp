@@ -59,7 +59,7 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<std::vector<std::string>>& activations,
+               const std::optional<FusedActivations>& activations,
                const uint8_t& queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor_a, scalar, dtype, memory_config, output_tensor, activations);
             },
@@ -69,7 +69,7 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = std::nullopt,
+            py::arg("fused_activations") = std::nullopt,
             py::arg("queue_id") = 0},
 
         // tensor and tensor
@@ -80,7 +80,7 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<std::vector<std::string>>& activations,
+               const std::optional<FusedActivations>& activations,
                const uint8_t& queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor_a, input_tensor_b, dtype, memory_config, output_tensor, activations);
             },
@@ -90,7 +90,7 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = std::nullopt,
+            py::arg("fused_activations") = std::nullopt,
             py::arg("queue_id") = 0});
 }
 

@@ -43,10 +43,11 @@ enum class BinaryOpType {
     DIV_FAST
 };
 
+using FusedActivations = std::vector<tt::tt_metal::UnaryWithParam>;
 namespace utils {
 
 std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<DataType> in_dtype = std::nullopt, const std::optional<DataType> out_dtype = std::nullopt,
-                                    const std::optional<std::vector<tt::tt_metal::UnaryWithParam>> fused_activations = std::nullopt);
+                                    const std::optional<FusedActivations> fused_activations = std::nullopt);
 
 }  // namespace utils
 
@@ -55,7 +56,7 @@ constexpr uint8_t DefaultQueueId = 0;
 struct BinaryProgramConfig {
     BinaryOpType binary_op_type;
     bool in_place;
-    const std::optional<std::vector<std::string>> activations;
+    const std::optional<FusedActivations> activations;
     const MemoryConfig memory_config;
     const DataType dtype;
 

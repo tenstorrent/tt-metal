@@ -49,7 +49,7 @@ struct ExecuteBinary {
         const std::optional<const DataType> &output_dtype = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
-        std::optional<std::vector<std::string>> activations = std::nullopt) {
+        std::optional<FusedActivations> activations = std::nullopt) {
 
         if(output_dtype.has_value() && optional_output_tensor.has_value()){
             TT_FATAL(output_dtype.value() == optional_output_tensor.value().get_dtype(), "If both output dtype and output tensor provided dtype should match");
@@ -107,7 +107,7 @@ struct ExecuteBinary {
         const std::optional<const DataType> &output_dtype = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
-        std::optional<std::vector<std::string>> activations = std::nullopt)
+        std::optional<FusedActivations> activations = std::nullopt)
     {
         return execute_on_worker_thread(DefaultQueueId, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations);
     }
@@ -125,7 +125,7 @@ struct ExecuteBinary {
         const std::optional<const DataType> &dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
-        std::optional<std::vector<std::string>> activations = std::nullopt) {
+        std::optional<FusedActivations> activations = std::nullopt) {
 
         return ExecuteBinary::execute_on_worker_thread(DefaultQueueId, input_tensor_a, scalar, dtype, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, optional_output_tensor, activations);
     }
@@ -142,7 +142,7 @@ struct ExecuteBinary {
         const std::optional<const DataType> &dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
-        std::optional<std::vector<std::string>> activations = std::nullopt) {
+        std::optional<FusedActivations> activations = std::nullopt) {
         // Cast Float Scalar to a device tensor
         auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(TILE_HEIGHT * TILE_WIDTH));
         host_buffer[0] = scalar;

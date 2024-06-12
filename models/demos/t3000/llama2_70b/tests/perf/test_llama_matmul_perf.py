@@ -6,6 +6,7 @@ import torch
 import pytest
 from loguru import logger
 
+import ttnn
 import tt_lib
 import tt_lib as ttl
 

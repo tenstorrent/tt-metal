@@ -27,15 +27,13 @@ Tensor lossfunction(
     const LossReductionMode reduce_mode,
     const MemoryConfig& mem_config) {
     Tensor result(ref);
-    std::vector<std::string> fused_ops;
+    std::vector<UnaryWithParam> fused_ops;
     switch(loss_kind) {
         case LossFunction::MAE:
-            // BAD CHANGE. NEED TO REVISIT NOW
-            fused_ops.push_back("abs");
+            fused_ops.push_back(UnaryWithParam{UnaryOpType::ABS});
             break;
         case LossFunction::MSE:
-            // BAD CHANGE. NEED TO REVISIT NOW
-            fused_ops.push_back("square");
+            fused_ops.push_back(UnaryWithParam{UnaryOpType::SQUARE});
             break;
         default:
             TT_FATAL("unsupported loss function");
