@@ -1798,11 +1798,13 @@ Tensor _argmax(const Tensor& input_t, int64_t _dim, bool all, const MemoryConfig
                 } else if ((dim == (input_shape.rank() - 3)) || (dim == (input_shape.rank() - 4))) {
                     bool is_channel = (dim == (input_shape.rank() - 3));
                     Tensor max_val = max(input_a, dim, output_mem_config);
-                    int repeat = input_shape[dim];
+                    int repeat = input.get_shape()[dim];
                     std::vector<Tensor> combined_tensors;
                     for (int cid = 0; cid < repeat; cid++) combined_tensors.emplace_back(max_val);
                     max_val.deallocate();
                     Tensor concat_out = concat(combined_tensors, dim, output_mem_config);
+                    // Needed till `max` stops autoformatting output
+                    concat_out = ttnn::reshape(concat_out, input_a.get_shape());
                     Tensor cmp_results = ttnn::eq(input_a, concat_out, std::nullopt, output_mem_config);
                     concat_out.deallocate();
                     Tensor tindex = tt::numpy::index_channel<bfloat16>(input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config);
