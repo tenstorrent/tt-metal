@@ -47,6 +47,23 @@ CPMAddPackage(
   OPTIONS "INSTALL_GTEST OFF"
 )
 
+if($ENV{ENABLE_TRACY})
+    CPMAddPackage(
+    NAME capstone
+    GITHUB_REPOSITORY capstone-engine/capstone
+    GIT_TAG 5.0.1
+    VERSION 5.0.1
+    )
+
+    CPMAddPackage(
+    NAME tbb
+    GITHUB_REPOSITORY oneapi-src/oneTBB
+    GIT_TAG 2020
+    VERSION 2020
+    )
+endif()
+
+
 
 ############################################################################################################################
 # Setting build type flags
