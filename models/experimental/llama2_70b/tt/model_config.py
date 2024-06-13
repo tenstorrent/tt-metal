@@ -24,11 +24,22 @@ def pretty_print_model_config(model_config):
     return "\n".join(print_str)
 
 
-def get_model_config(llama_version="llama3", batch=32, seq_len=1, num_devices=8):
+def get_model_config(
+    llama_version="llama3", batch=32, seq_len=1, num_devices=8, max_batch_size=16, max_context_len=8192
+):
     llm_mode = "decode" if seq_len == 1 else "prefill"
     assert num_devices == 8
     assert batch in (1, 16, 32)
     assert seq_len in (1, 128, 2048, 8192)
+    assert max_context_len % 2048 == 0
+
+    # Supported values, TODO update for larger TT chips
+    if max_context_len > 2048:
+        assert max_batch_size == 16
+    else:
+        assert max_batch_size == 32
+    assert batch <= max_batch_size
+    assert seq_len <= max_context_len
 
     if llama_version == "llama2" and seq_len > 2048:
         raise Exception("Llama2 only supports a maximum sequence length of 2048")
@@ -326,7 +337,7 @@ def get_model_config(llama_version="llama3", batch=32, seq_len=1, num_devices=8)
         )
     model_config["LN_F_OUTPUT_MEMCFG"] = model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"]
 
-    # Llama2 Decoder Config
+    # Llama Decoder Config
     model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"] = model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"]
     model_config["LN_ATTN_PROGCFG"] = model_config["LN_F_PROGCFG"]
     model_config["LN_ATTN_OUTPUT_MEMCFG"] = model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
@@ -347,7 +358,7 @@ def get_model_config(llama_version="llama3", batch=32, seq_len=1, num_devices=8)
     model_config["LN_MLP_OUTPUT_MEMCFG"] = model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
     model_config["MLP_ADD_OUTPUT_MEMCFG"] = model_config["ATTN_ADD_OUTPUT_MEMCFG"]
 
-    # LLama2 Attention Module
+    # LLama Attention Module
     model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
         ttl.tensor.BufferType.L1,
@@ -389,7 +400,7 @@ def get_model_config(llama_version="llama3", batch=32, seq_len=1, num_devices=8)
         ),
     )
     if llm_mode == "prefill":
-        # Llama 2 Attention Module Prefill 2D Matmul
+        # Llama Attention Module Prefill 2D Matmul
         # Input shape is [1,1,seq_len,8192]
         # qkv_list shape is [8192,1280]
         cores_y = 4  # 8 if seq_len_tiles % 8 == 0 else 4
@@ -527,7 +538,7 @@ def get_model_config(llama_version="llama3", batch=32, seq_len=1, num_devices=8)
             ),
         )
     else:
-        q_chunk_size = 128 if seq_len == 128 else 128
+        q_chunk_size = 128
         k_chunk_size = 64 if seq_len == 128 else 256
 
         model_config["SDPA_PROGCFG"] = ttl.operations.primary.transformers.SDPAMultiCoreProgramConfig(
@@ -630,7 +641,7 @@ def get_model_config(llama_version="llama3", batch=32, seq_len=1, num_devices=8)
             mcast_in0=True,
         )
     else:
-        # Llama 2 MLP Module Prefill
+        # Llama MLP Module Prefill
         cores_y = 4  # 8 if seq_tiles % 8 == 0 else 4
         max_mm_seq_tiles = min(seq_len, model_config["MAX_MM_SEQ_LEN"]) // 32
         model_config["PADDED_FF1_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
