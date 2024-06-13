@@ -995,6 +995,15 @@ def ne(x, y, *args, **kwargs):
         return x != y
 
 
+def ne_(x, y, *args, **kwargs):
+    return x.ne_(y)
+
+
+def unary_ne_(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    return x.ne_(value)
+
+
 def unary_gt(x, *args, **kwargs):
     value = kwargs.pop("value")
     result = torch.gt(x, value)
