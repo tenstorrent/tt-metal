@@ -79,9 +79,7 @@ class WorkExecutor {
    public:
     LockFreeQueue<std::function<void()>> worker_queue;
 
-    WorkExecutor(int cpu_core, int device_id) : cpu_core_for_worker(cpu_core), managed_device_id(device_id) {
-        initialize();
-    }
+    WorkExecutor(int cpu_core, int device_id) : cpu_core_for_worker(cpu_core), managed_device_id(device_id) {}
 
     WorkExecutor(WorkExecutor&& other) {
         worker_state = std::move(other.worker_state);
