@@ -959,7 +959,7 @@ def test_sharded_binary(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    output_t = tnn.add(in0_t, in1_t, output_mem_config=output_mem_config, output_dtype=output_dtype)
+    output_t = ttnn.add(in0_t, in1_t, memory_config=output_mem_config, dtype=output_dtype)
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 + in1
