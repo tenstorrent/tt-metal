@@ -703,7 +703,7 @@ def conv2d(
             weights_dtype=conv_config.weights_dtype,
             conv_blocking_and_parallelization_config_override=block_and_parallel_config_override,
             compute_kernel_config=compute_kernel_config,
-            activation=conv_config.activation if conv_config.activation is not "" else None,
+            activation=conv_config.activation if conv_config.activation != "" else None,
             using_parameters_cache=weight_is_on_device,
             reader_patterns_cache=conv_op_cache["reader_patterns_cache"],
             deallocate_activation=conv_config.deallocate_activation,

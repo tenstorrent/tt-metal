@@ -313,10 +313,10 @@ class TtFalconAttentionPrefill(nn.Module):
 
         if attention_mask is not None:
             for i in range(self.num_devices):
-                attn_weights[i] = ttnn.experimental.tensor.add(
+                attn_weights[i] = ttnn.add(
                     attn_weights[i],
                     attention_mask[i],
-                    output_mem_config=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"],
+                    memory_config=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"],
                 )
         ###############
         ### SOFTMAX ###
@@ -833,10 +833,10 @@ class TtFalconAttentionDecode(nn.Module):
 
             if attention_mask is not None:
                 for i in range(self.num_devices):
-                    attn_weights[i] = ttnn.experimental.tensor.add(
+                    attn_weights[i] = ttnn.add(
                         attn_weights[i],
                         attention_mask[i],
-                        output_mem_config=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"],
+                        memory_config=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"],
                     )
             ###############
             ### SOFTMAX ###
