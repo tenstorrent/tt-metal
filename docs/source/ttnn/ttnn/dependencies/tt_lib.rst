@@ -425,7 +425,7 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.celu
 
-.. autofunction:: tt_lib.tensor.addalphaldexp
+.. autofunction:: tt_lib.tensor.addalpha
 
 .. autofunction:: tt_lib.tensor.bias_gelu_unary
 
