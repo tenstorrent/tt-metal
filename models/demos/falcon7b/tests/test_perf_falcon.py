@@ -560,10 +560,9 @@ class TestParametrized:
     ):
         if async_mode:
             if llm_mode == "decode" and not (kv_cache_len == 2047):
-                if not (model_config_str == "BFLOAT16-L1_SHARDED" and kv_cache_len == 1024):
-                    pytest.skip(
-                        f"Skipping {llm_mode} with {kv_cache_len} in async mode. Config is supported but provides redundant testing."
-                    )
+                pytest.skip(
+                    f"Skipping {llm_mode} with {kv_cache_len} in async mode. Config is supported but provides redundant testing."
+                )
         self.run_perf_wh_bare_metal(
             model_version,
             1,
@@ -586,15 +585,17 @@ class TestParametrized:
         "llm_mode, num_devices, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc, expected_inference_time, async_mode",
         (
             ("prefill", 4, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.97, 0.1, False),
-            ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.97, 0.18, False),  # Issue 7816 Inference time
+            ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.97, 0.18, False),
             ("prefill", 4, 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.98, 0.5, False),
             ("prefill", 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.98, 1.1, False),
+            ("decode", 4, 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.89, 0.94, 0.94, 0.09, False),
             ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.86, 0.90, 0.91, 0.09, False),
             ("decode", 4, 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.77, 0.69, 0.72, 0.1, False),
-            ("prefill", 4, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.97, 0.1, True),
+            ("prefill", 4, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.98, 0.99, 0.97, 0.11, True),  # Issue 9422
             ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.97, 0.18, True),
             ("prefill", 4, 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.98, 0.5, True),
             ("prefill", 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.98, 1.1, True),
+            ("decode", 4, 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.89, 0.94, 0.94, 0.09, True),
             ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.86, 0.90, 0.91, 0.09, True),
             ("decode", 4, 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.77, 0.69, 0.72, 0.09, True),
         ),
@@ -603,12 +604,14 @@ class TestParametrized:
             "prefill_seq256",
             "prefill_seq1024",
             "prefill_seq2048",
+            "decode_batch32_128",
             "decode_batch32_1024",
             "decode_batch32_2047",
             "prefill_seq128_async",
             "prefill_seq256_async",
             "prefill_seq1024_async",
             "prefill_seq2048_async",
+            "decode_batch32_128_async",
             "decode_batch32_1024_async",
             "decode_batch32_2047_async",
         ],
