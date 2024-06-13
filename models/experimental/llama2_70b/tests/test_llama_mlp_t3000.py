@@ -19,16 +19,39 @@ from models.experimental.llama2_70b.tt.llama_common import setup_llama_env, chec
     ((32, 1, 0.9995), (1, 128, 0.9996), (1, 2048, 0.9996), (1, 8192, 0.9996)),
     ids=("decode", "prefill_128", "prefill_2k", "prefill_8k"),
 )
+@pytest.mark.parametrize(
+    "max_batch_size, max_context_len",
+    (
+        # (32, 2048),
+        (16, 8192),
+    ),
+    ids=(
+        # "short_context",
+        "long_context",
+    ),
+)
 def test_LlamaMLP_inference_t3000(
     batch,
     seq_len,
     pcc,
     t3k_device_mesh,
+    max_batch_size,
+    max_context_len,
     llama_version,
     use_program_cache,
 ):
+    if batch > max_batch_size:
+        pytest.skip(f"Decode with {batch} users is not supported with large context")
+
+    if batch == 1 and seq_len > max_context_len:
+        pytest.skip(f"Prefill with {seq_len=} is not supported with short context")
+
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
-        llama_version=llama_version, batch=batch, seq_len=seq_len
+        llama_version=llama_version,
+        batch=batch,
+        seq_len=seq_len,
+        max_batch_size=max_batch_size,
+        max_context_len=max_context_len,
     )
 
     check_device_mesh(t3k_device_mesh, model_config)
