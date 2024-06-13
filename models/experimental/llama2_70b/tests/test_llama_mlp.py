@@ -5,10 +5,8 @@
 import pytest
 from loguru import logger
 import torch
-from torch import nn
-import tt_lib
 import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
 from models.experimental.llama2_70b.reference.llama.llama import Llama
 from models.experimental.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
@@ -37,6 +35,32 @@ class PytorchLlamaMLPModel(torch.nn.Module):
     def forward(self, x):
         result = self.mlp(x)
         return result
+
+
+def tt_llama_mlp_prepare_inputs(llama_mlp_model, x):
+    x_multichip = ttnn.from_torch(
+        x,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=llama_mlp_model.device_mesh,
+        mesh_mapper=ReplicateTensorToMesh(llama_mlp_model.device_mesh),
+    )
+
+    if llama_mlp_model.model_config["LLM_MODE"] == "decode":
+        x_multichip = ttnn.to_memory_config(
+            x_multichip,
+            ttnn.create_sharded_memory_config(
+                shape=(32, 8192 // 32),
+                core_grid=ttnn.CoreGrid(y=4, x=8),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            ),
+        )
+    elif llama_mlp_model.model_config["LLM_MODE"] == "prefill":
+        x_multichip = ttnn.to_memory_config(x_multichip, llama_mlp_model.model_config["DRAM_MEMCFG"])
+
+    return x_multichip
 
 
 def run_test_LlamaMLP_inference(
@@ -94,7 +118,7 @@ def run_test_LlamaMLP_inference(
         cache_path=cache_path,
     )
 
-    tt_mlp_input = tt_LlamaMLP_model.prepare_inputs(tt_inp)
+    tt_mlp_input = tt_llama_mlp_prepare_inputs(tt_LlamaMLP_model, tt_inp)
 
     tt_out = tt_LlamaMLP_model(tt_mlp_input)
     tt_out = ttnn.from_device(tt_out)

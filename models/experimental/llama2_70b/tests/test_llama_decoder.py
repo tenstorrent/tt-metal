@@ -18,6 +18,10 @@ from models.experimental.llama2_70b.tt.llama_common import (
     setup_llama_env,
     check_device_mesh,
     extract_pcc_from_log,
+    generate_rot_emb,
+    get_rotation_mat,
+    gather_cos_sin,
+    precompute_freqs,
     MAX_SEQ_LEN,
     MAX_SEQ_LEN_LLAMA3,
     BASE_URL,
@@ -30,7 +34,7 @@ from models.experimental.llama2_70b.tt.llama_common import (
     should_skip_model_load,
     check_kv_cache,
 )
-import gc
+from models.utility_functions import nearest_32
 
 
 class PytorchLlamaDecoderModel(torch.nn.Module):
@@ -95,6 +99,144 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
             mask,
         )
         return result
+
+
+def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
+    assert len(x.size()) == 3
+    batch, seq_len, hidden_size = x.shape
+
+    cache_name = lambda name: llama_decoder_model.cache_path / (
+        f"{'llama3_' if llama_decoder_model.llama3 else ''}{name}"
+    )
+
+    if llama_decoder_model.model_config["LLM_MODE"] == "prefill":
+        assert seq_len % 128 == 0 and seq_len > 0, "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
+        assert batch == 1, "prefill mode only supports batch size 1"
+        x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
+
+        xs = ttnn.as_tensor(
+            x,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            mesh_mapper=ttnn.ShardTensorToMesh(llama_decoder_model.device_mesh, dim=3),
+            device=llama_decoder_model.device_mesh,
+        )
+        xs = ttnn.to_device(xs, llama_decoder_model.device_mesh)
+
+        cos, sin = precompute_freqs(
+            llama_decoder_model.head_dim, llama_decoder_model.max_seq_len * 2, llama_decoder_model.rope_theta
+        )
+        cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
+        assert cos_gathered.size() == (1, 1, seq_len, llama_decoder_model.head_dim)
+        assert sin_gathered.size() == (1, 1, seq_len, llama_decoder_model.head_dim)
+
+        cos_gathereds = ttnn.as_tensor(
+            cos_gathered,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
+            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            device=llama_decoder_model.device_mesh,
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.device_mesh),
+        )
+        sin_gathereds = ttnn.as_tensor(
+            sin_gathered,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
+            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            device=llama_decoder_model.device_mesh,
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.device_mesh),
+        )
+        cos_gathereds = ttnn.to_device(cos_gathereds, llama_decoder_model.device_mesh)
+        sin_gathereds = ttnn.to_device(sin_gathereds, llama_decoder_model.device_mesh)
+        rot_mats = [cos_gathereds, sin_gathereds]
+
+        attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
+        attn_mask = torch.triu(attn_mask, diagonal=1)
+        attn_mask = attn_mask.expand(batch, 1, -1, -1)
+        attn_masks = ttnn.as_tensor(
+            attn_mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.device_mesh),
+            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            device=llama_decoder_model.device_mesh,
+        )
+        attn_masks = ttnn.to_device(attn_masks, llama_decoder_model.device_mesh)
+
+    elif llama_decoder_model.model_config["LLM_MODE"] == "decode":
+        assert seq_len == 1, "Only supporting decode mode"
+        x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
+
+        xs = ttnn.as_tensor(
+            x,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            mesh_mapper=ttnn.ShardTensorToMesh(llama_decoder_model.device_mesh, dim=3),
+            device=llama_decoder_model.device_mesh,
+        )
+        xs = ttnn.to_device(xs, llama_decoder_model.device_mesh)
+        xs = tt_lib.tensor.interleaved_to_sharded(
+            xs, sharded_mem_config=llama_decoder_model.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
+        )
+
+        rot_emb = generate_rot_emb(
+            llama_decoder_model.head_dim, llama_decoder_model.max_seq_len * 2, llama_decoder_model.rope_theta
+        )
+        rot_mat = get_rotation_mat(rot_emb, start_pos, seq_len, batch=batch)
+        assert rot_mat.size() == (1, batch, llama_decoder_model.head_dim, llama_decoder_model.head_dim)
+        rot_mats = ttnn.as_tensor(
+            rot_mat,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.device_mesh),
+            device=llama_decoder_model.device_mesh,
+        )
+        rot_mats = ttnn.to_device(rot_mats, llama_decoder_model.device_mesh)
+
+        rot_mats = tt_lib.tensor.interleaved_to_sharded(
+            rot_mats, sharded_mem_config=llama_decoder_model.model_config["ROT_MAT_MM_IN1_MEMCFG"]
+        )
+
+        padded_layer_past_len = nearest_32(start_pos + 1)
+        attn_mask_shape = (seq_len, 1, llama_decoder_model.padded_local_heads, padded_layer_past_len)
+        attn_mask = torch.zeros(*attn_mask_shape)
+        attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
+
+        attn_masks = ttnn.as_tensor(
+            attn_mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.device_mesh),
+            device=llama_decoder_model.device_mesh,
+        )
+        attn_masks = ttnn.to_device(attn_masks, llama_decoder_model.device_mesh)
+
+        repeat_shape = (1, batch, 1, 1)
+        attn_masks = tt_lib.tensor.repeat(
+            attn_masks, repeat_shape, output_mem_config=llama_decoder_model.model_config["DRAM_MEMCFG"]
+        )
+        # Put attn_mask on the device with the sharded config
+        attention_mask_memconfig = llama_decoder_model.model_config["ATTN_MASK_MEMCFG"]
+        if attention_mask_memconfig.is_sharded():
+            attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+            attn_mask_shard_shape[-1] = padded_layer_past_len
+            attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
+
+            attn_masks = tt_lib.tensor.interleaved_to_sharded(attn_masks, sharded_mem_config=attention_mask_memconfig)
+
+    return (
+        xs,
+        start_pos,
+        rot_mats,
+        attn_masks,
+    )
 
 
 def run_test_LlamaDecoder_inference(
@@ -184,7 +326,9 @@ def run_test_LlamaDecoder_inference(
         )
 
         # TT hardware execution -------------------------------------------------------------
-        x_input, start_pos, rot_mat, attn_mask = tt_LlamaDecoder_model.prepare_inputs(tt_input, start_pos)
+        x_input, start_pos, rot_mat, attn_mask = tt_llama_decoder_prepare_inputs(
+            tt_LlamaDecoder_model, tt_input, start_pos
+        )
 
         tt_out = tt_LlamaDecoder_model(
             x_input,
