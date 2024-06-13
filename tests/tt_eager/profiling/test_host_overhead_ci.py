@@ -7,8 +7,10 @@ from loguru import logger
 import csv
 import os
 import time
+import pytest
 
 
+@pytest.mark.timeout(10000)
 def test_host_overhead_ci():
     profile_output_folder = "host_overhead_profile/"
     profile_output_filename = "final.csv"
