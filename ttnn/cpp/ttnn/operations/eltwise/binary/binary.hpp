@@ -13,6 +13,20 @@ namespace ttnn {
 
 namespace operations::binary {
 
+namespace utils {
+
+constexpr bool is_associative(BinaryOpType op) {
+    return op == BinaryOpType::ADD ||
+           op == BinaryOpType::MUL ||
+           op == BinaryOpType::EQ ||
+           op == BinaryOpType::NE ||
+           op == BinaryOpType::LOGICAL_AND ||
+           op == BinaryOpType::LOGICAL_OR ||
+           op == BinaryOpType::LOGADDEXP ||
+           op == BinaryOpType::LOGADDEXP2;
+}
+}
+
 template <BinaryOpType binary_op_type, bool in_place>
 struct ExecuteBinary {
     static inline const std::array<TensorSchema, 2> input_tensor_schemas() {
@@ -56,11 +70,13 @@ struct ExecuteBinary {
         }
 
         auto &&[input_tensor_a, input_tensor_b] = [](const auto &input_tensor_a_arg, const auto &input_tensor_b_arg) {
-            const auto input_shape_a = input_tensor_a_arg.get_shape();
-            const auto input_shape_b = input_tensor_b_arg.get_shape();
-            // Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
-            if (tt::tt_metal::compute_volume(input_shape_a) < tt::tt_metal::compute_volume(input_shape_b)) {
-                return std::make_tuple(input_tensor_b_arg, input_tensor_a_arg);
+            if(utils::is_associative(binary_op_type)) {
+                const auto input_shape_a = input_tensor_a_arg.get_shape();
+                const auto input_shape_b = input_tensor_b_arg.get_shape();
+                // Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
+                if (tt::tt_metal::compute_volume(input_shape_a) < tt::tt_metal::compute_volume(input_shape_b)) {
+                    return std::make_tuple(input_tensor_b_arg, input_tensor_a_arg);
+                }
             }
             return std::make_tuple(input_tensor_a_arg, input_tensor_b_arg);
         }(input_tensor_a_arg, input_tensor_b_arg);
@@ -68,15 +84,24 @@ struct ExecuteBinary {
         auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
 
         // TODO(arakhmati): #7731 - remove this!
-        auto input_shape_a = input_tensor_a.get_shape();
-        auto input_shape_b = input_tensor_b.get_shape();
-        if (input_shape_a.rank() == 4 and input_shape_b.rank() == 4 and input_shape_a[0] > input_shape_b[0] and
-            input_shape_a[-1] == input_shape_b[-1] and input_shape_a[-2] == input_shape_b[-2] and
-            input_shape_a[-3] == input_shape_b[-3]) {
-            tt::log_warning(tt::LogOp, "Using repeat op to broadcast batch dim");
-            Shape repeats({input_shape_a[0], 1, 1, 1});
-            input_tensor_b = ttnn::repeat(input_tensor_b, repeats, output_memory_config);
-        }
+        auto repeat_smaller = [&output_memory_config](const auto& first, auto& second){
+            const auto first_shape = first.get_shape();
+            const auto second_shape = second.get_shape();
+
+            // repeats second if it is smaller
+            if (first_shape.rank() == 4 and second_shape.rank() == 4 and
+                first_shape[0] > second_shape[0] and
+                first_shape[-1] == second_shape[-1] and
+                first_shape[-2] == second_shape[-2] and
+                first_shape[-3] == second_shape[-3]) {
+
+                tt::log_warning(tt::LogOp, "Using repeat op to broadcast batch dim");
+                Shape repeats({first_shape[0], 1, 1, 1});
+                second = ttnn::repeat(second, repeats, output_memory_config);
+            }
+        };
+        repeat_smaller(input_tensor_a, input_tensor_b);
+        repeat_smaller(input_tensor_b, input_tensor_a);
 
         DataType dtype = output_dtype.value_or(input_tensor_a.get_dtype());
         if(optional_output_tensor.has_value()) {
