@@ -20,6 +20,7 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
         case DataType::BFLOAT4_B: os << "bfloat4_b"; break;
         case DataType::BFLOAT16: os << "bfloat16"; break;
         case DataType::FLOAT32: os << "float32"; break;
+        case DataType::UINT8: os << "uint8"; break;
         case DataType::UINT16: os << "uint16"; break;
         case DataType::UINT32: os << "uint32"; break;
         case DataType::INT32: os << "int32"; break;
@@ -35,6 +36,7 @@ uint32_t element_size_bytes(DataType dtype) {
         case DataType::INT32: return sizeof(int32_t);
         case DataType::UINT32: return sizeof(uint32_t);
         case DataType::UINT16: return sizeof(uint16_t);
+        case DataType::UINT8: return sizeof(uint8_t);
         case DataType::BFLOAT8_B: return sizeof(std::byte);
         case DataType::BFLOAT4_B: return sizeof(std::byte);
         default: TT_THROW("Unsupported data type");
@@ -63,7 +65,8 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
                 } break;
                 case DataType::UINT32:
                 case DataType::INT32:
-                case DataType::UINT16: {
+                case DataType::UINT16:
+                case DataType::UINT8:{
                     uint32_t size_of_element = element_size_bytes(dtype);
                     page_size = constants::TILE_HW * size_of_element;
                 } break;
@@ -233,9 +236,9 @@ void validate_on_device_dtype_and_layout(Device* device, const Shape& shape, Dat
     auto supported_dtype = [&dtype]() {
         TT_ASSERT(
             (dtype == DataType::UINT32 || dtype == DataType::INT32 || dtype == DataType::FLOAT32 ||
-             dtype == DataType::UINT16 || dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B ||
-             dtype == DataType::BFLOAT4_B),
-            "Only UINT32, INT32, FLOAT32, UINT16, BFLOAT16, BFLOAT8_B, or BFLOAT4_B dtypes are supported on device!");
+             dtype == DataType::UINT16 || dtype == DataType::UINT8 || dtype == DataType::BFLOAT16 ||
+             dtype == DataType::BFLOAT8_B ||dtype == DataType::BFLOAT4_B),
+            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, BFLOAT16, BFLOAT8_B, or BFLOAT4_B dtypes are supported on device!");
     };
     auto supported_layout = [&shape, &dtype, &layout]() {
         switch (dtype) {
@@ -249,6 +252,14 @@ void validate_on_device_dtype_and_layout(Device* device, const Shape& shape, Dat
                         shape[-1] % 2 == 0,
                         "For ROW_MAJOR layout tensors with dtype BFLOAT16 or UINT16, tensor width must be divisible by "
                         "2 since data is packed as uint32_t when creating buffers on device!");
+                }
+                break;
+            case DataType::UINT8:
+                if (layout == Layout::ROW_MAJOR) {
+                    TT_ASSERT(
+                        shape[-1] % 2 == 0,
+                        "For ROW_MAJOR layout tensors with dtype UINT8, tensor width must be divisible by "
+                        "4 since data is packed as uint32_t when creating buffers on device!");
                 }
                 break;
             case DataType::BFLOAT8_B:
