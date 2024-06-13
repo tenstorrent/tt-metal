@@ -49,7 +49,7 @@ def should_skip_model_load():
     return skip_model_load
 
 
-def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8):
+def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, max_batch_size=16, max_context_len=8192):
     if os.getenv("CI") == "true":
         os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
 
@@ -77,7 +77,14 @@ def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8):
     logger.info(f"Tokenizer file: {tokenizer_path}")
     logger.info(f"Cache directory: {cache_path}")
 
-    model_config = get_model_config(llama_version=llama_version, batch=batch, seq_len=seq_len, num_devices=n_devices)
+    model_config = get_model_config(
+        llama_version=llama_version,
+        batch=batch,
+        seq_len=seq_len,
+        num_devices=n_devices,
+        max_batch_size=max_batch_size,
+        max_context_len=max_context_len,
+    )
 
     return model_config, ckpt_dir, tokenizer_path, cache_path
 
