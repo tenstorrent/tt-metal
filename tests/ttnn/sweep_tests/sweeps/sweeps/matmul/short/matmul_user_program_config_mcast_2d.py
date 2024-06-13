@@ -26,7 +26,7 @@ parameters = {
             (5 * 128, 7 * 64, 7 * 96),
             ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(7, 5),
-                in0_block_w=1,
+                in0_block_w=1,  # Modified by in0_block_w test parameter
                 out_subblock_h=1,
                 out_subblock_w=1,
                 per_core_M=4,
@@ -45,13 +45,37 @@ parameters = {
                 ),
             ),
         ),
+        (
+            (1,),
+            (5 * 128, 7 * 64, 7 * 96),
+            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(5, 7),
+                in0_block_w=1,  # Modified by in0_block_w test parameter
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=4,
+                per_core_N=3,
+                transpose_mcast=True,
+                fused_activation=None,
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 6))}),
+                    (128, 64),
+                    ttnn.ShardOrientation.COL_MAJOR,
+                    False,
+                ),
+            ),
+        ),
         # Matmul 2D mcast in0: in0 grid < output grid along tensor width
         (
             (1,),
             (5 * 128, 4 * 64, 7 * 96),
             ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(7, 5),
-                in0_block_w=1,
+                in0_block_w=1,  # Modified by in0_block_w test parameter
                 out_subblock_h=1,
                 out_subblock_w=1,
                 per_core_M=4,
@@ -70,6 +94,30 @@ parameters = {
                 ),
             ),
         ),
+        (
+            (1,),
+            (5 * 128, 4 * 64, 7 * 96),
+            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(5, 7),
+                in0_block_w=1,  # Modified by in0_block_w test parameter
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=4,
+                per_core_N=3,
+                transpose_mcast=True,
+                fused_activation=None,
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
+                    (128, 64),
+                    ttnn.ShardOrientation.COL_MAJOR,
+                    False,
+                ),
+            ),
+        ),
         # Matmul 2D mcast in0: in0 grid > output grid along tensor width
         (
             (1,),
@@ -81,7 +129,7 @@ parameters = {
                 out_subblock_w=1,
                 per_core_M=4,
                 per_core_N=3,
-                transpose_mcast=False,  # Modified by transpose_mcast test parameter
+                transpose_mcast=False,
                 fused_activation=None,
             ),
             ttnn.MemoryConfig(
@@ -95,13 +143,36 @@ parameters = {
                 ),
             ),
         ),
+        (
+            (1,),
+            (5 * 128, 7 * 64, 4 * 96),
+            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(5, 7),
+                in0_block_w=1,  # Modified by in0_block_w test parameter
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=4,
+                per_core_N=3,
+                transpose_mcast=True,
+                fused_activation=None,
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 6))}),
+                    (128, 64),
+                    ttnn.ShardOrientation.COL_MAJOR,
+                    False,
+                ),
+            ),
+        ),
     ],
     "batch_matrix_multiply": [False],
     "in0_block_w": [
         1,
         2,
     ],  # Used to override in0_block_w in program config (1: loop along in0 shard width; 2: no looping along in0 shard width)
-    "transpose_mcast": [False, True],  # Used to override transpose_mcast in program config
     "input_a_memory_config": [TensorMemoryConfigs.CUSTOM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
@@ -125,7 +196,6 @@ def run(
     matmul_specs,
     batch_matrix_multiply,
     in0_block_w,
-    transpose_mcast,
     input_a_memory_config,
     input_b_memory_config,
     output_memory_config,
@@ -144,20 +214,13 @@ def run(
         input_a_custom_memory_config,
     ) = matmul_specs
 
-    program_config.in0_block_w = in0_block_w
-    program_config.transpose_mcast = transpose_mcast
-    if program_config.transpose_mcast:
-        input_a_shard_grid_end = input_a_custom_memory_config.shard_spec.grid.bounding_box().end
-        input_a_custom_memory_config.shard_spec.grid = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(input_a_shard_grid_end.y, input_a_shard_grid_end.x))}
-        )
-        input_a_custom_memory_config.shard_spec.orientation = ttnn.ShardOrientation.COL_MAJOR
+    # TODO: When running with python run_sweeps, same object for variable is used for successive permutations.
+    # When modifying values for transpose_mcast=True, it causes subsequent tests to have wrong initial configs.
+    # When running with pytest test_sweeps, it's a new object created for each variable every time, so there's no issues.
+    # This means these configs are only safe to write and not read... Workaround: Manually specify matmul_specs for transpose_mcast=True.
 
-        compute_with_storage_grid_size = program_config.compute_with_storage_grid_size
-        program_config.compute_with_storage_grid_size = (
-            compute_with_storage_grid_size.y,
-            compute_with_storage_grid_size.x,
-        )
+    # Override program_config.in0_block_w with value from in0_block_w (this is safe to do)
+    program_config.in0_block_w = in0_block_w
 
     if input_a_memory_config == TensorMemoryConfigs.CUSTOM_MEMORY_CONFIG:
         input_a_memory_config = input_a_custom_memory_config
