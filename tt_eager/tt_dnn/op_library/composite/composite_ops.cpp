@@ -905,6 +905,8 @@ Tensor div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, con
 }
 
 Tensor _trunc(const Tensor& input, const MemoryConfig& output_mem_config) {
+    auto arch = input.device()->arch();
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     Tensor floor_res = tt::tt_metal::floor(input, output_mem_config);
     Tensor trunc_res = where(ttnn::ne(input, floor_res), add1(floor_res), floor_res, output_mem_config);
     Tensor result = where(gtz(input, output_mem_config), floor_res, trunc_res, output_mem_config);
@@ -921,6 +923,8 @@ Tensor is_odd(const Tensor& input, const MemoryConfig& output_mem_config) {
 }
 
 Tensor _round(const Tensor& input, int64_t decimals, const MemoryConfig& output_mem_config) {
+    auto arch = input.device()->arch();
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     Tensor floor_res = tt::tt_metal::floor(input, output_mem_config);
     if (decimals != 0) { //TODO: For decimal value!=0
         Tensor power_10 =
@@ -950,6 +954,8 @@ Tensor round(const Tensor& input, int64_t decimals, const MemoryConfig& output_m
 }
 
 Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+    auto arch = input_a.device()->arch();
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     Tensor temp = div(input_a, input_b, true);
     // floor(nan, inf, -inf) = nan, inf, -inf
     return where(
@@ -976,7 +982,7 @@ Tensor _floor_div_overload(const Tensor& input, float value, const MemoryConfig&
             output_mem_config);
     }
     Tensor temp = div_unary(input, value);
-    return temp;
+    return floor(temp);
 }
 Tensor floor_div(const Tensor& input_a, float value, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _floor_div_overload)(input_a, value, output_mem_config);
