@@ -899,10 +899,6 @@ all_binary_ops = [
         "name": "tt_lib.tensor.binary_ge_bw",
     },
     {
-        "op": tt_lib.tensor.binary_eq_bw,
-        "name": "tt_lib.tensor.binary_eq_bw",
-    },
-    {
         "op": tt_lib.tensor.binary_gt_bw,
         "name": "tt_lib.tensor.binary_gt_bw",
     },
@@ -2680,6 +2676,10 @@ all_ternary_ops = [
     {
         "op": tt_lib.tensor.binary_assign_bw,
         "name": "tt_lib.tensor.binary_assign_bw",
+    },
+    {
+        "op": tt_lib.tensor.binary_eq_bw,
+        "name": "tt_lib.tensor.binary_eq_bw",
     },
     {
         "op": tt_lib.tensor.div_bw,
