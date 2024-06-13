@@ -39,7 +39,7 @@ run_perf_models_llm_javelin() {
         env pytest models/demos/mamba/tests -m $test_marker
     fi
 
-    env pytest models/demos/wormhole/mistral7b/tests -m $test_marker
+    env  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mistral7b/tests -m $test_marker
 
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
