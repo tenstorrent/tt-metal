@@ -1690,7 +1690,7 @@ def eltwise_mul_unary(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.mul_unary(t0, scalar, memory_config=output_mem_config)
+    t1 = ttl.tensor.mul_unary(t0, scalar, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
