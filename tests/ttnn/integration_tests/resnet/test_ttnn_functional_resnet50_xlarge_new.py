@@ -21,7 +21,8 @@ from models.utility_functions import (
     enable_memory_reports,
 )
 
-from models.experimental.resnet.tt.ttnn_functional_resnet50_xlarge_new_conv_api import resnet50
+# from models.experimental.resnet.tt.ttnn_functional_resnet50_xlarge_new_conv_api import resnet50
+from models.experimental.resnet.tt.ttnn_functional_resnet50_xlarge_new_conv_api_24 import resnet50
 
 
 def preprocess_conv_parameter(parameter, *, dtype):
@@ -270,8 +271,8 @@ def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
     test_infra.preprocess_torch_input()
     # First run configures convs JIT
     test_infra.run()
-    # # Optimized run
-    test_infra.run()
-    # # More optimized run with caching
-    test_infra.run()
-    test_infra.validate()
+    # # # Optimized run
+    # test_infra.run()
+    # # # More optimized run with caching
+    # test_infra.run()
+    # test_infra.validate()
