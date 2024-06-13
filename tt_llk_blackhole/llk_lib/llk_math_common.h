@@ -20,6 +20,10 @@ inline void _llk_math_hw_configure() {
     //Following bits are needed for enabling stride of 16
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_remap_addrs_RMW>(untilize_en);
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_swizzle_32b_RMW>(untilize_en);
+    
+    // Legacy mode for ZEROACC 
+    cfg_reg_rmw_tensix<DEST_ACCESS_CFG_zeroacc_absolute_tile_mode_RMW>(1);
+
 }
 
 template <DstSync Dst>
