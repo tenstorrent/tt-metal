@@ -198,8 +198,11 @@ def encoder_layer(config, hidden_states, *, parameters):
     return hidden_states
 
 
-def encoder(config, inputs_embeds, *, parameters):
-    hidden_states = inputs_embeds + parameters.embed_positions.weight
+def encoder(config, inputs_embeds, *, parameters, device):
+    weights = ttnn.to_torch(parameters.embed_positions.weight)
+    inputs_embeds = ttnn.to_torch(inputs_embeds)
+    hidden_states = torch.add(inputs_embeds, weights)
+    hidden_states = ttnn.from_torch(hidden_states, device=device, layout=ttnn.TILE_LAYOUT)
     hidden_states = dropout(hidden_states, p=0, training=False)
 
     for encoder_layer_parameter in parameters.layers:
@@ -399,8 +402,8 @@ def preprocess_inputs(
     return input_embeds, decoder_hidden_states, attention_mask
 
 
-def whisper(config, encoder_hidden_states, decoder_hidden_states, decoder_attention_mask, *, parameters):
-    encoder_hidden_states = encoder(config, encoder_hidden_states, parameters=parameters.encoder)
+def whisper(config, encoder_hidden_states, decoder_hidden_states, decoder_attention_mask, *, parameters, device):
+    encoder_hidden_states = encoder(config, encoder_hidden_states, parameters=parameters.encoder, device=device)
     last_hidden_state = decoder(
         config,
         decoder_hidden_states,
@@ -409,6 +412,25 @@ def whisper(config, encoder_hidden_states, decoder_hidden_states, decoder_attent
         parameters=parameters.decoder,
     )
     return last_hidden_state
+
+
+def whisper_for_conditional_generation(
+    config, input_embeds, decoder_hidden_states, decoder_attention_mask, *, parameters, device, ttnn_linear_weight
+):
+    output = whisper(
+        config,
+        input_embeds,
+        decoder_hidden_states,
+        decoder_attention_mask=decoder_attention_mask,
+        parameters=parameters,
+        device=device,
+    )
+    ttnn_output = ttnn.matmul(
+        output,
+        ttnn_linear_weight,
+        dtype=ttnn.bfloat16,
+    )
+    return ttnn_output
 
 
 def custom_preprocessor(torch_model, name):
