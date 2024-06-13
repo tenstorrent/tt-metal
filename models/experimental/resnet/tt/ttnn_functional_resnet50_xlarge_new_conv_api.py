@@ -516,13 +516,12 @@ class resnet50:
         ## copy input to device sharded directly
         # x = ttnn.to_device(input_tensor, device=self.device, memory_config=self.conv1.conv.input_sharded_memory_config)
         conv_op_cache = {}
+        act_block_h_override = 0
         if is_wormhole_b0():
             if batch_size == 16:
                 act_block_h_override = 1568
             elif batch_size == 20:
                 act_block_h_override = 640
-        else:
-            act_block_h_override = 0
 
         x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
             input_tensor=input_tensor,
