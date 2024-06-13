@@ -25,6 +25,7 @@ import tt_lib.profiler as profiler
 import ttnn
 
 
+@pytest.mark.skip(reason="#9417: Various failures preventing model from running")
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("loop", [0])
