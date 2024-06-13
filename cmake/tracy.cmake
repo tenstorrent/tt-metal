@@ -9,6 +9,7 @@ set_target_properties(TracyClient PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib"
     ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib"
     POSITION_INDEPENDENT_CODE ON    # this is equivalent to adding -fPIC
+    ADDITIONAL_CLEAN_FILES "${TRACY_HOME}/capture/build/unix/capture-release;${TRACY_HOME}/csvexport/build/unix/csvexport-release"
     OUTPUT_NAME "tracy"
 )
 
