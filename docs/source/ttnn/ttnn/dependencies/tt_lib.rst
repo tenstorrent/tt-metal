@@ -409,7 +409,7 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.left_shift
 
-.. autofunction:: tt_lib.tensor.remainder
+.. autofunction:: tt_lib.tensor.unary_remainder
 
 .. autofunction:: tt_lib.tensor.atan
 

@@ -539,7 +539,7 @@ def left_shift(x, *args, **kwargs):
     return result
 
 
-def remainder(x, *args, **kwargs):
+def unary_remainder(x, *args, **kwargs):
     value = kwargs.pop("value")
     result = torch.remainder(x, value)
     return result

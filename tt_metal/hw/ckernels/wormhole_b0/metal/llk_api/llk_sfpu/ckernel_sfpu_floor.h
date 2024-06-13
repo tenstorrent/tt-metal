@@ -21,7 +21,7 @@ inline void calculate_floor()
     {
         vFloat result = dst_reg[0];
         vFloat v = result;
-        vInt tmp = float_to_int16(result);
+        vInt tmp = float_to_int16(result); //TODO: Replace float_to_int16 to float_to_int32 once it is available
         result= int32_to_float(tmp);
         v_if (result > v){
             result = result - 1;

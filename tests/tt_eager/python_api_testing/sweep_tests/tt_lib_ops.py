@@ -1242,7 +1242,7 @@ def eltwise_left_shift(
 
 
 @setup_host_and_device
-def eltwise_remainder(
+def eltwise_unary_remainder(
     x,
     *args,
     value,
@@ -1254,7 +1254,7 @@ def eltwise_remainder(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.remainder(t0, value, output_mem_config=output_mem_config)
+    t1 = ttl.tensor.unary_remainder(t0, value, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
