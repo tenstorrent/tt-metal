@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-
+import ttl
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -209,7 +209,9 @@ def test_add_dram_and_l1_tensor(device, shape_a, shape_b):
 
 
 @pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
-@pytest.mark.parametrize("activations", [None, ["relu"]])
+@pytest.mark.parametrize(
+    "activations", [None, [ttl.tensor.FusibleActivationWithParam(ttl.tensor.FusibleActivation.RELU)]]
+)
 def test_add_and_apply_activations(device, shape, activations):
     torch.manual_seed(0)
 

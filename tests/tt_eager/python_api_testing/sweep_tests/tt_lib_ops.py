@@ -2504,34 +2504,56 @@ def make_binary_op(ttl_tensor_binop):
     return binary_op
 
 
-eltwise_add = make_binary_op(ttnn.add)
-eltwise_sub = make_binary_op(ttnn.sub)
-eltwise_mul = make_binary_op(ttnn.mul)
-eltwise_squared_difference = make_binary_op(ttnn.squared_difference)
-eltwise_hypot = make_binary_op(ttnn.hypot)
-eltwise_scatter = make_binary_op(ttl.tensor.scatter)
-eltwise_atan2 = make_binary_op(ttnn.atan2)
-eltwise_min = make_binary_op(ttnn.min)
-eltwise_max = make_binary_op(ttnn.max)
-eltwise_ne = make_binary_op(ttnn.ne)
-eltwise_eq = make_binary_op(ttnn.eq)
-eltwise_gt = make_binary_op(ttnn.gt)
-eltwise_lt = make_binary_op(ttnn.lt)
-eltwise_gte = make_binary_op(ttnn.ge)
-eltwise_lte = make_binary_op(ttnn.le)
-eltwise_xlogy = make_binary_op(ttnn.xlogy)
-eltwise_ldexp = make_binary_op(ttnn.ldexp)
-eltwise_logaddexp = make_binary_op(ttnn.logaddexp)
-eltwise_logaddexp2 = make_binary_op(ttnn.logaddexp2)
-eltwise_logical_xor = make_binary_op(ttnn.logical_xor)
-eltwise_logical_and = make_binary_op(ttnn.logical_and)
-eltwise_logical_or = make_binary_op(ttnn.logical_or)
-eltwise_bias_gelu = make_binary_op(ttnn.bias_gelu)
+def make_binary_op_ttnn(ttnn_tensor_binop):
+    @setup_host_and_device
+    def binary_op(
+        x,
+        y,
+        *args,
+        device,
+        dtype,
+        layout,
+        input_mem_config,
+        output_mem_config,
+        **kwargs,
+    ):
+        t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+        t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+        t2 = ttnn_tensor_binop(t0, t1, memory_config=output_mem_config)
+
+        return tt2torch_tensor(t2)
+
+    return binary_op
+
+
+eltwise_add = make_binary_op_ttnn(ttnn.add)
+eltwise_sub = make_binary_op_ttnn(ttnn.sub)
+eltwise_mul = make_binary_op_ttnn(ttnn.mul)
+eltwise_squared_difference = make_binary_op_ttnn(ttnn.squared_difference)
+eltwise_hypot = make_binary_op_ttnn(ttnn.hypot)
+eltwise_atan2 = make_binary_op_ttnn(ttnn.atan2)
+eltwise_min = make_binary_op_ttnn(ttnn.min)
+eltwise_max = make_binary_op_ttnn(ttnn.max)
+eltwise_ne = make_binary_op_ttnn(ttnn.ne)
+eltwise_eq = make_binary_op_ttnn(ttnn.eq)
+eltwise_gt = make_binary_op_ttnn(ttnn.gt)
+eltwise_lt = make_binary_op_ttnn(ttnn.lt)
+eltwise_gte = make_binary_op_ttnn(ttnn.ge)
+eltwise_lte = make_binary_op_ttnn(ttnn.le)
+eltwise_xlogy = make_binary_op_ttnn(ttnn.xlogy)
+eltwise_ldexp = make_binary_op_ttnn(ttnn.ldexp)
+eltwise_logaddexp = make_binary_op_ttnn(ttnn.logaddexp)
+eltwise_logaddexp2 = make_binary_op_ttnn(ttnn.logaddexp2)
+eltwise_logical_xor = make_binary_op_ttnn(ttnn.logical_xor)
+eltwise_logical_and = make_binary_op_ttnn(ttnn.logical_and)
+eltwise_logical_or = make_binary_op_ttnn(ttnn.logical_or)
+eltwise_bias_gelu = make_binary_op_ttnn(ttnn.bias_gelu)
 
 matmul = make_binary_op(ttl.tensor.matmul)
 outer = make_binary_op(ttl.tensor.outer)
 bmm = make_binary_op(ttl.tensor.bmm)
 
+eltwise_scatter = make_binary_op(ttl.tensor.scatter)
 eltwise_nextafter = make_binary_op(ttl.tensor.nextafter)
 eltwise_isfinite = make_unary_op(ttl.tensor.isfinite)
 eltwise_isinf = make_unary_op(ttl.tensor.isinf)

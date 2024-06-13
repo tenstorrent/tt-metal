@@ -66,7 +66,7 @@ def test_bw_binary_eq_opt_output(input_shapes, device, mem_configs, out_dtype):
 
     tt_lib.tensor.typecast(out_tensor, out_dtype, output_mem_config=mem_cfg)
 
-    ttnn.eq(cq_id, input_tensor, other_tensor, memory_config=mem_cfg, output_tensor=out_tensor)
+    ttnn.eq(input_tensor, other_tensor, memory_config=mem_cfg, output_tensor=out_tensor, queue_id=cq_id)
 
     golden_tensor = torch.eq(in_data, other_data)
     comp_pass = compare_pcc([out_tensor], [golden_tensor])

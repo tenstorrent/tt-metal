@@ -878,9 +878,7 @@ def test_partial_sharded_op_binary(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        sliced_tensor = ttnn.add(
-            in0_t_slice, in1_t_slice, output_mem_config=output_mem_config, output_dtype=output_dtype
-        )
+        sliced_tensor = ttnn.add(in0_t_slice, in1_t_slice, memory_config=output_mem_config, dtype=output_dtype)
         ttl.tensor.sharded_to_interleaved_partial(
             sliced_tensor,
             out_tt_tensor,
