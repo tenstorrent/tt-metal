@@ -1605,7 +1605,7 @@ def eltwise_gt(
     return ttnn_tensor_to_torch(t2)
 
 
-def eltwise_gte(
+def eltwise_ge(
     x,
     y,
     *args,
@@ -1651,7 +1651,7 @@ def eltwise_lt(
     return ttnn_tensor_to_torch(t2)
 
 
-def eltwise_lte(
+def eltwise_le(
     x,
     y,
     *args,

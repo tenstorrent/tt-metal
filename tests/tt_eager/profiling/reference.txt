@@ -188,7 +188,7 @@ tt_lib.tensor.groupnorm,40,7.53,8.57,9.35,8.51
 tt_lib.tensor.groupnorm_no_weights,40,5.93,7.46,8.25,7.3
 tt_lib.tensor.gt,40,0.9,0.93,1.23,0.99
 tt_lib.tensor.gt_bw,40,0.98,1.07,1.36,1.11
-tt_lib.tensor.gte,40,0.89,0.94,1.21,0.99
+tt_lib.tensor.ge,40,0.89,0.94,1.21,0.99
 tt_lib.tensor.gtz,40,0.69,0.78,1.03,0.8
 tt_lib.tensor.hardshrink,40,5.94,6.07,6.42,5.98
 tt_lib.tensor.hardshrink_bw,40,10.39,11.2,12.34,11.65
@@ -253,7 +253,7 @@ tt_lib.tensor.logit_bw,40,24.44,26.0,25.6,24.79
 tt_lib.tensor.logiteps_bw,40,32.45,34.68,35.53,34.45
 tt_lib.tensor.lt,40,0.88,0.97,1.2,0.99
 tt_lib.tensor.lt_bw,40,0.99,1.08,1.36,1.11
-tt_lib.tensor.lte,40,0.9,1.19,1.24,1.12
+tt_lib.tensor.le,40,0.9,1.19,1.24,1.12
 tt_lib.tensor.ltz,40,0.81,0.9,1.12,0.93
 tt_lib.tensor.mac,40,1.69,1.79,2.13,1.83
 tt_lib.tensor.maeloss,40,11.89,13.2,14.13,12.75
