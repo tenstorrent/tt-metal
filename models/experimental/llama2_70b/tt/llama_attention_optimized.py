@@ -532,12 +532,12 @@ class TtLlamaAttention_optimized:
     ):
         assert xs.shape[1] == 1, "batch must be 1"
         assert xs.shape[2] % 128 == 0 and xs.shape[2] > 0, "Seqlen must be divisible by 128"
-        _, _, seq_len, hidden_size = xs.shape
+        _, _, seq_len, _ = xs.shape
 
-        max_seq_len = 1024  # Must be same as in model_config.py
-        batch_dim = 1 if seq_len < max_seq_len else seq_len // max_seq_len  # Find the division factor
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
 
-        xs = ttnn.reshape(xs, (1, batch_dim, seq_len // batch_dim, hidden_size))
+        xs = ttnn.reshape(xs, (1, batch_dim, seq_len // batch_dim, -1))
 
         # Fused QKV
         fused_query_key_value = tt_lib.operations.primary.matmul(
@@ -635,12 +635,11 @@ class TtLlamaAttention_optimized:
             memory_config=self.model_config["DRAM_MEMCFG"],
         )
 
-        _, _, seq_len, hidden_size = attn_output.shape
+        _, _, seq_len, _ = attn_output.shape
 
-        max_seq_len = 1024  # Must be same as in model_config.py
-        batch_dim = 1 if seq_len < max_seq_len else seq_len // max_seq_len  # Find the division factor
-
-        attn_output = ttnn.reshape(attn_output, (1, batch_dim, seq_len // batch_dim, hidden_size))
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
+        attn_output = ttnn.reshape(attn_output, (1, batch_dim, seq_len // batch_dim, -1))
 
         attn_output = tt_lib.operations.primary.matmul(
             attn_output,

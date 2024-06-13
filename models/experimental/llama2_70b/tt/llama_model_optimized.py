@@ -16,9 +16,7 @@ from models.utility_functions import torch2tt_tensor, nearest_32, profiler
 from models.experimental.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
 from models.experimental.llama2_70b.tt.llama_embedding import TtLlamaEmbedding
 from models.experimental.llama2_70b.tt.llama_common import (
-    tt_all_gather_torch,
     freqs_to_rotation_matrix,
-    get_weight_cache_path,
     get_rotation_mat,
     precompute_freqs,
     gather_cos_sin,
@@ -182,7 +180,9 @@ class TtLlamaModel_optimized:
         xs = self.tt_embd(x)
 
         if self.model_config["LLM_MODE"] == "prefill":
-            assert seq_len % 128 == 0 and seq_len > 0, "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
+            assert (
+                seq_len % 128 == 0 and seq_len > 0
+            ), "Prefill mode only supports seqlen as a multiple of 128 up to 8k (llama3) and 2k (llama2)"
             assert batch == 1, "prefill mode only supports batch size 1"
             assert xs.shape == (batch, 1, seq_len, self.hidden_size // self.num_devices)
 
@@ -444,10 +444,10 @@ class TtLlamaModel_optimized:
         if self.llama3:
             self.model_config["LM_HEAD_MM_PROGCFG"] = self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
 
-        _, _, seq_len, hidden_size = norm_out_replicated.shape
+        _, _, seq_len, _ = norm_out_replicated.shape
 
-        max_seq_len = 1024  # Must be same as in model_config.py
-        batch_dim = 1 if seq_len < max_seq_len else seq_len // max_seq_len  # Find the division factor
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
         norm_out_replicated = ttnn.reshape(norm_out_replicated, (1, batch_dim, seq_len // batch_dim, -1))
 
         lm_head_out = tt_lib.operations.primary.matmul(

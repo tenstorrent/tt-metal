@@ -94,6 +94,7 @@ def get_model_config(llama_version="llama3", batch=32, seq_len=1, num_devices=8)
         "WIDTH_SHARDED_MEMCFG": WIDTH_SHARDED_MEMCFG,
         "HEIGHT_SHARDED_MEMCFG": HEIGHT_SHARDED_MEMCFG,
         "BLOCK_SHARDED_MEMCFG": BLOCK_SHARDED_MEMCFG,
+        "MAX_MM_SEQ_LEN": 1024,  # Used to support seq len greater than 2k
     }
     hidden_size = model_config_entries["hidden_size"]
     head_dim = model_config_entries["head_dim"]
@@ -311,13 +312,13 @@ def get_model_config(llama_version="llama3", batch=32, seq_len=1, num_devices=8)
         )
 
         cores_y = 4 if seq_len == 128 else 8
-        max_seq_tiles = min(seq_len, 1024) // 32  # Must match the max_seq_len where config is used
+        max_mm_seq_tiles = min(seq_len, model_config["MAX_MM_SEQ_LEN"]) // 32
         model_config["LLAMA3_LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, cores_y),
             in0_block_w=1,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=max_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_M=max_mm_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
             per_core_N=64,  # 16 * 1024 // 32 // (8 if seq_len == 128 else 4) ,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
             fused_activation=None,
@@ -392,14 +393,14 @@ def get_model_config(llama_version="llama3", batch=32, seq_len=1, num_devices=8)
         # Input shape is [1,1,seq_len,8192]
         # qkv_list shape is [8192,1280]
         cores_y = 4  # 8 if seq_len_tiles % 8 == 0 else 4
-        max_seq_tiles = min(seq_len, 1024) // 32  # Must match the max_seq_len where config is used
+        max_mm_seq_tiles = min(seq_len, model_config["MAX_MM_SEQ_LEN"]) // 32
         in0_block_w = 32 if seq_len == 128 else 8  # smaller in0_block_w for larger seq_len to fit in L1)
         model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, cores_y),
             in0_block_w=in0_block_w,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=max_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size
+            per_core_M=max_mm_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size
             per_core_N=5,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
             fused_activation=None,
@@ -579,14 +580,14 @@ def get_model_config(llama_version="llama3", batch=32, seq_len=1, num_devices=8)
         )
     else:
         cores_y = 4  # 8 if seq_len_tiles % 8 == 0 else 4
-        max_seq_tiles = min(seq_len, 1024) // 32  # Must match the max_seq_len where config is used
+        max_mm_seq_tiles = min(seq_len, model_config["MAX_MM_SEQ_LEN"]) // 32
         in0_block_w = 32 if seq_len == 128 else 8  # smaller in0_block_w for larger seq_len to fit in L1)
         model_config["SELFOUT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, cores_y),
             in0_block_w=8,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=max_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_M=max_mm_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
             per_core_N=4,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
             fused_activation=None,
@@ -631,13 +632,13 @@ def get_model_config(llama_version="llama3", batch=32, seq_len=1, num_devices=8)
     else:
         # Llama 2 MLP Module Prefill
         cores_y = 4  # 8 if seq_tiles % 8 == 0 else 4
-        max_seq_tiles = min(seq_len, 1024) // 32  # Must match the max_seq_len where config is used
+        max_mm_seq_tiles = min(seq_len, model_config["MAX_MM_SEQ_LEN"]) // 32
         model_config["PADDED_FF1_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, cores_y),
             in0_block_w=4,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=max_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_M=max_mm_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
             per_core_N=16,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
             fused_activation=ttl.tensor.FusibleActivation.SILU,
@@ -649,7 +650,7 @@ def get_model_config(llama_version="llama3", batch=32, seq_len=1, num_devices=8)
             in0_block_w=4,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=max_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_M=max_mm_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
             per_core_N=16,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
             fused_activation=None,
@@ -663,7 +664,7 @@ def get_model_config(llama_version="llama3", batch=32, seq_len=1, num_devices=8)
             in0_block_w=4,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=max_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_M=max_mm_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
             per_core_N=4,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
             fused_activation=None,
@@ -704,7 +705,7 @@ def get_model_config(llama_version="llama3", batch=32, seq_len=1, num_devices=8)
     )
 
     # uncomment if need to see all the configs
-    # logger.debug(f"Falcon model config: \n{pretty_print_model_config(model_config)}")
+    # logger.debug(f"Llama model config: \n{pretty_print_model_config(model_config)}")
 
     return model_config
 
