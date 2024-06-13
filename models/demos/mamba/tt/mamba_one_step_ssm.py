@@ -9,6 +9,8 @@ import tt_lib as ttl
 from typing import Callable
 
 from models.demos.mamba.reference.args import ModelArgs
+from models.demos.mamba.reference.prefix_scan import sequential_prefix_scan
+from models.demos.mamba.tt.types import ModelMode
 
 
 class TtMambaSSM(torch.nn.Module):
@@ -102,7 +104,16 @@ class TtMambaSSM(torch.nn.Module):
         self.core_grid_row = 5
         self.core_grid_col = 8
 
-    def forward(self, x):
+    def prefix_scan(self, A: ttnn.Tensor, x: ttnn.Tensor):
+        return ttnn.from_torch(
+            sequential_prefix_scan(ttnn.to_torch(A), ttnn.to_torch(x)),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+    def forward(self, x: ttnn.Tensor, mode: ModelMode = ModelMode.DECODE):
         assert len(x.shape) == 4, "SSM block expects inputs to be rank 4"
 
         # delta
@@ -158,14 +169,6 @@ class TtMambaSSM(torch.nn.Module):
         )
         ttnn.deallocate(abar1)
 
-        # multiply abar and hidden_state
-        hidden_state0 = ttnn.to_memory_config(self.tt_hidden_state, memory_config=ttnn.L1_MEMORY_CONFIG)
-        amulh0 = ttnn.mul(
-            abar2, hidden_state0, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
-        )
-        ttnn.deallocate(abar2)
-        ttnn.deallocate(hidden_state0)
-
         # B
         B0 = ttnn.linear(
             x,
@@ -200,17 +203,30 @@ class TtMambaSSM(torch.nn.Module):
             output_dtype=self.configs["dtype"]["activations"],
             math_fidelity=self.eltwise_math_fidelity,
         )
-
         # deallocate bbar
         ttnn.deallocate(bbar0)
 
-        # add amulh and bmulx
-        hidden_state1 = ttnn.add(
-            amulh0, bmulx0, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
-        )
-        ttnn.deallocate(self.tt_hidden_state)
-        self.tt_hidden_state = ttnn.to_memory_config(hidden_state1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(amulh0)
+        if mode == ModelMode.PREFILL:
+            hidden_state1 = self.prefix_scan(abar2, bmulx0)
+        else:
+            # multiply abar and hidden_state
+            hidden_state0 = ttnn.to_memory_config(self.tt_hidden_state, memory_config=ttnn.L1_MEMORY_CONFIG)
+            amulh0 = ttnn.mul(
+                abar2, hidden_state0, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
+            )
+            ttnn.deallocate(abar2)
+            ttnn.deallocate(hidden_state0)
+
+            # add amulh and bmulx
+            hidden_state1 = ttnn.add(
+                amulh0, bmulx0, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
+            )
+
+            ttnn.deallocate(self.tt_hidden_state)
+            self.tt_hidden_state = ttnn.to_memory_config(hidden_state1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            ttnn.deallocate(amulh0)
+
         ttnn.deallocate(bmulx0)
 
         # compute C
