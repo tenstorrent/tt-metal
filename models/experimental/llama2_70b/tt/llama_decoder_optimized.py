@@ -334,7 +334,7 @@ class TtLlamaDecoder_optimized:
         # Add attn output to residiual first in place to save memory
 
         residual = xs
-        output = tt_lib.operations.primary.add(
+        output = ttnn.add(
             residual,
             attn_outs,
             output_mem_config=self.model_config["ATTN_ADD_OUTPUT_MEMCFG"],
@@ -383,7 +383,7 @@ class TtLlamaDecoder_optimized:
         ffn_out = self.mlp(ffn_norm_replicated)
 
         ### residual in place
-        output = tt_lib.operations.primary.add(
+        output = ttnn.add(
             output,
             ffn_out,
             output_mem_config=self.model_config["MLP_ADD_OUTPUT_MEMCFG"],

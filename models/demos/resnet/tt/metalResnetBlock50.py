@@ -4,6 +4,7 @@
 
 from typing import Optional, List, Callable
 import time
+import ttnn
 import tt_lib
 import torch
 import torch.nn as nn
@@ -1324,7 +1325,7 @@ class Bottleneck:
         fused_activations = [tt_lib.tensor.FusibleActivation.RELU]
 
         # logger.info("Running eltwise add")
-        out = tt_lib.operations.primary.add(
+        out = ttnn.add(
             out,
             ds_out,
             fused_activations,
