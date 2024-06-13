@@ -85,8 +85,6 @@ def device(request, device_params):
     import tt_lib as ttl
 
     device_id = request.config.getoption("device_id")
-
-    request.node.device_ids = [device_id]
     request.node.pci_ids = [ttl.device.GetPCIeDeviceID(device_id)]
 
     num_devices = ttl.device.GetNumPCIeDevices()
@@ -108,9 +106,7 @@ def pcie_devices(request, device_params):
 
     num_devices = ttl.device.GetNumPCIeDevices()
     device_ids = [i for i in range(num_devices)]
-
-    request.node.device_ids = device_ids
-    request.node.pci_ids = [ttl.device.GetPCIeDeviceID(i) for i in device_ids]
+    request.node.pci_ids = device_ids
 
     # Get only physical devices
     devices = ttl.device.CreateDevices(device_ids, **device_params)
@@ -129,8 +125,6 @@ def all_devices(request, device_params):
 
     num_devices = ttl.device.GetNumAvailableDevices()
     device_ids = [i for i in range(num_devices)]
-
-    request.node.device_ids = device_ids
     request.node.pci_ids = [ttl.device.GetPCIeDeviceID(i) for i in device_ids]
 
     # Get only physical devices
@@ -155,7 +149,6 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
     except (ValueError, AttributeError):
         num_devices_requested = len(device_ids)
 
-    request.node.device_ids = device_ids[:num_devices_requested]
     request.node.pci_ids = [ttl.device.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
     device_mesh = ttnn.open_device_mesh(
@@ -183,8 +176,7 @@ def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     except (ValueError, AttributeError):
         num_pcie_devices_requested = len(device_ids)
 
-    request.node.device_ids = device_ids[:num_pcie_devices_requested]
-    request.node.pci_ids = [ttl.device.GetPCIeDeviceID(i) for i in device_ids[:num_pcie_devices_requested]]
+    request.node.pci_ids = device_ids[:num_pcie_devices_requested]
 
     device_mesh = ttnn.open_device_mesh(
         ttnn.DeviceGrid(1, num_pcie_devices_requested), device_ids[:num_pcie_devices_requested], **device_params
@@ -213,7 +205,6 @@ def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     except (ValueError, AttributeError):
         num_devices_requested = len(device_ids)
 
-    request.node.device_ids = device_ids[:num_devices_requested]
     request.node.pci_ids = [ttl.device.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
     device_mesh = ttnn.open_device_mesh(
@@ -334,11 +325,16 @@ def pytest_addoption(parser):
     )
     parser.addoption("--cli-input", action="store", default=None, help="Enter prompt if --input-method=cli")
     parser.addoption(
-        "--metal-cleanup",
+        "--metal-timeout",
         action="store",
         default=None,
         help="Enable process timeout",
     )
+
+
+@pytest.fixture
+def input_path(request):
+    return request.config.getoption("--input-path")
 
 
 def pytest_generate_tests(metafunc):
@@ -473,14 +469,15 @@ def pytest_runtest_makereport(item, call):
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_teardown(item, nextitem):
     yield
-    metal_cleanup_enabled = item.config.getoption("--metal-cleanup")
-    if metal_cleanup_enabled is not None:
+    metal_timeout_enabled = item.config.getoption("--metal-timeout")
+    using_xdist = int(os.getenv("PYTEST_XDIST_WORKER_COUNT", "0"))
+
+    if metal_timeout_enabled is not None or using_xdist:
         report = item.stash[phase_report_key]
         test_failed = report.get("call", None) and report["call"].failed
         if test_failed:
-            logger.info(f"In custom teardown, open device ids: {item.device_ids} {set(item.pci_ids)}")
-            # reset_tensix(set(item.pci_ids))
-            reset_tensix()
+            logger.info(f"In custom teardown, open device ids: {set(item.pci_ids)}")
+            reset_tensix(set(item.pci_ids))
 
 
 # This is overriding the timer setup hook from pytest-timeout
@@ -488,10 +485,12 @@ def pytest_runtest_teardown(item, nextitem):
 # At timeout, the process kills it's parent (the test process) and then itself
 @pytest.hookimpl(tryfirst=True)
 def pytest_timeout_set_timer(item, settings):
-    metal_timeout_enabled = item.config.getoption("--metal-cleanup")
-    if metal_timeout_enabled is not None:
+    metal_timeout_enabled = item.config.getoption("--metal-timeout")
+    using_xdist = int(os.getenv("PYTEST_XDIST_WORKER_COUNT", "0"))
+
+    if metal_timeout_enabled is not None or using_xdist:
         parent_pid = os.getpid()
-        logger.info(f"Metal timeout {settings.timeout} seconds")
+        logger.info(f"Metal timeout {settings.timeout} seconds {parent_pid} for {item.nodeid}")
 
         def get_parent_status():
             try:
@@ -501,12 +500,15 @@ def pytest_timeout_set_timer(item, settings):
             return parent.status()
 
         def run_timer(settings):
+            logger.info(f"Timer started for {item.nodeid}")
             dead_status = ["zombie", "dead", "already dead"]
             timeout = settings.timeout
-            while get_parent_status() not in dead_status and timeout > 0:
-                time.sleep(1)
-                timeout -= 1
-            if get_parent_status() != "already dead":
+            parent_status = "running"
+            while parent_status not in dead_status and timeout > 0:
+                time.sleep(5)
+                timeout -= 5
+                parent_status = get_parent_status()
+            if parent_status != "already dead":
                 logger.info(f"Timing out test case")
                 os.kill(parent_pid, signal.SIGKILL)
             logger.info(f"Killing timer")
@@ -519,13 +521,12 @@ def pytest_timeout_set_timer(item, settings):
         metal_timer = multiprocess.Process(target=run_timer, args=(settings,), daemon=True)
         item.cancel_timeout = cancel
         metal_timer.start()
-        # logger.info(f"parent and metal timer pid: {parent_pid} {metal_timer.pid}")
     return True
 
 
 # This is a hook used in pytest-xdist to handle when a worker crashes out
 # In our case, combined with pytest-timeout thread method, the worker will crash out for a hang and
-# then it should get cleaned up by the controller through this fixture :fingers_crossed:
+# then it should get cleaned up by the controller through this fixture
 @pytest.hookimpl(tryfirst=True)
 def pytest_handlecrashitem(crashitem, report, sched):
     reset_tensix()
@@ -542,10 +543,9 @@ def reset_tensix(tt_open_devices=None):
         smi_reset_result = run_process_and_get_result(f"/opt/tt_metal_infra/scripts/ci/{arch}/reset.sh")
     else:
         tt_open_devices_str = ",".join([str(i) for i in tt_open_devices])
-        check_smi = run_process_and_get_result("tt-smi-metal -h")
-        logger.info(f"Check tt-smi-metal exists: {check_smi.returncode}")
+        check_smi_metal = run_process_and_get_result("tt-smi-metal -h")
         logger.info(f"Running reset for pci devices: {tt_open_devices_str}")
-        if check_smi.returncode > 0:
+        if check_smi_metal.returncode > 0:
             logger.info(f"Test failed - resetting {arch} with tt-smi")
             smi_reset_result = run_process_and_get_result(f"tt-smi -r {tt_open_devices_str}")
         else:
@@ -555,5 +555,4 @@ def reset_tensix(tt_open_devices=None):
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_xdist_auto_num_workers(config):
-    logger.info("getting num of xdist workers")
     return 1
