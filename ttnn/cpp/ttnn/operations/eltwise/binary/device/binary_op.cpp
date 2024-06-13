@@ -108,7 +108,12 @@ std::map<string, string> get_defines(
         default: TT_ASSERT(false && "Undefined op type");
     }
 
-    if(input_dtype.has_value() && output_dtype.has_value() && (output_dtype.value() == DataType::UINT32 || output_dtype.value() == DataType::UINT16)){
+    if(input_dtype.has_value() && output_dtype.has_value() &&
+        ((input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT32) ||
+        (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT16) ||
+        (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::INT32) ||
+        (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::BFLOAT16) ||
+        (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT16))){
         TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0 && "SFPU_OP_CHAIN_0 already defined");
 
         auto in_dataformat =  std::to_string((uint32_t)datatype_to_dataformat_converter(input_dtype.value()));

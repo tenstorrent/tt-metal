@@ -38,6 +38,7 @@ from models.experimental.llama2_70b.tt.llama_common import (
     should_skip_model_load,
     check_kv_cache,
 )
+import gc
 
 
 class PytorchLlamaDecoderModel(torch.nn.Module):
@@ -141,7 +142,7 @@ def run_test_LlamaDecoder_inference(
         hugging_face_reference_model, UNIT_TEST_LAYER_NUM, configuration.rope_theta
     )
     # TT model -------------------------------------------------------------------------
-    transformation_mat_torch = get_rot_transformation_mat(head_dim)
+    transformation_mat_torch = get_rot_transformation_mat(32)  # 32 for tile size
     transformation_mats = ttnn.as_tensor(
         transformation_mat_torch,
         dtype=ttnn.bfloat16,
@@ -253,6 +254,7 @@ def run_test_LlamaDecoder_inference(
         logger.info(f"{model_name} Decoder output Passed!")
     else:
         logger.warning(f"{model_name} Decoder output Failed!")
+        gc.collect()
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 
