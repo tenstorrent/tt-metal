@@ -43,6 +43,7 @@ jobs:
         run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run unit regression tests
+        shell: bash {0}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
