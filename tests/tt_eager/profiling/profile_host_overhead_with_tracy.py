@@ -34,7 +34,7 @@ def profile_host_overhead(output_directory, output_csv):
 
     for op_name in all_ops:
         op_id = f"{i:03d}"
-        command = f'python -m tracy -v -r -p -o {output_directory} -n {op_id}_{op_name} -m "pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input {output_directory}::{op_name}"'
+        command = f'python -m tracy -v -r -p -o {output_directory} -n {op_id}_{op_name} --no-device -m "pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input {output_directory}::{op_name}"'
         subprocess.run([command], shell=True, check=False, env=currentEnvs, timeout=3000)
         i += 1
 
@@ -99,10 +99,10 @@ def profile_host_overhead(output_directory, output_csv):
                 # Add the average value to the final dataframe
                 op_count = row["count"]
                 host_duration = round(host_duration / (op_count * 1000 * 1000), 2)
-                final_df.loc[index, "HOST DURATION [ms]"] = host_duration
+                final_df.loc[index, "C++ mean dispatch time (ms)"] = host_duration
 
     duration = (time.time() - start_time) / 60
-    logger.info(f"Total ops profiled {len(all_ops)} in {duration:.2f}min")
+    logger.info(f"{len(all_ops)} ops profiled in {duration:.2f}min")
 
     # Sort output
     final_df = final_df.sort_values("op")
