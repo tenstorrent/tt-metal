@@ -22,7 +22,7 @@ namespace tt::tt_metal::detail {
         detail::bind_binary_op(m_tensor, "gt", gt, R"doc(Perform an eltwise-binary greater-than (``{0} > {1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "lt", lt, R"doc(Perform an eltwise-binary less-than (``{0} < {1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "le", le, R"doc(Perform an eltwise-binary less-than-or-equal (``{0} <= {1}``) on two tensors.)doc");
-        detail::bind_binary_op(m_tensor, "gte", gte, R"doc(Perform an eltwise-binary greater-than-or-equal (``{0} >= {1}``) on two tensors.)doc");
+        detail::bind_binary_op(m_tensor, "ge", ge, R"doc(Perform an eltwise-binary greater-than-or-equal (``{0} >= {1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "eq", py::overload_cast<const Tensor&, const Tensor&, std::optional<std::vector<UnaryWithParam>>, const MemoryConfig&, std::optional<const DataType>, std::optional<Tensor> >(&eq), R"doc(Perform an eltwise-binary equal (``{0} == {1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "ne", ne, R"doc(Perform an eltwise-binary not-equal (``{0} != {1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "ldexp", ldexp, R"doc(Performs eltwise-binary ldexp (``{0} * 2**{1}``) on two tensors.)doc");

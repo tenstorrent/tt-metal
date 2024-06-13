@@ -114,7 +114,7 @@ class TestEltwiseBinary:
             test_args,
         )
 
-    @pytest.mark.parametrize("cmp_kind", ["lt", "gt", "le", "gte", "ne", "eq"])
+    @pytest.mark.parametrize("cmp_kind", ["lt", "gt", "le", "ge", "ne", "eq"])
     def test_run_eltwise_binary_cmp_ops(
         self,
         input_shapes,

@@ -27,7 +27,7 @@ constexpr auto eq =
 constexpr auto ne =
     ttnn::register_operation<ttnn::operations::binary::ExecuteBinary<BinaryOpType::NE, false>>("ttnn::ne");
 constexpr auto ge =
-    ttnn::register_operation<ttnn::operations::binary::ExecuteBinary<BinaryOpType::GTE, false>>("ttnn::ge");
+    ttnn::register_operation<ttnn::operations::binary::ExecuteBinary<BinaryOpType::GE, false>>("ttnn::ge");
 constexpr auto gt =
     ttnn::register_operation<ttnn::operations::binary::ExecuteBinary<BinaryOpType::GT, false>>("ttnn::gt");
 constexpr auto le =

@@ -1583,7 +1583,7 @@ std::vector<Tensor> _hardtanh_bw(
     Tensor grad_result = where(
         le(input, full_like(input, min), std::nullopt, output_mem_config),
         0.0,
-        where(gte(input, full_like(input, max), std::nullopt, output_mem_config), 0.0, grad),
+        where(ge(input, full_like(input, max), std::nullopt, output_mem_config), 0.0, grad),
         output_mem_config);
 
     grad_tensor.emplace_back(grad_result);
@@ -1892,7 +1892,7 @@ std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const Mem
         grad_result,
         output_mem_config);
     grad_result =
-        where(gte(input, six_tensor, std::nullopt, output_mem_config), zero_tensor, grad_result, output_mem_config);
+        where(ge(input, six_tensor, std::nullopt, output_mem_config), zero_tensor, grad_result, output_mem_config);
 
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;

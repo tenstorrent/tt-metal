@@ -26,7 +26,7 @@ enum class BinaryOpType {
     GT,
     LT,
     LE,
-    GTE,
+    GE,
     EQ,
     NE,
     SQUARED_DIFFERENCE,
@@ -257,7 +257,7 @@ constexpr auto div_fast = make_eltwise_binary<BinaryOpType::DIV_FAST>{};
 constexpr auto lt = make_eltwise_binary<BinaryOpType::LT>{};
 constexpr auto gt = make_eltwise_binary<BinaryOpType::GT>{};
 constexpr auto le = make_eltwise_binary<BinaryOpType::LE>{};
-constexpr auto gte = make_eltwise_binary<BinaryOpType::GTE>{};
+constexpr auto ge = make_eltwise_binary<BinaryOpType::GE>{};
 constexpr auto ne = make_eltwise_binary<BinaryOpType::NE>{};
 
 // logical ops

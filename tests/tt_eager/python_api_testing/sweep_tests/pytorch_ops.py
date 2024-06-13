@@ -963,7 +963,7 @@ def lt(x, y, *args, **kwargs):
         return x < y
 
 
-def gte(x, y, *args, **kwargs):
+def ge(x, y, *args, **kwargs):
     if "scalar" in kwargs:
         scalar = kwargs.pop("scalar")
         return x >= scalar

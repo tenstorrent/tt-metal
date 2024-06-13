@@ -497,8 +497,8 @@ all_binary_ops = [
         "name": "tt_lib.tensor.gt",
     },
     {
-        "op": tt_lib.tensor.gte,
-        "name": "tt_lib.tensor.gte",
+        "op": tt_lib.tensor.ge,
+        "name": "tt_lib.tensor.ge",
     },
     {
         "op": tt_lib.tensor.lt,
