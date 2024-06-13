@@ -144,8 +144,8 @@ class TtLlamaMLP_optimized:
     def prefill_forward(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
         # Prefill Reshape fix
         _, _, seq_len, _ = x.shape
-        max_seq_len = 1024  # Must be same as in model_config.py
-        batch_dim = 1 if seq_len < max_seq_len else seq_len // max_seq_len  # Find the division factor
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
         x = ttnn.reshape(x, (1, batch_dim, seq_len // batch_dim, self.hidden_size))
 
         w1_out = tt_lib.operations.primary.matmul(
