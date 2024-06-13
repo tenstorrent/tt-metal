@@ -505,8 +505,8 @@ all_binary_ops = [
         "name": "tt_lib.tensor.lt",
     },
     {
-        "op": tt_lib.tensor.lte,
-        "name": "tt_lib.tensor.lte",
+        "op": tt_lib.tensor.le,
+        "name": "tt_lib.tensor.le",
     },
     {
         "op": tt_lib.tensor.eq,

@@ -148,9 +148,9 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_gte,
         "pytorch_op": pytorch_ops.gte,
     },
-    "ttnn-eltwise-lte": {
-        "tt_op": ttnn_ops.eltwise_lte,
-        "pytorch_op": pytorch_ops.lte,
+    "ttnn-eltwise-le": {
+        "tt_op": ttnn_ops.eltwise_le,
+        "pytorch_op": pytorch_ops.le,
     },
     "ttnn-min": {
         "tt_op": ttnn_ops.min,

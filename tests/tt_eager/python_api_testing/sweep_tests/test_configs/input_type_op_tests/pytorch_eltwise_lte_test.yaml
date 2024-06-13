@@ -1,6 +1,6 @@
 ---
 test-list:
-  eltwise-lte:
+  eltwise-le:
     shape:
       start-shape: [1, 1, 1, 2]
       end-shape: [2, 2, 2048, 2048]
@@ -15,4 +15,4 @@ test-list:
     comparison:
       function: comp_equal
     args-gen: gen_dtype_layout_device
-    output-file: eltwise_lte_sweep.csv
+    output-file: eltwise_le_sweep.csv

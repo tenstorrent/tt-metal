@@ -510,7 +510,7 @@ Tensor _acosh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
         // input < 1, output is nan
         // input > 1, output is acosh(input)
         Tensor nan_res = bcast(
-            lte(input_a, t_one, std::nullopt, output_mem_config),
+            le(input_a, t_one, std::nullopt, output_mem_config),
             mk_tiled_scalar(std::nanf("")),
             BcastOpMath::MUL,
             BcastOpDim::HW,
@@ -645,7 +645,7 @@ Tensor _isclose(
         is_close_rhs = add_unary(mul_result, atol, output_mem_config);
     }
     return where(
-        lte(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config),
+        le(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config),
         ones_like(value2, output_mem_config),
         zeros_like(value2, output_mem_config),
         output_mem_config);

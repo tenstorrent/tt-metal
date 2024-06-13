@@ -51,7 +51,7 @@ std::map<string, string> get_defines(
         case BinaryOpType::GTE:
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst));
             break;
-        case BinaryOpType::LTE:
+        case BinaryOpType::LE:
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst));
             break;
         case BinaryOpType::EQ:

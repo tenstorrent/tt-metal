@@ -1049,7 +1049,7 @@ std::vector<Tensor> _xlogy_bw(
     grad1_result = where(
         logical_and(
             eqz(input, output_mem_config),
-            lte(other, zero_tensor, std::nullopt, output_mem_config),
+            le(other, zero_tensor, std::nullopt, output_mem_config),
             std::nullopt,
             output_mem_config),
         zero_tensor,
@@ -1253,7 +1253,7 @@ std::vector<Tensor> _hardswish_bw(const Tensor& grad, const Tensor& input, const
         lt(input, full_like(input, -3.0f), std::nullopt, output_mem_config),
         0.0,
         where(
-            lte(input, full_like(input, 3.0f), std::nullopt, output_mem_config),
+            le(input, full_like(input, 3.0f), std::nullopt, output_mem_config),
             mul(grad,
                 add_unary(mul_unary(input, 0.3333f, output_mem_config), 0.5f, output_mem_config),
                 std::nullopt,
@@ -1581,7 +1581,7 @@ std::vector<Tensor> _hardtanh_bw(
     const Tensor& grad, const Tensor& input, float min, float max, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = where(
-        lte(input, full_like(input, min), std::nullopt, output_mem_config),
+        le(input, full_like(input, min), std::nullopt, output_mem_config),
         0.0,
         where(gte(input, full_like(input, max), std::nullopt, output_mem_config), 0.0, grad),
         output_mem_config);
@@ -1881,7 +1881,7 @@ std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const Mem
     Tensor one_tensor = ones_like(input, output_mem_config);
     Tensor six_tensor = full_like(input, 6, output_mem_config);
     Tensor grad_result =
-        where(lte(input, zero_tensor, std::nullopt, output_mem_config), zero_tensor, six_tensor, output_mem_config);
+        where(le(input, zero_tensor, std::nullopt, output_mem_config), zero_tensor, six_tensor, output_mem_config);
     grad_result = where(
         logical_and(
             gtz(input, output_mem_config),

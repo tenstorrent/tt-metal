@@ -653,9 +653,9 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_gte,
         "pytorch_op": pytorch_ops.gte,
     },
-    "eltwise-lte": {
-        "tt_op": tt_lib_ops.eltwise_lte,
-        "pytorch_op": pytorch_ops.lte,
+    "eltwise-le": {
+        "tt_op": tt_lib_ops.eltwise_le,
+        "pytorch_op": pytorch_ops.le,
     },
     "eltwise-add": {
         "tt_op": tt_lib_ops.eltwise_add,
@@ -786,9 +786,9 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_gte_optional,
         "pytorch_op": pytorch_ops.gte,
     },
-    "eltwise-lte-optional": {
-        "tt_op": tt_lib_ops.eltwise_lte_optional,
-        "pytorch_op": pytorch_ops.lte,
+    "eltwise-le-optional": {
+        "tt_op": tt_lib_ops.eltwise_le_optional,
+        "pytorch_op": pytorch_ops.le,
     },
     "eltwise-add-optional": {
         "tt_op": tt_lib_ops.eltwise_add_optional,

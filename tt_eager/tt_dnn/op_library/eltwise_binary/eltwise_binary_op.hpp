@@ -25,7 +25,7 @@ enum class BinaryOpType {
     MUL,
     GT,
     LT,
-    LTE,
+    LE,
     GTE,
     EQ,
     NE,
@@ -256,7 +256,7 @@ constexpr auto div_fast = make_eltwise_binary<BinaryOpType::DIV_FAST>{};
 // comparative binary ops
 constexpr auto lt = make_eltwise_binary<BinaryOpType::LT>{};
 constexpr auto gt = make_eltwise_binary<BinaryOpType::GT>{};
-constexpr auto lte = make_eltwise_binary<BinaryOpType::LTE>{};
+constexpr auto le = make_eltwise_binary<BinaryOpType::LE>{};
 constexpr auto gte = make_eltwise_binary<BinaryOpType::GTE>{};
 constexpr auto ne = make_eltwise_binary<BinaryOpType::NE>{};
 

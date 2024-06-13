@@ -947,7 +947,7 @@ def repeat(x, *args, repeat, **kwargs):
     return x.repeat(*repeat)
 
 
-def lte(x, y, *args, **kwargs):
+def le(x, y, *args, **kwargs):
     if "scalar" in kwargs:
         scalar = kwargs.pop("scalar")
         return x <= scalar

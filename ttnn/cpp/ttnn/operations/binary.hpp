@@ -31,7 +31,7 @@ constexpr auto ge =
 constexpr auto gt =
     ttnn::register_operation<ttnn::operations::binary::ExecuteBinary<BinaryOpType::GT, false>>("ttnn::gt");
 constexpr auto le =
-    ttnn::register_operation<ttnn::operations::binary::ExecuteBinary<BinaryOpType::LTE, false>>("ttnn::le");
+    ttnn::register_operation<ttnn::operations::binary::ExecuteBinary<BinaryOpType::LE, false>>("ttnn::le");
 constexpr auto lt =
     ttnn::register_operation<ttnn::operations::binary::ExecuteBinary<BinaryOpType::LT, false>>("ttnn::lt");
 constexpr auto logical_and =
