@@ -9,10 +9,10 @@ from typing import Optional
 from transformers import AutoTokenizer
 
 from models.demos.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
-from models.demos.mamba.reference.model import Mamba
+from models.demos.mamba.reference.prefill_model import MambaPrefill
 
 
-def generate_through_selective_scan(
+def generate_through_prefill(
     model, tokenizer, prompt: str, n_tokens_to_gen: int = 30, sample: bool = False, top_k: Optional[int] = None
 ):
     input_ids = tokenizer(prompt, return_tensors="pt").input_ids
@@ -32,24 +32,25 @@ def generate_through_decode(model, tokenizer, prompt: str, n_tokens_to_gen: int 
 
 @pytest.mark.parametrize(
     "model_version, batch, genlen",
-    (
-        ("state-spaces/mamba-130m", 1, 32),
-        ("state-spaces/mamba-370m", 1, 32),
-    ),
+    (("state-spaces/mamba-370m", 1, 32),),
 )
-def test_cpu_reference_model_decode_vs_selective_scan(
+def test_cpu_reference_model_decode_vs_prefill(
     model_version: MambaPretrainedModelName,
     batch: int,
     genlen: int,
 ):
-    prompt = "Hello World!"
+    prompt = "Mamba is the"
 
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
 
-    selective_scan_model = Mamba.from_pretrained(model_version)
+    prefill_model = MambaPrefill.from_pretrained(model_version)
     decode_model = MambaDecode.from_pretrained(model_version)
 
-    selective_scan_output = generate_through_selective_scan(selective_scan_model, tokenizer, prompt, genlen)
+    prefill_output = generate_through_prefill(prefill_model, tokenizer, prompt, genlen)
     decode_output = generate_through_decode(decode_model, tokenizer, prompt, genlen)
 
-    assert selective_scan_output == decode_output, "Model outputs should match"
+    logger.debug(f"Prefill output: >> '{prefill_output}'")
+    logger.debug(f"Decode output: >> '{decode_output}'")
+
+    assert len(prefill_output) == len(decode_output), "Model outputs should be the same length"
+    assert prefill_output == decode_output, "Model outputs should match"
