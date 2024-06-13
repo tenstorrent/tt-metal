@@ -227,10 +227,10 @@ namespace tt::tt_metal::detail {
         )doc");
 
         detail::bind_unary_op_with_param(
-            m_tensor, "remainder", remainder,
+            m_tensor, "unary_remainder", unary_remainder,
             py::arg("value"),
-            R"doc(Perform an eltwise-modulus operation on ``{0}`` and ``{1}``. Support provided only for WH_B0.)doc",
-            R"doc("value", "int", "")doc"
+            R"doc(Perform an eltwise-modulus operation on ``{0}`` and ``{1}``. Formula : ``a - a.div(b, rounding_mode="floor") * b`` . Support provided only for WH_B0.)doc",
+            R"doc("value", "float", "")doc"
 
         );
         detail::bind_unary_op_with_param(

@@ -19,22 +19,23 @@
 namespace ckernel {
 
 /**
- * Performs element-wise modulus computation on input x by y , where x is each element of a tile
- * in DST register at index tile_index. The input must be of int data type only. The value is provided as const param0 The DST register buffer must be in
+ * Performs element-wise remainder computation on input x by y , where x is each element of a tile
+ * in DST register at index tile_index. The input can be of float data type. The value is provided as const param0 The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
  *
- * | Argument        | Description                                                                | Type     | Valid
- * Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
- * less than the size of the DST register buffer | True     | | param0          | The value the output is if the input
- * is greater than 0                     | uint32_t |                                                       | True     |
+ * | Argument       | Description                                                                 | Type     | Valid Range                                           | Required |
+ * |----------------|-----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to perform remainder operation | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0         | Denominator value to perform remainder operation                            | uint32_t |                                                       | True     |
+ * | param1         | Reciprocal of param0, calculated on-host                                    | uint32_t |                                                       | False    |
  */
-ALWI void remainder_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_remainder<APPROX>(idst, param0)));
+
+
+ALWI void remainder_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_remainder<APPROX>(idst, param0, param1)));
 }
 
 /**

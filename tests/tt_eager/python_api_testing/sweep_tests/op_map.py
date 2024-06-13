@@ -496,9 +496,9 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_left_shift,
         "pytorch_op": pytorch_ops.left_shift,
     },
-    "eltwise-remainder": {
-        "tt_op": tt_lib_ops.eltwise_remainder,
-        "pytorch_op": pytorch_ops.remainder,
+    "eltwise-unary_remainder": {
+        "tt_op": tt_lib_ops.eltwise_unary_remainder,
+        "pytorch_op": pytorch_ops.unary_remainder,
     },
     "eltwise-unary_ne": {
         "tt_op": tt_lib_ops.eltwise_unary_ne,

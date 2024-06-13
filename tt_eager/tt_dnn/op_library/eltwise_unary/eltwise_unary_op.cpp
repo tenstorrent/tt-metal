@@ -129,7 +129,7 @@ std::pair<string, string> get_op_init_and_func_parameterized(
         case UnaryOpType::REMAINDER:
             op_init_and_name = {
                 "remainder_tile_init();",
-                fmt::format("remainder_tile({}, {}u);", idst, Converter::to_hex(param0))};
+                fmt::format("remainder_tile({}, {}u, {}u);", idst, Converter::to_hex(param0), Converter::to_hex(1.0f/param0))};
             break;
         case UnaryOpType::EXP:
             op_init_and_name = {
@@ -345,10 +345,27 @@ namespace tt {
 
 namespace tt_metal {
 
+inline void validate_supported_arch(tt::ARCH arch, UnaryOpType op_type) {
+    switch (op_type) {
+        case UnaryOpType::REMAINDER:
+        case UnaryOpType::FLOOR:
+        case UnaryOpType::LEFT_SHIFT:
+        case UnaryOpType::RIGHT_SHIFT:
+            TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+            break;
+        default:
+            return;
+    }
+}
+
 void EltwiseUnary::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &optional_output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto out_mem_config = (!optional_output_tensors.empty() && optional_output_tensors.at(0).has_value()) ? optional_output_tensors.at(0).value().memory_config() : this->output_mem_config;
 
+    auto arch = input_tensor_a.device()->arch();
+    for (const auto& unary_op : this->op_chain) {
+        validate_supported_arch(arch, unary_op.op_type);
+    }
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to eltwise unary need to be on device!");
     TT_FATAL(
         input_tensor_a.buffer() != nullptr, "Operands to eltwise unary need to be allocated in buffers on device!");
