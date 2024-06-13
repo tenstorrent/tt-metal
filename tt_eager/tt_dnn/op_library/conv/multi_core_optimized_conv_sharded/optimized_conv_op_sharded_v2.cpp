@@ -1476,16 +1476,18 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     TT_ASSERT(b.get_legacy_shape()[1] == 1, "Conv weight matrix shape is invalid");
     uint32_t weight_matrix_height = b.get_legacy_shape()[2];
     uint32_t weight_matrix_width = b.get_legacy_shape()[3];
+    TT_ASSERT(weight_matrix_height % TILE_HEIGHT == 0, "Height of weight matrix needs to be divisible by 32");
+    TT_ASSERT(weight_matrix_width % TILE_WIDTH == 0, "Width of weight matrix needs to be divisible by 32");
     uint32_t weight_matrix_height_ntiles = weight_matrix_height / TILE_HEIGHT;
     uint32_t weight_matrix_width_ntiles = weight_matrix_width / TILE_WIDTH;
-
     // Partitions conv inner dim into blocks to support sharding along this dim
     // TODO: Only 2D convs with sharded input use this, but we can uplift to support generically
     // TODO: Only updated variables which is affected, but there may be more that needs to account for this
     // TODO: Loop naming in reader, writer, and compute kernels could also be cleaned up
     // TODO: Can conv_act_c_blocks be same as num_blocks_act_w?
-    auto shard_shape = a.shard_spec().value().shape;
-
+    auto a_shard_spec = a.shard_spec().value();
+    auto shard_shape = a_shard_spec.shape;
+    auto a_memory_config = a.memory_config();
     // parallelization config
     const auto& p_config = parallelization_config;
     uint32_t num_cores_x = p_config.grid_size.x;
@@ -1495,15 +1497,18 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     assert(num_cores_y < 10);
 
     // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
-    bool weight_width_sliced = per_core_out_matrix_width_ntiles < weight_matrix_width_ntiles;
-    uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
+    bool weight_width_sliced = a_memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    uint32_t conv_act_c_blocks = a_memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED ? (a_shard_spec.orientation == ShardOrientation::ROW_MAJOR ? num_cores_x : num_cores_y) : 1;
     uint32_t input_channels_padded = 0;
     if (weight_width_sliced) {
+        // remove transpose mcast variable. No need. Can be derived from input tensor "a" memory config
         if (transpose_mcast) {
             TT_FATAL(conv_act_c_blocks == num_cores_y, "Expected conv_act_c_blocks to be equal to height of grid");
+            TT_ASSERT(a_shard_spec.orientation == ShardOrientation::COL_MAJOR, "Expected COL_MAJOR orientation");
             input_channels_padded = shard_shape[1] * num_cores_y;
         } else {
             TT_FATAL(conv_act_c_blocks == num_cores_x, "Expected conv_act_c_blocks to be equal to width of grid");
+            TT_ASSERT(a_shard_spec.orientation == ShardOrientation::ROW_MAJOR, "Expected ROW_MAJOR orientation");
             input_channels_padded = shard_shape[1] * num_cores_x;
         }
     } else {
@@ -1540,12 +1545,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
         optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-            ashape_with_channels_padded, conv_params, out_block_h_ntiles * TILE_HEIGHT, extra_padding_for_32B_alignment);
+            ashape_with_channels_padded, conv_params, p_config.per_core_out_matrix_height, extra_padding_for_32B_alignment);
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
-    uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
+    //uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
     uint32_t act_matrix_width = (uint32_t)act_matrix_shape[2];
-    uint32_t act_matrix_height_unpadded = (uint32_t)act_matrix_shape_unpadded[1];
+    //uint32_t act_matrix_height_unpadded = (uint32_t)act_matrix_shape_unpadded[1];
     uint32_t act_matrix_width_unpadded = (uint32_t)act_matrix_shape_unpadded[2];
 
     // TODO: Move all these asserts/checks to validate?
@@ -1559,13 +1564,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     }
 
     // Normal matrix shape check
-    TT_ASSERT(act_matrix_width == weight_matrix_height, "The width of tensor a needs to match the height of tensor b");
+    //TT_ASSERT(act_matrix_width == weight_matrix_height, "The width of tensor a needs to match the height of tensor b");
 
     // Tile size divisibility checks
-    TT_ASSERT(act_matrix_height % TILE_HEIGHT == 0, "Height of activation matrix needs to be divisible by 32");
+    //TT_ASSERT(act_matrix_height % TILE_HEIGHT == 0, "Height of activation matrix needs to be divisible by 32");
     TT_ASSERT(act_matrix_width % TILE_WIDTH == 0, "Width of activation matrix needs to be divisible by 32");
-    TT_ASSERT(weight_matrix_height % TILE_HEIGHT == 0, "Height of weight matrix needs to be divisible by 32");
-    TT_ASSERT(weight_matrix_width % TILE_WIDTH == 0, "Width of weight matrix needs to be divisible by 32");
 
     // Device compatibility checks
     TT_ASSERT(
@@ -1580,48 +1583,48 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     }
 
     // Convert tensor dims to tile dims
-    uint32_t act_matrix_height_ntiles = act_matrix_height / TILE_HEIGHT;
+    //uint32_t act_matrix_height_ntiles = act_matrix_height / TILE_HEIGHT;
     uint32_t act_matrix_width_ntiles = act_matrix_width / TILE_WIDTH;
 
-    assert(act_matrix_height_ntiles % act_block_h_ntiles == 0);
-    assert(act_matrix_width_ntiles % act_block_w_ntiles == 0);
-    assert(weight_matrix_width_ntiles % weight_block_w_ntiles == 0);
-    assert(act_matrix_height_ntiles % out_block_h_ntiles == 0);
+    //assert(act_matrix_height_ntiles % act_block_h_ntiles == 0);
+    //assert(act_matrix_width_ntiles % act_block_w_ntiles == 0);
+    //assert(weight_matrix_width_ntiles % weight_block_w_ntiles == 0);
+    //assert(act_matrix_height_ntiles % out_block_h_ntiles == 0);
 
-    uint32_t num_blocks_act_h = act_matrix_height_ntiles / act_block_h_ntiles;
-    uint32_t num_blocks_out_h = act_matrix_height_ntiles / out_block_h_ntiles;
+    //uint32_t num_blocks_act_h = act_matrix_height_ntiles / act_block_h_ntiles;
+    //uint32_t num_blocks_out_h = act_matrix_height_ntiles / out_block_h_ntiles;
     uint32_t num_blocks_act_w = act_matrix_width_ntiles / act_block_w_ntiles;
-    uint32_t num_blocks_weight_w = weight_matrix_width_ntiles / weight_block_w_ntiles;
+    //uint32_t num_blocks_weight_w = weight_matrix_width_ntiles / weight_block_w_ntiles;
 
     // act block info
-    uint32_t act_block_w_datums = act_matrix_width / num_blocks_act_w;
-    uint32_t act_block_h_datums = act_matrix_height / num_blocks_act_h;
+    uint32_t act_block_w_datums = act_block_w_ntiles * TILE_WIDTH;
+    uint32_t act_block_h_datums = act_block_h_ntiles * TILE_HEIGHT;
     TT_ASSERT(
         (act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH)) ||
         ((act_block_w_datums <= conv_act_size_c) && (conv_act_size_c % act_block_w_datums == 0)));
 
     // weight block info
-    uint32_t weight_block_w_datums = weight_matrix_width / num_blocks_weight_w;
+    uint32_t weight_block_w_datums = weight_block_w_ntiles * TILE_WIDTH;
     assert(weight_block_w_ntiles % out_subblock_w_ntiles == 0);
     uint32_t weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
     uint32_t weight_block_h_ntiles = act_block_w_ntiles;
     uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles;
 
-    uint32_t num_groups = num_blocks_act_h * num_blocks_act_w * num_blocks_weight_w;
+    //uint32_t num_groups = num_blocks_act_h * num_blocks_act_w * num_blocks_weight_w;
     // writer of conv op partially removes padding on the width
     // it removes the padding done for block width but it doesn't remove padding done for tiled width
-    uint32_t output_channels_padded_to_tile_width = round_up(output_channels, TILE_WIDTH);
-    assert(output_channels_padded_to_tile_width <= weight_matrix_width);
-    uint32_t output_width_num_tiles = output_channels_padded_to_tile_width / TILE_WIDTH;
-    uint32_t num_blocks_output_w =
-        (uint32_t)ceil((double)output_channels_padded_to_tile_width / (double)weight_block_w_datums);
-    uint32_t last_block_width_datums = (output_channels_padded_to_tile_width % weight_block_w_datums == 0)
-                                           ? weight_block_w_datums
-                                           : (output_channels_padded_to_tile_width % weight_block_w_datums);
-    assert(last_block_width_datums % TILE_WIDTH == 0);
+    // uint32_t output_channels_padded_to_tile_width = round_up(output_channels, TILE_WIDTH);
+    // assert(output_channels_padded_to_tile_width <= weight_matrix_width);
+    // uint32_t output_width_num_tiles = output_channels_padded_to_tile_width / TILE_WIDTH;
+    // uint32_t num_blocks_output_w =
+    //     (uint32_t)ceil((double)output_channels_padded_to_tile_width / (double)weight_block_w_datums);
+    // uint32_t last_block_width_datums = (output_channels_padded_to_tile_width % weight_block_w_datums == 0)
+    //                                        ? weight_block_w_datums
+    //                                        : (output_channels_padded_to_tile_width % weight_block_w_datums);
+    // assert(last_block_width_datums % TILE_WIDTH == 0);
 
     // sanity check
-    assert(num_blocks_output_w == num_blocks_weight_w);
+    //assert(num_blocks_output_w == num_blocks_weight_w);
 
     uint32_t out_block_h_datums = out_block_h_ntiles * TILE_HEIGHT;
 
@@ -1642,7 +1645,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     uint32_t act_noc_x = act_dram_noc_xy.x;
     uint32_t act_noc_y = act_dram_noc_xy.y;
 
-    assert(act_matrix_width_ntiles % act_block_w_ntiles == 0);
+    //assert(act_matrix_width_ntiles % act_block_w_ntiles == 0);
     assert(act_block_h_ntiles % out_subblock_h_ntiles == 0);
     assert(out_block_h_ntiles % out_subblock_h_ntiles == 0);
     uint32_t act_num_subblocks = act_block_h_ntiles / out_subblock_h_ntiles;
@@ -1677,17 +1680,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
 
     std::map<string, string> reader_defines;
 
-    if (act_matrix_height_unpadded < act_matrix_height) {
-        reader_defines["ACT_BLOCK_HEIGHT_PADDING"] = "1";
-    }
-
     if (conv_act_c_blocks > 1) {
         reader_defines["ACT_W_OUTER_BLOCKS"] = "1";
     }
-
-    uint32_t output_height_padded_to_tile_height = round_up(act_matrix_height_unpadded, TILE_HEIGHT);
-    uint32_t output_height_num_tiles = output_height_padded_to_tile_height / TILE_HEIGHT;
-    assert(output_height_num_tiles <= act_matrix_height_ntiles);
 
     uint32_t src_dram_act_buffer_size_bytes = src0_dram_buffer->size();
     uint32_t src_dram_weight_buffer_size_bytes = src1_dram_buffer->size();
@@ -1701,19 +1696,19 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         log_debug(LogOp, "multi_core_optimized_conv_sharded_v2_");
         log_debug(LogOp, "conv_act_size_h: {}", conv_act_size_h);
         log_debug(LogOp, "conv_act_size_w: {}", conv_act_size_w);
-        log_debug(LogOp, "act_matrix_height: {}", act_matrix_height);
+        //log_debug(LogOp, "act_matrix_height: {}", act_matrix_height);
         log_debug(LogOp, "act_matrix_width: {}", act_matrix_width);
-        log_debug(LogOp, "act_matrix_height_unpadded: {}", act_matrix_height_unpadded);
+        //log_debug(LogOp, "act_matrix_height_unpadded: {}", act_matrix_height_unpadded);
         log_debug(LogOp, "act_matrix_width_unpadded: {}", act_matrix_width_unpadded);
-        log_debug(LogOp, "act_matrix_height_ntiles: {}", act_matrix_height_ntiles);
-        log_debug(LogOp, "act_matrix_width_ntiles: {}", act_matrix_width_ntiles);
+        //log_debug(LogOp, "act_matrix_height_ntiles: {}", act_matrix_height_ntiles);
+        //log_debug(LogOp, "act_matrix_width_ntiles: {}", act_matrix_width_ntiles);
         log_debug(LogOp, "weight_matrix_width_ntiles: {}", weight_matrix_width_ntiles);
         log_debug(LogOp, "per_core_out_matrix_height_ntiles: {}", per_core_out_matrix_height_ntiles);
         log_debug(LogOp, "per_core_out_matrix_width_ntiles: {}", per_core_out_matrix_width_ntiles);
-        log_debug(LogOp, "num_blocks_act_h: {}", num_blocks_act_h);
+        //log_debug(LogOp, "num_blocks_act_h: {}", num_blocks_act_h);
         log_debug(LogOp, "num_blocks_act_w: {}", num_blocks_act_w);
-        log_debug(LogOp, "num_blocks_weight_w: {}", num_blocks_weight_w);
-        log_debug(LogOp, "num_blocks_out_h: {}", num_blocks_out_h);
+        //log_debug(LogOp, "num_blocks_weight_w: {}", num_blocks_weight_w);
+        //log_debug(LogOp, "num_blocks_out_h: {}", num_blocks_out_h);
         log_debug(LogOp, "act_dram_addr: {}", act_dram_addr);
         log_debug(LogOp, "act_block_h_ntiles: {}", act_block_h_ntiles);
         log_debug(LogOp, "act_block_h_datums: {}", act_block_h_datums);
@@ -1737,7 +1732,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         log_debug(LogOp, "out_subblock_h_ntiles: {}", out_subblock_h_ntiles);
         log_debug(LogOp, "out_subblock_w_ntiles: {}", out_subblock_w_ntiles);
         log_debug(LogOp, "out_subblock_num_tiles: {}", out_subblock_num_tiles);
-        log_debug(LogOp, "num_groups: {}", num_groups);
+        //log_debug(LogOp, "num_groups: {}", num_groups);
         log_debug(LogOp, "math_fidelity: {}", math_fidelity);
         log_debug(LogOp, "math_approx_mode: {}", math_approx_mode);
         log_debug(LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
@@ -1758,65 +1753,62 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     reader_defines["WINDOW_INNER"] = std::to_string(window_inner);
     log_debug(LogOp, "window_outer: {}, window_inner: {}", window_outer, window_inner);
 
-    assert(weight_matrix_width_ntiles % per_core_out_matrix_width_ntiles == 0);
+    //assert(weight_matrix_width_ntiles % per_core_out_matrix_width_ntiles == 0);
     assert(per_core_out_matrix_width_ntiles % weight_block_w_ntiles == 0);
     uint32_t num_blocks_weight_w_per_core = per_core_out_matrix_width_ntiles / weight_block_w_ntiles;
-    if (not weight_width_sliced) {
-        assert(num_blocks_weight_w_per_core == num_blocks_weight_w);
-    }
-    uint32_t num_weight_slices_width = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
-    uint32_t total_num_cores_per_weight_slice = 0;
-    uint32_t total_num_cores_per_act_slice = 0;  // only used when (BLOCK_SHARDING && !transpose_mcast)
-    if (weight_width_sliced) {
-        if (transpose_mcast) {
-            assert(num_cores_y % num_weight_slices_width == 0);
-            uint32_t num_cores_y_per_weight_slice_width = num_cores_y / num_weight_slices_width;
-            total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
-        } else {
-            assert(num_cores_x % num_weight_slices_width == 0);
-            uint32_t num_cores_x_per_weight_slice_width = num_cores_x / num_weight_slices_width;
-            uint32_t num_act_slices_height = act_matrix_height_ntiles / per_core_out_matrix_height_ntiles;
-            total_num_cores_per_act_slice = num_cores_x * num_cores_y / num_act_slices_height;
-            log_debug(LogOp, "total_num_cores_per_act_slice: {}", total_num_cores_per_act_slice);
-            total_num_cores_per_weight_slice = num_cores_x_per_weight_slice_width * num_cores_y;
-        }
-        assert(total_num_cores_per_weight_slice * per_core_out_matrix_height_ntiles == act_matrix_height_ntiles);
-    } else {
-        assert(num_cores_y % num_weight_slices_width == 0);
-        uint32_t num_cores_y_per_weight_slice_width = num_cores_y / num_weight_slices_width;
-        total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
-        assert(total_num_cores * per_core_out_matrix_height_ntiles >= act_matrix_height_ntiles);
-    }
+    //uint32_t num_weight_slices_width = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
+    //uint32_t total_num_cores_per_weight_slice = 0;
+    //uint32_t total_num_cores_per_act_slice = 0;  // only used when (BLOCK_SHARDING && !transpose_mcast)
+    //if (weight_width_sliced) {
+    //    if (transpose_mcast) {
+    //        assert(num_cores_y % num_weight_slices_width == 0);
+    //        uint32_t num_cores_y_per_weight_slice_width = num_cores_y / num_weight_slices_width;
+    //        total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
+    //    } else {
+    //        assert(num_cores_x % num_weight_slices_width == 0);
+    //        uint32_t num_cores_x_per_weight_slice_width = num_cores_x / num_weight_slices_width;
+    //        uint32_t num_act_slices_height = act_matrix_height_ntiles / per_core_out_matrix_height_ntiles;
+    //        total_num_cores_per_act_slice = num_cores_x * num_cores_y / num_act_slices_height;
+    //        log_debug(LogOp, "total_num_cores_per_act_slice: {}", total_num_cores_per_act_slice);
+    //        total_num_cores_per_weight_slice = num_cores_x_per_weight_slice_width * num_cores_y;
+    //    }
+    //    assert(total_num_cores_per_weight_slice * per_core_out_matrix_height_ntiles == act_matrix_height_ntiles);
+    //} else {
+    //    assert(num_cores_y % num_weight_slices_width == 0);
+    //    uint32_t num_cores_y_per_weight_slice_width = num_cores_y / num_weight_slices_width;
+    //    total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
+    //    assert(total_num_cores * per_core_out_matrix_height_ntiles >= act_matrix_height_ntiles);
+    //}
     assert(per_core_out_matrix_height_ntiles % act_block_h_ntiles == 0);
     uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
     assert(per_core_out_matrix_height_ntiles % out_block_h_ntiles == 0);
     uint32_t num_blocks_out_h_per_core = per_core_out_matrix_height_ntiles / out_block_h_ntiles;
-    bool act_height_sliced = per_core_out_matrix_height_ntiles < act_matrix_height_ntiles;
+    bool act_height_sliced = a_memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
     if (not act_height_sliced) {
-        assert(num_blocks_act_h_per_core == num_blocks_act_h);
-        assert(num_blocks_out_h_per_core == num_blocks_out_h);
-        assert(num_cores_x == 1);
+        //assert(num_blocks_act_h_per_core == num_blocks_act_h);
+        //assert(num_blocks_out_h_per_core == num_blocks_out_h);
+        //assert(num_cores_x == 1);
     }
 
-    log_debug(LogOp, "total_num_cores_per_weight_slice: {}", total_num_cores_per_weight_slice);
+    //log_debug(LogOp, "total_num_cores_per_weight_slice: {}", total_num_cores_per_weight_slice);
     log_debug(LogOp, "num_blocks_act_h_per_core: {}", num_blocks_act_h_per_core);
     log_debug(LogOp, "num_blocks_out_h_per_core: {}", num_blocks_out_h_per_core);
 
-    assert(act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0);
-    uint32_t total_active_num_cores_per_weight_slice = act_matrix_height_ntiles / per_core_out_matrix_height_ntiles;
-    assert(total_active_num_cores_per_weight_slice <= total_num_cores_per_weight_slice);
-    uint32_t total_noop_cores = total_num_cores_per_weight_slice - total_active_num_cores_per_weight_slice;
-    uint32_t total_active_num_cores = total_active_num_cores_per_weight_slice * num_weight_slices_width;
+    //assert(act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0);
+    //uint32_t total_active_num_cores_per_weight_slice = act_matrix_height_ntiles / per_core_out_matrix_height_ntiles;
+    //assert(total_active_num_cores_per_weight_slice <= total_num_cores_per_weight_slice);
+    uint32_t total_active_num_cores = a_shard_spec.grid.num_cores();
+    TT_FATAL(total_active_num_cores <= total_num_cores);
+    uint32_t total_noop_cores = total_num_cores - total_active_num_cores;
     if (weight_width_sliced) {
-        assert(total_noop_cores == 0);
-        assert(total_active_num_cores == total_num_cores);
+        TT_FATAL(total_noop_cores == 0);
     }
 
-    if (has_bias) {
-        assert(bias_ntiles % num_weight_slices_width == 0);
-        assert(bias_ntiles == weight_matrix_width_ntiles);
-    }
-    uint32_t bias_ntiles_per_core = bias_ntiles / num_weight_slices_width;
+    //if (has_bias) {
+        //assert(bias_ntiles % num_weight_slices_width == 0);
+        //assert(bias_ntiles == weight_matrix_width_ntiles);
+    //}
+    uint32_t bias_ntiles_per_core = per_core_out_matrix_width_ntiles;
 
     CoreRange all_cores(CoreCoord(0, 0), CoreCoord(num_cores_x - 1, num_cores_y - 1));
     assert(total_active_num_cores >= num_cores_x);
@@ -1893,9 +1885,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     }
 
     bool read_window_in_inner_loop = false;
-    uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles / conv_act_c_blocks;
+    uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles;
     bool fully_buffer_weights = false;
-    uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles / conv_act_c_blocks;
+    uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles;
     // TODO: This flag should be set in kernel logic but need this for create_CB
     if (a.memory_config().is_sharded() and ((weight_size_h == 3 and weight_size_w == 3 and
         (stride_h == 1 or stride_h == 2)) or (weight_size_h == 1 and weight_size_w == 1 and stride_h == 2)) and weight_width_sliced) {
@@ -1909,7 +1901,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         fully_buffer_weights = true;
     }
     uint32_t num_cb0_tilized_tiles = num_act_cb_tiles;
-
+    // todo: need to make weight bufferring configurable and remove hardcoded values
     if (fully_buffer_weights) {
         num_weight_cb_tiles *= window_outer;
     } else if (per_core_out_matrix_width_ntiles < 5 && per_core_out_matrix_height_ntiles < 22) {  // Q: where are these
@@ -1929,14 +1921,15 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     std::vector<uint32_t> writer_rt_args;
     std::vector<uint32_t> writer_compile_time_args;
 
-    uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
+    uint32_t conv_act_c_read_bytes = a_shard_spec.shape[-1] * a.element_size();
+    cout << "conv_act_c_read_bytes: " << conv_act_c_read_bytes << endl;
     uint32_t act_block_w_extra_align_bytes =
         (round_up(conv_act_size_c * weight_size_w, TILE_WIDTH) - (conv_act_size_c * weight_size_w)) * a.element_size();
-
-    uint32_t in0_block_w = act_block_w_ntiles / conv_act_c_blocks;
-    uint32_t in0_block_num_tiles = act_block_num_tiles / conv_act_c_blocks;
-    uint32_t in0_subblock_num_tiles = act_subblock_num_tiles / conv_act_c_blocks;
-    uint32_t in1_block_num_tiles = weight_block_num_tiles / conv_act_c_blocks;
+    cout << "act_block_w_extra_align_bytes: " << act_block_w_extra_align_bytes << endl;
+    uint32_t in0_block_w = act_block_w_ntiles; // todo (nitika): fix how this value is set in conv2d.cpp
+    uint32_t in0_block_num_tiles = act_block_num_tiles;
+    uint32_t in0_subblock_num_tiles = act_subblock_num_tiles;
+    uint32_t in1_block_num_tiles = weight_block_num_tiles;
     uint32_t in0_num_blocks_w =
         num_blocks_act_w * conv_act_c_blocks;  // Fold outer c_block loop together with weight_block_num_tiles = 9
 
@@ -1992,10 +1985,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
                 "reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp";
             writer_mcast_sender_kernel =
                 "tt_eager/tt_dnn/op_library/conv/kernels/"
-                "writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
+                "writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks_sharded.cpp";
             writer_mcast_receiver_kernel =
                 "tt_eager/tt_dnn/op_library/conv/kernels/"
-                "writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
+                "writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks_sharded.cpp";
             act_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
             act_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
@@ -2023,17 +2016,17 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
             if (split_reader) {
                 writer_mcast_sender_kernel =
                     "tt_eager/tt_dnn/op_library/conv/kernels/"
-                    "reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
+                    "reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks_sharded.cpp";
                 writer_mcast_receiver_kernel =
                     "tt_eager/tt_dnn/op_library/conv/kernels/"
-                    "reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
+                    "reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks_sharded.cpp";
             } else {
                 writer_mcast_sender_kernel =
                     "tt_eager/tt_dnn/op_library/conv/kernels/"
-                    "writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
+                    "writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks_sharded.cpp";
                 writer_mcast_receiver_kernel =
                     "tt_eager/tt_dnn/op_library/conv/kernels/"
-                    "writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
+                    "writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_block_sharded.cpp";
             }
         }
 
@@ -2123,7 +2116,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     if (packer_l1_acc_en) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
-
+    // todo: NEEDS CLEANUP. NOT ALL ARGS ARE USED!!
     writer_compile_time_args = {
         (uint32_t)(dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         out0_cb,
@@ -2142,11 +2135,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         // bias
         bias_ntiles_per_core,
 
-        output_width_num_tiles,                          // out_next_tile_stride_h
+        0,                          // out_next_tile_stride_h UNUSED
         1,                                               // out_next_tile_stride_w
-        out_subblock_h_ntiles * output_width_num_tiles,  // out_next_subblock_stride_h
+        0,  // out_next_subblock_stride_h UNUSED
         out_subblock_w_ntiles,                           // out_next_subblock_stride_w
-        act_block_h_ntiles * output_width_num_tiles,     // out_next_block_stride_h
+        0,     // out_next_block_stride_h UNUSED
         // weight_block_w_ntiles, // out_next_block_stride_w
         out_subblock_h_ntiles,
         out_subblock_w_ntiles,
@@ -2156,8 +2149,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         num_blocks_act_h_per_core,                      // out_num_blocks_h
         num_blocks_weight_w_per_core,                   // out_num_blocks_w
         act_block_h_ntiles,                             // out_block_height_num_tiles
-        output_height_num_tiles,                        // out_height_num_tiles without block shape padding
-        output_width_num_tiles,                         // out_width_num_tiles withoug block shape padding
+        0,                        // out_height_num_tiles without block shape padding
+        0,                         // out_width_num_tiles withoug block shape padding UNUSED
 
         out_dram_addr,
         weight_dram_addr,
@@ -2256,13 +2249,25 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         // per core specific args
         uint32_t act_slice_i;
         uint32_t weight_slice_i;
-        if (weight_width_sliced && transpose_mcast || !weight_width_sliced) {
-            act_slice_i = core_i % total_num_cores_per_weight_slice;
-            weight_slice_i = core_i / total_num_cores_per_weight_slice;
+        if (!weight_width_sliced) {
+            act_slice_i = core_i;
+            weight_slice_i = 0;
         } else {
-            act_slice_i = core_i / total_num_cores_per_act_slice;
-            weight_slice_i = core_i % total_num_cores_per_act_slice;
+            if (transpose_mcast) {
+                act_slice_i = core_i % num_cores_x;
+                weight_slice_i = core_i / num_cores_x;
+            } else {
+                act_slice_i = core_i / num_cores_x;
+                weight_slice_i = core_i % num_cores_x;
+            }
         }
+        // if (weight_width_sliced && transpose_mcast || !weight_width_sliced) {
+        //     act_slice_i = core_i % total_num_cores_per_weight_slice;
+        //     weight_slice_i = core_i / total_num_cores_per_weight_slice;
+        // } else {
+        //     act_slice_i = core_i / total_num_cores_per_act_slice;
+        //     weight_slice_i = core_i % total_num_cores_per_act_slice;
+        // }
         uint32_t out_start_tile_id = (act_slice_i * per_core_out_matrix_height_ntiles * weight_matrix_width_ntiles) +
                                      (weight_slice_i * per_core_out_matrix_width_ntiles);
         uint32_t out_start_tile_id_h = act_slice_i * per_core_out_matrix_height_ntiles;
@@ -2341,11 +2346,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
             weight_dram_addr,
             bias_dram_addr,
 
-            output_width_num_tiles,                          // out_next_tile_stride_h
+            0,                          // out_next_tile_stride_h UNUSED
             1,                                               // out_next_tile_stride_w
-            out_subblock_h_ntiles * output_width_num_tiles,  // out_next_subblock_stride_h
+            0,  // out_next_subblock_stride_h UNUSED
             out_subblock_w_ntiles,                           // out_next_subblock_stride_w
-            act_block_h_ntiles * output_width_num_tiles,     // out_next_block_stride_h
+            0,     // out_next_block_stride_h UNUSED
             weight_block_w_ntiles,                           // out_next_block_stride_w
             out_subblock_h_ntiles,
             out_subblock_w_ntiles,
@@ -2355,8 +2360,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
             num_blocks_act_h_per_core,                      // out_num_blocks_h
             num_blocks_weight_w_per_core,                   // out_num_blocks_w
             act_block_h_ntiles,                             // out_block_height_num_tiles
-            output_height_num_tiles,                        // out_height_num_tiles without block shape padding
-            output_width_num_tiles,                         // out_width_num_tiles withoug block shape padding
+            0,                        // out_height_num_tiles without block shape padding UNUSED
+            0,                         // out_width_num_tiles withoug block shape padding UNUSED
 
             out_start_tile_id,
             out_start_tile_id_h,

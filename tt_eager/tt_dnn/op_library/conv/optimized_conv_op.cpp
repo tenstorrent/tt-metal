@@ -270,7 +270,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     const vector<int> conv_params,
     uint32_t output_channels,
     bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
-    const OptimizedConvParallelizationConfig& parallelization_config,
+    const OptimizedConvParallelizationConfigNew& parallelization_config,
     const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment,
     MemoryConfig output_mem_config,
     DataType output_dtype,
@@ -303,7 +303,7 @@ void OptimizedConvNew::validate(const std::vector<Tensor>& input_tensors, const 
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     // TODO: ...
-    TT_FATAL(!input_tensor_a.memory_config().is_sharded());
+    TT_FATAL(input_tensor_a.memory_config().is_sharded());
     TT_FATAL(!input_tensor_b.memory_config().is_sharded());
     if (this->untilize_out) {
         TT_FATAL((this->output_dtype == DataType::BFLOAT16) || (this->output_dtype == DataType::FLOAT32));

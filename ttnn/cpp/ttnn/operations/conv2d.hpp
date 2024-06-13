@@ -107,11 +107,11 @@ uint32_t get_num_cores_channels_from_parallel_config(const ParallelConfig& pconf
 
 MemoryConfig create_sharded_memory_config_from_parallel_config(const Shape& tensor_shape, ParallelConfig& parallel_config, uint32_t tile_size);
 
-tt::tt_metal::OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw);
+tt::tt_metal::OptimizedConvParallelizationConfigNew determine_conv_op_parallel_config_from_conv_output_mem_config(const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw);
 
 std::pair<uint32_t, uint32_t> determine_largest_subblock_size(uint32_t block_height, uint32_t block_width, bool fp32_accum);
 
-tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(const ParallelConfig& parallel_config, const tt::tt_metal::OptimizedConvParallelizationConfig& conv_op_parallel_config, uint32_t padded_in_channels, uint32_t act_block_h_override, uint32_t window_w, bool fp32_accum, bool use_shallow_conv_variant);
+tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(const ParallelConfig& parallel_config, const tt::tt_metal::OptimizedConvParallelizationConfigNew& conv_op_parallel_config, uint32_t padded_in_channels, uint32_t act_block_h_override, uint32_t window_w, bool fp32_accum, bool use_shallow_conv_variant);
 
 std::tuple<ttnn::Tensor, ParallelConfig, bool>  shard_or_reshard_tensor_if_required(Device& device, const ttnn::Tensor& input_tensor_, const Conv2dConfig& conv_config, uint32_t batch_size, uint32_t height, uint32_t width, uint32_t in_channels, uint32_t out_channels);
 
