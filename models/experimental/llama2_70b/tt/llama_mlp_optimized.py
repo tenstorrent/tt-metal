@@ -8,13 +8,7 @@ import torch
 from torch import nn
 import ttnn.experimental as tt_lib
 import ttnn
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
-from models.experimental.llama2_70b.tt.llama_common import (
-    tt_all_gather_torch,
-    get_weight_cache_path,
-    get_weight_cache_path_ttnn,
-)
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+from ttnn import ShardTensorToMesh
 
 
 class TtLlamaMLP_optimized:
@@ -105,31 +99,6 @@ class TtLlamaMLP_optimized:
             cache_file_name=self.cache_path / w3_str,
         )
         self.w3 = ttnn.to_device(w3_ttnn, self.device_mesh)
-
-    def prepare_inputs(self, x):
-        x_multichip = ttnn.from_torch(
-            x,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            device=self.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
-        )
-
-        if self.model_config["LLM_MODE"] == "decode":
-            x_multichip = ttnn.to_memory_config(
-                x_multichip,
-                ttnn.create_sharded_memory_config(
-                    shape=(32, 8192 // 32),
-                    core_grid=ttnn.CoreGrid(y=4, x=8),
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                ),
-            )
-        elif self.model_config["LLM_MODE"] == "prefill":
-            x_multichip = ttnn.to_memory_config(x_multichip, self.model_config["DRAM_MEMCFG"])
-
-        return x_multichip
 
     def __call__(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
