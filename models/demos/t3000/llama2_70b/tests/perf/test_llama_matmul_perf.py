@@ -182,7 +182,7 @@ class Prefill_MLP_128:
         out = ttnn.mul(
             ff1_out,
             ff3_out,
-            output_mem_config=WIDTH_SHARDED_MEMCFG,
+            memory_config=WIDTH_SHARDED_MEMCFG,
         )
 
         out.deallocate()

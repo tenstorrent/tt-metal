@@ -312,8 +312,8 @@ class TtLlamaDecoder_galaxy:
                 ttnn.add(
                     residual[i],
                     attn_outs[i],
-                    output_mem_config=self.model_config["ATTN_ADD_OUTPUT_MEMCFG"],
-                    in_place=True,
+                    memory_config=self.model_config["ATTN_ADD_OUTPUT_MEMCFG"],
+                    output_tensor=residual[i],
                 )
             )
             attn_outs[i].deallocate(True)
@@ -339,8 +339,8 @@ class TtLlamaDecoder_galaxy:
             output[i] = ttnn.add(
                 output[i],
                 ffn_out[i],
-                output_mem_config=self.model_config["MLP_ADD_OUTPUT_MEMCFG"],
-                in_place=True,
+                memory_config=self.model_config["MLP_ADD_OUTPUT_MEMCFG"],
+                output_tensor=output[i],
             )
             ffn_out[i].deallocate(True)
 

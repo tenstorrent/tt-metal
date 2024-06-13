@@ -215,8 +215,8 @@ class TtLlamaMLP_optimized:
         hidden_states = ttnn.mul(
             w1_out,
             w3_out,
-            output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-            output_dtype=self.model_config["BFP8_DTYPE"],
+            memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+            dtype=self.model_config["BFP8_DTYPE"],
         )
         w1_out.deallocate(True)
         w3_out.deallocate(True)

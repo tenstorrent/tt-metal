@@ -207,7 +207,7 @@ class TtRobertaModel(nn.Module):
         encoder_extended_attention_mask = ttnn.mul(
             encoder_extended_attention_mask,
             self.mul_const,
-            output_mem_config=self.mem_config,
+            memory_config=self.mem_config,
         )
 
         return encoder_extended_attention_mask

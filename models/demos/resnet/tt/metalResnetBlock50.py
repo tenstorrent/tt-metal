@@ -1328,10 +1328,10 @@ class Bottleneck:
         out = ttnn.add(
             out,
             ds_out,
-            fused_activations,
-            self.out_memory_config,
-            self.model_config["ACTIVATIONS_DTYPE"],
-            self.out_in_place,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
+            memory_config=self.out_memory_config,
+            activations=fused_activations,
+            output_tensor=out if self.out_in_place else None,
         )
         if self.module_input_shape[0] == 20 and self.module_input_shape[1] == 56 and self.module_input_shape[3] == 64:
             out = tt_lib.tensor.move_sharded(out)

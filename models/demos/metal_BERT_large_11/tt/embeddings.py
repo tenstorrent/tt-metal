@@ -155,7 +155,7 @@ class TtEmbeddings:
 
         if self.position_embedding_type == "absolute":
             inputs_plus_token_type_embeddings_tt_tensor = ttnn.add(
-                inputs_embeds, token_type_embeddings, output_mem_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"]
+                inputs_embeds, token_type_embeddings, memory_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"]
             )
             if not self.model_config["DEALLOC_INPUT_EMBEDS_AFTER_POSITION_EMBEDS"]:
                 inputs_embeds.deallocate()

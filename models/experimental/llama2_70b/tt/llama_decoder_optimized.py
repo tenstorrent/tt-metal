@@ -337,8 +337,8 @@ class TtLlamaDecoder_optimized:
         output = ttnn.add(
             residual,
             attn_outs,
-            output_mem_config=self.model_config["ATTN_ADD_OUTPUT_MEMCFG"],
-            in_place=True,
+            memory_config=self.model_config["ATTN_ADD_OUTPUT_MEMCFG"],
+            output_tensor=residual,
         )
         attn_outs.deallocate(True)
 
@@ -386,8 +386,8 @@ class TtLlamaDecoder_optimized:
         output = ttnn.add(
             output,
             ffn_out,
-            output_mem_config=self.model_config["MLP_ADD_OUTPUT_MEMCFG"],
-            in_place=True,
+            memory_config=self.model_config["MLP_ADD_OUTPUT_MEMCFG"],
+            output_tensor=output,
         )
         ffn_out.deallocate(True)
 
