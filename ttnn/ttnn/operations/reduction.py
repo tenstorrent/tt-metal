@@ -8,11 +8,10 @@ from typing import Tuple, Union, Optional
 import tt_lib as ttl
 
 import ttnn
+import torch
 
 
 def _create_golden_function(torch_function_name):
-    import torch
-
     torch_function = getattr(torch, torch_function_name)
 
     def golden_function(input_tensor: ttnn.Tensor, dim: Optional[Union[int, Tuple[int]]] = None, keepdim=False, **_):
@@ -20,6 +19,13 @@ def _create_golden_function(torch_function_name):
             return torch_function(input_tensor, keepdim=keepdim)
         else:
             return torch_function(input_tensor, dim=dim, keepdim=keepdim)
+
+    return golden_function
+
+
+def _create_golden_function_topk():
+    def golden_function(input_tensor: ttnn.Tensor, k: int, dim: Optional[int] = None, largest=True, sorted=True, **_):
+        return torch.topk(input_tensor, k, dim=dim, largest=largest, sorted=sorted)
 
     return golden_function
 
@@ -36,6 +42,8 @@ std = ttnn.register_operation(golden_function=_create_golden_function("std"))(tt
 argmax = ttnn.register_operation(golden_function=_create_golden_function("argmax"))(
     ttnn._ttnn.operations.reduction.argmax
 )
+
+topk = ttnn.register_operation(golden_function=_create_golden_function_topk())(ttnn._ttnn.operations.reduction.topk)
 
 
 __all__ = []

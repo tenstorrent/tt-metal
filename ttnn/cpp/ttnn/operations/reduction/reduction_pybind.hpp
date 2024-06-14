@@ -12,6 +12,7 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions_pybind.hpp"
 #include "ttnn/operations/reduction/argmax/argmax_pybind.hpp"
+#include "ttnn/operations/reduction/topk/topk_pybind.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -26,6 +27,7 @@ void py_module(py::module& module) {
 
     // Special reductions
     detail::bind_reduction_argmax_operation(module);
+    detail::bind_reduction_topk_operation(module);
 }
 
 }  // namespace ttnn::operations::reduction
