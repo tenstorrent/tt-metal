@@ -20,7 +20,7 @@ using tt::tt_metal::Tensor;
 namespace tt::tt_metal::sliding_window {
 
 // Calculate Convolution on padded input buffer.
-owned_buffer::Buffer<bfloat16> RefConvOp(
+owned_buffer::Buffer<bfloat16> ref_conv_op(
     const Tensor &input_padded_tensor,
     Shape input_nchw_shape,
     uint32_t stride_h,
@@ -30,7 +30,7 @@ owned_buffer::Buffer<bfloat16> RefConvOp(
     Shape &out_golden_pyt_tensor_shape);
 
 // Calculate convolution using op_trace_metadata on padded input buffer.
-owned_buffer::Buffer<bfloat16> ConvUsingOpTraceMetadata(
+owned_buffer::Buffer<bfloat16> conv_using_op_trace_metadata(
     const owned_buffer::Buffer<bfloat16> &input_padded_tensor_buf,
     const vector<float> &filter_vector,
     const vector<uint32_t> &op_trace_metadata,
@@ -42,7 +42,7 @@ owned_buffer::Buffer<bfloat16> ConvUsingOpTraceMetadata(
     uint32_t out_tensor_size);
 
 // Calculate convolution using shards on padded input buffer.
-owned_buffer::Buffer<bfloat16> ConvUsingShardBoundaries(
+owned_buffer::Buffer<bfloat16> conv_using_shard_boundaries(
     const owned_buffer::Buffer<bfloat16> &input_padded_tensor_buf,
     const vector<float> &filter_vector,
     const vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries,
@@ -59,7 +59,7 @@ owned_buffer::Buffer<bfloat16> ConvUsingShardBoundaries(
     uint32_t out_tensor_size);
 
 // Calculate convolution using sliding window op configs on padded input buffer.
-owned_buffer::Buffer<bfloat16> ConvUsingSlidingWindowOpConfig(
+owned_buffer::Buffer<bfloat16> conv_using_sliding_window_op_config(
     const owned_buffer::Buffer<bfloat16> &input_padded_tensor_buf,
     const vector<float> &filter_vector,
     const vector<uint32_t> &op_trace_metadata,
@@ -75,20 +75,20 @@ owned_buffer::Buffer<bfloat16> ConvUsingSlidingWindowOpConfig(
     uint32_t out_tensor_size);
 
 // Calculate Padding using tensor metadata.
-vector<bool> PadMetadataFromTensorMetadata(const vector<std::pair<bool, uint32_pair_t>> &tensor_metadata);
+vector<bool> pad_metadata_from_tensor_metadata(const vector<std::pair<bool, uint32_pair_t>> &tensor_metadata);
 
 // Calculate Indices of pads in padded input buffer using halo kernel config's flattened pad config.
-vector<uint16_t> PadIndicesFromFlattenedPadConfig(
+vector<uint16_t> pad_indices_from_flattened_pad_config(
     const vector<vector<uint16_t>> &flattened_pad_config,
     const vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries);
 
 // Calculate Indices of valid inputs in padded input buffer using halo kernel config's flattened local configs.
-vector<uint16_t> InputIndicesFromFlattenedLocalConfig(
+vector<uint16_t> input_indices_from_flattened_local_config(
     const vector<vector<uint16_t>> &flattened_local_config,
     const vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries);
 
 // Calculate Indices of valid inputs in padded input buffer using halo kernel config's flattened remote configs.
-vector<uint16_t> InputIndicesFromFlattenedRemoteConfig(
+vector<uint16_t> input_indices_from_flattened_remote_config(
     tt::tt_metal::Device *device,
     const vector<vector<uint16_t>> &flattened_remote_config,
     const vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries,

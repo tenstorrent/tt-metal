@@ -13,7 +13,7 @@
 
 namespace tt::tt_metal::sliding_window {
 
-owned_buffer::Buffer<bfloat16> RefConvOp(
+owned_buffer::Buffer<bfloat16> ref_conv_op(
     const Tensor &input_padded_tensor,
     Shape input_nchw_shape,
     uint32_t stride_h,
@@ -56,7 +56,7 @@ owned_buffer::Buffer<bfloat16> RefConvOp(
     return out_golden_pyt_tensor;
 }
 
-owned_buffer::Buffer<bfloat16> ConvUsingOpTraceMetadata(
+owned_buffer::Buffer<bfloat16> conv_using_op_trace_metadata(
     const owned_buffer::Buffer<bfloat16> &input_padded_tensor_buf,
     const vector<float> &filter_vector,
     const vector<uint32_t> &op_trace_metadata,
@@ -84,7 +84,7 @@ owned_buffer::Buffer<bfloat16> ConvUsingOpTraceMetadata(
     return conv_tensor_buf;
 }
 
-owned_buffer::Buffer<bfloat16> ConvUsingShardBoundaries(
+owned_buffer::Buffer<bfloat16> conv_using_shard_boundaries(
     const owned_buffer::Buffer<bfloat16> &input_padded_tensor_buf,
     const vector<float> &filter_vector,
     const vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries,
@@ -127,7 +127,7 @@ owned_buffer::Buffer<bfloat16> ConvUsingShardBoundaries(
     return conv_tensor_buf;
 }
 
-owned_buffer::Buffer<bfloat16> ConvUsingSlidingWindowOpConfig(
+owned_buffer::Buffer<bfloat16> conv_using_sliding_window_op_config(
     const owned_buffer::Buffer<bfloat16> &input_padded_tensor_buf,
     const vector<float> &filter_vector,
     const vector<uint32_t> &op_trace_metadata,
@@ -167,7 +167,7 @@ owned_buffer::Buffer<bfloat16> ConvUsingSlidingWindowOpConfig(
     return conv_tensor_buf;
 }
 
-vector<bool> PadMetadataFromTensorMetadata(const vector<std::pair<bool, uint32_pair_t>> &tensor_metadata) {
+vector<bool> pad_metadata_from_tensor_metadata(const vector<std::pair<bool, uint32_pair_t>> &tensor_metadata) {
     vector<bool> ref_pad_metadata;
     for (auto i = 0; i < tensor_metadata.size(); i++) {
         auto is_pad_stick = tensor_metadata[i].first;
@@ -180,7 +180,7 @@ vector<bool> PadMetadataFromTensorMetadata(const vector<std::pair<bool, uint32_p
     return ref_pad_metadata;
 }
 
-vector<uint16_t> PadIndicesFromFlattenedPadConfig(
+vector<uint16_t> pad_indices_from_flattened_pad_config(
     const vector<vector<uint16_t>> &flattened_pad_config,
     const vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries) {
     vector<uint16_t> abs_indices;
@@ -198,7 +198,7 @@ vector<uint16_t> PadIndicesFromFlattenedPadConfig(
     return abs_indices;
 }
 
-vector<uint16_t> InputIndicesFromFlattenedLocalConfig(
+vector<uint16_t> input_indices_from_flattened_local_config(
     const vector<vector<uint16_t>> &flattened_local_config,
     const vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries) {
     vector<uint16_t> abs_indices;
@@ -217,7 +217,7 @@ vector<uint16_t> InputIndicesFromFlattenedLocalConfig(
     return abs_indices;
 }
 
-vector<uint16_t> InputIndicesFromFlattenedRemoteConfig(
+vector<uint16_t> input_indices_from_flattened_remote_config(
     tt::tt_metal::Device *device,
     const vector<vector<uint16_t>> &flattened_remote_config,
     const vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries,
