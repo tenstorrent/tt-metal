@@ -246,7 +246,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
 
 logaddexp2 = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.logaddexp2)
 
-div_fast = ttnn.register_operation()(ttnn._ttnn.operations.binary.div_fast)
+divide = ttnn.register_operation()(ttnn._ttnn.operations.binary.divide)
 
 bias_gelu = ttnn.register_operation()(ttnn._ttnn.operations.binary.bias_gelu)
 

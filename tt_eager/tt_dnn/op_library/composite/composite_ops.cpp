@@ -881,7 +881,7 @@ Tensor addcdiv(
 }
 
 Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, const MemoryConfig& output_mem_config) {
-    Tensor result = ttnn::div_fast(input_a, input_b);
+    Tensor result = ttnn::divide(input_a, input_b);
     if (accurate_mode == false) {  // If input_b is non-zero tensor
         return result;
     }

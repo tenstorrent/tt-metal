@@ -13,28 +13,28 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 
-using namespace tt::constants;
 
 namespace ttnn::operations::binary {
 
-using namespace tt::tt_metal;
-
 template <bool initialize_args>
 inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
-    Program& program,
-    const Tensor& a,
-    const Tensor& b,
-    const Tensor& output,
-    const KernelHandle binary_reader_kernel_id,
-    const KernelHandle unary_writer_kernel_id,
-    const KernelHandle eltwise_binary_kernel_id,
-    const CBHandle cb_src0,
-    const CBHandle cb_src1,
-    const CBHandle cb_output,
+    tt::tt_metal::Program& program,
+    const tt::tt_metal::Tensor& a,
+    const tt::tt_metal::Tensor& b,
+    const tt::tt_metal::Tensor& output,
+    const tt::tt_metal::KernelHandle binary_reader_kernel_id,
+    const tt::tt_metal::KernelHandle unary_writer_kernel_id,
+    const tt::tt_metal::KernelHandle eltwise_binary_kernel_id,
+    const tt::tt_metal::CBHandle cb_src0,
+    const tt::tt_metal::CBHandle cb_src1,
+    const tt::tt_metal::CBHandle cb_output,
     const CoreCoord compute_with_storage_grid_size,
     const uint32_t src0_single_tile_size,
     const uint32_t src1_single_tile_size,
     const uint32_t dst_single_tile_size){
+
+    using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     auto src_buffer_a = a.buffer();
     auto src_buffer_b = b.buffer();
@@ -247,7 +247,10 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
 
 }
 
-operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const Tensor &b, const Tensor& output, BinaryOpType op_type, const std::optional<std::vector<UnaryWithParam>> fused_activations) {
+operation::ProgramWithCallbacks eltwise_binary_multi_core(const ttnn::Tensor &a, const ttnn::Tensor &b, const ttnn::Tensor& output,
+                                                          BinaryOpType op_type, const std::optional<std::vector<tt::tt_metal::UnaryWithParam>> fused_activations) {
+    using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     Program program{};
 

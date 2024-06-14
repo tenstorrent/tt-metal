@@ -185,33 +185,28 @@ struct ExecuteBinary {
 
 }  // operations::binary
 
-template <ttnn::operations::binary::BinaryOpType OpType, bool InPlace>
-constexpr auto register_op(const char* name) {
-    return ttnn::register_operation<ttnn::operations::binary::ExecuteBinary<OpType, InPlace>>(name);
-}
+constexpr auto add = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::ADD, false>>("ttnn::add");
+constexpr auto add_ = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::ADD, true>>("ttnn::add_");
+constexpr auto subtract = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::SUB, false>>("ttnn::subtract");
+constexpr auto subtract_ = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::SUB, true>>("ttnn::subtract_");
+constexpr auto multiply = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::MUL, false>>("ttnn::multiply");
+constexpr auto multiply_ = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::MUL, true>>("ttnn::multiply_");
 
-constexpr auto add = register_op<ttnn::operations::binary::BinaryOpType::ADD, false>("ttnn::add");
-constexpr auto add_ = register_op<ttnn::operations::binary::BinaryOpType::ADD, true>("ttnn::add_");
-constexpr auto subtract = register_op<ttnn::operations::binary::BinaryOpType::SUB, false>("ttnn::subtract");
-constexpr auto subtract_ = register_op<ttnn::operations::binary::BinaryOpType::SUB, true>("ttnn::subtract_");
-constexpr auto multiply = register_op<ttnn::operations::binary::BinaryOpType::MUL, false>("ttnn::multiply");
-constexpr auto multiply_ = register_op<ttnn::operations::binary::BinaryOpType::MUL, true>("ttnn::multiply_");
+constexpr auto eq = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::EQ, false>>("ttnn::eq");
+constexpr auto ne = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::NE, false>>("ttnn::ne");
+constexpr auto ge = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::GTE, false>>("ttnn::ge");
+constexpr auto gt = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::GT, false>>("ttnn::gt");
+constexpr auto le = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::LTE, false>>("ttnn::le");
+constexpr auto lt = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::LT, false>>("ttnn::lt");
+constexpr auto logical_and = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::LOGICAL_AND, false>>("ttnn::logical_and");
+constexpr auto logical_or = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::LOGICAL_OR, false>>("ttnn::logical_or");
+constexpr auto ldexp = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::LDEXP, false>>("ttnn::ldexp");
 
-constexpr auto eq = register_op<ttnn::operations::binary::BinaryOpType::EQ, false>("ttnn::eq");
-constexpr auto ne = register_op<ttnn::operations::binary::BinaryOpType::NE, false>("ttnn::ne");
-constexpr auto ge = register_op<ttnn::operations::binary::BinaryOpType::GTE, false>("ttnn::ge");
-constexpr auto gt = register_op<ttnn::operations::binary::BinaryOpType::GT, false>("ttnn::gt");
-constexpr auto le = register_op<ttnn::operations::binary::BinaryOpType::LTE, false>("ttnn::le");
-constexpr auto lt = register_op<ttnn::operations::binary::BinaryOpType::LT, false>("ttnn::lt");
-constexpr auto logical_and = register_op<ttnn::operations::binary::BinaryOpType::LOGICAL_AND, false>("ttnn::logical_and");
-constexpr auto logical_or = register_op<ttnn::operations::binary::BinaryOpType::LOGICAL_OR, false>("ttnn::logical_or");
-constexpr auto ldexp = register_op<ttnn::operations::binary::BinaryOpType::LDEXP, false>("ttnn::ldexp");
-
-constexpr auto logaddexp = register_op<ttnn::operations::binary::BinaryOpType::LOGADDEXP, false>("ttnn::logaddexp");
-constexpr auto logaddexp2 = register_op<ttnn::operations::binary::BinaryOpType::LOGADDEXP2, false>("ttnn::logaddexp2");
-constexpr auto squared_difference = register_op<ttnn::operations::binary::BinaryOpType::SQUARED_DIFFERENCE, false>("ttnn::squared_difference");
-constexpr auto div_fast = register_op<ttnn::operations::binary::BinaryOpType::DIV_FAST, false>("ttnn::div_fast");
-constexpr auto bias_gelu = register_op<ttnn::operations::binary::BinaryOpType::BIAS_GELU, false>("ttnn::bias_gelu");
+constexpr auto logaddexp = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::LOGADDEXP, false>>("ttnn::logaddexp");
+constexpr auto logaddexp2 = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::LOGADDEXP2, false>>("ttnn::logaddexp2");
+constexpr auto squared_difference = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::SQUARED_DIFFERENCE, false>>("ttnn::squared_difference");
+constexpr auto divide = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::DIV_FAST, false>>("ttnn::divide");
+constexpr auto bias_gelu = ttnn::register_operation<operations::binary::ExecuteBinary<operations::binary::BinaryOpType::BIAS_GELU, false>>("ttnn::bias_gelu");
 
 
 template <typename InputBType>

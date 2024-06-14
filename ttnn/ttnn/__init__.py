@@ -18,6 +18,9 @@ import ttnn._ttnn
 
 CPP_CONFIG: ttnn._ttnn.core.Config = ttnn._ttnn.CONFIG
 
+UnaryWithParam = _tt_lib.tensor.FusibleActivationWithParam
+UnaryOpType = _tt_lib.tensor.FusibleActivation
+
 
 @dataclasses.dataclass
 class Config:
@@ -440,7 +443,7 @@ from ttnn.operations.binary import (
     ne,
     isclose,
     bias_gelu,
-    div_fast,
+    divide,
 )
 
 from ttnn.operations.ternary import (
