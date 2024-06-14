@@ -27,8 +27,10 @@ COPY build_metal.sh /scripts/build_metal.sh
 # Setup Env variables to setup Python Virtualenv - Install TT-Metal Python deps
 ENV TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 ENV PYTHON_ENV_DIR=${TT_METAL_INFRA_DIR}/tt-metal/python_env
-RUN python3 -m venv $PYTHON_ENV_DIR
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+
+# Disable using venv since this is isolated in a docker container
+# RUN python3 -m venv $PYTHON_ENV_DIR
+# ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 
 # Copy requirements from tt-metal folders with requirements.txt docs
 COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
@@ -53,5 +55,12 @@ RUN cd $TT_METAL_INFRA_DIR \
     && ./configure \
     && make -j$(nproc)
 ENV PATH="$TT_METAL_INFRA_DIR/gdb-14.2/gdb:$PATH"
+
+# Can only be installed after Clang-17 installed
+RUN apt-get -y update \
+    && apt-get install -y --no-install-recommends \
+    libc++-17-dev \
+    libc++abi-17-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 CMD ["tail", "-f", "/dev/null"]
