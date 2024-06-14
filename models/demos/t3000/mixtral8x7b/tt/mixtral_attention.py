@@ -409,15 +409,23 @@ class TtMixtralAttention(LightweightModule):
             output_mem_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        attn_output_11SH = ttnn.all_gather(
+        output_11SH = ttnn.linear(
             attn_output_11SH,
-            dim=3,
-            num_links=1,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            self.wo,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            compute_kernel_config=self.compute_kernel,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        attn_output_11SH = ttnn.linear(attn_output_11SH, self.wo, core_grid=ttnn.CoreGrid(y=7, x=6))
+        attn_output_11SH.deallocate(True)
 
-        return attn_output_11SH
+        output_11BH_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1)
+        output_11SH.deallocate(True)
+        output_11BH_reduced = ttnn.experimental.operations.primary.moreh_sum(
+            output_11BH_gathered, dim=1  # , output=None, compute_kernel_config=None
+        )
+        output_11BH_gathered.deallocate(True)
+        return output_11BH_reduced
 
     def forward(
         self, xs, start_pos, current_pos, attn_masks, rot_mats, transformation_mats=None, user_id=0, mode="decode"

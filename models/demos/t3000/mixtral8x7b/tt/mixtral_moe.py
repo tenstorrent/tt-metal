@@ -113,7 +113,7 @@ class TtMoeLayer(LightweightModule):
             output_11BH_gathered = ttnn.all_gather(results_11BH, dim=1, num_links=1)
             results_11BH.deallocate(True)
             output_11BH_gathered = ttnn.experimental.operations.primary.moreh_sum(
-                output_11BH_gathered, dims=[1], output=None, compute_kernel_config=None
+                output_11BH_gathered, dim=1  # , output=None, compute_kernel_config=None
             )
         else:
             output_11BH_gathered = ttnn.all_gather(results_11BH, dim=2, num_links=1)

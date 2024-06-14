@@ -90,7 +90,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
         del attention_input, attn_mask
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
-            .squeeze(2)
+            .squeeze(0)
             .view(batch, seq_len, -1)
         )  # [ batch, seq, hidden_dim]
         positions = torch.LongTensor(range(seq_len))
