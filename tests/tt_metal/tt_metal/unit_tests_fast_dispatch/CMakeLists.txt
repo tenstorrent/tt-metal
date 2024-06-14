@@ -7,6 +7,7 @@ set(UNIT_TESTS_FD_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/command_queue/test_events.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/command_queue/test_HostAsyncCQ.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/sfpu/sfpu_compute.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/multichip/test_device_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/multichip/test_eth_EnqueueProgram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/multichip/test_eth_ring_gather_EnqueueProgram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pipelining/basic_pipeline.cpp
@@ -23,6 +24,5 @@ target_include_directories(unit_tests_fast_dispatch PRIVATE
     ${PROJECT_SOURCE_DIR}/tests
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/common
-    ${gtest_SOURCE_DIR}/include
 )
 set_target_properties(unit_tests_fast_dispatch PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/tt_metal)

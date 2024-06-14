@@ -14,7 +14,7 @@ namespace ttnn {
 namespace multi_device {
 
 
-DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_ids, size_t l1_small_size)
+DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size)
     : device_grid(device_grid)
 {
     auto [num_rows, num_cols] = device_grid;
@@ -26,10 +26,40 @@ DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_id
 
     //TODO: for DevicePool feature delete CreateDevices and merge with this function
     //TODO: should there be an explicit CloseDevices call somewhere?
-    managed_devices = tt::tt_metal::detail::CreateDevices(device_ids, 1, l1_small_size);
-    for (int i = 0; i < num_requested_devices; i++) {
-        mesh_devices.emplace_back(device_ids[i], std::unique_ptr<Device>(managed_devices.at(device_ids[i])));
+    bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
+    std::vector<chip_id_t> mmio_device_ids = {};
+    if (is_galaxy) {
+        mmio_device_ids.push_back(0);
+        if (num_requested_devices > 8) {
+            mmio_device_ids.push_back(1);
+        }
+        if (num_requested_devices > 16) {
+            mmio_device_ids.push_back(2);
+        }
+        if (num_requested_devices > 24) {
+            mmio_device_ids.push_back(3);
+        }
+    } else {
+        mmio_device_ids = device_ids;
     }
+    managed_devices = tt::tt_metal::detail::CreateDevices(mmio_device_ids, 1, l1_small_size, trace_region_size);
+    if (is_galaxy) {
+        DeviceIds galaxy_device_ids;
+        for (const auto &[dev_id, dev]: managed_devices) {
+            galaxy_device_ids.emplace_back(dev_id);
+        }
+        for (int i = 0; i < num_requested_devices; i++) {
+            mesh_devices.emplace_back(device_ids[i], managed_devices.at(galaxy_device_ids[i]));
+        }
+    } else {
+      for (int i = 0; i < num_requested_devices; i++) {
+            mesh_devices.emplace_back(device_ids[i], managed_devices.at(device_ids[i]));
+      }
+    }
+    /*
+    for (const auto& [dev_id, dev]: mesh_devices) {
+        std::cout << "dev_id " << dev_id << " dev " << dev->id() << std::endl;
+    }*/
 }
 
 
@@ -44,7 +74,7 @@ Device* DeviceMesh::get_device(int queried_device_id)
 {
     for (const auto& [device_id, device] : mesh_devices) {
         if (device_id == queried_device_id) {
-            return device.get();
+            return device;
         }
     }
     TT_THROW("User has provided an invalid device index");
@@ -55,7 +85,7 @@ std::vector<Device*> DeviceMesh::get_devices() const
 {
     std::vector<Device*> devices;
     for (const auto& [device_id, device] : mesh_devices) {
-        devices.push_back(device.get());
+        devices.push_back(device);
     }
     return devices;
 }
@@ -76,14 +106,7 @@ int DeviceMesh::num_devices() const
 }
 
 void DeviceMesh::close_devices() {
-    // TODO: change api to a yield, shouldn't allow closing sub grids in a pool of devices
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
-    for (const auto &[device_id, device] : managed_devices) {
-        if (device->is_initialized()) {
-            tt::tt_metal::detail::DeallocateBuffers(device);
-            device->close();
-        }
-    }
+    tt::tt_metal::detail::CloseDevices(managed_devices);
     mesh_devices.clear();
     managed_devices.clear();
 }

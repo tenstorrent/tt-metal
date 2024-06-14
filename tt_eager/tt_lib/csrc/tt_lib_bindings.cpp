@@ -27,13 +27,14 @@ void DeviceModule(py::module &m_device) {
         .value("GRAYSKULL", tt::ARCH::GRAYSKULL)
         .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0);
 
-    auto pyDevice = py::class_<Device>(m_device, "Device", "Class describing a Tenstorrent accelerator device.");
+    auto pyDevice = py::class_<Device, std::unique_ptr<Device, py::nodelete>>(m_device, "Device", "Class describing a Tenstorrent accelerator device.");
     pyDevice
         .def(
-            py::init<>([](int device_id, size_t l1_small_size) { return Device(device_id, 1, l1_small_size); }),
+            py::init<>([](int device_id, size_t l1_small_size, size_t trace_region_size) { return Device(device_id, 1, l1_small_size, trace_region_size); }),
             "Create device.",
             py::arg("device_id"),
-            py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE)
+            py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
+            py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE)
         .def("id", &Device::id, "Device's ID")
         .def("arch", &Device::arch, "Device's arch")
         .def(
@@ -76,7 +77,7 @@ void DeviceModule(py::module &m_device) {
         )doc");
     m_device.def(
         "CreateDevice",
-        [](int device_id, uint8_t num_hw_cqs, size_t l1_small_size) { return CreateDevice(device_id, num_hw_cqs, l1_small_size); },
+        [](int device_id, uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size) { return CreateDevice(device_id, num_hw_cqs, l1_small_size, trace_region_size); },
         R"doc(
         Creates an instance of TT device.
 
@@ -88,11 +89,12 @@ void DeviceModule(py::module &m_device) {
     )doc",
         py::arg("device_id"),
         py::arg("num_hw_cqs") = 1,
-        py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE);
+        py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
+        py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE);
     m_device.def(
         "CreateDevices",
-        [](std::vector<int> device_ids, uint8_t num_hw_cqs, size_t l1_small_size) {
-            return tt::tt_metal::detail::CreateDevices(device_ids, num_hw_cqs, l1_small_size);
+        [](std::vector<int> device_ids, uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size) {
+            return tt::tt_metal::detail::CreateDevices(device_ids, num_hw_cqs, l1_small_size, trace_region_size);
         },
         R"doc(
         Creates an instance of TT device.
@@ -105,7 +107,8 @@ void DeviceModule(py::module &m_device) {
     )doc",
         py::arg("device_ids"),
         py::arg("num_hw_cqs") = 1,
-        py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE);
+        py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
+        py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE);
     m_device.def("CloseDevice", &CloseDevice, R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
@@ -212,10 +215,10 @@ void DeviceModule(py::module &m_device) {
         Deallocate all buffers associated with Device handle
     )doc");
     m_device.def("BeginTraceCapture",
-        [] (Device* device, const uint8_t cq_id, const uint32_t trace_buff_size) {
+        [] (Device* device, const uint8_t cq_id) {
             uint32_t tid = Trace::next_id();
-            device->push_work([device, cq_id, tid, trace_buff_size] () mutable {
-                device->begin_trace(cq_id, tid, trace_buff_size);
+            device->push_work([device, cq_id, tid] () mutable {
+                device->begin_trace(cq_id, tid);
             });
             return tid;
         }, R"doc(
@@ -276,6 +279,7 @@ void DeviceModule(py::module &m_device) {
     )doc");
 
     m_device.attr("DEFAULT_L1_SMALL_SIZE") = py::int_(DEFAULT_L1_SMALL_SIZE);
+    m_device.attr("DEFAULT_TRACE_REGION_SIZE") = py::int_(DEFAULT_TRACE_REGION_SIZE);
 }
 
 void ProfilerModule(py::module &m_profiler) {

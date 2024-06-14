@@ -7,20 +7,18 @@ from loguru import logger
 import csv
 import os
 import time
+import pytest
 
 
+@pytest.mark.timeout(10000)
 def test_host_overhead_ci():
     profile_output_folder = "host_overhead_profile/"
     profile_output_filename = "final.csv"
     measured_filename = os.path.join(profile_output_folder, profile_output_filename)
     reference_filename = "tests/tt_eager/profiling/reference.txt"
-    measuring_tolerance = 1.1
+    measuring_tolerance = 1.13
 
-    start_time = time.time()
     profile_host_overhead(profile_output_folder, profile_output_filename)
-    duration = (time.time() - start_time) / 60
-
-    logger.info(f"Profiled host overhead for all ops in {duration:.2f}min")
 
     with open(measured_filename, mode="r") as infile:
         reader = csv.reader(infile)

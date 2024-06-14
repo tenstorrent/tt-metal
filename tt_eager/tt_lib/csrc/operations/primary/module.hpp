@@ -66,6 +66,12 @@ void py_module(py::module& m_primary) {
             py::arg("out_subblock_w").noconvert(),
             py::arg("per_core_M").noconvert(),
             py::arg("per_core_N").noconvert())
+        .def_readwrite("compute_with_storage_grid_size", &MatmulMultiCoreReuseProgramConfig::compute_with_storage_grid_size)
+        .def_readwrite("in0_block_w", &MatmulMultiCoreReuseProgramConfig::in0_block_w)
+        .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseProgramConfig::out_subblock_h)
+        .def_readwrite("out_subblock_w", &MatmulMultiCoreReuseProgramConfig::out_subblock_w)
+        .def_readwrite("per_core_M", &MatmulMultiCoreReuseProgramConfig::per_core_M)
+        .def_readwrite("per_core_N", &MatmulMultiCoreReuseProgramConfig::per_core_N)
         .def("__repr__", [](const MatmulMultiCoreReuseProgramConfig& config) { return fmt::format("{}", config); });
 
     py::class_<MatmulMultiCoreReuseMultiCastProgramConfig>(m_primary, "MatmulMultiCoreReuseMultiCastProgramConfig")
@@ -78,7 +84,8 @@ void py_module(py::module& m_primary) {
                 std::size_t,
                 std::size_t,
                 bool,
-                std::optional<UnaryWithParam>>(),
+                std::optional<UnaryWithParam>,
+                bool>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("in0_block_w").noconvert(),
@@ -87,8 +94,17 @@ void py_module(py::module& m_primary) {
             py::arg("per_core_M").noconvert(),
             py::arg("per_core_N").noconvert(),
             py::arg("transpose_mcast").noconvert(),
-            py::arg("fused_activation"))
+            py::arg("fused_activation"),
+            py::arg("fuse_batch").noconvert() = true)
+        .def_readwrite("compute_with_storage_grid_size", &MatmulMultiCoreReuseMultiCastProgramConfig::compute_with_storage_grid_size)
+        .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCastProgramConfig::in0_block_w)
+        .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseMultiCastProgramConfig::out_subblock_h)
+        .def_readwrite("out_subblock_w", &MatmulMultiCoreReuseMultiCastProgramConfig::out_subblock_w)
+        .def_readwrite("per_core_M", &MatmulMultiCoreReuseMultiCastProgramConfig::per_core_M)
+        .def_readwrite("per_core_N", &MatmulMultiCoreReuseMultiCastProgramConfig::per_core_N)
+        .def_readwrite("transpose_mcast", &MatmulMultiCoreReuseMultiCastProgramConfig::transpose_mcast)
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastProgramConfig::fused_activation)
+        .def_readwrite("fuse_batch", &MatmulMultiCoreReuseMultiCastProgramConfig::fuse_batch)
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastProgramConfig& config) {
             return fmt::format("{}", config);
         });
@@ -115,7 +131,15 @@ void py_module(py::module& m_primary) {
             py::arg("fuse_batch").noconvert(),
             py::arg("fused_activation"),
             py::arg("mcast_in0").noconvert())
+        .def_readwrite("compute_with_storage_grid_size", &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size)
+        .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::in0_block_w)
+        .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_subblock_h)
+        .def_readwrite("out_subblock_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_subblock_w)
+        .def_readwrite("per_core_M", &MatmulMultiCoreReuseMultiCast1DProgramConfig::per_core_M)
+        .def_readwrite("per_core_N", &MatmulMultiCoreReuseMultiCast1DProgramConfig::per_core_N)
+        .def_readwrite("fuse_batch", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fuse_batch)
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fused_activation)
+        .def_readwrite("mcast_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::mcast_in0)
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
             return fmt::format("{}", config);
         });
@@ -132,6 +156,9 @@ void py_module(py::module& m_primary) {
             py::arg("per_core_M").noconvert(),
             py::arg("per_core_N").noconvert(),
             py::arg("fused_activation"))
+        .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::in0_block_w)
+        .def_readwrite("per_core_M", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::per_core_M)
+        .def_readwrite("per_core_N", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::per_core_N)
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::fused_activation)
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
             return fmt::format("{}", config);
@@ -539,10 +566,10 @@ void py_module(py::module& m_primary) {
     m_primary.def(
         "moreh_adamw",
         &moreh_adamw,
-        py::arg("param").noconvert(),
+        py::arg("param_in").noconvert(),
         py::arg("grad").noconvert(),
-        py::arg("exp_avg").noconvert(),
-        py::arg("exp_avg_sq").noconvert(),
+        py::arg("exp_avg_in").noconvert(),
+        py::arg("exp_avg_sq_in").noconvert(),
         py::arg("lr").noconvert() = 0.001f,
         py::arg("beta1").noconvert() = 0.9f,
         py::arg("beta2").noconvert() = 0.999f,
@@ -550,8 +577,13 @@ void py_module(py::module& m_primary) {
         py::arg("weight_decay").noconvert() = 0.01f,
         py::arg("step").noconvert(),
         py::arg("amsgrad").noconvert() = false,
-        py::arg("max_exp_avg_sq").noconvert() = std::nullopt,
+        py::arg("max_exp_avg_sq_in").noconvert() = std::nullopt,
+        py::arg("param_out").noconvert() = std::nullopt,
+        py::arg("exp_avg_out").noconvert() = std::nullopt,
+        py::arg("exp_avg_sq_out").noconvert() = std::nullopt,
+        py::arg("max_exp_avg_sq_out").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
         "Performs a moreh_adamw operation.
         )doc");
@@ -788,6 +820,8 @@ void py_module(py::module& m_primary) {
         py::arg("dim"),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("in_place") = false,
+        py::arg("output_tensor").noconvert() = std::nullopt,
+        py::arg("queue_id").noconvert() = 0,
         R"doc(
         Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
 
@@ -814,6 +848,7 @@ void py_module(py::module& m_primary) {
             "dim", "Dimension on which to broadcast", "BcastOpDim", "W, H, HW", "Yes"
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
             "in_place", "Whether to perform bcast in place, without allocating space for output tensor", "Bool", "Default is false", "No"
+            "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
     )doc");
 
     py::enum_<MorehSoftmaxOpParallelizationStrategy>(m_primary, "MorehSoftmaxOpParallelizationStrategy")
@@ -901,7 +936,8 @@ void py_module(py::module& m_primary) {
         &moreh_sum,
         py::arg("input").noconvert(),
         py::kw_only(),
-        py::arg("dims").noconvert() = std::vector<int64_t>(),
+        py::arg("dim").noconvert() = std::nullopt,
+        py::arg("keep_batch_dim").noconvert() = false,
         py::arg("output").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
@@ -923,7 +959,8 @@ void py_module(py::module& m_primary) {
         py::arg("output_grad").noconvert(),
         py::arg("input").noconvert(),
         py::kw_only(),
-        py::arg("dims").noconvert() = std::vector<int64_t>(),
+        py::arg("dim").noconvert() = std::nullopt,
+        py::arg("keep_batch_dim").noconvert() = false,
         py::arg("input_grad").noconvert() = std::nullopt,
         py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,

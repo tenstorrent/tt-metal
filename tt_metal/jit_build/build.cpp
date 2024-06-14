@@ -216,7 +216,9 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bo
             if (this->is_fw_) {
                 this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0.S");
                 this->srcs_.push_back("tt_metal/hw/firmware/src/ncrisc.cc");
-                this->srcs_.push_back("tt_metal/hw/toolchain/ncrisc-halt.S");
+                if (this->env_.arch_ == tt::ARCH::GRAYSKULL or this->env_.arch_ == tt::ARCH::WORMHOLE_B0) {
+                    this->srcs_.push_back("tt_metal/hw/toolchain/ncrisc-halt.S");
+                }
             } else {
                 this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
                 this->srcs_.push_back("tt_metal/hw/firmware/src/ncrisck.cc");

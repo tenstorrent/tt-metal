@@ -47,8 +47,19 @@ static string kernel_file_name = "kernel_names.txt";
 // Flag to signal whether the watcher server has been killed due to a thrown exception.
 static std::atomic<bool> watcher_killed_due_to_error = false;
 
-// Description of thrown exception from watcher server, used for testing purposes.
-static string watcher_exception_message = "";
+static std::mutex watcher_exception_message_mutex;
+
+// Function to get the static string
+static std::string& watcher_exception_message() {
+    static std::string message = "";
+    return message;
+}
+
+// Function to set the static string
+static void set_watcher_exception_message(const std::string& message) {
+    std::lock_guard<std::mutex> lock(watcher_exception_message_mutex);
+    watcher_exception_message() = message;
+}
 
 static double get_elapsed_secs() {
     std::chrono::time_point now_time = std::chrono::system_clock::now();
@@ -352,7 +363,7 @@ static void dump_noc_sanity_status(
         log_ring_buffer(device, core);
         log_running_kernels(launch_msg);
         // Save the error string for checking later in unit tests.
-        watcher::watcher_exception_message = fmt::format("{}: {}", core_str, error_msg);
+        set_watcher_exception_message(fmt::format("{}: {}", core_str, error_msg));
         TT_THROW(error_reason);
     }
 }
@@ -383,7 +394,7 @@ static void dump_assert_status(
             log_waypoint(core, launch_msg, debug_status);
             log_ring_buffer(device, core);
             log_running_kernels(launch_msg);
-            watcher::watcher_exception_message = error_msg;
+            set_watcher_exception_message(error_msg);
             TT_THROW("Watcher detected tripped assert and stopped device.");
             break;
         }
@@ -1082,7 +1093,7 @@ void watcher_attach(Device *device) {
             watcher::create_kernel_file();
         }
         watcher::watcher_killed_due_to_error = false;
-        watcher::watcher_exception_message = "";
+        watcher::set_watcher_exception_message("");
 
         watcher::enabled = true;
 
@@ -1153,8 +1164,6 @@ bool watcher_server_killed_due_to_error() { return watcher::watcher_killed_due_t
 
 void watcher_server_set_error_flag(bool val) { watcher::watcher_killed_due_to_error = val; }
 
-string watcher_server_get_exception_message() { return watcher::watcher_exception_message; }
-
 void watcher_clear_log() { watcher::create_log_file(); }
 
 string watcher_get_log_file_name() {
@@ -1185,6 +1194,12 @@ void watcher_read_kernel_ids_from_file() {
         int k_id = stoi(s.substr(0, s.find(":")));  // Format is {k_id}: {kernel}
         watcher::kernel_names.push_back(s.substr(s.find(":") + 2));
     }
+}
+
+// Function to get the static string value
+std::string get_watcher_exception_message() {
+    std::lock_guard<std::mutex> lock(watcher::watcher_exception_message_mutex);
+    return watcher::watcher_exception_message();
 }
 
 }  // namespace tt

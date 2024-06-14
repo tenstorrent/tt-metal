@@ -182,7 +182,7 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
     }
 
     // TODO: Add pad_n to run_with_autoformat when needed
-    return operation::run_with_autoformat(Transpose{transpose_dim, output_mem_config}, {a}, {}, 0, pad_c /*, pad_n */).at(0);
+    return operation::run_with_autoformat(Transpose{transpose_dim, output_mem_config}, {a}, {}, {}, 0, pad_c /*, pad_n */).at(0);
 }
 
 Tensor transpose(const Tensor &a, std::int64_t dim1, std::int64_t dim2, const MemoryConfig& output_mem_config) {

@@ -6,7 +6,7 @@ set(COMMON_SRCS
 )
 
 add_library(common OBJECT ${COMMON_SRCS})
-target_link_libraries(common PUBLIC compiler_flags metal_header_directories)
+target_link_libraries(common PUBLIC compiler_flags metal_header_directories umd_device)
 
 target_include_directories(common PUBLIC
     ${UMD_HOME}

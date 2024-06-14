@@ -72,6 +72,7 @@ void reduce_c() {
     }
 
    reduce_revert_delta<reduce_dim>(out_cb);
+   UNPACK(tensix_sync()); // Workaround for issue #9370
 }
 
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
@@ -274,7 +275,6 @@ void matmul_blocks(const uint32_t& in0_cb, const uint32_t& in1_cb, const uint32_
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
 
-
     mm_block_init_short(in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     unpack_reconfig_data_format(in1_cb, in0_cb);
@@ -283,9 +283,10 @@ void matmul_blocks(const uint32_t& in0_cb, const uint32_t& in1_cb, const uint32_
     uint32_t output_num_tiles = M * N;
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
-    uint32_t in1_index_offset = 0;
+
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
+        uint32_t in1_index_offset = 0;
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
             tile_regs_acquire();
 
@@ -308,7 +309,7 @@ void matmul_blocks(const uint32_t& in0_cb, const uint32_t& in1_cb, const uint32_
             }
             tile_regs_release();
             cb_push_back(out_cb, out_subblock_num_tiles);
-            in1_index_offset += in1_subblock * subblock_w;
+            in1_index_offset += subblock_w;
         }
         in0_index_offset += subblock_h * in0_block_w;
     }

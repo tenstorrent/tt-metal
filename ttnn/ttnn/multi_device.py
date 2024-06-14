@@ -34,7 +34,10 @@ def get_device_ids() -> List[int]:
 
 
 def open_device_mesh(
-    device_grid: ttnn.DeviceGrid, device_ids: List[int], l1_small_size: int = ttl.device.DEFAULT_L1_SMALL_SIZE
+    device_grid: ttnn.DeviceGrid,
+    device_ids: List[int],
+    l1_small_size: int = ttl.device.DEFAULT_L1_SMALL_SIZE,
+    trace_region_size: int = ttl.device.DEFAULT_TRACE_REGION_SIZE,
 ):
     """
     open_device_mesh(device_grid: ttnn.DeviceGrid, device_ids: int) -> ttnn.DeviceMesh:
@@ -44,7 +47,10 @@ def open_device_mesh(
     assert len(device_ids) > 0
 
     return ttnn._ttnn.multi_device.DeviceMesh(
-        device_grid=device_grid.as_tuple(), device_ids=device_ids, l1_small_size=l1_small_size
+        device_grid=device_grid.as_tuple(),
+        device_ids=device_ids,
+        l1_small_size=l1_small_size,
+        trace_region_size=trace_region_size,
     )
 
 
@@ -59,14 +65,19 @@ def close_device_mesh(device_mesh):
 
 @contextlib.contextmanager
 def create_device_mesh(
-    device_grid: ttnn.DeviceGrid, device_ids: List[int], l1_small_size: int = ttl.device.DEFAULT_L1_SMALL_SIZE
+    device_grid: ttnn.DeviceGrid,
+    device_ids: List[int],
+    l1_small_size: int = ttl.device.DEFAULT_L1_SMALL_SIZE,
+    trace_region_size: int = ttl.device.DEFAULT_TRACE_REGION_SIZE,
 ):
     """
     create_device_mesh(device_grid: ttnn.DeviceGrid, device_ids: List[int]) -> ttnn.DeviceMesh
 
     Context manager for opening and closing a device.
     """
-    device_mesh = open_device_mesh(device_grid=device_grid, device_ids=device_ids, l1_small_size=l1_small_size)
+    device_mesh = open_device_mesh(
+        device_grid=device_grid, device_ids=device_ids, l1_small_size=l1_small_size, trace_region_size=trace_region_size
+    )
     try:
         yield device_mesh
     finally:

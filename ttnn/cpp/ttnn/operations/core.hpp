@@ -194,11 +194,11 @@ inline Tensor reallocate(const Tensor& input_tensor, const std::optional<MemoryC
 }
 
 // Trace APIs - Single Device
-inline uint32_t begin_trace_capture(Device* device, const uint32_t trace_buff_size, const uint8_t cq_id) {
+inline uint32_t begin_trace_capture(Device* device, const uint8_t cq_id) {
     uint32_t tid = Trace::next_id();
     device->push_work(
-        [device, trace_buff_size, cq_id, tid] () mutable {
-            device->begin_trace(cq_id, tid, trace_buff_size);
+        [device, cq_id, tid] () mutable {
+            device->begin_trace(cq_id, tid);
         });
     return tid;
 }
@@ -233,13 +233,13 @@ inline void release_trace(Device* device, const uint32_t tid) {
 }
 
 // Trace APIs - Multi Device
-inline uint32_t begin_trace_capture(DeviceMesh* device, const uint32_t trace_buff_size, const uint8_t cq_id = 0) {
+inline uint32_t begin_trace_capture(DeviceMesh* device, const uint8_t cq_id = 0) {
     auto workers = device->get_devices();
     uint32_t tid = Trace::next_id();
     for (auto& worker : workers) {
         worker->push_work(
-            [worker, trace_buff_size, cq_id, tid] () mutable {
-                worker->begin_trace(cq_id, tid, trace_buff_size);
+            [worker, cq_id, tid] () mutable {
+                worker->begin_trace(cq_id, tid);
             });
     }
     return tid;

@@ -2,12 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import torch
 import pytest
 from loguru import logger
 
 import tt_lib
 import ttnn
+
+if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    from tracy import signpost
+
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
@@ -51,7 +56,7 @@ def run_test_FalconCausalLM_end_to_end(
     model_location_generator,
     expected_compile_time,
     expected_inference_time,
-    inference_iterations,
+    warmup_iterations,
 ):
     # Clear global profiler state before starting measurements
     profiler.clear()
@@ -134,15 +139,9 @@ def run_test_FalconCausalLM_end_to_end(
             ]
         )
     elif llm_mode == "decode":
-        tt_inputs, tt_attention_mask_host = tt_FalconCausalLM.model_preprocessing(
+        tt_inputs, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
-        attention_mask_memconfig = model_config["ATTN_MASK_MEMCFG"]
-        num_max_tokens = nearest_32(kv_cache_len + 1)
-        if attention_mask_memconfig.is_sharded():
-            attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-            attn_mask_shard_shape[-1] = num_max_tokens
-            attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
     profiler.end("processing_of_input")
 
     # First run to fill compile cache ----------------------------------------------------
@@ -151,6 +150,10 @@ def run_test_FalconCausalLM_end_to_end(
 
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
+
+    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+        signpost("COMPILE_RUN")
+
     if llm_mode == "prefill":
         tt_outs = []
         for user_id in range(batch):
@@ -168,9 +171,6 @@ def run_test_FalconCausalLM_end_to_end(
         tt_out = tt_outs
 
     elif llm_mode == "decode":
-        tt_attention_mask = [
-            tt_attention_mask_host[i].to(devices[i], attention_mask_memconfig) for i in range(len(devices))
-        ]
         tt_out, tt_layer_present = tt_FalconCausalLM(
             input_ids=tt_inputs,
             llm_mode=llm_mode,
@@ -189,26 +189,23 @@ def run_test_FalconCausalLM_end_to_end(
     del tt_inputs
     del tt_attention_mask
 
-    # Prepare inputs
-    if llm_mode == "prefill":
-        model_inputs = torch.split(model_input, 1)
-        tt_inputs, tt_attention_mask = zip(
-            *[
-                tt_FalconCausalLM.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
-                for m_i in model_inputs
-            ]
-        )
-    elif llm_mode == "decode":
-        tt_attention_mask = [
-            tt_attention_mask_host[i].to(devices[i], attention_mask_memconfig) for i in range(len(devices))
-        ]
-
     # Run warmup interations - profiler still disabled
     profiler.start(f"model_warmup_run_for_inference")
-    for _ in range(inference_iterations - 1):
+
+    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+        signpost("WARMUP_RUNS")
+
+    for _ in range(warmup_iterations):
         for device in devices:
             tt_lib.device.DumpDeviceProfiler(device)
         if llm_mode == "prefill":
+            model_inputs = torch.split(model_input, 1)
+            tt_inputs, tt_attention_mask = zip(
+                *[
+                    tt_FalconCausalLM.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
+                    for m_i in model_inputs
+                ]
+            )
             tt_outs = []
             for user_id in range(batch):
                 tt_out, tt_layer_present = tt_FalconCausalLM(
@@ -221,16 +218,12 @@ def run_test_FalconCausalLM_end_to_end(
                     use_cache=use_cache,
                 )
                 tt_outs.append(tt_out)
-            model_inputs = torch.split(model_input, 1)
-            tt_inputs, tt_attention_mask = zip(
-                *[
-                    tt_FalconCausalLM.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
-                    for m_i in model_inputs
-                ]
-            )
             tt_outs = [[tt_o.cpu() for tt_o in tt_out] for tt_out in tt_outs]
 
         elif llm_mode == "decode":
+            tt_inputs, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
+                llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
+            )
             tt_out, tt_layer_present = tt_FalconCausalLM(
                 input_ids=tt_inputs,
                 llm_mode=llm_mode,
@@ -239,21 +232,34 @@ def run_test_FalconCausalLM_end_to_end(
                 layer_past_len=kv_cache_len,
                 use_cache=use_cache,
             )
-            tt_attention_mask = [
-                tt_attention_mask_host[i].to(devices[i], attention_mask_memconfig) for i in range(len(devices))
-            ]
             tt_out = [tt_o.cpu() for tt_o in tt_out]
     profiler.end(f"model_warmup_run_for_inference")
     for device in devices:
         ttnn.device.synchronize_device(device)
 
+    # Prepare inputs
+    if llm_mode == "prefill":
+        model_inputs = torch.split(model_input, 1)
+        tt_inputs, tt_attention_mask = zip(
+            *[
+                tt_FalconCausalLM.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
+                for m_i in model_inputs
+            ]
+        )
+    elif llm_mode == "decode":
+        tt_inputs, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
+            llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
+        )
+
     # Run for perf iteration - profiler enabled
-    for device in devices:
-        tt_lib.device.DumpDeviceProfiler(device)
     profiler.enable()
     enable_persistent_kernel_cache()
     logger.info(f"Enable profiler and enable binary and compile cache")
     profiler.start(f"model_run_for_inference")
+
+    if not os.getenv("CI") == "true":
+        signpost("PERF_RUN")
+
     if llm_mode == "prefill":
         tt_outs = []
         for user_id in range(batch):
@@ -279,6 +285,7 @@ def run_test_FalconCausalLM_end_to_end(
             use_cache=use_cache,
         )
         tt_out = [tt_o.cpu() for tt_o in tt_out]
+
     profiler.end(f"model_run_for_inference")
     for device in devices:
         ttnn.device.synchronize_device(device)
@@ -306,7 +313,6 @@ def run_test_FalconCausalLM_end_to_end(
 
     tokens_per_s_per_user = 1 / second_iter_time
     tokens_per_s_overall = tokens_per_s_per_user * batch * seq_len
-    logger.info(f"{inference_iterations} Iterations inference time: {profiler.get('model_run_for_inference')}")
     logger.info(f"Time per iteration: {second_iter_time}")
     if llm_mode == "prefill":
         logger.info(f"Prompt per s per user: {tokens_per_s_per_user}")
@@ -314,43 +320,38 @@ def run_test_FalconCausalLM_end_to_end(
         logger.info(f"Tokens per s per user: {tokens_per_s_per_user}")
     logger.info(f"Tokens per s overall: {tokens_per_s_overall}")
 
-    # This script will assert since this is not a part of regular perf pipeline
-    # assert second_iter_time <= expected_inference_time
-    # assert compile_time <= expected_compile_time
+    # This script does not asser the expected vs actual time since this is done based on the perf report and as part of the perf pipeline
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.models_performance_bare_metal
+@pytest.mark.model_perf_t3000
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len, expected_compile_time, expected_inference_time, inference_iterations",
+    "llm_mode, batch, seq_len, kv_cache_len, expected_compile_time, expected_inference_time, num_layers, model_config_str",
     (
-        ("prefill", 1, 32, 0, 60, 0.22, 10),
-        ("prefill", 1, 128, 0, 60, 0.30, 10),
-        ("prefill", 1, 2048, 0, 60, 0.30, 10),
-        ("decode", 32, 1, 128, 60, 0.22, 10),
+        ("prefill", 1, 32, 0, 60, 0.37 + 0.04, 60, "BFLOAT8_B-DRAM"),
+        ("prefill", 1, 128, 0, 60, 0.39 + 0.04, 60, "BFLOAT8_B-DRAM"),
+        ("prefill", 1, 2048, 0, 60, 0.94 + 0.1, 60, "BFLOAT8_B-DRAM"),
+        ("prefill", 1, 32, 0, 60, 0.42 + 0.04, 60, "BFLOAT16-DRAM"),
+        ("prefill", 1, 128, 0, 60, 0.46 + 0.04, 60, "BFLOAT16-DRAM"),
+        ("prefill", 1, 2048, 0, 60, 1.18 + 0.1, 60, "BFLOAT16-DRAM"),
+        ("decode", 32, 1, 128, 60, 0.21 + 0.02, 60, "BFLOAT8_B-SHARDED"),
     ),
     ids=[
-        "prefill_seq32",
-        "prefill_seq128",
-        "prefill_seq2048",
+        "prefill_seq32_bfp8",
+        "prefill_seq128_bfp8",
+        "prefill_seq2048_bfp8",
+        "prefill_seq32_fp16",
+        "prefill_seq128_fp16",
+        "prefill_seq2048_fp16",
         "decode_batch32",
     ],
-)
-@pytest.mark.parametrize(
-    "num_layers",
-    (
-        1,
-        60,
-    ),
-    ids=["layers_1", "layers_60"],
 )
 @pytest.mark.parametrize(
     "model_version",
     ("tiiuae/falcon-40b-instruct",),
     ids=["falcon_40b"],
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT8_B-SHARDED", "BFLOAT8_B-DRAM", "BFLOAT16-DRAM"))
 def test_perf_bare_metal(
     num_devices,
     model_version,
@@ -360,7 +361,6 @@ def test_perf_bare_metal(
     kv_cache_len,
     expected_compile_time,
     expected_inference_time,
-    inference_iterations,
     num_layers,
     request,
     model_config_str,
@@ -402,5 +402,5 @@ def test_perf_bare_metal(
         model_location_generator,
         expected_compile_time,
         expected_inference_time,
-        inference_iterations,
+        warmup_iterations=10,
     )
