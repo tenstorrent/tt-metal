@@ -78,7 +78,7 @@ void init(int argc, char **argv) {
     if (test_args::has_command_option(input_args, "-h") ||
         test_args::has_command_option(input_args, "--help")) {
         log_info(LogTest, "Usage:");
-        log_info(LogTest, "    -t: test type, 0:uni_write 1:mcast_write 2:dram paged_write 3:l1 paged_write 4:packed_write (default {})", 0);
+        log_info(LogTest, "    -t: test type, 0:uni_write 1:mcast_write 2:dram paged_write 3:l1 paged_write 4:packed_write 5:packed_write_large (default {})", 0);
         log_info(LogTest, "    -w: warm-up iterations before starting timer (default {}), ", DEFAULT_WARMUP_ITERATIONS);
         log_info(LogTest, "    -i: host iterations (default {})", DEFAULT_ITERATIONS);
         log_info(LogTest, "   -wx: right-most worker in grid (default {})", all_workers_g.end.x);
@@ -173,19 +173,21 @@ bool is_paged_test() {
 
 // Unicast or Multicast Linear Write Test.
 void gen_linear_or_packed_write_test(uint32_t& cmd_count,
-                                bool is_linear_write,
-                                bool is_linear_multicast,
-                                Device *device,
-                                vector<uint32_t>& dispatch_cmds,
-                                CoreRange worker_cores,
-                                DeviceData& device_data,
-                                uint32_t page_size) {
+                                     Device *device,
+                                     vector<uint32_t>& dispatch_cmds,
+                                     CoreRange worker_cores,
+                                     DeviceData& device_data,
+                                     uint32_t page_size,
+                                     bool is_linear_multicast = false) {
+
 
     uint32_t total_size_bytes = 0;
     uint32_t buffer_size = prefetcher_buffer_size_g - page_size; // for terminate
+    bool is_linear_write = (test_type_g == 0 || test_type_g == 1);
     log_info(tt::LogTest, "Generating linear: {} multicast: {} Write Test with dispatch buffer page_size: {}", is_linear_write, is_linear_multicast, page_size);
 
-    while (total_size_bytes < buffer_size) {
+    bool done = false;
+    while (!done && total_size_bytes < buffer_size) {
         total_size_bytes += sizeof(CQDispatchCmd);
         if (debug_g) {
             total_size_bytes += sizeof(CQDispatchCmd);
@@ -194,7 +196,9 @@ void gen_linear_or_packed_write_test(uint32_t& cmd_count,
         uint32_t xfer_size_bytes = 0;
 
         // Test specific stuff starts here.
-        if (is_linear_write) {
+        switch (test_type_g) {
+        case 0:
+        case 1: {
             uint32_t xfer_size_16B = (std::rand() & (MAX_XFER_SIZE_16B - 1));
             if (total_size_bytes + (xfer_size_16B << 4) > buffer_size) {
                 xfer_size_16B = (buffer_size - total_size_bytes) >> 4;
@@ -209,8 +213,14 @@ void gen_linear_or_packed_write_test(uint32_t& cmd_count,
             } else {
                 gen_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_cores.start, device_data, xfer_size_bytes);
             }
-        } else {
+            break;
+        }
+        case 4:
             gen_rnd_dispatcher_packed_write_cmd(device, dispatch_cmds, device_data);
+            break;
+        case 5:
+            done = gen_rnd_dispatcher_packed_write_large_cmd(device, worker_cores, dispatch_cmds, device_data, buffer_size - total_size_bytes);
+            break;
         }
 
         uint32_t page_size_words = page_size / sizeof(uint32_t);
@@ -294,17 +304,20 @@ void gen_cmds(Device *device,
     switch (test_type_g) {
     case 0:
         TT_FATAL(all_workers_g.size() == 1, "Should use single core for unicast write test");
-        gen_linear_or_packed_write_test(cmd_count, true, false, device, dispatch_cmds, worker_cores, device_data, page_size);
+        gen_linear_or_packed_write_test(cmd_count, device, dispatch_cmds, worker_cores, device_data, page_size);
         break;
     case 1:
-        gen_linear_or_packed_write_test(cmd_count, true, true, device, dispatch_cmds, worker_cores, device_data, page_size);
+        gen_linear_or_packed_write_test(cmd_count, device, dispatch_cmds, worker_cores, device_data, page_size, true);
         break;
     case 2:
     case 3:
         gen_paged_write_test(cmd_count, is_paged_dram_test(), device, dispatch_cmds, worker_cores, device_data, page_size);
         break;
     case 4:
-        gen_linear_or_packed_write_test(cmd_count, false, false, device, dispatch_cmds, worker_cores, device_data, page_size);
+        gen_linear_or_packed_write_test(cmd_count, device, dispatch_cmds, worker_cores, device_data, page_size);
+        break;
+    case 5:
+        gen_linear_or_packed_write_test(cmd_count, device, dispatch_cmds, worker_cores, device_data, page_size);
         break;
     }
 
