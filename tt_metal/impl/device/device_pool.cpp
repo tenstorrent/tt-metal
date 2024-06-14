@@ -158,19 +158,8 @@ bool DevicePool::is_device_active(chip_id_t id) const {
     }
 }
 
-void DevicePool::add_devices_to_pool(
-    std::vector<chip_id_t> device_ids,
-    const uint8_t num_hw_cqs,
-    size_t l1_small_size,
-    size_t trace_region_size,
-    const std::vector<uint32_t>& l1_bank_remap,
-    bool skip_remote_devices) {
-    this->l1_small_size = l1_small_size;
-    this->trace_region_size = trace_region_size;
-    this->num_hw_cqs = num_hw_cqs;
-    this->l1_bank_remap = l1_bank_remap;
-    bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
-    if (skip_remote_devices) {
+void DevicePool::add_devices_to_pool(std::vector<chip_id_t> device_ids) {
+    if (this->skip_remote_devices) {
         for (const auto& device_id : device_ids) {
             const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
             TT_ASSERT(device_id == mmio_device_id, "Skipping remote devices is only available for mmio devices");
@@ -189,30 +178,8 @@ void DevicePool::add_devices_to_pool(
                     // Don't support multi cqs on R chip yet
                     continue;
                 }
-                all_device_ids.push_back(mmio_controlled_device_id);
-            }
-        }
-        for (const auto &device_id : all_device_ids) {
-            // For Galaxy init, we only need to loop over mmio devices
-            const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-            if (is_galaxy and mmio_device_id != device_id) {
-                continue;
-            }
-            if (not this->is_device_active(mmio_device_id)) {
-                log_debug(tt::LogMetal, "MMIO Device {} Tunnel Count: {}", mmio_device_id, tt::Cluster::instance().get_mmio_device_tunnel_count(mmio_device_id));
-                log_debug(tt::LogMetal, "MMIO Device {} Tunnel Depth: {}", mmio_device_id, tt::Cluster::instance().get_mmio_device_max_tunnel_depth(mmio_device_id));
-                log_debug(tt::LogMetal, "MMIO Device {} Tunnel Stop: {}", mmio_device_id, tt::Cluster::instance().get_device_tunnel_depth(mmio_device_id));
-                int core_assigned_to_device = device_to_core_map.at(mmio_device_id);
-                this->activate_device(mmio_device_id);
-
-                auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
-                for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
-                    //Need to create devices from farthest to the closest.
-                    for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0 ; ts--) {
-                        uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
-                        log_debug(tt::LogMetal, "Tunnel {} Device {} Tunnel Stop: {}", t, mmio_controlled_device_id, ts);
-                        this->activate_device(mmio_controlled_device_id);
-                    }
+                if (not this->is_device_active(mmio_controlled_device_id)) {
+                    this->activate_device(mmio_controlled_device_id);
                 }
             }
         }
@@ -222,8 +189,41 @@ void DevicePool::add_devices_to_pool(
 
 void DevicePool::init_firmware_on_active_devices() const {
     for (const auto& dev : this->get_all_active_devices()) {
+        // For Galaxy init, we only need to loop over mmio devices
+        const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(dev->id());
+        if (mmio_device_id != dev->id()) {
+            continue;
+        }
+        log_debug(
+            tt::LogMetal,
+            "MMIO Device {} Tunnel Count: {}",
+            mmio_device_id,
+            tt::Cluster::instance().get_mmio_device_tunnel_count(mmio_device_id));
+        log_debug(
+            tt::LogMetal,
+            "MMIO Device {} Tunnel Depth: {}",
+            mmio_device_id,
+            tt::Cluster::instance().get_mmio_device_max_tunnel_depth(mmio_device_id));
+        log_debug(
+            tt::LogMetal,
+            "MMIO Device {} Tunnel Stop: {}",
+            mmio_device_id,
+            tt::Cluster::instance().get_device_tunnel_depth(mmio_device_id));
+
+        auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
         this->initialize_device(dev);
         detail::InitDeviceProfiler(dev);
+        if (not this->skip_remote_devices) {
+            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
+                // Need to create devices from farthest to the closest.
+                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
+                    uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
+                    log_debug(tt::LogMetal, "Tunnel {} Device {} Tunnel Stop: {}", t, mmio_controlled_device_id, ts);
+                    this->initialize_device(this->devices[mmio_controlled_device_id].get());
+                    detail::InitDeviceProfiler(this->devices[mmio_controlled_device_id].get());
+                }
+            }
+        }
     }
 }
 
@@ -248,8 +248,6 @@ DevicePool::DevicePool(
         // Bind main thread to cores not being used by workers
         device_cpu_allocator::bind_current_thread_to_free_cores(free_cores);
     }
-
-    this->add_devices_to_pool(device_ids, num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, skip_remote_devices);
 }
 
 Device* DevicePool::get_active_device(chip_id_t device_id) const {
