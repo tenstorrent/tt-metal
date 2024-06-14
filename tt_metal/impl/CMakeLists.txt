@@ -17,6 +17,7 @@ set(IMPL_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_server.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/trace/trace.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/trace/trace_buffer.cpp
 )
 
 add_library(impl OBJECT ${IMPL_SRC})

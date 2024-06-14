@@ -25,8 +25,8 @@ struct TraceBuffer {
     std::shared_ptr<detail::TraceDescriptor> desc;
     std::shared_ptr<Buffer> buffer;
 
-    TraceBuffer(std::shared_ptr<detail::TraceDescriptor> desc, std::shared_ptr<Buffer> buffer) : desc(desc), buffer(buffer) {
-    }
+    TraceBuffer(std::shared_ptr<detail::TraceDescriptor> desc, std::shared_ptr<Buffer> buffer);
+    ~TraceBuffer();
 };
 
 }  // namespace tt::tt_metal
