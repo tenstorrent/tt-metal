@@ -9,7 +9,7 @@ set(TENSOR_SRCS
 
 add_library(tensor OBJECT ${TENSOR_SRCS})
 
-target_link_libraries(tensor PUBLIC metal_header_directories compiler_flags umd_device)
+target_link_libraries(tensor PUBLIC metal_header_directories compiler_flags)
 target_include_directories(tensor PUBLIC
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}

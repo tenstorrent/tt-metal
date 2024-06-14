@@ -5,12 +5,12 @@
 #pragma once
 
 #include <string>
-#include <boost/functional/hash.hpp>
 
 #include "hostdevcommon/kernel_structs.h"
 #include "tt_metal/common/base_types.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/common/assert.hpp"
+#include "tt_metal/common/utils.hpp"
 
 namespace tt
 {
@@ -184,7 +184,7 @@ inline void hash_hlk_args(size_t& seed, void *hlk_args, size_t hlk_args_size) {
     memcpy(buffer, hlk_args, hlk_args_size);
 
     for (int i = 0; i < hlk_args_size; i++) {
-        boost::hash_combine(seed, std::hash<char>{}(buffer[i]));
+        tt::utils::hash_combine(seed, std::hash<char>{}(buffer[i]));
     }
 }
 
@@ -196,13 +196,13 @@ struct std::hash<tt::tt_hlk_desc>
         std::size_t hash_value = 0;
         for (int i = 0; i < 8; i++)
         {
-            boost::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_input_buf_dataformat(i)));
-            boost::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_param_buf_dataformat(i)));
-            boost::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_output_buf_dataformat(i)));
-            boost::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_intermediate_buf_dataformat(i)));
+            tt::utils::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_input_buf_dataformat(i)));
+            tt::utils::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_param_buf_dataformat(i)));
+            tt::utils::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_output_buf_dataformat(i)));
+            tt::utils::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_intermediate_buf_dataformat(i)));
         }
-        boost::hash_combine(hash_value, hash<MathFidelity>{}(obj.get_hlk_math_fidelity()));
-        boost::hash_combine(hash_value, hash<bool>{}(obj.get_hlk_math_approx_mode()));
+        tt::utils::hash_combine(hash_value, hash<MathFidelity>{}(obj.get_hlk_math_fidelity()));
+        tt::utils::hash_combine(hash_value, hash<bool>{}(obj.get_hlk_math_approx_mode()));
 
         // Get hash for hlk_args here
         void *hlk_args = obj.get_hlk_args();

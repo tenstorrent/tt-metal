@@ -14,8 +14,6 @@
 #include <vector>
 #include <map>
 
-#include <boost/functional/hash.hpp>
-
 #include "tt_metal/common/tt_backend_api_types.hpp" // These are the types exported to frontend team...
 #include "tt_metal/common/assert.hpp"
 #include "hostdevcommon/kernel_structs.h"

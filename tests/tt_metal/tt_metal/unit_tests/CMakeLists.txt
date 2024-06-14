@@ -34,7 +34,7 @@ set(UNIT_TESTS_SRC
 
 add_executable(unit_tests ${UNIT_TESTS_SRC} $<TARGET_OBJECTS:unit_tests_common_o>)
 
-target_link_libraries(unit_tests PUBLIC test_metal_common_libs)
+target_link_libraries(unit_tests PRIVATE test_metal_common_libs Boost::smart_ptr)
 target_include_directories(unit_tests PRIVATE
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}

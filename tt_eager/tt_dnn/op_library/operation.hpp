@@ -225,7 +225,7 @@ namespace detail {
 // TODO: move 'NotImplemented' to a library file
 class NotImplemented : public std::logic_error {
    public:
-    NotImplemented(const std::string& message) : std::logic_error(message) {};
+    NotImplemented(const std::string& message) : std::logic_error(message){};
 };
 
 template <class T, class... Args>
@@ -394,7 +394,7 @@ struct HostOperation final {
         }},
 
         // Initialize methods
-        get_type_name{[]() -> const std::string { return tt::stl::get_type_name<T>(); }},
+        get_type_name{[]() -> const std::string { return std::string(tt::stl::get_type_name<T>()); }},
         validate{[this](const Tensors& input_tensors) {
             const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&this->type_erased_storage);
             operation.validate(input_tensors);
@@ -519,7 +519,7 @@ struct DeviceOperation final {
             if constexpr (detail::implements_get_type_name<T>()) {
                 return operation.get_type_name();
             } else {
-                return tt::stl::get_type_name<T>();
+                return std::string(tt::stl::get_type_name<T>());
             }
         }},
         validate_impl_{
@@ -565,7 +565,7 @@ struct DeviceOperation final {
                     operation.validate(input_tensors, optional_input_tensors);
                 } else if constexpr (detail::implements_validate_with_output_tensors<T>()) {
                     TT_FATAL(optional_input_tensors.empty());
-                    //TT_FATAL(not optional_output_tensors.empty());
+                    // TT_FATAL(not optional_output_tensors.empty());
                     operation.validate_with_output_tensors(input_tensors, optional_output_tensors);
                 } else if constexpr (detail::implements_validate_with_output_tensors_and_optional_input_tensors<T>()) {
                     TT_FATAL(not optional_input_tensors.empty());
@@ -669,7 +669,7 @@ struct DeviceOperation final {
         }},
         create_profiler_info_impl_{[](const storage_t& storage, const Tensors& input_tensors) -> const ProfilerInfo {
             const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
-            std::optional<std::string> preferred_name = tt::stl::get_type_name<T>();
+            std::optional<std::string> preferred_name = std::string(tt::stl::get_type_name<T>());
 
             std::optional<std::string> parallelization_strategy = std::nullopt;
             if constexpr (detail::implements_get_parallelization_strategy<T>()) {
