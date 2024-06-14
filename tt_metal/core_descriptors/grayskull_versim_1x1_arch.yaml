@@ -7,9 +7,6 @@
 
 E150:
   1:
-    l1_bank_size:
-      524288
-
     compute_with_storage_grid_range:
       start: [0, 0]
       end: [0, 0]

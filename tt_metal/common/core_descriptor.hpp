@@ -13,7 +13,7 @@ struct core_descriptor_t {
     CoreCoord compute_grid_size;
     std::vector<RelativeCoreCoord> relative_compute_cores;
     std::vector<RelativeCoreCoord> relative_storage_cores;
-    uint32_t storage_core_bank_size;
+    std::optional<uint32_t> storage_core_bank_size = std::nullopt;
     std::vector<RelativeCoreCoord> relative_dispatch_cores;
     CoreType dispatch_core_type;
 };
@@ -76,9 +76,14 @@ inline const std::string get_product_name(tt::ARCH arch, uint32_t num_harvested_
 
 const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const uint8_t num_hw_cqs);
 
-inline uint32_t get_storage_core_bank_size(chip_id_t device_id, const uint8_t num_hw_cqs) {
+inline uint32_t get_l1_bank_size(chip_id_t device_id, const uint8_t num_hw_cqs) {
     const core_descriptor_t &core_desc = get_core_descriptor_config(device_id, num_hw_cqs);
-    return core_desc.storage_core_bank_size;
+    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
+    uint32_t l1_bank_size = core_desc.storage_core_bank_size.has_value()
+                                ? core_desc.storage_core_bank_size.value()
+                                : (soc_desc.worker_l1_size - L1_UNRESERVED_BASE);
+    TT_FATAL(l1_bank_size % L1_ALIGNMENT == 0, "L1 bank size must be {} B aligned", L1_ALIGNMENT);
+    return l1_bank_size;
 }
 
 inline const std::vector<CoreCoord> &get_logical_storage_cores(chip_id_t device_id, const uint8_t num_hw_cqs) {

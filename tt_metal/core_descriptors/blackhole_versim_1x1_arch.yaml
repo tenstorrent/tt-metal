@@ -7,9 +7,6 @@
 
 blackhole:
   1:
-    l1_bank_size:
-      1376256
-
     compute_with_storage_grid_range:
       start: [0, 0]
       end: [0, 0]

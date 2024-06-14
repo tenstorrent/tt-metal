@@ -64,7 +64,7 @@ void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size
          .dram_bank_offsets = {},
          .worker_grid_size = this->logical_grid_size(),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
-         .l1_bank_size = static_cast<size_t>(get_storage_core_bank_size(this->id_, this->num_hw_cqs_)),
+         .l1_bank_size = static_cast<size_t>(get_l1_bank_size(this->id_, this->num_hw_cqs_)),
          .l1_small_size = l1_small_size,
          .trace_region_size = trace_region_size,
          .core_type_from_noc_coord_table = {},  // Populated later

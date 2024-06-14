@@ -37,7 +37,6 @@ const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const u
     YAML::Node desc_yaml = core_descriptor_yaml[product_name][std::to_string(num_hw_cqs)];
 
     // Parse the yaml into core_descriptor_t
-    uint32_t storage_core_bank_size = desc_yaml["l1_bank_size"].as<uint32_t>();
     std::vector<RelativeCoreCoord> storage_cores;
     for (const auto& core_node : desc_yaml["storage_cores"]) {
         RelativeCoreCoord coord = {};
@@ -48,6 +47,17 @@ const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const u
             TT_THROW("Only logical relative coords supported for storage_cores cores");
         }
         storage_cores.push_back(coord);
+    }
+    std::optional<uint32_t> storage_core_bank_size = std::nullopt;
+    if (not storage_cores.empty()) {
+        try {
+            storage_core_bank_size = desc_yaml["storage_core_bank_size"].as<uint32_t>();
+        } catch (std::runtime_error &ex) {
+            TT_THROW(
+                "Core descriptor yaml for {} needs to specify storage_core_bank_size since there are {} storage cores!",
+                get_string_lowercase(arch),
+                storage_cores.size());
+        }
     }
 
     auto compute_with_storage_start = desc_yaml["compute_with_storage_grid_range"]["start"];
