@@ -78,14 +78,19 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, dev
     assert min_prompt_len <= max_prompt_len, f"Minimum prompt length {min_prompt_len} exceeds max len {max_prompt_len}"
 
     if min_prompt_len < 128:
-        prefill_seq_len = 0  # no prefill
+        prefill_seq_len = 0  # For short prompts do decode-as-prefill instead
     else:
-        prefill_seq_len = 2048 if min_prompt_len > 2048 else (1024 if min_prompt_len > 1024 else 128)
+        prefill_seq_len = (
+            2048 if min_prompt_len > 2048 else (1024 if min_prompt_len > 1024 else 128)
+        )  # TODO Only supports prefill lengths of 128, 1024 and 2048
+        # Initial prefill tensor full of pad tokens
         input_tokens_prefill = torch.full((len(input_prompts), prefill_seq_len), tokenizer.pad_id, dtype=torch.int32)
 
+    # Initial decode tensor full of pad tokens
     input_tokens_decode = torch.full(
         (len(input_prompts), max_prompt_len - prefill_seq_len), tokenizer.pad_id, dtype=torch.int32
     )
+
     logger.info(f"# of users: {len(encoded_prompts)}")
     for i, encoded in enumerate(encoded_prompts):
         if prefill_seq_len > 0:
@@ -111,8 +116,9 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, dev
             )
             for i in range(len(encoded_prompts))
         ]
-    else:
+    else:  # Prefill-as-decode for short prompts
         input_tokens_prefill_tt = None
+
     input_tokens_decode_tt = [
         ttnn.from_torch(
             input_tokens_decode[:, i].unsqueeze(0),
@@ -123,6 +129,7 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, dev
         )
         for i in range(max_prompt_len - prefill_seq_len)
     ]
+
     input_mask_tt = [
         ttnn.from_torch(
             input_mask[:, i].unsqueeze(0),
@@ -213,7 +220,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
             pt_prefill_input = [
                 embd(input_tokens_prefill_pt[b, :]).view(1, prefill_seq_len, -1) for b in range(batch_size)
             ]
-    else:  # Embedding on device
+    else:  # TODO Embedding on device
         pass
 
     logger.info("Loading weights to device...")
@@ -226,9 +233,8 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
     )
     logger.info("Finished loading weights to device.")
 
-    # PREFILL
     if prefill_seq_len > 0:
-        logger.info("Starting prefill...")
+        logger.info(f"Starting prefill [{prefill_seq_len} tokens]...")
         rot_mats_prefill = prepare_rotation_mat_ttnn(
             model_args.head_dim, model_args.max_seq_len, device_mesh, mode="prefill", seq_len=prefill_seq_len
         )
@@ -249,8 +255,8 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
             )
             tt_out = tt_model(
                 prefill_input,
-                0,
-                0,
+                0,  # Start position
+                0,  # Current position
                 attn_mask,
                 rot_mats_prefill,
                 transformation_mats,
@@ -258,9 +264,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
                 mode="prefill",
             )
 
-        del prefill_input, attn_mask, rot_mats_prefill, transformation_mats
-        logger.info("Prefill finished!")
-    # DONE PREFILL
+        logger.info(f"Prefill finished [{prefill_seq_len} tokens]!")
 
     # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
     rot_mats = prepare_rotation_mat_ttnn(
@@ -270,7 +274,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
     )
 
     generation_start_pos = prefill_seq_len
-    max_generated_tokens = 50
+    max_generated_tokens = 100
 
     cache_attention(device_mesh, state_dict, model_args, rot_mats, generation_start_pos, max_generated_tokens, dtype)
 

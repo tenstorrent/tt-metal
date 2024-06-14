@@ -34,7 +34,7 @@ from models.utility_functions import (
 )
 def test_mixtral_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds, seq_len):
     pcc = 0.99
-    iterations = 1
+    iterations = 3
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))

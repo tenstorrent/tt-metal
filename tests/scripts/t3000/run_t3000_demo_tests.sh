@@ -43,7 +43,9 @@ run_t3000_mixtral_tests() {
   echo "LOG_METAL: Running run_t3000_mixtral8x7b_tests"
 
   # mixtral8x7b 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
+  # Prefill-as-decode demo (small prompts)
   pytest models/demos/t3000/mixtral8x7b/demo/demo.py::test_mixtral8x7b_demo[wormhole_b0-True-general_weights]
+  # Prefill + decode demo (large prompts)
   pytest models/demos/t3000/mixtral8x7b/demo/demo_decode.py::test_mixtral8x7b_demo[wormhole_b0-True-general_weights]
 
   # Record the end time

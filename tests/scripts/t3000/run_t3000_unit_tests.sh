@@ -73,6 +73,7 @@ run_t3000_mixtral_tests() {
 
   echo "LOG_METAL: Running run_t3000_mixtral_tests"
 
+  # Mixtral decode-only tests
   pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_attention.py
   pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp.py
   pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_rms_norm.py
@@ -80,11 +81,16 @@ run_t3000_mixtral_tests() {
   pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe.py
   pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_decoder.py
   pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py::test_mixtral_model_inference[wormhole_b0-True-1-1-pcc]
+  # Mixtral prefill-only tests
   pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_attention_prefill.py
   pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp_prefill.py
   pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe_prefill.py
   pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_decoder_prefill.py
-  pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_model_prefill.py
+  # Run only tests for a single layer of Mixtral model
+  pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_model_prefill.py::test_mixtral_model_inference[wormhole_b0-True-1-128]
+  pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_model_prefill.py::test_mixtral_model_inference[wormhole_b0-True-1-1024]
+  pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_model_prefill.py::test_mixtral_model_inference[wormhole_b0-True-1-2048]
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))

@@ -7,7 +7,6 @@ import pytest
 import numpy as np
 from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
-import time
 
 # Set Mixtral flags for CI, if CI environment is setup
 if os.getenv("CI") == "true":
@@ -47,7 +46,10 @@ class Emb(torch.nn.Module):
 )
 @pytest.mark.parametrize(
     "n_layers",
-    (32,),
+    (
+        1,
+        32,
+    ),
 )
 def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds, n_layers, seq_len):
     pcc = 0.96
@@ -91,8 +93,8 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
         dtype=dtype,
     )
 
-    # Select the first token from the prompts for initial decoding
-    encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
+    # Select the corresponding seq_len of tokens for prefill
+    encoded_prompts_tensor = torch.tensor(encoded_prompts)
     pt_decode_input = embd(encoded_prompts_tensor).view(batch, seq_len, -1)
     tt_decode_input = pt_decode_input
 
@@ -100,7 +102,6 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
     current_pos = start_pos % model_args.sliding_window
 
     for iter in range(2):
-        start_time = time.time()
         decode_input, attn_mask, attn_mask_torch = prepare_inputs_ttnn_prefill(
             tt_decode_input,
             tt_model.device_mesh,
@@ -121,8 +122,6 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
             .float()
         )
 
-        # logger.info(f"seqlen: {seq_len}, iter: {iter}, TTNN Inference time: {time.time() - start_time:.2f} sec")
-
     # Measure PCC
     positions = torch.LongTensor(range(seq_len))
     ref_output = reference_model(pt_decode_input, positions, attn_mask_torch, mode="prefill").detach().float()
@@ -132,7 +131,7 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
     logger.info(pcc_message)
 
     if passing:
-        logger.info(f"Mistral decode Passed!")
+        logger.info(f"Mistral model Passed!")
     else:
-        logger.warning("Mistral decode Failed!")
+        logger.warning("Mistral model Failed!")
         assert passing, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"

@@ -63,7 +63,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
     tt_model = TtMixtralAttention(t3k_device_mesh, state_dict, args=model_args, layer_num=0, dtype=dtype)
 
     generation_start_pos = 0
-    generation_length = 1
+    generation_length = 3
     all_tests_pass = True
 
     for i in range(generation_length):

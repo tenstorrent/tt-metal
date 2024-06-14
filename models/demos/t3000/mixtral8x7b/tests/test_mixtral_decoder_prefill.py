@@ -71,7 +71,7 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
     )
 
     generation_start_pos = 0
-    generation_length = 1
+    generation_length = 3
     all_tests_pass = True
 
     for i in range(generation_length):
