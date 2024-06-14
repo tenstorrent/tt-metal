@@ -28,14 +28,13 @@ from models.utility_functions import (
 def test_grok_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     # Specify different dtypes for each feedForward weights
     dtypes = {
-        "linear": ttnn.bfloat4_b,
+        "linear": ttnn.bfloat8_b,
         "linear_1": ttnn.bfloat8_b,
-        "linear_v": ttnn.bfloat4_b,
+        "linear_v": ttnn.bfloat8_b,
     }
 
     model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=True)
     state_dict = model_args.load_state_dict()
-    print(state_dict)
 
     tt_model = TtGrokMLP(
         device_mesh=t3k_device_mesh,

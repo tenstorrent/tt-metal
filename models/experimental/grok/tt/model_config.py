@@ -181,6 +181,7 @@ class TtModelArgs:
         self.model_config["SHARDED_NORM_OUTPUT_MEMCFG"] = self.model_config["SHARDED_NORM_INPUT_MEMCFG"]
 
         # Create program configs for the different ttlib matmul ops
+        # TODO: update for 6144 not 4096?
         self.model_config[
             "ROT_MAT_MM_PROGCFG"
         ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -208,7 +209,7 @@ class TtModelArgs:
             "GATE_MM_OUTPUT_PROGCFG"
         ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 1),
-            in0_block_w=16,
+            in0_block_w=24,
             out_subblock_h=1,
             out_subblock_w=1,
             per_core_M=1,
@@ -222,7 +223,7 @@ class TtModelArgs:
             "QKV_MM_OUTPUT_PROGCFG"
         ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
-            in0_block_w=4,
+            in0_block_w=6,
             out_subblock_h=1,
             out_subblock_w=1,
             per_core_M=1,
@@ -235,7 +236,7 @@ class TtModelArgs:
         self.model_config["SCORES_BATCHED_MM_PROGCFG"] = cached_lambda(
             lambda p: ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
-                in0_block_w=4,
+                in0_block_w=6,
                 out_subblock_h=1,
                 out_subblock_w=1,
                 per_core_M=1,
@@ -248,9 +249,9 @@ class TtModelArgs:
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=p,
                 out_subblock_h=1,
-                out_subblock_w=4,
+                out_subblock_w=3,
                 per_core_M=1,
-                per_core_N=4,
+                per_core_N=6,
             )
         )
 
@@ -260,9 +261,9 @@ class TtModelArgs:
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=1,
             out_subblock_h=1,
-            out_subblock_w=2,
+            out_subblock_w=3,
             per_core_M=1,
-            per_core_N=2,
+            per_core_N=3,
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,
@@ -403,6 +404,7 @@ class TtModelArgs:
         if self.dummy_weights:
             reference_model = Grok1Model(config=grok1_config)
             state_dict = reference_model.state_dict()
+            state_dict = {k: torch.randn_like(v) for k, v in state_dict.items()}
         else:
             state_dict = torch.load(self.state_dict_path)
 

@@ -15,10 +15,10 @@ if os.getenv("CI") == "true":
     os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ConcatMeshToTensor
 from models.experimental.grok.tt.grok_attention import TtGrokAttention
 from models.experimental.grok.tt.grok_common import prepare_inputs_ttnn, prepare_rotation_mat_ttnn
-from models.experimental.grok.reference.model import Attention, precompute_freqs_cis
+from models.experimental.grok.reference.model import MultiHeadAttention
 from models.experimental.grok.tt.model_config import TtModelArgs
 from models.utility_functions import (
     comp_pcc,
@@ -29,13 +29,20 @@ from models.utility_functions import (
 def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     pcc = 0.99
     dtype = ttnn.bfloat8_b
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=True)
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    partial_state_dict = {k[19:]: v for k, v in state_dict.items() if (k.startswith("layers.0.attention."))}
+    key_start = "layers.0.attn."
+    partial_state_dict = {k[len(key_start) :]: v for k, v in state_dict.items() if (k.startswith(key_start))}
 
-    reference_model = Attention(args=model_args)
+    reference_model = MultiHeadAttention(
+        num_heads=model_args.num_attention_heads,
+        num_key_value_heads=model_args.num_key_value_heads,
+        max_position_embeddings=model_args.max_position_embeddings,
+        attn_output_multiplier=model_args.attn_output_multiplier,
+        max_attn_val=model_args.max_attn_value,
+    )
     reference_model.load_state_dict(partial_state_dict)
 
     batch = 32
@@ -62,15 +69,12 @@ def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seed
             # tt_model.hidden_size,
             model_args.dim,
             start_pos,
-            model_args.sliding_window,
             tt_model.device_mesh,
         )
 
-        current_pos = start_pos % model_args.sliding_window
         tt_out = tt_model(
             attention_input,
             start_pos,
-            current_pos,
             attn_mask,
             rot_mat,
         )
@@ -82,8 +86,7 @@ def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seed
             .view(batch, 1, -1)
         )  # [ batch, seq, hidden_dim]
         positions = torch.LongTensor([start_pos])
-        freqs_cis_i = precompute_freqs_cis(model_args.head_dim, 128_000)[positions]
-        reference_output = reference_model(pt_attention_input, freqs_cis_i, positions, mask=None)
+        reference_output = reference_model(pt_attention_input, positions, mask=None)
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
         logger.info(comp_allclose(reference_output, tt_output_torch))

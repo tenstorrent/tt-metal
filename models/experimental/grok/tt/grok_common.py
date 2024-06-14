@@ -55,7 +55,7 @@ def get_rotation_mat(dhead, end):
     return rot_mat
 
 
-def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, sliding_window, device_mesh):
+def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, device_mesh):
     """
     Prepare inputs for decode mode.
     x: (batch, seq, hidden_dim)
@@ -83,21 +83,11 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, sliding_window, device_
     )
 
     # Attention mask
-    padded_layer_past_len = min(nearest_32(current_pos + 1), sliding_window)
-    current = current_pos % sliding_window
-    n_local_heads = 4  # model_args.n_heads // 8 # num_devices TODO pass the arguments instead of hard coding
-
+    padded_layer_past_len = nearest_32(current_pos + 1)
     attn_mask = torch.zeros(seq_len, 32, 32, padded_layer_past_len)  # [SB4P]
 
     # Fill mask with -inf outside the processed tokens
-    if current_pos < sliding_window:
-        attn_mask[:, :, :, current + 1 :] = torch.finfo(attn_mask.dtype).min
-    else:
-        # TODO Double check this logic.
-        # As current position increases closer to sliding window we're masking [: curr] and [window - curr : ]
-        #  so for a window = 32, and we're on position 55, curr: 55%32=23. we're then masking [:23] and [9:] which is masking everything.
-        attn_mask[:, :, :, :current] = torch.finfo(attn_mask.dtype).min
-        attn_mask[:, :, :, sliding_window - current :] = torch.finfo(attn_mask.dtype).min
+    attn_mask[:, :, :, current_pos + 1 :] = torch.finfo(attn_mask.dtype).min
 
     attn_mask = ttnn.from_torch(
         attn_mask,

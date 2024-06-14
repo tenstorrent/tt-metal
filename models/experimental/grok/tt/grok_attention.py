@@ -32,17 +32,17 @@ class TtGrokAttention(LightweightModule):
 
         self.model_config = self.model_args.get_model_config()
 
-        layer_name = f"layers.{layer_num}.attention"
+        layer_name = f"layers.{layer_num}.attn"
 
         if args.dummy_weights:
             cache_name = lambda _: None
         else:
             cache_name = lambda name: self.model_args.weight_cache_path(dtype) / (f"{layer_name}.{name}")
 
-        wq_str = f"{layer_name}.wq.weight"
-        wk_str = f"{layer_name}.wk.weight"
-        wv_str = f"{layer_name}.wv.weight"
-        wo_str = f"{layer_name}.wo.weight"
+        wq_str = f"{layer_name}.q_proj.weight"
+        wk_str = f"{layer_name}.k_proj.weight"
+        wv_str = f"{layer_name}.v_proj.weight"
+        wo_str = f"{layer_name}.o_proj.weight"
 
         self.wqkv = ttnn.as_tensor(
             torch.concat(
@@ -143,20 +143,18 @@ class TtGrokAttention(LightweightModule):
         self,
         xs,
         start_pos,
-        current_pos,
         attn_masks,
         rot_mats,
     ):
         """
         x: (seq_len, 1, batch, hidden_dim)
         start_pos: the length of the KV cache. Same as current token's index.
-        current_pos: start_pos % self.sliding_window
         attn_masks: (seq_len, batch, n_heads, cache_len+seq_len)
         rot_mats: list of rotation matrices for each device
 
         Tensors are postfixed with 4 characters that represent their 4-D shape:
         B : batch_size (32)
-        H : dim (4096)
+        H : dim (6144)
         D : head_dim (128)
         P : padded_layer_past_len
         """
@@ -222,8 +220,8 @@ class TtGrokAttention(LightweightModule):
         ###
         keys_1BPD = layer_past[0]
         values_1BPD = layer_past[1]
-        ttnn.kv_cache.update_cache_for_token_(keys_1BPD, k_heads_1B1D, current_pos)
-        ttnn.kv_cache.update_cache_for_token_(values_1BPD, v_heads_1B1D, current_pos)
+        ttnn.kv_cache.update_cache_for_token_(keys_1BPD, k_heads_1B1D, start_pos)
+        ttnn.kv_cache.update_cache_for_token_(values_1BPD, v_heads_1B1D, start_pos)
         self.layer_past = [keys_1BPD, values_1BPD]
         k_heads_1B1D.deallocate(True)
         v_heads_1B1D.deallocate(True)
