@@ -7,9 +7,6 @@
 
 blackhole:
   1:
-    l1_bank_size:
-      1376256
-
     compute_with_storage_grid_range: # Logical only start and end [x, y]
       start: [0, 0]
       end: [13, 8]
@@ -24,9 +21,6 @@ blackhole:
       "tensix"
 
   2:
-    l1_bank_size:
-      1376256
-
     compute_with_storage_grid_range: # Logical only start and end [x, y]
       start: [0, 0]
       end: [13, 8]

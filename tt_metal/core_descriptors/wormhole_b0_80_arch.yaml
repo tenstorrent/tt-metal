@@ -7,9 +7,6 @@
 
 galaxy:
   1:
-    l1_bank_size:
-      1376256
-
     compute_with_storage_grid_range: # Logical only start and end [x, y]
       start: [0, 0]
       end: [7, 7]
@@ -24,9 +21,6 @@ galaxy:
       "tensix"
 
   2:
-    l1_bank_size:
-      1376256
-
     compute_with_storage_grid_range: # Logical only start and end [x, y]
       start: [0, 0]
       end: [7, 7]
@@ -42,9 +36,6 @@ galaxy:
 
 nebula_x1:
   1:
-    l1_bank_size:
-      1376256
-
     compute_with_storage_grid_range: # Logical only start and end [x, y]
       start: [0, 0]
       end: [7, 7]
@@ -68,9 +59,6 @@ nebula_x1:
       "tensix"
 
   2:
-    l1_bank_size:
-      1376256
-
     compute_with_storage_grid_range: # Logical only start and end [x, y]
       start: [0, 0]
       end: [7, 7]
@@ -86,9 +74,6 @@ nebula_x1:
 
 nebula_x2:
   1:
-    l1_bank_size:
-      1376256
-
     compute_with_storage_grid_range: # Logical only start and end [x, y]
       start: [0, 0]
       end: [7, 6]
@@ -103,9 +88,6 @@ nebula_x2:
       "tensix"
 
   2:
-    l1_bank_size:
-      1376256
-
     compute_with_storage_grid_range: # Logical only start and end [x, y]
       start: [0, 0]
       end: [7, 6]
