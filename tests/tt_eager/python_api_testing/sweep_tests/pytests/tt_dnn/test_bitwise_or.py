@@ -34,15 +34,15 @@ mem_configs = [
 )
 @pytest.mark.parametrize(
     "scalar",
-    {random.randint(-100, 100) for _ in range(5)},
+    {random.randint(-100, 100) for _ in range(10)},
 )
 @pytest.mark.parametrize(
     "dst_mem_config",
     mem_configs,
 )
 @skip_for_grayskull("#TODO: GS implementation needs to be done")
-class TestBitwiseAnd:
-    def test_run_bitwise_and_op(
+class TestLeftShift:
+    def test_run_bitwise_or_op(
         self,
         input_shapes,
         scalar,
@@ -63,7 +63,7 @@ class TestBitwiseAnd:
         comparison_func = comparison_funcs.comp_equal
 
         run_single_pytorch_test(
-            "eltwise-bitwise_and",
+            "eltwise-bitwise_or",
             input_shapes,
             datagen_func,
             comparison_func,
