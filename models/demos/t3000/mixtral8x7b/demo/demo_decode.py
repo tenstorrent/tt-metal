@@ -138,7 +138,7 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, dev
         input_tokens_decode_tt,
         max_prompt_len,
         input_mask_tt,
-        input_tokens_prefill,
+        input_tokens_prefill if prefill_seq_len != 0 else None,
         input_tokens_decode,
         input_mask_bool,
         prefill_seq_len,
