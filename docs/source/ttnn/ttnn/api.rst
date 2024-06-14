@@ -223,6 +223,7 @@ Reduction
    ttnn/sum
    ttnn/var
    ttnn/argmax
+   ttnn/topk
 
 Data Movement
 =============
