@@ -42,7 +42,7 @@ def test_run_resnet50_inference(
 
 
 @skip_for_wormhole_b0("This test is not supported on WHB0, please use the TTNN version.")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 1500000}], indirect=True)
 @pytest.mark.parametrize("batch_size", [20], ids=["batch_20"])
 @pytest.mark.parametrize(
     "weights_dtype",
