@@ -9,7 +9,7 @@ from torch import nn
 import tt_lib
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
-
+import os
 
 import scipy
 from sklearn.metrics import top_k_accuracy_score
@@ -70,19 +70,28 @@ def run_test_LlamaModel_inference(
     ckpt_dir,
     tokenizer_path,
     cache_path,
+    prompt_file=None,
 ):
+    # Load prompt file if provided
+    prompt = None
+    if prompt_file:
+        assert os.path.isfile(prompt_file), "Input file does not exist!"
+        with open(prompt_file, "r") as f:
+            prompt = f.read()
+
     # Prepare paths and devices
     skip_model_load = should_skip_model_load()
 
     logger.info(f"Running num_layer: {n_layers}")
-    hugging_face_reference_model = Llama.build(
+    hugging_face_reference = Llama.build(
         ckpt_dir,
         tokenizer_path,
         max_seq_len=MAX_SEQ_LEN if llama_version == "llama2" else MAX_SEQ_LEN_LLAMA3,
         max_batch_size=batch,
         n_layers=n_layers,
         skip_model_load=skip_model_load,
-    ).model
+    )
+    hugging_face_reference_model = hugging_face_reference.model
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
     logger.info(state_dict.keys())
@@ -109,12 +118,30 @@ def run_test_LlamaModel_inference(
     else:
         generation_start_pos = UNIT_TEST_START_POS
         generation_length = UNIT_TEST_GENERATION_LENGTH
+
+    # Pre-process inputs in prompt mode
+    if prompt:
+        tokenizer = hugging_face_reference.tokenizer
+        tokenized = tokenizer.encode(prompt, bos=True, eos=False)
+        tokenized = torch.tensor(tokenized).unsqueeze(0)
+
+        # Sliding window across sequence dimension for generation_length iterations
+        tokenized = tokenized[:, : (seq_len + generation_length - 1) * batch]
+        tokenized = torch.reshape(tokenized, (batch, (seq_len + generation_length - 1)))
+
+        logger.info("Finished converting prompt to tokens.")
+
     all_tests_pass = True
     all_pccs, all_top1, all_top5 = [], [], []
     for i in range(generation_length):
         # Prepare input
-        pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
+        if prompt:
+            pt_inp_ids = tokenized[:, i : i + seq_len]  # Slide window
+            assert pt_inp_ids.shape == (batch, seq_len), f"Inputs must have shape {(batch, seq_len)}"
+        else:
+            pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
         tt_inp_ids = pt_inp_ids.clone()
+
         start_pos = generation_start_pos + i
 
         # PyTorch output --------------------------------------------------------------------
@@ -250,6 +277,11 @@ def run_test_LlamaModel_inference(
         "long_context",
     ),
 )
+@pytest.mark.parametrize(
+    "prompt_file",
+    ("models/demos/t3000/llama2_70b/demo/data/a_tale_of_two_cities.txt", None),
+    ids=("prompt_input", "rand_input"),
+)
 def test_LlamaModel_inference(
     batch,
     seq_len,
@@ -259,6 +291,7 @@ def test_LlamaModel_inference(
     max_batch_size,
     max_context_len,
     llama_version,
+    prompt_file,
     use_program_cache,
 ):
     if batch > max_batch_size:
@@ -288,4 +321,5 @@ def test_LlamaModel_inference(
         ckpt_dir,
         tokenizer_path,
         cache_path,
+        prompt_file=prompt_file,
     )
