@@ -995,6 +995,23 @@ Tensor div_no_nan(const Tensor& input_a, float value, const MemoryConfig& output
     return operation::decorate_as_composite(__func__, _div_no_nan_overload)(input_a, value, output_mem_config);
 }
 
+Tensor _lt_(Tensor& input_a, Tensor& input_b, std::optional<MemoryConfig> output_mem_config) {
+    lt(input_a, input_b, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, input_a);
+    return input_a;
+}
+Tensor lt_(Tensor& input_a, Tensor& input_b, std::optional<MemoryConfig> output_mem_config) {
+    return operation::decorate_as_composite(__func__, _lt_)(input_a, input_b, output_mem_config);
+}
+
+Tensor _lt_overload(Tensor& input_a, float value, std::optional<MemoryConfig> output_mem_config) {
+    Tensor input_b = full_like(input_a, value);
+    lt(input_a, input_b, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::nullopt, input_a);
+    return input_a;
+}
+Tensor lt_(Tensor& input_a, float value, std::optional<MemoryConfig> output_mem_config) {
+    return operation::decorate_as_composite(__func__, _lt_overload)(input_a, value, output_mem_config);
+}
+
 // logit(input, eps)=log(input / 1 - input)
 Tensor _logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_config) {
     Tensor t_eps = full_like(input_a, eps, output_mem_config);
