@@ -4,7 +4,7 @@ set -eo pipefail
 
 run_tg_tests() {
   # Write tests here
-  echo "LOG_METAL: Fill me!"
+  TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="CommandQueueSingleCardFixture.*"
 }
 
 main() {
@@ -21,7 +21,7 @@ main() {
   # Run all tests
   cd $TT_METAL_HOME
   export PYTHONPATH=$TT_METAL_HOME
-  
+
   run_tg_tests
 }
 
