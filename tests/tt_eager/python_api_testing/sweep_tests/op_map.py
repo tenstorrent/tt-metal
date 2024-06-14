@@ -499,9 +499,14 @@ op_map = {
     "eltwise-bitwise_not": {
         "tt_op": tt_lib_ops.eltwise_bitwise_not,
         "pytorch_op": pytorch_ops.bitwise_not,
+    },
     "eltwise-bitwise_and": {
         "tt_op": tt_lib_ops.eltwise_bitwise_and,
         "pytorch_op": pytorch_ops.bitwise_and,
+    },
+    "eltwise-bitwise_or": {
+        "tt_op": tt_lib_ops.eltwise_bitwise_or,
+        "pytorch_op": pytorch_ops.bitwise_or,
     },
     "eltwise-right_shift": {
         "tt_op": tt_lib_ops.eltwise_right_shift,
