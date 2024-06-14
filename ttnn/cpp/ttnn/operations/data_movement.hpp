@@ -385,9 +385,7 @@ struct Pad {
             "ttnn.pad: for tiled tensors padding end must be a multiple of the tile size on height and width for a "
             "tensor in tile layout");
 
-        // Performing actual padding
-        // std::vector<uint32_t> pad_front_vec;
-        // std::ranges::copy(pad_front, std::back_inserter(pad_front_vec));
+        // Performing actual padding        
         std::vector<uint32_t> pad_front_vec(pad_front.begin(), pad_front.end());
         auto output_tensor = operation::run(
             tt::tt_metal::Pad{
