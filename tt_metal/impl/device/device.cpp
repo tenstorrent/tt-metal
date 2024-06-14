@@ -2118,7 +2118,6 @@ void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool bl
 }
 
 void Device::release_trace(const uint32_t tid) {
-    this->trace_buffers_size -= this->trace_buffer_pool_.at(tid)->buffer->size();
     uint32_t erased = this->trace_buffer_pool_.erase(tid);
     // Only enable allocations once all captured traces are released
     if (this->trace_buffer_pool_.empty()) {
