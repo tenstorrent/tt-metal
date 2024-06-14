@@ -33,6 +33,12 @@ Device::Device(
     ZoneScoped;
     TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");
     this->build_key_ = tt::Cluster::instance().get_harvesting_mask(device_id);
+    if (!this->is_mmio_capable()) {
+        //Remote device Vs MMIO Device need to be unique even if they have same harvesting mask because
+        //dispatch cores are allocated differently on two types of devices.
+        //harvest mask is 12-bit mask so adding 100000 should not alias with any possible harvest mask value.
+        this->build_key_ += 100000;
+    }
     tunnel_device_dispatch_workers_ = {};
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
 }
@@ -1607,7 +1613,6 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache.is_enabled() ? "": "NOT ");
     TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");
-    this->build_key_ = tt::Cluster::instance().get_harvesting_mask(this->id());
     this->using_fast_dispatch = false;
     this->num_hw_cqs_ = num_hw_cqs;
     this->initialize_cluster();
