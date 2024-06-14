@@ -79,11 +79,6 @@ inline uint32_t packet_switch_4B_pack(uint32_t b0, uint32_t b1, uint32_t b2, uin
     return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0;
 }
 
-inline void set_64b_result(uint32_t* buf, uint64_t val, uint32_t index = 0) {
-    buf[index] = val >> 32;
-    buf[index+1] = val & 0xFFFFFFFF;
-}
-
 static_assert(MAX_DEST_ENDPOINTS <= 32,
               "MAX_DEST_ENDPOINTS must be <= 32 for the packing funcitons below to work");
 

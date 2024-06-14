@@ -41,12 +41,9 @@ constexpr static std::uint32_t PROFILER_RISC_COUNT = 5;
 static_assert (PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC > PROFILER_L1_BUFFER_SIZE);
 
 constexpr static std::uint32_t BRISC_L1_ARG_BASE = 98 * 1024;
-constexpr static std::uint32_t BRISC_L1_RESULT_BASE = 99 * 1024;
 constexpr static std::uint32_t NCRISC_L1_ARG_BASE = 100 * 1024;
-constexpr static std::uint32_t NCRISC_L1_RESULT_BASE = 101 * 1024;
 constexpr static std::uint32_t TRISC_L1_ARG_BASE = 102 * 1024;
 constexpr static std::uint32_t IDLE_ERISC_L1_ARG_BASE = 32 * 1024;
-constexpr static std::uint32_t IDLE_ERISC_L1_RESULT_BASE = 33 * 1024;
 constexpr static std::uint32_t L1_ALIGNMENT = 16;
 
 // config for 32 L1 buffers is at addr BUFFER_CONFIG_BASE
