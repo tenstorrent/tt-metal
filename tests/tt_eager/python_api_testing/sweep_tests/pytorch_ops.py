@@ -527,6 +527,12 @@ def heaviside(x, *args, **kwargs):
     return result
 
 
+def bitwise_xor(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.bitwise_xor(x, value)
+    return result
+
+
 def right_shift(x, *args, **kwargs):
     value = kwargs.pop("value")
     result = torch.bitwise_right_shift(x, value)
