@@ -59,91 +59,11 @@ def _postprocess_golden_function_outputs(output_tensor, args, kwargs):
     return output_tensor
 
 
-def _pad_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.int32, ttnn.uint32),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-
-
-@ttnn.register_operation(
-    name="ttnn.pad",
-    validate_input_tensors=_pad_validate_input_tensors,
+pad = ttnn.register_operation(
     golden_function=_golden_function,
     preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
     postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
-)
-def pad(
-    input_tensor: ttnn.Tensor,
-    padding: Tuple[Tuple[int, int], ...],
-    value: Union[int, float],
-    *,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    r"""
-
-    pad(input_tensor: ttnn.Tensor, padding: Tuple[Tuple[int, int], ...], value: Union[int, float], *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-    Pad tensor with constant value.
-
-    Padded shape is accumulated if ttnn.pad is called on a tensor with padding.
-
-    Args:
-        * :attr:`input_tensor`: input tensor
-        * :attr:`padding`: padding to apply. Each element of padding should be a tuple of 2 integers, with the first integer specifying the number of values to add before the tensor and the second integer specifying the number of values to add after the tensor.
-        * :attr:`value`: value to pad with
-        * :attr:`memory_config`: the memory configuration to use for the operation
-
-    """
-    if input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT:
-        raise RuntimeError(
-            "ttnn.pad: row-major tensors have to use fallback because the kernel currently causes a PCC error"
-        )
-
-    original_rank = len(input_tensor.shape)
-    if len(padding) != original_rank:
-        raise RuntimeError("ttnn.pad: padding must be the same length as the input tensor rank")
-
-    for start, end in padding:
-        if start < 0 or end < 0:
-            raise RuntimeError("ttnn.pad: padding must be non-negative")
-
-    if original_rank < 4:
-        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-        padding = tuple((0, 0) for _ in range(4 - original_rank)) + padding
-
-    input_shape_with_tile_padding = input_tensor.shape.with_tile_padding()
-
-    pad_start = tuple(start for start, _ in padding)
-    if sum(pad_start) != 0:
-        raise RuntimeError("ttnn.pad: padding start must be 0 currently")
-
-    pad_end = tuple(end for _, end in padding)
-    *_, pad_end_height, pad_end_width = pad_end
-    if input_tensor.layout == ttnn.TILE_LAYOUT:
-        if pad_end_height % ttnn.TILE_SIZE != 0 or pad_end_width % ttnn.TILE_SIZE != 0:
-            raise RuntimeError(
-                "ttnn.pad: padding end must be a multiple of the tile size on height and width for a tensor in tile layout"
-            )
-
-    padded_shape = tuple(dim + end for dim, end in zip(input_shape_with_tile_padding, pad_end))
-
-    output_tensor = ttl.tensor.pad(
-        input_tensor, padded_shape, pad_start, value, output_mem_config=memory_config, use_multicore=True
-    )
-
-    while len(output_tensor.shape) > original_rank:
-        output_tensor = ttnn.squeeze(output_tensor, dim=0)
-
-    # Padding always turn the intended shape to the shape with tile padding. For simplicity of the operation
-    output_tensor = ttnn.reshape(output_tensor, shape=output_tensor.shape.with_tile_padding())
-
-    return output_tensor
+)(ttnn._ttnn.operations.data_movement.pad)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, order: Tuple[int, ...], **_):

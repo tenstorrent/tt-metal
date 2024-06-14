@@ -14,13 +14,9 @@ namespace py = pybind11;
 namespace ttnn {
 namespace operations {
 namespace data_movement {
-void py_module(py::module& module) {
-    module.def(
-        "permute",
-        &permute,
-        py::arg("input_tensor"),
-        py::arg("order"),
-        R"doc(
+
+void bind_permute(py::module& module) {
+const auto doc = R"doc(
 Permutes :attr:`input_tensor` using :attr:`order`.
 
 Args:
@@ -34,16 +30,18 @@ Example:
     >>> print(output.shape)
     [1, 1, 32, 64]
 
-    )doc");
+    )doc";
 
     module.def(
-        "concat",
-        &concat,
+        "permute",
+        &permute,
         py::arg("input_tensor"),
-        py::arg("dim") = 0,
-        py::kw_only(),
-        py::arg("memory_config") = std::nullopt,
-        R"doc(
+        py::arg("order"),
+        doc);
+}
+
+void bind_concat(py::module& module) {
+    const auto doc = R"doc(
 Concats :attr:`tensors` in the given :attr:`dim`.
 
 Args:
@@ -63,57 +61,66 @@ Example:
     >>> print(output.shape)
     [1, 1, 32, 64]
 
-    )doc");
+    )doc";
+    module.def(
+        "concat",
+        &concat,
+        py::arg("input_tensor"),
+        py::arg("dim") = 0,
+        py::kw_only(),
+        py::arg("memory_config") = std::nullopt,
+        doc);
+}
+
+void bind_upsample(py::module& module) {
+    const auto doc = R"doc(
+ Upsamples a given multi-channel 2D (spatial) data.
+ The input data is assumed to be of the form [N, H, W, C].
+
+ The algorithms available for upsampling are 'nearest' for now.
+
+ Args:
+     * :attr:`input_tensor`: the input tensor
+     * :attr:`scale_factor`: multiplier for spatial size. Has to match input size if it is a tuple.
+     )doc";
 
     ttnn::bind_registered_operation(
         module,
         ttnn::upsample,
-        R"doc(
-Upsamples a given multi-channel 2D (spatial) data.
-The input data is assumed to be of the form [N, H, W, C].
-
-The algorithms available for upsampling are 'nearest' for now.
-
-Args:
-    * :attr:`input_tensor`: the input tensor
-    * :attr:`scale_factor`: multiplier for spatial size. Has to match input size if it is a tuple.
-    )doc",
+        doc,
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg("scale_factor"),
             py::arg("memory_config") = std::nullopt});
+}
 
-    ttnn::bind_registered_operation(
-        module,
-        ttnn::repeat,
-        R"doc(
-repeat(input_tensor: ttnn.Tensor, shape : ttnn.Shape) -> ttnn.Tensor
-
-Returns a new tensor filled with repetition of input :attr:`input_tensor` according to number of times specified in :attr:`shape`.
+void bind_pad(py::module& module) {
+    auto doc =
+        R"doc(pad(input_tensor: ttnn.Tensor, padding: Tuple[Tuple[int, int], ...], value: Union[int, float], *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+Pad tensor with constant value. Padded shape is accumulated if ttnn.pad is called on a tensor with padding.
 
 Args:
-    * :attr:`input_tensor`: the input_tensor to apply the repeate operation.
-    * :attr:`shape`: The number of repetitions for each element.
+    * :attr:`input_tensor`: input tensor
+    * :attr:`padding`: padding to apply. Each element of padding should be a tuple of 2 integers, with the first integer specifying the number of values to add before the tensor and the second integer specifying the number of values to add after the tensor.
+    * :attr:`value`: value to pad with
 
 Keyword Args:
-    * :attr:`memory_config`: the memory configuration to use for the operation
-
-Example:
-
-    >>> tensor = ttnn.repeat(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]]), 2,)), device)
-    >>> print(tensor)
-    tensor([[1, 2],
-    [1, 2],
-    [3, 4],
-    [3, 4]])
-        )doc",
-        ttnn::pybind_arguments_t{
-            py::arg("input_tensor"), py::arg("shape"), py::kw_only(), py::arg("memory_config") = std::nullopt});
+    * :attr:`memory_config`: the memory configuration to use for the operation)doc";
 
     ttnn::bind_registered_operation(
         module,
-        ttnn::repeat_interleave,
-        R"doc(
+        ttnn::pad,
+        doc,
+        ttnn::pybind_arguments_t{
+            py::arg("input_tensor"),
+            py::arg("padding"),
+            py::arg("value"),
+            py::kw_only(),
+            py::arg("memory_config") = nullopt});
+}
+
+void bind_repeat_interleave(py::module& module) {
+    auto doc = R"doc(
 repeat_interleave(input_tensor: ttnn.Tensor, repeats : int, dim: int = 0) -> ttnn.Tensor
 
 Repeats elements of a :attr:`tensor` in the given :attr:`dim`.
@@ -135,13 +142,63 @@ torch_input_tensor =
     >>> b = ttnn.repeat_interleave(a, 2, dim=0)
     >>> print(a.shape, b.shape)
     ttnn.Shape([1, 1, 32, 32]) ttnn.Shape([2, 1, 32, 32])
-        )doc",
-        ttnn::pybind_arguments_t{
-            py::arg("input_tensor"),
-            py::arg("repeats"),
-            py::arg("dim"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+        )doc";
+
+    ttnn::bind_registered_operation(
+    module,
+    ttnn::repeat_interleave,
+    doc,
+    ttnn::pybind_arguments_t{
+        py::arg("input_tensor"),
+        py::arg("repeats"),
+        py::arg("dim"),
+        py::kw_only(),
+        py::arg("memory_config") = std::nullopt});
+}
+
+void bind_repeat(py::module& module) {
+    auto doc = R"doc(
+repeat(input_tensor: ttnn.Tensor, shape : ttnn.Shape) -> ttnn.Tensor
+
+Returns a new tensor filled with repetition of input :attr:`input_tensor` according to number of times specified in :attr:`shape`.
+
+Args:
+    * :attr:`input_tensor`: the input_tensor to apply the repeate operation.
+    * :attr:`shape`: The number of repetitions for each element.
+
+Keyword Args:
+    * :attr:`memory_config`: the memory configuration to use for the operation
+
+Example:
+
+    >>> tensor = ttnn.repeat(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]]), 2,)), device)
+    >>> print(tensor)
+    tensor([[1, 2],
+    [1, 2],
+    [3, 4],
+    [3, 4]])
+        )doc";
+
+    ttnn::bind_registered_operation(
+    module,
+    ttnn::repeat,
+    doc,
+    ttnn::pybind_arguments_t{
+        py::arg("input_tensor"),
+        py::arg("shape"),
+        py::kw_only(),
+        py::arg("memory_config") = std::nullopt});
+}
+
+
+
+void py_module(py::module& module) {
+    bind_permute(module);
+    bind_concat(module);
+    bind_upsample(module);
+    bind_pad(module);
+    bind_repeat(module);
+    bind_repeat_interleave(module);
 }
 
 }  // namespace data_movement
