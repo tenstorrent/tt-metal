@@ -246,9 +246,23 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
 
 logaddexp2 = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.logaddexp2)
 
-divide = ttnn.register_operation()(ttnn._ttnn.operations.binary.divide)
 
-bias_gelu = ttnn.register_operation()(ttnn._ttnn.operations.binary.bias_gelu)
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.divide(input_tensor_a, input_tensor_b)
+
+
+divide = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.divide)
+
+
+def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.nn.functional.gelu(torch.add(x, y))
+
+
+bias_gelu = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary.bias_gelu)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
