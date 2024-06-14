@@ -126,19 +126,21 @@ void barrier_and_stall(uint32_t& pending_read_size, uint32_t& fence, uint32_t& c
 
 template<uint32_t preamble_size>
 FORCE_INLINE
-void read_from_pcie(volatile tt_l1_ptr prefetch_q_entry_type *& prefetch_q_rd_ptr,
-                    uint32_t& pending_read_size,
+uint32_t read_from_pcie(volatile tt_l1_ptr prefetch_q_entry_type *& prefetch_q_rd_ptr,
                     uint32_t& fence,
                     uint32_t& pcie_read_ptr,
                     uint32_t cmd_ptr,
                     uint32_t size) {
 
+    uint32_t pending_read_size = 0;
     // Wrap cmddat_q
     if (fence + size + preamble_size > cmddat_q_base + cmddat_q_size) {
         // only wrap if there are no commands ready, otherwise we'll leave some on the floor
         // TODO: does this matter for perf?
         if (cmd_ptr != fence) {
-            return;
+            // No pending reads, since the location of fence cannot be moved due to unread commands
+            // in the cmddat_q -> reads cannot be issued to fill the queue.
+            return pending_read_size;
         }
         fence = cmddat_q_base;
     }
@@ -165,6 +167,7 @@ void read_from_pcie(volatile tt_l1_ptr prefetch_q_entry_type *& prefetch_q_rd_pt
     if ((uint32_t)prefetch_q_rd_ptr == prefetch_q_end) {
         prefetch_q_rd_ptr = (volatile tt_l1_ptr prefetch_q_entry_type*)prefetch_q_base;
     }
+    return pending_read_size;
 }
 
 // This routine can be called in 8 states based on the boolean values cmd_ready, prefetch_q_ready, read_pending:
@@ -213,14 +216,15 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
     stall_state = static_cast<StallState>(stall_flag << 1); // NOT_STALLED -> STALL_NEXT if stall_flag is set
 
     if (fetch_size != 0 && pending_read_size == 0) {
-        read_from_pcie<preamble_size>
-            (prefetch_q_rd_ptr, pending_read_size, fence, pcie_read_ptr, cmd_ptr, fetch_size);
-        if (stall_state == STALL_NEXT) {
-            // No pending reads. exec_buf is the first command being fetched and should be offset
+        pending_read_size = read_from_pcie<preamble_size>
+            (prefetch_q_rd_ptr, fence, pcie_read_ptr, cmd_ptr, fetch_size);
+        if (stall_state == STALL_NEXT && pending_read_size != 0) {
+            // No pending reads -> stall_state can be set to STALLED, since the read to the cmd
+            // that initiated the stall has been issued.
+            // exec_buf is the first command being fetched and should be offset
             // by preamble size. After ensuring that the exec_buf command has been read (barrier),
             // exit.
             barrier_and_stall(pending_read_size, fence, cmd_ptr); // STALL_NEXT -> STALLED
-            return;
         }
     }
     if (!cmd_ready) {
@@ -248,12 +252,17 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                     // If the prefetcher state reached here, it is issuing a read to the same "slot", since for exec_buf commands
                     // we will insert a read barrier. Hence, the exec_buf command will be concatenated to a previous command, and
                     // should not be offset by pramble size.
-                    read_from_pcie<0>
-                        (prefetch_q_rd_ptr, pending_read_size, fence, pcie_read_ptr, cmd_ptr, fetch_size);
-                    barrier_and_stall(pending_read_size, fence, cmd_ptr); // STALL_NEXT -> STALLED
+                    pending_read_size = read_from_pcie<0>
+                        (prefetch_q_rd_ptr, fence, pcie_read_ptr, cmd_ptr, fetch_size);
+                    if (pending_read_size != 0) {
+                        // if pending_read_size == 0 read_from_pcie early exited, due to a wrap, i.e. the exec_buf cmd is at a
+                        // wrapped location, and a read to it could not be issued, since there are existing commands in the cmddat_q.
+                        // Only move the stall_state to stalled if the read to the cmd that initiated the stall was issued
+                        barrier_and_stall(pending_read_size, fence, cmd_ptr); // STALL_NEXT -> STALLED
+                    }
                 } else {
-                    read_from_pcie<preamble_size>
-                        (prefetch_q_rd_ptr, pending_read_size, fence, pcie_read_ptr, cmd_ptr, fetch_size);
+                    pending_read_size = read_from_pcie<preamble_size>
+                        (prefetch_q_rd_ptr, fence, pcie_read_ptr, cmd_ptr, fetch_size);
                 }
             }
         } else {
