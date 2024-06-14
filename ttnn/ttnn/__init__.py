@@ -308,6 +308,7 @@ from ttnn.operations.reduction import (
     sum,
     mean,
     argmax,
+    topk,
 )
 
 from ttnn.operations.losses import (

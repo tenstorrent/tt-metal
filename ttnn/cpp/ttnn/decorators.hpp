@@ -77,7 +77,13 @@ template <typename concrete_operation_t, typename execute_on_worker_thread_retur
 inline Tensors create_async_output_tensors(const Tensors& inputs, const OptionalConstTensors& optional_inputs) {
     bool enable_autoformat_device = false;
 
-    if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
+    constexpr bool custom_create_async_outputs = requires(const concrete_operation_t& t) {
+        t.create_async_output_tensors(inputs, optional_inputs);
+    };
+
+    if constexpr (custom_create_async_outputs) {
+        return concrete_operation_t::create_async_output_tensors(inputs, optional_inputs);
+    } else if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
         return {Tensor(operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device))};
     } else if constexpr (detail::is_homogenous_tuple<execute_on_worker_thread_return_t, Tensor>()) {
         Tensors output_tensors;
@@ -90,9 +96,9 @@ inline Tensors create_async_output_tensors(const Tensors& inputs, const Optional
     } else {
         static_assert(
             tt::stl::concepts::always_false_v<concrete_operation_t>,
-            "Operation is expecting the execute_on_worker_thread method to return either a single Tensor or a vector "
+            "Operation is expecting the execute_on_worker_thread method to return either a single Tensor or a tuple "
             "of "
-            "Tensor(s).");
+            "Tensor(s). If the operation returns a vector of Tensors, it must implement create_async_output_tensors.");
     }
 }
 
@@ -268,6 +274,8 @@ struct operation_t {
 
             if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
                 return output_tensors.at(0);
+            } else if constexpr (std::is_same_v<execute_on_worker_thread_return_t, Tensors>) {
+                return output_tensors;
             } else if constexpr (detail::is_homogenous_tuple<execute_on_worker_thread_return_t, Tensor>()) {
                 return detail::make_tuple_from_vector<execute_on_worker_thread_return_t>(output_tensors);
             } else {
