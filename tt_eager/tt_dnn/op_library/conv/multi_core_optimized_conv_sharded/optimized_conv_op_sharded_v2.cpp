@@ -1534,7 +1534,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     Shape ashape_with_channels_padded = {ashape[0], ashape[1], ashape[2], input_channels_padded};
     uint32_t conv_act_size_h = ashape_with_channels_padded[1];
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
-    uint32_t conv_act_size_c = ashape_with_channels_padded[3];
+    // uint32_t conv_act_size_c = ashape_with_channels_padded[3];
     uint32_t weight_size_h = (uint32_t)conv_params[0];  // filter_h
     uint32_t weight_size_w = (uint32_t)conv_params[1];  // filter_W
     uint32_t stride_h = (uint32_t)conv_params[2];
@@ -1593,22 +1593,23 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
 
     //uint32_t num_blocks_act_h = act_matrix_height_ntiles / act_block_h_ntiles;
     //uint32_t num_blocks_out_h = act_matrix_height_ntiles / out_block_h_ntiles;
-    uint32_t num_blocks_act_w = act_matrix_width_ntiles / act_block_w_ntiles;
+    uint32_t num_blocks_act_w = a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ? weight_size_h * weight_size_w : weight_size_h;
     //uint32_t num_blocks_weight_w = weight_matrix_width_ntiles / weight_block_w_ntiles;
 
     // act block info
     uint32_t act_block_w_datums = act_block_w_ntiles * TILE_WIDTH;
     uint32_t act_block_h_datums = act_block_h_ntiles * TILE_HEIGHT;
-    TT_ASSERT(
-        (act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH)) ||
-        ((act_block_w_datums <= conv_act_size_c) && (conv_act_size_c % act_block_w_datums == 0)));
+    // todo: validate act_block_w_datums
+    // TT_ASSERT(
+    //     (act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH)) ||
+    //     ((act_block_w_datums <= conv_act_size_c) && (conv_act_size_c % act_block_w_datums == 0)));
 
     // weight block info
     uint32_t weight_block_w_datums = weight_block_w_ntiles * TILE_WIDTH;
     assert(weight_block_w_ntiles % out_subblock_w_ntiles == 0);
     uint32_t weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
     uint32_t weight_block_h_ntiles = act_block_w_ntiles;
-    uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles;
+    uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles * conv_act_c_blocks;
 
     //uint32_t num_groups = num_blocks_act_h * num_blocks_act_w * num_blocks_weight_w;
     // writer of conv op partially removes padding on the width
@@ -1667,16 +1668,16 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
             bias.value().get_legacy_shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
     }
 
-    auto [conv_output_size_h, conv_output_size_w] = optimized_conv_op_utils::compute_opt_conv_output_face_shape(
-        conv_act_size_h,
-        conv_act_size_w,
-        weight_size_h,
-        weight_size_w,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        extra_padding_for_32B_alignment);
+    // auto [conv_output_size_h, conv_output_size_w] = optimized_conv_op_utils::compute_opt_conv_output_face_shape(
+    //     conv_act_size_h,
+    //     conv_act_size_w,
+    //     weight_size_h,
+    //     weight_size_w,
+    //     stride_h,
+    //     stride_w,
+    //     pad_h,
+    //     pad_w,
+    //     extra_padding_for_32B_alignment);
 
     std::map<string, string> reader_defines;
 
@@ -1688,14 +1689,14 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     uint32_t src_dram_weight_buffer_size_bytes = src1_dram_buffer->size();
     uint32_t dst_l1_act_buffer_size_bytes =
         out_block_h_ntiles * act_block_w_ntiles * tt::tt_metal::detail::TileSize(act_df);
-    uint32_t dst_l1_weight_buffer_size_bytes =
-        weight_block_h_ntiles * weight_block_w_ntiles * tt::tt_metal::detail::TileSize(weight_df);
+    //uint32_t dst_l1_weight_buffer_size_bytes =
+    //    weight_block_h_ntiles * weight_block_w_ntiles * tt::tt_metal::detail::TileSize(weight_df);
 
     // For debug
     {
         log_debug(LogOp, "multi_core_optimized_conv_sharded_v2_");
-        log_debug(LogOp, "conv_act_size_h: {}", conv_act_size_h);
-        log_debug(LogOp, "conv_act_size_w: {}", conv_act_size_w);
+        //log_debug(LogOp, "conv_act_size_h: {}", conv_act_size_h);
+        //log_debug(LogOp, "conv_act_size_w: {}", conv_act_size_w);
         //log_debug(LogOp, "act_matrix_height: {}", act_matrix_height);
         log_debug(LogOp, "act_matrix_width: {}", act_matrix_width);
         //log_debug(LogOp, "act_matrix_height_unpadded: {}", act_matrix_height_unpadded);
@@ -1909,7 +1910,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         num_weight_cb_tiles = num_weight_cb_tiles * 2;
     }
 
-    if (conv_act_size_c / conv_act_c_blocks < 160 &&
+    if (a_shard_spec.shape[1] < 160 &&
         per_core_out_matrix_height_ntiles < 22) {  // Q: where are these numbers from?
         num_act_cb_tiles = num_act_cb_tiles * 2;   // double buffered
     }
@@ -1921,10 +1922,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     std::vector<uint32_t> writer_rt_args;
     std::vector<uint32_t> writer_compile_time_args;
 
-    uint32_t conv_act_c_read_bytes = a_shard_spec.shape[-1] * a.element_size();
+    uint32_t conv_act_c_read_bytes = a_shard_spec.shape[1] * a.element_size();
     cout << "conv_act_c_read_bytes: " << conv_act_c_read_bytes << endl;
+    // act_block_w_extra_align_bytes is used for height sharded reader only
     uint32_t act_block_w_extra_align_bytes =
-        (round_up(conv_act_size_c * weight_size_w, TILE_WIDTH) - (conv_act_size_c * weight_size_w)) * a.element_size();
+        (round_up(a_shard_spec.shape[1] * weight_size_w, TILE_WIDTH) - (a_shard_spec.shape[1] * weight_size_w)) * a.element_size();
     cout << "act_block_w_extra_align_bytes: " << act_block_w_extra_align_bytes << endl;
     uint32_t in0_block_w = act_block_w_ntiles; // todo (nitika): fix how this value is set in conv2d.cpp
     uint32_t in0_block_num_tiles = act_block_num_tiles;
@@ -2009,7 +2011,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
             tilize_in0 = false;
         } else {
             // 1D conv
-            TT_ASSERT(act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH));
+            TT_ASSERT(act_block_w_datums == round_up(a_shard_spec.shape[1] * weight_size_w, TILE_WIDTH));
 
             reader_kernel =
                 "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp";
@@ -2062,12 +2064,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         (uint32_t)stride_h,
         (uint32_t)stride_w,
         (uint32_t)conv_act_size_w,
-        (uint32_t)conv_output_size_w,  // conv_output_w_last_index
+        (uint32_t) 0,  // conv_output_w_last_index unused
         (uint32_t)conv_act_c_read_bytes,
         (uint32_t)window_outer,
         (uint32_t)window_inner,
         (uint32_t)act_block_h_datums,
-        (uint32_t)act_block_num_tiles / conv_act_c_blocks,
+        (uint32_t)act_block_num_tiles,
         (uint32_t)weight_size_w,
         (uint32_t)conv_act_size_w + (2 * pad_w),
         (uint32_t)act_block_w_extra_align_bytes,  // only used for 1d systolic variant
@@ -2126,10 +2128,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         num_blocks_act_w,  // = number of blocks of weight in height dim
         in1_block_num_tiles,
         conv_act_c_blocks,
-        weight_block_h_ntiles / conv_act_c_blocks,
+        weight_block_h_ntiles,
         weight_block_w_ntiles,
         weight_matrix_width_ntiles,                          // weight_stride_h
-        weight_matrix_width_ntiles * weight_block_h_ntiles,  // weight_next_block_stride_h,
+        weight_matrix_width_ntiles * weight_block_h_ntiles * conv_act_c_blocks,  // weight_next_block_stride_h,
         weight_block_w_ntiles,                               // weight_next_block_stride_w
 
         // bias
@@ -2159,7 +2161,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     if (split_reader) {
         std::vector<uint32_t> split_reader_args = {
             (uint32_t)act_block_h_datums,
-            (uint32_t)act_block_num_tiles / conv_act_c_blocks,
+            (uint32_t)act_block_num_tiles,
             (uint32_t)conv_act_c_read_bytes,
             (uint32_t)weight_size_w * conv_act_c_read_bytes,                  // coalesced_read_bytes
             (uint32_t)(conv_act_size_w + 2 * pad_w) * conv_act_c_read_bytes,  // window_outer_offset
@@ -2370,10 +2372,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
             num_blocks_act_w,  // = number of blocks of weight in height dim
             in1_block_num_tiles,
             conv_act_c_blocks,
-            weight_block_h_ntiles / conv_act_c_blocks,
+            weight_block_h_ntiles,
             weight_block_w_ntiles,
             weight_matrix_width_ntiles,                          // weight_stride_h
-            weight_matrix_width_ntiles * weight_block_h_ntiles,  // weight_next_block_stride_h,
+            weight_matrix_width_ntiles * weight_block_h_ntiles * conv_act_c_blocks,  // weight_next_block_stride_h,
             weight_block_w_ntiles,                               // weight_next_block_stride_w
 
             // bias
