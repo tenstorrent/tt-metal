@@ -21,6 +21,9 @@ namespace tt {
 
 namespace tt_metal {
 
+constexpr uint32_t max_runtime_args = 256;
+constexpr uint32_t idle_eth_max_runtime_args = eth_l1_mem::address_map::ERISC_L1_ARGS_SIZE / sizeof(uint32_t);
+
 using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
 
 struct RuntimeArgsData {
@@ -115,6 +118,8 @@ class Kernel : public JitBuildSettings {
     void process_defines(const std::function<void (const string& define, const string &value)>) const override;
     void process_compile_time_args(const std::function<void (int i, uint32_t value)>) const override;
 
+    bool is_idle_eth();
+
    protected:
     const int watcher_kernel_id_;
     std::string kernel_path_file_name_;                 // Full kernel path and file name
@@ -140,8 +145,6 @@ class Kernel : public JitBuildSettings {
     virtual uint8_t expected_num_binaries() const = 0;
 
     virtual std::string config_hash() const = 0;
-
-    virtual std::pair<uint64_t, uint64_t> get_runtime_args_range() const = 0;
 };
 
 class DataMovementKernel : public Kernel {
@@ -168,8 +171,6 @@ class DataMovementKernel : public Kernel {
     uint8_t expected_num_binaries() const override;
 
     std::string config_hash() const override;
-
-    std::pair<uint64_t, uint64_t> get_runtime_args_range() const override;
 };
 
 class EthernetKernel : public Kernel {
@@ -197,8 +198,6 @@ class EthernetKernel : public Kernel {
     uint8_t expected_num_binaries() const override;
 
     std::string config_hash() const override;
-
-    std::pair<uint64_t, uint64_t> get_runtime_args_range() const override;
 };
 
 class ComputeKernel : public Kernel {
@@ -225,8 +224,6 @@ class ComputeKernel : public Kernel {
     uint8_t expected_num_binaries() const override;
 
     std::string config_hash() const override;
-
-    std::pair<uint64_t, uint64_t> get_runtime_args_range() const override;
 };
 
 std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processor);

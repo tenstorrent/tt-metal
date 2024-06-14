@@ -433,8 +433,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 compile_args[11] = tunneler_settings.worker_physical_core.y; // 11: remote_tx_y
                 compile_args[12] = 0; // 12: remote_tx_queue_id
                 compile_args[13] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 13: tx_network_type
-                compile_args[14] = BRISC_L1_RESULT_BASE; // 14: test_results_addr
-                compile_args[15] = 1024; // 15: test_results_size
+                compile_args[14] = 0; // 14: test_results_addr (disabled)
+                compile_args[15] = 0; // 15: test_results_size (disabled)
                 compile_args[16] = 0; // 16: timeout_cycles
                 compile_args[17] = 0x0; // 17: output_depacketize
                 compile_args[18] = 0x0; // 18: output_depacketize info
@@ -544,8 +544,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
                 compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
                 compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
-                compile_args[22] = BRISC_L1_RESULT_BASE; // 22: test_results_addr
-                compile_args[23] = 1024; // 23: test_results_size
+                compile_args[22] = 0; // 22: test_results_addr (disabled)
+                compile_args[23] = 0; // 23: test_results_size (disabled)
                 compile_args[24] = 0; // 24: timeout_cycles
                 compile_args[25] = 0xF; // 25: output_depacketize_mask
                 arg_index = 26;
@@ -695,8 +695,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
                 compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
                 compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
-                compile_args[22] = BRISC_L1_RESULT_BASE; // 22: test_results_addr
-                compile_args[23] = 1024; // 23: test_results_size
+                compile_args[22] = 0; // 22: test_results_addr (disabled)
+                compile_args[23] = 0; // 23: test_results_size (disabled)
                 compile_args[24] = 0; // 24: timeout_cycles
                 compile_args[25] = 0x1; // 25: output_depacketize_mask
                 compile_args[26] = packet_switch_4B_pack(prefetch_d_settings.cb_log_page_size,
@@ -830,8 +830,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 compile_args[11] = tunneler_settings.worker_physical_core.y; // 11: remote_tx_y
                 compile_args[12] = 1; // 12: remote_tx_queue_id
                 compile_args[13] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 13: tx_network_type
-                compile_args[14] = BRISC_L1_RESULT_BASE; // 14: test_results_addr
-                compile_args[15] = 1024; // 15: test_results_size
+                compile_args[14] = 0; // 14: test_results_addr (disabled)
+                compile_args[15] = 0; // 15: test_results_size (disabled)
                 compile_args[16] = 0; // 16: timeout_cycles
                 compile_args[17] = 0x0; // 17: output_depacketize
                 compile_args[18] = 0x0; // 18: output_depacketize info
