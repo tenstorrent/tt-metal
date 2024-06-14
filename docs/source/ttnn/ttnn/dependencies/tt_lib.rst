@@ -414,7 +414,7 @@ Tensor elementwise operations
 .. autofunction:: tt_lib.tensor.heaviside
 
 .. autofunction:: tt_lib.tensor.right_shift
-    
+
 .. autofunction:: tt_lib.tensor.left_shift
 
 .. autofunction:: tt_lib.tensor.logaddexp
@@ -508,6 +508,8 @@ Tensor relational operations
 .. autofunction:: tt_lib.tensor.gt
 
 .. autofunction:: tt_lib.tensor.gte
+
+.. autofunction:: tt_lib.tensor.ge_
 
 .. autofunction:: tt_lib.tensor.lt
 
