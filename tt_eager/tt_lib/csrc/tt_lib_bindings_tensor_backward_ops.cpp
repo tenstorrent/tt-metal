@@ -1766,10 +1766,29 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-    m_tensor.def("prod_bw", &tt::tt_metal::prod_bw,
-            py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("all_dimensions") , py::arg("dim") , py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+    m_tensor.def("prod_bw",
+        [](const Tensor &grad,
+        const Tensor &input,
+        bool all_dimensions,
+        int64_t dim,
+        const MemoryConfig &output_mem_config,
+        const std::vector<bool> &are_required_outputs,
+        std::optional<Tensor> &input_grad,
+        uint8_t queue_id) {
+            return prod_bw(queue_id, grad, input, all_dimensions, dim, output_mem_config, are_required_outputs, input_grad);
+        },
+        py::arg("grad").noconvert(),
+        py::arg("input").noconvert(),
+        py::arg("all_dimensions") ,
+        py::arg("dim") ,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("are_required_outputs").noconvert() = std::vector<bool>{true},
+        py::arg("input_grad").noconvert() = std::nullopt,
+        py::arg("queue_id").noconvert() = 0,
+        R"doc(
             Performs backward operations for prod on ``input_a`` along ``all_dimensions`` or a particular ``dim``.
             If ``all_dimensions`` is set to ``true``, irrespective of given dimension it will perform backward prod for all dimensions.
+            Optional ``input_grad`` support provided only for ``all_dimensions = true``.
 
             Input tensor must have BFLOAT16 data type.
 
@@ -1783,6 +1802,9 @@ namespace tt::tt_metal::detail{
                 "all_dimensions", "Consider all dimension (ignores ``dim`` param)", "bool", "", "Yes"
                 "dim", "Dimension to perform prod", "int", "", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "are_required_outputs", "Boolean values for the required outputs: input_grad", "List of bool", "Default value is [True]", "No"
+                "input_grad", "optional output tensor", "Tensor", "default is None", "No"
+                "queue_id", "queue_id", "uint8_t", "Default is 0", "No"
         )doc");
 
     m_tensor.def("log_sigmoid_bw", &tt::tt_metal::log_sigmoid_bw,

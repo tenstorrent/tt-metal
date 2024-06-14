@@ -595,12 +595,24 @@ std::vector<Tensor> trunc_bw(
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> prod_bw(
+std::vector<std::optional<Tensor>> prod_bw(
     const Tensor& grad,
     const Tensor& input,
     bool all_dimensions,
     int64_t dim,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
+
+std::vector<std::optional<Tensor>> prod_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    bool all_dimensions,
+    int64_t dim,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
 
 std::vector<Tensor> log_sigmoid_bw(
     const Tensor& grad,
