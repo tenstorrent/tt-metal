@@ -34,11 +34,16 @@ class DevicePool {
         if (_inst == nullptr) {
             static DevicePool device_pool(device_ids, num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, skip_remote_devices);
             _inst = &device_pool;
-            _inst->init_firmware_on_active_devices();
-        } else {
-            _inst->add_devices_to_pool(device_ids, num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, skip_remote_devices);
-            _inst->init_firmware_on_active_devices();
         }
+         _inst->l1_small_size = l1_small_size;
+         _inst->trace_region_size = trace_region_size;
+         _inst->num_hw_cqs = num_hw_cqs;
+         _inst->l1_bank_remap = l1_bank_remap;
+         _inst->skip_remote_devices = skip_remote_devices;
+
+         _inst->add_devices_to_pool(device_ids);
+         _inst->init_firmware_on_active_devices();
+
     }
 
     Device *get_active_device(chip_id_t device_id) const;
@@ -61,6 +66,7 @@ class DevicePool {
     std::vector<uint32_t> l1_bank_remap;
     std::mutex lock;
     std::vector<std::unique_ptr<Device>> devices;
+    bool skip_remote_devices;
 
     // Determine which CPU cores the worker threads need to be placed on for each device
     std::unordered_map<uint32_t, uint32_t> device_to_core_map;
@@ -69,13 +75,7 @@ class DevicePool {
     void activate_device(chip_id_t id);
     void initialize_device(Device *dev) const;
     void deactivate_device(chip_id_t id);
-    void add_devices_to_pool(
-        std::vector<chip_id_t> device_ids,
-        const uint8_t num_hw_cqs,
-        size_t l1_small_size,
-        size_t trace_region_size,
-        const std::vector<uint32_t> &l1_bank_remap,
-        bool skip_remote_devices);
+    void add_devices_to_pool(std::vector<chip_id_t> device_ids);
     static DevicePool *_inst;
 };
 
