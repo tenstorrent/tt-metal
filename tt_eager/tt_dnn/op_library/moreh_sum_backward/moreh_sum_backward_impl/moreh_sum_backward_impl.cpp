@@ -33,14 +33,35 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
     }
 
     log_debug(LogOp, "rank {}", rank);
-    for (auto i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+    for (auto i = 0; i < rank; ++i) {
         log_debug(LogOp, "dim[{}] = {}", i, dim[i]);
     }
 }
 
+Shape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim) {
+    if (keep_batch_dim) {
+        return output_grad.get_legacy_shape();
+    }
+
+    auto shape = input_grad.get_legacy_shape();
+    auto rank = shape.rank();
+    auto padding = shape.padding();
+    for (auto dim : dims) {
+        TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
+        bool is_tile_dim = (dim == rank - 1 || dim == rank - 2);
+        if (is_tile_dim) {
+            shape[dim] = TILE_HEIGHT;
+            padding[dim] = Padding::PadDimension{0, 31};
+        } else {
+            shape[dim] = 1;
+        }
+    }
+
+    return Shape(shape, padding);
+}
 }
 
-operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_grad, const Tensor &input_grad, const DeviceComputeKernelConfig &compute_kernel_config) {
+operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim, const DeviceComputeKernelConfig &compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -53,30 +74,26 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
     const auto cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
     const auto single_tile_size = detail::TileSize(cb_data_format);
 
-    const auto &output_grad_shape = output_grad.get_legacy_shape();
-    const auto &output_grad_shape_wo_padding = output_grad_shape.without_padding();
-    const auto output_grad_rank = output_grad_shape.rank();
-
-    std::vector<uint32_t> output_grad_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-    log_debug(LogOp, "output_grad");
-    get_tensor_dim(output_grad_dim, output_grad_shape);
-
     const auto &input_grad_shape = input_grad.get_legacy_shape();
     const auto &input_grad_shape_wo_padding = input_grad_shape.without_padding();
     const auto input_grad_rank = input_grad_shape.rank();
 
-    std::vector<uint32_t> input_grad_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    std::vector<uint32_t> input_grad_dim(input_grad_rank, 1);
     log_debug(LogOp, "input_grad");
     get_tensor_dim(input_grad_dim, input_grad_shape);
+    const auto &output_grad_shape = get_output_grad_shape(output_grad, input_grad, dims, keep_batch_dim);
+    const auto &output_grad_shape_wo_padding = output_grad_shape.without_padding();
 
-    std::vector<uint32_t> need_bcast_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 0);
-    // TODO: both rank can be different when keepdim=false
-    // for (auto i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+    std::vector<uint32_t> output_grad_dim(input_grad_rank, 1);
+    log_debug(LogOp, "output_grad");
+    get_tensor_dim(output_grad_dim, output_grad_shape);
+
+    std::vector<uint32_t> need_bcast_dim(input_grad_rank, 0);
     for (auto i = 0; i < input_grad_rank; ++i) {
         auto idx = input_grad_rank - 1 - i;
+        bool is_tile_dim = (idx == input_grad_rank - 1 || idx == input_grad_rank - 2);
 
-        // last 2-dim
-        if (idx == input_grad_rank - 1 || idx == input_grad_rank - 2) {
+        if (is_tile_dim) {
             need_bcast_dim[i] = (output_grad_shape_wo_padding[idx] != input_grad_shape_wo_padding[idx]);
         } else {
             need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
@@ -85,7 +102,7 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
     const auto num_input_grad_tiles = input_grad.volume() / TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(output_grad.device()->arch(), compute_kernel_config);
 
-    for (auto i = 0; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
+    for (auto i = 0; i < input_grad_rank; ++i) {
         log_debug(LogOp, "need_bcast_dim [{}] = {}", i, need_bcast_dim[i]);
     }
     log_debug(LogOp, "num_input_grad_tiles {}", num_input_grad_tiles);
@@ -131,7 +148,7 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args =
-    { static_cast<uint32_t>(is_dram(output_grad)) };
+    { static_cast<uint32_t>(is_dram(output_grad)), input_grad_rank };
     std::vector<uint32_t> writer_compile_time_args =
     { static_cast<uint32_t>(is_dram(input_grad)) };
     const auto reader_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/reader_moreh_sum_backward.cpp";

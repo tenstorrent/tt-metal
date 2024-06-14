@@ -35,6 +35,7 @@ def shape_padded(shape):
     ],
 )
 @pytest.mark.parametrize("enable_async", [True, False])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 11264}], indirect=True)
 def test_run_average_pool(act_shape, dtype, device, use_program_cache, enable_async):
     device.enable_async(enable_async)
 
@@ -68,7 +69,7 @@ def test_run_average_pool(act_shape, dtype, device, use_program_cache, enable_as
     run_ops(ttact_res)
     # Trace
     logger.info("Start Trace capture")
-    tid = ttl.device.BeginTraceCapture(device, 0, 11264)
+    tid = ttl.device.BeginTraceCapture(device, 0)
     out_res = run_ops(ttact_res)
     ttl.device.EndTraceCapture(device, 0, tid)
     logger.info("Trace captured")

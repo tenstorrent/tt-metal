@@ -3,17 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "debug/dprint.h"
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 
-inline uint32_t get_output_grad_tile(uint32_t idx, uint32_t* output_grad_dim, uint32_t* output_grad_stride, uint32_t* input_grad_dim, uint32_t* input_grad_stride, bool* need_bcast_dim) {
+inline uint32_t get_output_grad_tile(uint32_t idx, uint32_t rank, uint32_t* output_grad_dim, uint32_t* output_grad_stride, uint32_t* input_grad_dim, uint32_t* input_grad_stride, bool* need_bcast_dim) {
     uint32_t cur_idx[MAX_NUM_DIMENSIONS];
 
-    for (auto i = 0; i < MAX_NUM_DIMENSIONS; ++i) {
+    for (uint32_t i = 0; i < rank; ++i) {
         cur_idx[i] = (need_bcast_dim[i]) ? (0) : ((idx / input_grad_stride[i]) % input_grad_dim[i]);
     }
 
-    auto read_tile_id = 0;
-    for (auto i = 0; i < MAX_NUM_DIMENSIONS; ++i) {
+    uint32_t read_tile_id = 0;
+    for (uint32_t i = 0; i < rank; ++i) {
         read_tile_id += (cur_idx[i] * output_grad_stride[i]);
     }
 
@@ -23,6 +24,7 @@ inline uint32_t get_output_grad_tile(uint32_t idx, uint32_t* output_grad_dim, ui
 void kernel_main() {
     // compile-time args
     constexpr bool output_grad_is_dram = (get_compile_time_arg_val(0) == 1);
+    constexpr uint32_t input_grad_rank = get_compile_time_arg_val(1);
 
     // runtime args
     ArgFetcher arg_fetcher;
@@ -31,29 +33,29 @@ void kernel_main() {
     const auto start_id = arg_fetcher.get_next_arg_val<uint32_t>();
 
     uint32_t output_grad_dim[MAX_NUM_DIMENSIONS];
-    for (auto i = 0; i < MAX_NUM_DIMENSIONS;++i) {
+    for (uint32_t i = 0; i < input_grad_rank;++i) {
         output_grad_dim[i] = arg_fetcher.get_next_arg_val<uint32_t>();
     }
 
     uint32_t input_grad_dim[MAX_NUM_DIMENSIONS];
-    for (auto i = 0; i < MAX_NUM_DIMENSIONS;++i) {
+    for (uint32_t i = 0; i < input_grad_rank;++i) {
         input_grad_dim[i] = arg_fetcher.get_next_arg_val<uint32_t>();
     }
 
     bool need_bcast_dim[MAX_NUM_DIMENSIONS];
-    for (auto i = 0; i < MAX_NUM_DIMENSIONS;++i) {
+    for (uint32_t i = 0; i < input_grad_rank;++i) {
         need_bcast_dim[i] = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
     }
 
     uint32_t output_grad_stride[MAX_NUM_DIMENSIONS];
     output_grad_stride[0] = 1;
-    for (auto i = 1; i < MAX_NUM_DIMENSIONS;++i) {
+    for (uint32_t i = 1; i < input_grad_rank;++i) {
         output_grad_stride[i] = output_grad_stride[i - 1] * output_grad_dim[i - 1];
     }
 
     uint32_t input_grad_stride[MAX_NUM_DIMENSIONS];
     input_grad_stride[0] = 1;
-    for (auto i = 1; i < MAX_NUM_DIMENSIONS;++i) {
+    for (uint32_t i = 1; i < input_grad_rank;++i) {
         input_grad_stride[i] = input_grad_stride[i - 1] * input_grad_dim[i - 1];
     }
 
@@ -78,7 +80,7 @@ void kernel_main() {
         .data_format = output_grad_data_format};
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
-        auto read_tile_id = get_output_grad_tile(i, output_grad_dim, output_grad_stride, input_grad_dim, input_grad_stride, need_bcast_dim);
+        auto read_tile_id = get_output_grad_tile(i, input_grad_rank, output_grad_dim, output_grad_stride, input_grad_dim, input_grad_stride, need_bcast_dim);
 
         cb_reserve_back(cb_id_in0, onetile);
         l1_write_addr_in0 = get_write_ptr(cb_id_in0);

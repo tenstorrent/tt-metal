@@ -136,14 +136,14 @@ void DevicePool::activate_device(chip_id_t id) {
         log_debug(tt::LogMetal, "DevicePool new device {}", id);
         int core_assigned_to_device = this->device_to_core_map.at(id);
         auto dev =
-            new Device(id, this->num_hw_cqs, this->l1_small_size, this->l1_bank_remap, false, core_assigned_to_device);
+            new Device(id, this->num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap, false, core_assigned_to_device);
         dev->build_firmware();
         this->devices[id] = std::unique_ptr<Device>(dev);
     } else {
         const auto& dev = this->devices[id];
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
         if (not dev->is_initialized()) {
-            dev->initialize(num_hw_cqs, this->l1_small_size, this->l1_bank_remap);
+            dev->initialize(num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap);
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
         }
@@ -162,9 +162,11 @@ void DevicePool::add_devices_to_pool(
     std::vector<chip_id_t> device_ids,
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
+    size_t trace_region_size,
     const std::vector<uint32_t>& l1_bank_remap,
     bool skip_remote_devices) {
     this->l1_small_size = l1_small_size;
+    this->trace_region_size = trace_region_size;
     this->num_hw_cqs = num_hw_cqs;
     this->l1_bank_remap = l1_bank_remap;
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
@@ -229,6 +231,7 @@ DevicePool::DevicePool(
     std::vector<chip_id_t> device_ids,
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
+    size_t trace_region_size,
     const std::vector<uint32_t>& l1_bank_remap,
     bool skip_remote_devices) {
     ZoneScoped;
@@ -246,7 +249,7 @@ DevicePool::DevicePool(
         device_cpu_allocator::bind_current_thread_to_free_cores(free_cores);
     }
 
-    this->add_devices_to_pool(device_ids, num_hw_cqs, l1_small_size, l1_bank_remap, skip_remote_devices);
+    this->add_devices_to_pool(device_ids, num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, skip_remote_devices);
 }
 
 Device* DevicePool::get_active_device(chip_id_t device_id) const {
