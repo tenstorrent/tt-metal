@@ -979,6 +979,15 @@ def gt(x, y, *args, **kwargs):
         return x > y
 
 
+def gt_(x, y, *args, **kwargs):
+    return x.gt_(y)
+
+
+def unary_gt_(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    return x.gt_(value)
+
+
 def eq(x, y, *args, **kwargs):
     if "scalar" in kwargs:
         scalar = kwargs.pop("scalar")

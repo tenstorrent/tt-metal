@@ -209,6 +209,15 @@ Tensor floor_div(
     const Tensor& input,
     float value,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor gt_(
+    Tensor& input_a,
+    Tensor& input_b,
+    std::optional<MemoryConfig> output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor gt_(
+    Tensor& input_a,
+    float value,
+    std::optional<MemoryConfig> output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // xlogy(x,y))=x*log(y)
 Tensor xlogy(
