@@ -24,12 +24,12 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_total_data_kb = 16*1024;
     constexpr uint32_t default_max_packet_size_words = 0x100;
 
-    constexpr uint32_t default_tx_queue_start_addr = L1_UNRESERVED_BASE;
+    constexpr uint32_t default_test_result_buf_addr = L1_UNRESERVED_BASE;
+    constexpr uint32_t default_test_result_buf_size = 1024;
+    constexpr uint32_t default_tx_queue_start_addr = L1_UNRESERVED_BASE + default_test_result_buf_size;
     constexpr uint32_t default_tx_queue_size_bytes = 0x10000;
     constexpr uint32_t default_rx_queue_start_addr = L1_UNRESERVED_BASE + 0x2000;
     constexpr uint32_t default_rx_queue_size_bytes = 0x20000;
-    constexpr uint32_t default_test_result_buf_addr = BRISC_L1_RESULT_BASE;
-    constexpr uint32_t default_test_result_buf_size = 1024;
 
     constexpr uint32_t default_timeout_mcycles = 1000;
     constexpr uint32_t default_rx_disable_data_check = 0;

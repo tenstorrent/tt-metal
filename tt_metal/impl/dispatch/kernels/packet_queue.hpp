@@ -36,6 +36,21 @@ void zero_l1_buf(tt_l1_ptr uint32_t* buf, uint32_t size_bytes) {
     }
 }
 
+static FORCE_INLINE
+void write_test_results(tt_l1_ptr uint32_t* const buf, uint32_t i, uint32_t val) {
+    if (buf != nullptr) {
+        buf[i] = val;
+    }
+}
+
+static FORCE_INLINE
+void set_64b_result(uint32_t* buf, uint64_t val, uint32_t index = 0) {
+    if (buf != nullptr) {
+        buf[index] = val >> 32;
+        buf[index+1] = val & 0xFFFFFFFF;
+    }
+}
+
 typedef struct dispatch_packet_header_t dispatch_packet_header_t;
 
 static_assert(sizeof(dispatch_packet_header_t) == PACKET_WORD_SIZE_BYTES);

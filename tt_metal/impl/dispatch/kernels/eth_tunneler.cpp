@@ -64,6 +64,7 @@ constexpr DispatchRemoteNetworkType remote_sender_network_type[NUM_TUNNEL_QUEUES
 constexpr uint32_t test_results_buf_addr_arg = get_compile_time_arg_val(12);
 constexpr uint32_t test_results_buf_size_bytes = get_compile_time_arg_val(13);
 
+// careful, may be null
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_buf_addr_arg);
 
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(14);
@@ -73,12 +74,12 @@ void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
     noc_init();
 
-    test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000000;
-    test_results[PQ_TEST_MISC_INDEX + 1] = 0xbb000000;
-    test_results[PQ_TEST_MISC_INDEX + 2] = 0xAABBCCDD;
-    test_results[PQ_TEST_MISC_INDEX + 3] = 0xDDCCBBAA;
-    test_results[PQ_TEST_MISC_INDEX + 4] = endpoint_id_start_index;
+    write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
+    write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000000);
+    write_test_results(test_results, PQ_TEST_MISC_INDEX + 1, 0xbb000000);
+    write_test_results(test_results, PQ_TEST_MISC_INDEX + 2, 0xAABBCCDD);
+    write_test_results(test_results, PQ_TEST_MISC_INDEX + 3, 0xDDCCBBAA);
+    write_test_results(test_results, PQ_TEST_MISC_INDEX + 4, endpoint_id_start_index);
 
     for (uint32_t i = 0; i < tunnel_lanes; i++) {
         input_queues[i].init(
@@ -105,11 +106,11 @@ void kernel_main() {
     }
 
     if (!wait_all_src_dest_ready(input_queues, tunnel_lanes, output_queues, tunnel_lanes, timeout_cycles)) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
+        write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
         return;
     }
 
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
+    write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000001);
 
     bool timeout = false;
     bool all_outputs_finished = false;
@@ -156,7 +157,7 @@ void kernel_main() {
     }
 
     if (!timeout) {
-        test_results[PQ_TEST_MISC_INDEX] = 0xff000002;
+        write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000002);
         for (uint32_t i = 0; i < tunnel_lanes; i++) {
             if (!output_queues[i].output_barrier(timeout_cycles)) {
                 timeout = true;
@@ -167,7 +168,7 @@ void kernel_main() {
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
     if (!timeout) {
-        test_results[PQ_TEST_MISC_INDEX] = 0xff000003;
+        write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000003);
     }
 
     set_64b_result(test_results, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
@@ -175,9 +176,9 @@ void kernel_main() {
     set_64b_result(test_results, iter, PQ_TEST_ITER_INDEX);
 
     if (timeout) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
+        write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
     } else {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_PASS;
-        test_results[PQ_TEST_MISC_INDEX] = 0xff00005;
+        write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
+        write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff00005);
     }
 }

@@ -74,6 +74,7 @@ constexpr DispatchRemoteNetworkType
 constexpr uint32_t test_results_buf_addr_arg = get_compile_time_arg_val(14);
 constexpr uint32_t test_results_buf_size_bytes = get_compile_time_arg_val(15);
 
+// careful, may be null
 tt_l1_ptr uint32_t* const test_results =
     reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_buf_addr_arg);
 
@@ -140,9 +141,9 @@ void kernel_main() {
 
     noc_init();
 
-    test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000000;
-    test_results[PQ_TEST_MISC_INDEX+1] = 0xaa000000 | mux_fan_in;
+    write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
+    write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000000);
+    write_test_results(test_results, PQ_TEST_MISC_INDEX+1, 0xaa000000 | mux_fan_in);
 
     for (uint32_t i = 0; i < mux_fan_in; i++) {
         input_queues[i].init(i, rx_queue_start_addr_words + i*rx_queue_size_words, rx_queue_size_words,
@@ -160,11 +161,11 @@ void kernel_main() {
                       output_depacketize_remove_header);
 
     if (!wait_all_src_dest_ready(input_queues, mux_fan_in, &output_queue, 1, timeout_cycles)) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
+        write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
         return;
     }
 
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
+    write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000001);
 
     uint32_t curr_input = 0;
     bool timeout = false;
@@ -203,7 +204,7 @@ void kernel_main() {
     }
 
     if (!timeout) {
-        test_results[PQ_TEST_MISC_INDEX] = 0xff000002;
+        write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000002);
         if (!output_queue.output_barrier(timeout_cycles)) {
             timeout = true;
         }
@@ -211,7 +212,7 @@ void kernel_main() {
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
     if (!timeout) {
-        test_results[PQ_TEST_MISC_INDEX] = 0xff000003;
+        write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000003);
         for (uint32_t i = 0; i < mux_fan_in; i++) {
             input_queues[i].send_remote_finished_notification();
         }
@@ -222,12 +223,12 @@ void kernel_main() {
     set_64b_result(test_results, iter, PQ_TEST_ITER_INDEX);
 
     if (timeout) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
+        write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
         // DPRINT << "mux timeout" << ENDL();
         // input_queues[0].dprint_object();
         // output_queue.dprint_object();
     } else {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_PASS;
-        test_results[PQ_TEST_MISC_INDEX] = 0xff00005;
+        write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
+        write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff00005);
     }
 }
