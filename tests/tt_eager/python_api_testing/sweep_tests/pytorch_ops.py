@@ -955,6 +955,15 @@ def lte(x, y, *args, **kwargs):
         return x <= y
 
 
+def le_(x, y, *args, **kwargs):
+    return x.le_(y)
+
+
+def unary_le_(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    return x.le_(value)
+
+
 def lt(x, y, *args, **kwargs):
     if "scalar" in kwargs:
         scalar = kwargs.pop("scalar")

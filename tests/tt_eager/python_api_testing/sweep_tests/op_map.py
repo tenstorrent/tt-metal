@@ -657,6 +657,14 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_lte,
         "pytorch_op": pytorch_ops.lte,
     },
+    "eltwise-le_": {
+        "tt_op": tt_lib_ops.eltwise_le_,
+        "pytorch_op": pytorch_ops.le_,
+    },
+    "eltwise-unary_le_": {
+        "tt_op": tt_lib_ops.eltwise_unary_le_,
+        "pytorch_op": pytorch_ops.unary_le_,
+    },
     "eltwise-add": {
         "tt_op": tt_lib_ops.eltwise_add,
         "pytorch_op": pytorch_ops.add,

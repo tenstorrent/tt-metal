@@ -1166,6 +1166,43 @@ def eltwise_unary_div_no_nan(
 
 
 @setup_host_and_device
+def eltwise_le_(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    ttl.tensor.le_(t0, t1)
+
+    return tt2torch_tensor(t0)
+
+
+@setup_host_and_device
+def eltwise_unary_le_(
+    x,
+    *args,
+    value,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    ttl.tensor.le_(t0, value)
+
+    return tt2torch_tensor(t0)
+
+
+@setup_host_and_device
 def lamb_optimizer(
     x,
     y,
