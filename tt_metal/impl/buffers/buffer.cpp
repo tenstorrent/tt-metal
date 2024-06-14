@@ -248,7 +248,7 @@ Buffer &Buffer::operator=(Buffer &&other) {
 
 void Buffer::allocate() {
     TT_ASSERT(this->device_ != nullptr);
-    // L1 buffers are allocated top down!
+    // L1 and Trace buffers (which live in DRAM) are allocated top down!
     bool bottom_up = this->buffer_type_ == BufferType::DRAM;
     detail::AllocateBuffer(this, bottom_up);
     detail::BUFFER_MAP.insert({this->device_->id(), this->address_}, this);
@@ -266,7 +266,8 @@ CoreCoord Buffer::logical_core_from_bank_id(uint32_t bank_id) const {
 
 CoreCoord Buffer::noc_coordinates(uint32_t bank_id) const {
     switch (this->buffer_type_) {
-        case BufferType::DRAM: {
+        case BufferType::DRAM:
+        case BufferType::TRACE: {
             auto dram_channel = this->dram_channel_from_bank_id(bank_id);
             return this->device_->dram_core_from_dram_channel(dram_channel);
         }
@@ -316,15 +317,6 @@ void Buffer::deallocate() {
 }
 
 Buffer::~Buffer() { this->deallocate(); }
-
-tt::stl::reflection::Attributes ShardSpec::attributes() const {
-    return {
-        {"grid", this->grid.str()},
-        {"shape", this->shape},
-        {"orientation", this->orientation},
-        {"halo", this->halo},
-    };
-}
 
 bool operator==(const ShardSpec &spec_a, const ShardSpec &spec_b) {
     if (spec_a.grid != spec_b.grid) {

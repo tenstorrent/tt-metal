@@ -119,6 +119,10 @@ inline const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, 
 
     auto compute_with_storage_start = desc_yaml["compute_with_storage_grid_range"]["start"];
     auto compute_with_storage_end = desc_yaml["compute_with_storage_grid_range"]["end"];
+    if (tt::Cluster::instance().is_galaxy_cluster() and product_name == "nebula_x1") {
+        compute_with_storage_start = desc_yaml["tg_compute_with_storage_grid_range"]["start"];
+        compute_with_storage_end = desc_yaml["tg_compute_with_storage_grid_range"]["end"];
+    }
     TT_ASSERT(compute_with_storage_start.IsSequence() and compute_with_storage_end.IsSequence());
     TT_ASSERT(compute_with_storage_end[0].as<size_t>() >= compute_with_storage_start[0].as<size_t>());
     TT_ASSERT(compute_with_storage_end[1].as<size_t>() >= compute_with_storage_start[1].as<size_t>());
@@ -136,7 +140,11 @@ inline const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, 
     }
 
     std::vector<RelativeCoreCoord> dispatch_cores;
-    for (const auto& core_node : desc_yaml["dispatch_cores"]) {
+    auto dispatch_cores_string = "dispatch_cores";
+    if (tt::Cluster::instance().is_galaxy_cluster() and product_name == "nebula_x1") {
+        dispatch_cores_string = "tg_dispatch_cores";
+    }
+    for (const auto& core_node : desc_yaml[dispatch_cores_string]) {
         RelativeCoreCoord coord = {};
         if (core_node.IsSequence()) {
             // Logical coord

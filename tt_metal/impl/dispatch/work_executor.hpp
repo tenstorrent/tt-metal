@@ -79,13 +79,7 @@ class WorkExecutor {
    public:
     LockFreeQueue<std::function<void()>> worker_queue;
 
-    WorkExecutor(int cpu_core, int device_id) : cpu_core_for_worker(cpu_core), managed_device_id(device_id) {
-        set_process_priority(0);
-        if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS) {
-            this->set_worker_queue_mode(this->worker_queue_mode);
-            this->start_worker();
-        }
-    }
+    WorkExecutor(int cpu_core, int device_id) : cpu_core_for_worker(cpu_core), managed_device_id(device_id) {}
 
     WorkExecutor(WorkExecutor&& other) {
         worker_state = std::move(other.worker_state);
@@ -102,7 +96,23 @@ class WorkExecutor {
         return *this;
     }
 
-    ~WorkExecutor() {
+    ~WorkExecutor() { reset(); }
+
+    inline void initialize() {
+        this->work_executor_mode = default_worker_executor_mode();
+        this->worker_queue_mode = default_worker_queue_mode();
+        this->worker_state = WorkerState::IDLE;
+        this->cpu_core_for_worker = 0;
+        this->worker_queue.parent_thread_id = 0;
+        this->worker_queue.worker_thread_id = 0;
+        set_process_priority(0);
+        if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS) {
+            this->set_worker_queue_mode(this->worker_queue_mode);
+            this->start_worker();
+        }
+    }
+
+    inline void reset() {
         if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS) {
             stop_worker();
         }
@@ -218,9 +228,9 @@ class WorkExecutor {
 
    private:
     std::thread worker_thread;
-    WorkerState worker_state = WorkerState::IDLE;
-    int cpu_core_for_worker = 0;
-    int managed_device_id = 0;
+    WorkerState worker_state;
+    int cpu_core_for_worker;
+    int managed_device_id;
     std::condition_variable cv;
     std::mutex cv_mutex;
 
@@ -257,8 +267,8 @@ class WorkExecutor {
         return static_cast<WorkerQueueMode>(value);
     }
 
-    WorkExecutorMode work_executor_mode = default_worker_executor_mode();
-    WorkerQueueMode worker_queue_mode = default_worker_queue_mode();
+    WorkExecutorMode work_executor_mode;
+    WorkerQueueMode worker_queue_mode;
 };
 
 }  // namespace tt

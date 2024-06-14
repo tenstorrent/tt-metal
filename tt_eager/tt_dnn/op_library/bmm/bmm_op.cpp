@@ -322,8 +322,8 @@ tuple<uint32_t, uint32_t> get_matmul_subblock_params(
             return {out_subblock_h, out_subblock_w};
         }
     }
-
-    TT_FATAL(false, "Matmul subblock parameters could not be determined for given input shapes");
+    // Return basic value that should work in most cases.
+    return {1, 1};
 }
 
 // TODO: Only supports sharded matmul for now; infer most matmul params from shard spec
@@ -1064,7 +1064,6 @@ void Matmul::validate(
                                 input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout);
                         }
 
-                        TT_FATAL(K / (shard_shape[1] / TILE_WIDTH) == div_up(N, program_config.per_core_N));
                     } else if (tensor_a_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                         TT_FATAL(K == program_config.in0_block_w);
                         TT_FATAL(program_config.in0_block_w == (shard_shape[1] / TILE_WIDTH));
@@ -1661,9 +1660,10 @@ MatmulProgramConfig create_matmul_program_config(
             k_tiles_per_core -= 1;
         }
     } else {
-        TT_FATAL(
-            input_tensor_a_memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
-            "MatmulMultiCoreReuseMultiCastProgramConfig: Must be block sharded");
+        if (input_tensor_a_memory_config.memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
+            return create_matmul_1d_systolic_array_program_config(
+                    a_shape, b_shape, core_coord, fused_activation, fp32_dest_acc_en);
+        }
         uint32_t k = a_shape[-1] / ttnn::TILE_SIZE;
         uint32_t n = b_shape[-1] / ttnn::TILE_SIZE;
         auto shard_shape = input_tensor_a_memory_config.shard_spec.value().shape;

@@ -19,6 +19,45 @@ namespace tt::tt_metal {
 // One core dispatches commands to worker cores on the device `dispatcher`
 // The `remote_x` cores are used for remote fast dispatch and receive / transmit fast dispatch packets from ethernet cores
 
+enum DispatchWorkerType : uint32_t {
+    PREFETCH = 0,
+    PREFETCH_D = 1,
+    DISPATCH = 2,
+    DISPATCH_D = 3,
+    MUX = 4,
+    MUX_D = 5,
+    DEMUX = 6,
+    DEMUX_D = 7,
+    US_TUNNELER_LOCAL = 8,
+    US_TUNNELER_REMOTE = 9,
+    DS_TUNNELER_LOCAL = 10,
+    DS_TUNNELER_REMOTE = 11,
+    COUNT = 12
+};
+
+struct worker_build_settings_t{
+    std::string kernel_file;
+    std::vector<uint32_t> compile_args;
+    std::vector<tt_cxy_pair> upstream_cores;
+    std::vector<tt_cxy_pair> downstream_cores;
+    tt_cxy_pair worker_physical_core;
+    tt_cxy_pair eth_partner_physical_core;
+    CoreType dispatch_core_type;
+    uint32_t command_queue_start_addr;
+    uint32_t issue_queue_start_addr;
+    uint32_t issue_queue_size;
+    uint32_t completion_queue_start_addr;
+    uint32_t completion_queue_size;
+    std::vector<uint32_t> semaphores;
+    uint32_t producer_semaphore_id;
+    uint32_t consumer_semaphore_id;
+    uint32_t cb_start_address;
+    uint32_t cb_size_bytes;
+    uint32_t cb_log_page_size;
+    uint32_t cb_pages;
+    uint32_t tunnel_stop;
+};
+
 // std::optional is used to determine whether core has been assigned
 // tt_cxy_pair is used over CoreCoord to denote location because remote device command queue interface cores are on the associated MMIO device
 struct dispatch_core_types_t {
@@ -34,6 +73,7 @@ struct dispatch_core_types_t {
     std::optional<tt_cxy_pair> demux_d = std::nullopt; // Demux
     std::optional<tt_cxy_pair> tunneler_d = std::nullopt; // ethernet tunneler
 };
+
 
 class dispatch_core_manager {
    public:
@@ -193,20 +233,30 @@ class dispatch_core_manager {
     /// @param channel assigned to the command queue where commands are enqueued
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the ethernet tunnel core
-    const tt_cxy_pair &tunneler_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+    const tt_cxy_pair &tunneler_core(chip_id_t upstream_device_id, chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
         dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.tunneler.has_value()) {
             return assignment.tunneler.value();
         }
-        TT_ASSERT(assignment.mux.has_value(), " Mux core not assigned for device {}. Must assign a Mux core before getting a tunneler core.", device_id);
 
-        tt_cxy_pair tunneler_location = tt::Cluster::instance().get_eth_core_for_dispatch_core(
-                        assignment.mux.value(), EthRouterMode::BI_DIR_TUNNELING, device_id);
-        assignment.tunneler = tunneler_location;
-        log_debug(tt::LogMetal, "Allocated Tunneler Core: {} for Device {}", tunneler_location.str(), device_id);
+        auto[us_core, ds_core] = tt::Cluster::instance().get_eth_tunnel_core(upstream_device_id, device_id, EthRouterMode::BI_DIR_TUNNELING);
+
+        assignment.tunneler = us_core;
+        assignment.tunneler_d = ds_core;
+
+        log_debug(tt::LogMetal, "Allocated Tunneler Core: {} for Device {}", us_core.str(), device_id);
         return assignment.tunneler.value();
     }
 
+    const tt_cxy_pair &us_tunneler_core_local(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.tunneler_d.has_value()) {
+            return assignment.tunneler_d.value();
+        }
+        TT_ASSERT(false, "Device {} has no allocation for Local Upstream Tunneler Core.", device_id);
+        assignment.tunneler_d = tt_cxy_pair(0, 0, 0);
+        return assignment.tunneler_d.value();
+    }
 
 
     /// @brief Gets the location of the kernel desginated to write to the completion queue region for a particular command queue

@@ -97,7 +97,6 @@ def test_upblock_256x256(reset_seeds, device, res_hidden_states_tuple, hidden_st
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
 def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_states, temb):
     # TODO
-    pytest.skip()
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
@@ -135,6 +134,10 @@ def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_st
 
     hidden_state = ttnn.from_torch(hidden_state, ttnn.bfloat16)
     hidden_state = ttnn.to_device(hidden_state, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    hidden_state = ttnn.permute(hidden_state, (0, 2, 3, 1))
+
+    hidden_state = ttnn.reshape(hidden_state, (1, 1, N * H * W, in_channels))
+
     hidden_state = ttnn.to_layout(hidden_state, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
 
     temb = temb.permute(2, 0, 1, 3)  # pre-permute temb
@@ -142,7 +145,7 @@ def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_st
     temb = ttnn.to_device(temb, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
 
-    hidden_state = pre_process_input(device, hidden_state)
+    # hidden_state = pre_process_input(device, hidden_state)
     res_hidden_states_tuple = (weight_to_bfp8(hidden_state), weight_to_bfp8(hidden_state), weight_to_bfp8(hidden_state))
     op = model(
         hidden_state,

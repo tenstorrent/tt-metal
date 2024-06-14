@@ -34,6 +34,8 @@ from models.experimental.llama2_70b.tt.llama_common import (
     check_kv_cache,
 )
 
+import gc
+
 
 class PytorchLlamaAttentionModel(torch.nn.Module):
     def __init__(self, hf_reference_model, layer_num):
@@ -133,7 +135,7 @@ def run_test_LlamaAttention_inference(
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, UNIT_TEST_LAYER_NUM)
     # TT model -------------------------------------------------------------------------
-    transformation_mat_torch = get_rot_transformation_mat(head_dim)
+    transformation_mat_torch = get_rot_transformation_mat(32)  # 32 for tile size
 
     transformation_mats = ttnn.as_tensor(
         transformation_mat_torch,
@@ -253,6 +255,7 @@ def run_test_LlamaAttention_inference(
         logger.info(f"{model_name} Attention output Passed!")
     else:
         logger.warning(f"{model_name} Attention output Failed!")
+        gc.collect()
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 

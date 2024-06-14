@@ -131,6 +131,7 @@ class cross_attention_upblock2d:
                     ttnn.clone, hidden_states, memory_config=ttnn.get_memory_config(hidden_states), dtype=ttnn.bfloat8_b
                 )
             hidden_states = dealloc_input(ttnn.concat, [hidden_states, on_dev_res_hidden_states], dim=3)
+
             ttnn.deallocate(on_dev_res_hidden_states)
             hidden_states = resnet(
                 hidden_states,

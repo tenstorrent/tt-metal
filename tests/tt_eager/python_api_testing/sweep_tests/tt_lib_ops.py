@@ -1027,6 +1027,33 @@ def eltwise_addalpha(
 
 
 @setup_host_and_device
+def eltwise_addalpha_optional(
+    x,
+    y,
+    z,
+    *args,
+    alpha,
+    device,
+    dtype,
+    layout,
+    queue_id,
+    input_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
+    cq_id = 0
+
+    if queue_id:
+        ttl.tensor.addalpha(cq_id, t0, t1, alpha, output_tensor=t2)
+    else:
+        ttl.tensor.addalpha(t0, t1, alpha, output_tensor=t2)
+
+    return tt2torch_tensor(t2)
+
+
+@setup_host_and_device
 def eltwise_div(
     x,
     y,
@@ -2304,15 +2331,15 @@ def eltwise_typecast(
     x,
     *args,
     device,
-    dtype,
+    tt_input_dtype,
     tt_output_dtype,
     layout,
     input_mem_config,
     output_mem_config,
     **kwargs,
 ):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.eltwise_typecast(t0, tt_output_dtype[0], output_mem_config=output_mem_config)
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], tt_input_dtype[0])
+    t1 = ttl.tensor.eltwise_typecast(t0, tt_input_dtype[0], tt_output_dtype[0], output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -3547,3 +3574,107 @@ def tt_embedding_bw(
     t3 = ttl.tensor.embedding_bw(grad_tensor, input_tensor, weights_tensor)[0]
 
     return tt2torch_tensor(t3)
+
+
+@setup_host_and_device
+def interleaved_to_sharded_partial(
+    x,
+    *args,
+    num_slices,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    grid_size = (8, 8)
+    W = x.shape[-1]
+    H = x.shape[-2]
+    height_shard_spec = [H // 2, W]
+
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    out_initial = torch.randn(x.shape).bfloat16().float()
+
+    t2 = torch2tt_tensor(out_initial, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype[0])
+
+    for slice_index in range(num_slices):
+        t1 = ttl.tensor.interleaved_to_sharded_partial(
+            t0,
+            grid_size,
+            height_shard_spec,
+            num_slices,
+            slice_index,
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+
+        ttl.tensor.sharded_to_interleaved_partial(
+            t1,
+            t2,
+            num_slices,
+            slice_index,
+            interleaved_mem_config,
+        )
+
+    returned_res = tt2torch_tensor(t2)
+    return returned_res
+
+
+@setup_host_and_device
+def interleaved_to_sharded_partial_coregrid(
+    x,
+    *args,
+    num_slices,
+    x_core,
+    y_core,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    grid_size = (x_core, y_core)
+    W = x.shape[-1]
+    H = x.shape[-2]
+    height_shard_spec = [H // 2, W]
+
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    out_initial = torch.randn(x.shape).bfloat16().float()
+
+    t2 = torch2tt_tensor(out_initial, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype[0])
+
+    for slice_index in range(num_slices):
+        t1 = ttl.tensor.interleaved_to_sharded_partial(
+            t0,
+            grid_size,
+            height_shard_spec,
+            num_slices,
+            slice_index,
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+
+        ttl.tensor.sharded_to_interleaved_partial(
+            t1,
+            t2,
+            num_slices,
+            slice_index,
+            interleaved_mem_config,
+        )
+
+    returned_res = tt2torch_tensor(t2)
+    return returned_res

@@ -560,8 +560,8 @@ def test_matmul_dram(arch, freq, r, c, test_vector):
     "arch, freq, test_vector, dtype, fidel, matmul_block, num_blocks, packer_l1_acc, fp32_dest_acc, interm_cb_dtype, subblock_index, baseline",
     [
         # ########################### 512 512 512 x 8 subblock 4 2 ################################
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 0, 8, 0, 0, 0, 0, 1661931.0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 0, 8, 0, 0, 0, 0, 1661960.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 0, 8, 0, 0, 0, 0, 1718887.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 0, 8, 0, 0, 0, 0, 1718906.0),
         ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0, 717089.0),
         ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0, 1233930.0),
         ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0, 664492.0),
@@ -789,7 +789,7 @@ def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_form
         run_dram_read_cmd(k, n, nblock, data_format, num_banks, bank_start_id)
         cycle = profile_results_kernel_duration()
         time = cycle / freq / 1000.0 / 1000.0
-        throughput = (input_size / 1024.0 / 1024.0 / 1024.0) / time
+        throughput = input_size / cycle
         logger.info("DRAM read cycle: " + str(cycle))
         logger.info("DRAM read time: " + str(time))
         logger.info("DRAM read throughput: " + str(throughput))
@@ -805,7 +805,7 @@ def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_form
     data.append([throughput])
     # check within range
     dev_freq = get_device_freq()
-    bw_bound = 240.0 * dev_freq / 1000.0
+    bw_bound = 260.0 * dev_freq / 1000.0
     assert bw_bound <= throughput
 
 

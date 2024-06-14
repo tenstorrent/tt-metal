@@ -48,25 +48,6 @@ using on_close_device_callback = std::function<void ()>;
 static constexpr float  EPS_GS = 0.001953125f;
 static constexpr float  EPS_WHB0 = 1.19209e-7f;
 
-class ActiveDevices {
-    enum class ActiveState {
-        UNINITIALIZED = 0,
-        INACTIVE = 1,
-        ACTIVE = 2,
-    };
-
-    std::mutex lock_;
-    std::vector<enum ActiveState>active_devices_;
-
-public:
-    ActiveDevices();
-    ~ActiveDevices();
-
-    bool activate_device(chip_id_t id);
-    void deactivate_device(chip_id_t id);
-    bool is_device_active(chip_id_t id);
-};
-
 // A physical PCIexpress Tenstorrent device
 class Device {
    public:
@@ -76,6 +57,7 @@ class Device {
         chip_id_t device_id,
         const uint8_t num_hw_cqs,
         std::size_t l1_small_size,
+        std::size_t trace_region_size,
         const std::vector<uint32_t> &l1_bank_remap = {},
         bool minimal = false,
         uint32_t worker_core = 0);
@@ -159,6 +141,10 @@ class Device {
         return tt::Cluster::instance().get_associated_mmio_device(this->id_) == this->id_;
     }
 
+    void setup_tunnel_for_remote_devices();
+
+    void update_workers_build_settings(std::vector<std::vector<std::tuple<tt_cxy_pair, worker_build_settings_t>>> &device_worker_variants);
+
     uint32_t num_banks(const BufferType &buffer_type) const;
     uint32_t bank_size(const BufferType &buffer_type) const;
 
@@ -212,7 +198,7 @@ class Device {
     CommandQueue& command_queue(size_t cq_id = 0);
 
     // Metal trace device capture mode
-    void begin_trace(const uint8_t cq_id, const uint32_t tid, const uint32_t trace_buff_size);
+    void begin_trace(const uint8_t cq_id, const uint32_t tid);
     void end_trace(const uint8_t cq_id, const uint32_t tid);
     void replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking);
     void release_trace(const uint32_t tid);
@@ -223,9 +209,9 @@ class Device {
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    bool initialize(size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap = {}, bool minimal = false);
+    bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap = {}, bool minimal = false);
     void initialize_cluster();
-    void initialize_allocator(size_t l1_small_size, const std::vector<uint32_t> &l1_bank_remap = {});
+    void initialize_allocator(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap = {});
     void initialize_build();
     void build_firmware();
     void initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg);
@@ -258,11 +244,12 @@ class Device {
     friend class SystemMemoryManager;
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
-    static ActiveDevices active_devices_;
     chip_id_t id_;
     uint32_t build_key_;
     std::unique_ptr<Allocator> allocator_ = nullptr;
     bool initialized_ = false;
+    std::map<uint32_t, std::map<chip_id_t, std::vector<std::vector<std::tuple<tt_cxy_pair, worker_build_settings_t>>>>> tunnel_device_dispatch_workers_;
+    std::vector<std::vector<chip_id_t>> tunnels_from_mmio_;
 
     JitBuildEnv build_env_;
     JitBuildStateSet firmware_build_states_;
@@ -283,7 +270,7 @@ class Device {
     uint8_t num_hw_cqs_;
 
     vector<std::unique_ptr<Program, tt::tt_metal::detail::ProgramDeleter>> command_queue_programs;
-    bool using_fast_dispatch = false;
+    bool using_fast_dispatch;
     program_cache::detail::ProgramCache program_cache;
 
     // Program cache interface. Syncrhonize with worker worker threads before querying or
@@ -297,9 +284,9 @@ class Device {
         log_info(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
         this->synchronize();
         if (this->program_cache.is_enabled()) {
-            program_cache.clear();
             program_cache.disable();
         }
+        program_cache.clear();
     }
     std::size_t num_program_cache_entries() {
         this->synchronize();
@@ -311,7 +298,7 @@ class Device {
         return (std::hash<std::thread::id>{}(std::this_thread::get_id()) == this->work_executor.get_parent_thread_id())
                 or get_worker_mode() == WorkExecutorMode::SYNCHRONOUS;
     }
-
+   uint32_t trace_buffers_size = 0;
    private:
     std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
 };

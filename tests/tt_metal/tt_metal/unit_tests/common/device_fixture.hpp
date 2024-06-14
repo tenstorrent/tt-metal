@@ -30,17 +30,20 @@ class DeviceFixture : public ::testing::Test {
             GTEST_SKIP();
         }
 
+        vector<chip_id_t> ids;
         for (unsigned int id = 0; id < num_devices_; id++) {
-            auto* device = tt::tt_metal::CreateDevice(id);
-            devices_.push_back(device);
+            ids.push_back(id);
         }
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+        tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE);
+        devices_ = tt::DevicePool::instance().get_all_active_devices();
     }
 
     void TearDown() override {
         tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
         for (unsigned int id = 0; id < devices_.size(); id++) {
-            tt::tt_metal::CloseDevice(devices_.at(id));
+            if (devices_.at(id)->is_initialized()) {
+                tt::tt_metal::CloseDevice(devices_.at(id));
+            }
         }
     }
 

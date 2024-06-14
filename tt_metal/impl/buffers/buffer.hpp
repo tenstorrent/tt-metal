@@ -29,6 +29,7 @@ enum class BufferType {
     L1,
     SYSTEM_MEMORY,
     L1_SMALL,
+    TRACE,
 };
 
 enum class TensorMemoryLayout {
@@ -61,7 +62,11 @@ struct ShardSpec {
 
     const uint32_t num_cores() const { return this->grid.num_cores(); }
     const uint32_t numel() const { return this->shape[0] * this->shape[1]; }
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("grid", "shape", "orientation", "halo");
+    constexpr auto attribute_values() const {
+        return std::forward_as_tuple(this->grid, this->shape, this->orientation, this->halo);
+    }
 };
 
 bool operator==(const ShardSpec &spec_a, const ShardSpec &spec_b);
@@ -202,7 +207,8 @@ class Buffer {
     }
 
     bool is_l1() const { return buffer_type() == BufferType::L1 or buffer_type() == BufferType::L1_SMALL; }
-    bool is_dram() const { return buffer_type() == BufferType::DRAM; }
+    bool is_dram() const { return buffer_type() == BufferType::DRAM || buffer_type() == BufferType::TRACE; }
+    bool is_trace() const { return buffer_type() == BufferType::TRACE; }
 
     TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
 

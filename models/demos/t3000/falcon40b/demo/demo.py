@@ -577,7 +577,7 @@ def test_demo(
         user_input=user_input,
         model_version=model_config_entries["_name_or_path"],
         model_config_str_for_decode="BFLOAT8_B-SHARDED",  # Decode model config
-        model_config_str_for_prefill="BFLOAT16-DRAM",  # Prefill model config
+        model_config_str_for_prefill="BFLOAT8_B-DRAM",  # Prefill model config
         batch_size=32,
         num_layers=model_config_entries["num_hidden_layers"],
         max_seq_len=max_seq_len,

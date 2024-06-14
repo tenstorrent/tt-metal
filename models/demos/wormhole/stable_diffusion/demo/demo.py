@@ -12,11 +12,13 @@ from loguru import logger
 from tqdm.auto import tqdm
 from datasets import load_dataset
 import os
+import time
 
 from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import (
     AutoencoderKL,
     UNet2DConditionModel,
+    StableDiffusionPipeline,
 )
 from models.utility_functions import skip_for_grayskull
 from models.utility_functions import (
@@ -26,10 +28,10 @@ from models.utility_functions import (
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_unet_2d_condition_model import (
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
-
+from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import round_up_to_tile_dim
 from torchvision.transforms import ToTensor
 from torchmetrics.multimodal.clip_score import CLIPScore
 from torchmetrics.image.fid import FrechetInceptionDistance
@@ -128,7 +130,13 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
-        beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000, device=device
+        beta_start=0.00085,
+        beta_end=0.012,
+        beta_schedule="scaled_linear",
+        num_train_timesteps=1000,
+        skip_prk_steps=True,
+        steps_offset=1,
+        device=device,
     )
 
     text_encoder.to(torch_device)
@@ -279,7 +287,13 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
-        beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000, device=device
+        beta_start=0.00085,
+        beta_end=0.012,
+        beta_schedule="scaled_linear",
+        num_train_timesteps=1000,
+        skip_prk_steps=True,
+        steps_offset=1,
+        device=device,
     )
 
     text_encoder.to(torch_device)
@@ -326,7 +340,9 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
     while 1:
         ttnn_scheduler.set_timesteps(num_inference_steps)
         print("Enter the input promt, or q to exit:")
-        input_prompt = [input()]
+        new_prompt = input()
+        if len(new_prompt) > 0:
+            input_prompt = [new_prompt]
         if input_prompt[0] == "q":
             break
 
@@ -360,8 +376,10 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
         iter = 0
         ttnn_latents = rand_latents
         # # Denoising loop
+        total_accum = 0
         for index in tqdm(range(len(time_step))):
             # expand the latents if we are doing classifier-free guidance to avoid doing two forward passes.
+            t0 = time.time()
             ttnn_latent_model_input = ttnn.concat([ttnn_latents, ttnn_latents], dim=0)
             _t = _tlist[index]
             t = time_step[index]
@@ -381,8 +399,9 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
             noise_pred = tt_guide(ttnn_output, guidance_scale)
 
             ttnn_latents = ttnn_scheduler.step(noise_pred, t, ttnn_latents).prev_sample
-
+            total_accum += time.time() - t0
             iter += 1
+        print(f"Time taken for {iter} iterations: total: {total_accum:.3f}")
 
         latents = ttnn.to_torch(ttnn_latents).to(torch.float32)
 
@@ -433,7 +452,13 @@ def run_demo_inference_diffusiondb(
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
-        beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000, device=device
+        beta_start=0.00085,
+        beta_end=0.012,
+        beta_schedule="scaled_linear",
+        num_train_timesteps=1000,
+        skip_prk_steps=True,
+        steps_offset=1,
+        device=device,
     )
 
     text_encoder.to(torch_device)
@@ -581,7 +606,7 @@ def run_demo_inference_diffusiondb(
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((30),),
+    ((50),),
 )
 @pytest.mark.parametrize(
     "image_size",
@@ -599,7 +624,7 @@ def test_demo(device, reset_seeds, input_path, num_prompts, num_inference_steps,
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((30),),
+    ((50),),
 )
 @pytest.mark.parametrize(
     "image_size",
@@ -613,11 +638,11 @@ def test_demo_diffusiondb(device, reset_seeds, input_path, num_prompts, num_infe
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((30),),
+    ((50),),
 )
 @pytest.mark.parametrize(
     "image_size",
     ((512, 512),),
 )
-def test_interactve_demo(device, num_inference_steps, image_size):
+def test_interactive_demo(device, num_inference_steps, image_size):
     return run_interactive_demo_inference(device, num_inference_steps, image_size)
