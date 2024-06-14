@@ -74,16 +74,20 @@ TEST(NoFixture, ExtractPackBitArray) {
     uint32_t src[4] = { 0x12345678, 0x9abcdef0, 0x13579bdf, 0x2468ace0 };
 
     // Compute the number of 3-bit elements that can be packed into 4 x 32-bit elements
-    const uint32_t num_3_bit_elements = (4 * 32 + 3 - 1) / 3;
+    const uint32_t num_3_bit_elements = (4 * 32) / 3;
     uint32_t dest[num_3_bit_elements];
 
     for (uint num_pack_bits = 3; num_pack_bits <= 31; num_pack_bits++) {
-        const uint32_t num_dest_elements = (4 * 32 + num_pack_bits - 1) / num_pack_bits;
+        const uint32_t num_dest_elements = (4 * 32) / num_pack_bits;
 
         extract_bit_array(src, num_pack_bits, dest, num_dest_elements);
         uint32_t packed[4];
         pack_bit_array(dest, num_pack_bits, packed, num_dest_elements);
-        for (int i = 0; i < 4; i++) {
+
+        // If the bit length of src is not evenly divisible by num_pack_bits
+        // then the last element after packing back won't equal the original.
+        bool has_partial = (num_pack_bits * num_dest_elements) % 32 != 0;
+        for (int i = 0; i < 4 - has_partial; i++) {
             EXPECT_EQ(src[i], packed[i]);
         }
     }

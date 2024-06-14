@@ -171,10 +171,10 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
     log_info(LogTest, "Expected error: {}", expected);
     std::string exception = "";
     do {
-        exception = watcher_server_get_exception_message();
+        exception = get_watcher_exception_message();
     } while (exception == "");
     log_info(LogTest, "Reported error: {}", exception);
-    EXPECT_TRUE(expected == watcher_server_get_exception_message());
+    EXPECT_TRUE(expected == get_watcher_exception_message());
 }
 
 TEST_F(WatcherFixture, TestWatcherAssertBrisc) {
