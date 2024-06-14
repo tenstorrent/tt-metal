@@ -17,6 +17,42 @@ namespace ttnn {
 namespace operations {
 namespace creation {
 
+template <typename T, std::size_t rank=4>
+Tensor create_scalar(T scalar, DataType data_type, Layout layout, Device* device){
+    static_assert(rank >=2, "Rank must be at least 2 when creating a tensor with TILE_LAYOUT");
+    std::array<std::uint32_t, rank> intended_shape = {};
+    intended_shape.fill(1);
+    std::array<std::uint32_t, rank> device_shape = {};
+    device_shape.fill(1);
+
+    if(layout == Layout::ROW_MAJOR){
+        device_shape[device_shape.size() - 2] = 2;
+        auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(2));
+        host_buffer[0] = scalar;
+        Tensor scalar_tensor_host = Tensor(
+            OwnedStorage{host_buffer},
+            ttnn::Shape(intended_shape, device_shape),
+            data_type,
+            Layout::ROW_MAJOR);
+        return scalar_tensor_host.to(device);
+    }
+    else if(layout == Layout::TILE){
+        device_shape[device_shape.size() - 2] = TILE_HEIGHT;
+        device_shape[device_shape.size() - 1] = TILE_WIDTH;
+        auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(TILE_HEIGHT * TILE_WIDTH));
+        host_buffer[0] = scalar;
+        Tensor scalar_tensor_host = Tensor(
+            OwnedStorage{host_buffer},
+            ttnn::Shape(intended_shape, device_shape),
+            data_type,
+            Layout::TILE);
+        return scalar_tensor_host.to(device);
+    }
+    else{
+        throw std::runtime_error("Unsupported layout");
+    }
+}
+
 template <typename T>
 inline ttnn::Tensor full(
     const ttnn::Shape& shape,

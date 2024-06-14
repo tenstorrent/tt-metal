@@ -11,6 +11,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
+#include "ttnn/cpp/ttnn/operations/creation.hpp"
 
 using namespace tt::constants;
 
@@ -433,8 +434,10 @@ const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tenso
 // unary op version tie
 template <BcastOpMath OP>
 Tensor tie_binop_to_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
-    Tensor t_value = mk_tiled_scalar(value, input_tensor.get_dtype());
-    return bcast(input_tensor, t_value, OP, BcastOpDim::HW);
+    Tensor t_value = ttnn::operations::creation::create_scalar(value,input_tensor.get_dtype(), Layout::TILE, input_tensor.device());
+    Tensor tensor = bcast(input_tensor, t_value, OP, BcastOpDim::HW);
+    t_value.deallocate();
+    return tensor;
 }
 
 Tensor lte_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {

@@ -22,8 +22,8 @@ namespace tt_metal {
 operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b, const Tensor& output, BcastOpMath bcast_math/*, BcastOpDim bcast_dim*/){
     const auto ashape = a.get_legacy_shape();
     const auto bshape = b.get_legacy_shape();
-    uint32_t N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
-    uint32_t bN = bshape[0], bC = bshape[1], bH = bshape[2], bW = bshape[3];
+    uint32_t N  = ashape.rank() >= 4 ? ashape[-4] : 1, C  = ashape.rank() >= 3 ? ashape[-3] : 1, H  = ashape[-2], W  = ashape[-1];
+    uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1, bC = bshape.rank() >= 3 ? bshape[-3] : 1, bH = bshape[-2], bW = bshape[-1];
     uint32_t NC = N*C;
 
 
