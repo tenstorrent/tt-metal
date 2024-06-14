@@ -74,11 +74,10 @@ class TtMambaSSM(torch.nn.Module):
         A_weight_name = "mixer.A_log"
 
         def preprocess_A(x):
-            x = -torch.exp(x.float())
-            # padding with inf
-            x = torch.nn.functional.pad(x, (0, 16), "constant", float("-inf"))
-            # x = x.reshape(1, self.hidden_size * self.n)  # (1, 2en)
-            return x[0, :].repeat(self.batch_size, 1)  # b, n
+            x = -torch.exp(x.float())  # (2E, N) where N=16
+            x = torch.nn.functional.pad(x, (0, 16), "constant", float("-inf"))  # (2E, N) where N=32
+            x = x.reshape(1, x.shape[0] * x.shape[1])  # (1, 2EN)
+            return x.repeat(self.batch_size, 1)  # (B, 2EN)
 
         self.A = load_fn(A_weight_name, tm_fn=preprocess_A, postfix=f"A_{self.args.batch_size}")
 
