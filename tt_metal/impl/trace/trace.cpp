@@ -62,35 +62,31 @@ uint32_t Trace::next_id() {
     return global_trace_id++;
 }
 
-std::shared_ptr<TraceBuffer> Trace::create_trace_buffer(
-    const CommandQueue& cq, shared_ptr<detail::TraceDescriptor> desc, uint32_t unpadded_size) {
-    size_t page_size = interleaved_page_size(
-        unpadded_size, cq.device()->num_banks(BufferType::DRAM), kExecBufPageMin, kExecBufPageMax);
-    uint64_t padded_size = round_up(unpadded_size, page_size);
-
-    // Commit the trace buffer to device DRAM
+std::shared_ptr<TraceBuffer> Trace::create_empty_trace_buffer() {
     return std::make_shared<TraceBuffer>(
-        desc,
-        std::make_shared<Buffer>(
-            cq.device(), padded_size, page_size, BufferType::DRAM, TensorMemoryLayout::INTERLEAVED));
+        std::make_shared<detail::TraceDescriptor>(),
+        nullptr
+    );
 }
 
 void Trace::initialize_buffer(CommandQueue& cq, std::shared_ptr<TraceBuffer> trace_buffer) {
-    vector<uint32_t>& data = trace_buffer->desc->data;
-
-    uint64_t unpadded_size = data.size() * sizeof(uint32_t);
-    TT_FATAL(
-        unpadded_size <= trace_buffer->buffer->size(),
-        "Trace data size {} is larger than specified trace buffer size {}. Increase specified buffer size.",
-        unpadded_size,
-        trace_buffer->buffer->size());
-    size_t numel_padding = (trace_buffer->buffer->size() - unpadded_size) / sizeof(uint32_t);
+    vector<uint32_t>& trace_data = trace_buffer->desc->data;
+    uint64_t unpadded_size = trace_data.size() * sizeof(uint32_t);
+    size_t page_size = interleaved_page_size(
+        unpadded_size, cq.device()->num_banks(BufferType::DRAM), kExecBufPageMin, kExecBufPageMax);
+    uint64_t padded_size = round_up(unpadded_size, page_size);
+    size_t numel_padding = (padded_size - unpadded_size) / sizeof(uint32_t);
     if (numel_padding > 0) {
-        data.resize(data.size() + numel_padding, 0 /*padding value*/);
+        trace_data.resize(trace_data.size() + numel_padding, 0 /*padding value*/);
     }
-    uint64_t padded_size = data.size() * sizeof(uint32_t);
-    EnqueueWriteBuffer(cq, trace_buffer->buffer, data, kBlocking);
-
+    cq.device()->trace_buffers_size += padded_size;
+    TT_FATAL(
+        cq.device()->trace_buffers_size <= cq.device()->allocator_->config.trace_region_size,
+        "Creating trace buffers of size {}B on device {}, but only {}B is allocated for trace region.",  cq.device()->trace_buffers_size, cq.device()->id(),  cq.device()->allocator_->config.trace_region_size);
+    // Commit trace to device DRAM
+    trace_buffer->buffer = std::make_shared<Buffer>(
+                            cq.device(), padded_size, page_size, BufferType::TRACE, TensorMemoryLayout::INTERLEAVED);
+    EnqueueWriteBuffer(cq, trace_buffer->buffer, trace_data, kBlocking);
     log_trace(
         LogMetalTrace,
         "Trace issue buffer unpadded size={}, padded size={}, num_pages={}",

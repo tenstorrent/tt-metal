@@ -49,9 +49,9 @@ struct EltwiseBinaryBroadcast {
     const MemoryConfig output_mem_config;
     const bool in_place;
 
-    void validate(const std::vector<Tensor> &input_tensors) const;
+    void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     BcastOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
@@ -65,16 +65,18 @@ struct EltwiseBinaryBroadcast {
     const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 };
 
-inline Tensor bcast(
+inline Tensor run_bcast(
+    uint8_t queue_id,
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     BcastOpMath bcast_op,
     BcastOpDim bcast_dim,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt) {
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
     operation::launch_with_autoformat(
-        [bcast_op, bcast_dim, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+        [bcast_op, bcast_dim, output_mem_config, output_tensor, queue_id] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             using tt::constants::TILE_HEIGHT;
             using tt::constants::TILE_WIDTH;
             auto& input_tensor_a = input_tensors.at(0);
@@ -110,10 +112,31 @@ inline Tensor bcast(
                 }
             }
             return operation::run_with_autoformat(
-                    EltwiseBinaryBroadcast{bcast_op, bcast_dim, output_mem_config}, {input_tensor_a, input_tensor_b});
-        }, {input_tensor_a, input_tensor_b}, output_tensors);
+                    EltwiseBinaryBroadcast{bcast_op, bcast_dim, output_mem_config}, {input_tensor_a, input_tensor_b}, {}, {output_tensor}, queue_id);
+        }, {input_tensor_a, input_tensor_b}, output_tensors, {}, {output_tensor});
     return output_tensors.at(0);
 }
+
+inline Tensor bcast(
+    uint8_t queue_id,
+    const Tensor &input_tensor_a,
+    const Tensor &input_tensor_b,
+    BcastOpMath bcast_op,
+    BcastOpDim bcast_dim,
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor  = std::nullopt) {
+       return run_bcast(queue_id, input_tensor_a, input_tensor_b, bcast_op, bcast_dim, output_mem_config, output_tensor);
+    }
+inline Tensor bcast(
+    const Tensor &input_tensor_a,
+    const Tensor &input_tensor_b,
+    BcastOpMath bcast_op,
+    BcastOpDim bcast_dim,
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor  = std::nullopt) {
+    uint8_t default_queue_id = 0;
+       return run_bcast(default_queue_id, input_tensor_a, input_tensor_b, bcast_op, bcast_dim, output_mem_config, output_tensor);
+    }
 
 }  // namespace tt_metal
 
@@ -127,10 +150,14 @@ inline Tensor bcast(
     BcastOpMath bcast_op,
     BcastOpDim bcast_dim,
     const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    bool in_place = false) {
-    vector<Tensor> output = operation::run(EltwiseBinaryBroadcast{bcast_op, bcast_dim, mem_config, in_place}, {input_tensor_a, input_tensor_b});
+    bool in_place = false,
+    std::optional<Tensor> output_tensor = std::nullopt,
+    uint8_t queue_id = 0) {
+    vector<Tensor> output = operation::run(EltwiseBinaryBroadcast{bcast_op, bcast_dim, mem_config, in_place}, {input_tensor_a, input_tensor_b}, {}, {output_tensor}, queue_id);
     if (in_place) {
         return input_tensor_a;
+    } else if (output_tensor.has_value()){
+        return output_tensor.value();
     } else {
         return output.at(0);
     }

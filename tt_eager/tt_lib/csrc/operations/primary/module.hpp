@@ -566,10 +566,10 @@ void py_module(py::module& m_primary) {
     m_primary.def(
         "moreh_adamw",
         &moreh_adamw,
-        py::arg("param").noconvert(),
+        py::arg("param_in").noconvert(),
         py::arg("grad").noconvert(),
-        py::arg("exp_avg").noconvert(),
-        py::arg("exp_avg_sq").noconvert(),
+        py::arg("exp_avg_in").noconvert(),
+        py::arg("exp_avg_sq_in").noconvert(),
         py::arg("lr").noconvert() = 0.001f,
         py::arg("beta1").noconvert() = 0.9f,
         py::arg("beta2").noconvert() = 0.999f,
@@ -577,8 +577,13 @@ void py_module(py::module& m_primary) {
         py::arg("weight_decay").noconvert() = 0.01f,
         py::arg("step").noconvert(),
         py::arg("amsgrad").noconvert() = false,
-        py::arg("max_exp_avg_sq").noconvert() = std::nullopt,
+        py::arg("max_exp_avg_sq_in").noconvert() = std::nullopt,
+        py::arg("param_out").noconvert() = std::nullopt,
+        py::arg("exp_avg_out").noconvert() = std::nullopt,
+        py::arg("exp_avg_sq_out").noconvert() = std::nullopt,
+        py::arg("max_exp_avg_sq_out").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
         "Performs a moreh_adamw operation.
         )doc");
@@ -800,6 +805,8 @@ void py_module(py::module& m_primary) {
         py::arg("dim"),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("in_place") = false,
+        py::arg("output_tensor").noconvert() = std::nullopt,
+        py::arg("queue_id").noconvert() = 0,
         R"doc(
         Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
 
@@ -826,6 +833,7 @@ void py_module(py::module& m_primary) {
             "dim", "Dimension on which to broadcast", "BcastOpDim", "W, H, HW", "Yes"
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
             "in_place", "Whether to perform bcast in place, without allocating space for output tensor", "Bool", "Default is false", "No"
+            "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
     )doc");
 
     py::enum_<MorehSoftmaxOpParallelizationStrategy>(m_primary, "MorehSoftmaxOpParallelizationStrategy")
@@ -913,7 +921,8 @@ void py_module(py::module& m_primary) {
         &moreh_sum,
         py::arg("input").noconvert(),
         py::kw_only(),
-        py::arg("dims").noconvert() = std::vector<int64_t>(),
+        py::arg("dim").noconvert() = std::nullopt,
+        py::arg("keep_batch_dim").noconvert() = false,
         py::arg("output").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
@@ -935,7 +944,8 @@ void py_module(py::module& m_primary) {
         py::arg("output_grad").noconvert(),
         py::arg("input").noconvert(),
         py::kw_only(),
-        py::arg("dims").noconvert() = std::vector<int64_t>(),
+        py::arg("dim").noconvert() = std::nullopt,
+        py::arg("keep_batch_dim").noconvert() = false,
         py::arg("input_grad").noconvert() = std::nullopt,
         py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
