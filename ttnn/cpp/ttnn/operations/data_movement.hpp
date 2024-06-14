@@ -359,8 +359,7 @@ struct Pad {
             "ttnn.pad: row-major tensors have to use fallback because the kernel currently causes a PCC error");
 
         // Unsqueeze Tensor to 4D if it is not already
-        ttnn::Tensor input_tensor_4D = input_tensor;
-        input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+        ttnn::Tensor input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);        
         padding.insert(padding.begin(), 4 - original_rank, {0, 0});
         auto input_shape_with_tile_padding = input_tensor_4D.get_shape().with_tile_padding();
         std::vector<uint32_t> output_padded_shape(padding.size());
