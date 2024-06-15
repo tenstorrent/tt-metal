@@ -6,6 +6,7 @@ import torch
 from torch import nn
 from torchvision import transforms, datasets
 
+import ttnn
 import tt_lib
 from models.utility_functions import (
     tilize_to_list,
@@ -49,13 +50,13 @@ def tt_batch_norm(
         print("inference mode")
         assert batch_size == 1, "in inference mode batch size must be 1!"
         # In prediction mode, use mean and variance obtained by moving average
-        var_plus_eps = tt_lib.tensor.add(eps_tt, running_var)
+        var_plus_eps = ttnn.add(eps_tt, running_var)
         sqrt_var = tt_lib.tensor.sqrt(var_plus_eps)
         sqrt_inv = tt_lib.tensor.recip(sqrt_var)
-        x_minus_mean = tt_lib.tensor.sub(x, running_mean)
-        x_div_sqrt = tt_lib.tensor.mul(x_minus_mean, sqrt_inv)
-        x_gamma = tt_lib.tensor.mul(x_div_sqrt, gamma)
-        Y = tt_lib.tensor.add(x_gamma, beta)
+        x_minus_mean = ttnn.sub(x, running_mean)
+        x_div_sqrt = ttnn.mul(x_minus_mean, sqrt_inv)
+        x_gamma = ttnn.mul(x_div_sqrt, gamma)
+        Y = ttnn.add(x_gamma, beta)
     else:
         print("train mode")
         x_tor = x.cpu().to_torch()
@@ -74,7 +75,7 @@ def tt_batch_norm(
         )
 
         # In training mode, the current mean and variance are used
-        var_plus_eps = tt_lib.tensor.add(eps_tt, var_tt)
+        var_plus_eps = ttnn.add(eps_tt, var_tt)
         sqrt_var = tt_lib.tensor.sqrt(var_plus_eps)
         sqrt_inv = tt_lib.tensor.recip(sqrt_var)
         sqrt_inv_data = sqrt_inv.cpu().to_torch()
@@ -105,7 +106,7 @@ def tt_batch_norm(
             device,
         )
 
-        running_mean_left = tt_lib.tensor.mul(tt_lib.tensor.sub(ones_tt, momentum_tt), running_mean)
+        running_mean_left = ttnn.mul(ttnn.sub(ones_tt, momentum_tt), running_mean)
         mean_reshaped = mean.view(1, 1, 32, 32)
         mean_tilized = tilize_to_list(mean_reshaped)
         mean_tt = tt_lib.tensor.Tensor(
@@ -115,12 +116,12 @@ def tt_batch_norm(
             tt_lib.tensor.Layout.TILE,
             device,
         )
-        running_mean_right = tt_lib.tensor.mul(momentum_tt, mean_tt)
-        running_mean = tt_lib.tensor.add(running_mean_left, running_mean_right)
+        running_mean_right = ttnn.mul(momentum_tt, mean_tt)
+        running_mean = ttnn.add(running_mean_left, running_mean_right)
 
-        running_var_left = tt_lib.tensor.mul(tt_lib.tensor.sub(ones_tt, momentum_tt), running_var)
-        running_var_right = tt_lib.tensor.mul(momentum_tt, var_tt)
-        running_var = tt_lib.tensor.add(running_var_left, running_var_right)
+        running_var_left = ttnn.mul(ttnn.sub(ones_tt, momentum_tt), running_var)
+        running_var_right = ttnn.mul(momentum_tt, var_tt)
+        running_var = ttnn.add(running_var_left, running_var_right)
 
         gamma_tor = gamma.cpu().to_torch()
         gamma_tor = torch.Tensor(gamma_tor).reshape((1, 1, H, W))

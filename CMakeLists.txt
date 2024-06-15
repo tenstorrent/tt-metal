@@ -148,12 +148,12 @@ else()
 endif()
 
 # Can't use the `REUSE_FROM` option bc tt_lib and ttnn have different build flags :(
-add_library(pch_pybinds INTERFACE)
-target_precompile_headers(pch_pybinds INTERFACE
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/operators.h
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/pybind11.h
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/stl.h
-)
+# add_library(pch_pybinds INTERFACE)
+# target_precompile_headers(pch_pybinds INTERFACE
+#     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/operators.h
+#     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/pybind11.h
+#     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/stl.h
+# )
 
 ############################################################################################################################
 # Build subdirectories

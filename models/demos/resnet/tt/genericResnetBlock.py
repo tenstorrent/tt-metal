@@ -4,6 +4,7 @@
 
 from typing import Type, Union, Optional, List, Callable
 
+import ttnn
 import tt_lib
 import torch
 import torch.nn as nn
@@ -229,7 +230,7 @@ class Bottleneck(nn.Module):
         elif self.downsample is not None:
             identity = self.downsample(x)
 
-        out = tt_lib.tensor.add(out, identity)
+        out = ttnn.add(out, identity)
 
         out = self.relu(out)
 
@@ -379,7 +380,7 @@ class BasicBlock(nn.Module):
         elif self.downsample is not None:
             identity = self.downsample(x)
 
-        out = tt_lib.tensor.add(out, identity)
+        out = ttnn.add(out, identity)
 
         out = self.relu(out)
 

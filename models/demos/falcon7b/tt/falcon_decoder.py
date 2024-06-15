@@ -195,10 +195,10 @@ class TtFalconDecoderLayer(nn.Module):
         output = []
         for i in range(self.num_devices):
             output.append(
-                ttnn.experimental.tensor.add(
+                ttnn.add(
                     mlp_output[i],
                     attention_output[i],
-                    output_mem_config=self.model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"],
+                    memory_config=self.model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"],
                 )
             )
             mlp_output[i].deallocate()
@@ -207,10 +207,10 @@ class TtFalconDecoderLayer(nn.Module):
         # dropout_add
         # For inference, this is just add
         for i in range(self.num_devices):
-            output[i] = ttnn.experimental.tensor.add(
+            output[i] = ttnn.add(
                 output[i],
                 residual[i],
-                output_mem_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],
             )
             residual[i].deallocate()
 

@@ -6,6 +6,7 @@ import torch
 from torch import nn
 from torchvision import transforms, datasets
 
+import ttnn
 import tt_lib
 from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
 
@@ -16,7 +17,7 @@ def ttLinear(weight, bias):
     def linear_(activation):
         weight_T = tt_lib.tensor.transpose(weight, -2, -1)
         output = tt_lib.tensor.matmul(activation, weight_T)
-        output_plus_bias = tt_lib.tensor.add(output, bias)
+        output_plus_bias = ttnn.add(output, bias)
         return output_plus_bias
 
     return linear_
@@ -32,13 +33,13 @@ def torchLinear(in_features, out_features, weight, bias):
 
 def ttBatchnorm1d_inference(gamma, beta, running_mean, running_var, epsilon):
     def batchnorm1d_inference_(X):
-        var_plus_eps = tt_lib.tensor.add(epsilon, running_var)
+        var_plus_eps = ttnn.add(epsilon, running_var)
         sqrt_var = tt_lib.tensor.sqrt(var_plus_eps)
         sqrt_inv = tt_lib.tensor.recip(sqrt_var)
-        x_minus_mean = tt_lib.tensor.sub(X, running_mean)
-        x_div_sqrt = tt_lib.tensor.mul(x_minus_mean, sqrt_inv)
-        x_gamma = tt_lib.tensor.mul(x_div_sqrt, gamma)
-        Y = tt_lib.tensor.add(x_gamma, beta)
+        x_minus_mean = ttnn.sub(X, running_mean)
+        x_div_sqrt = ttnn.mul(x_minus_mean, sqrt_inv)
+        x_gamma = ttnn.mul(x_div_sqrt, gamma)
+        Y = ttnn.add(x_gamma, beta)
         return Y
 
     return batchnorm1d_inference_

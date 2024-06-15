@@ -151,7 +151,7 @@ class TtLlamaDecoder:
         ### Fractured residual add
         attn_resid_fractures = []
         for i in range(self.num_devices):
-            attn_resid = tt_lib.tensor.add(attn_outs[i], xs[i])
+            attn_resid = ttnn.add(attn_outs[i], xs[i])
             attn_resid_fractures.append(attn_resid)
 
         ### Duplicate attention residual on all chips
@@ -184,7 +184,7 @@ class TtLlamaDecoder:
         ### Duplicate residual
         ffn_resid_fractured = []
         for i in range(self.num_devices):
-            ffn_resid = tt_lib.tensor.add(ffn_out[i], attn_resid_fractures[i])
+            ffn_resid = ttnn.add(ffn_out[i], attn_resid_fractures[i])
             ffn_resid_fractured.append(ffn_resid)
 
         return ffn_resid_fractured

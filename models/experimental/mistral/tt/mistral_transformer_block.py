@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 import torch
 import torch.nn as nn
+
+import ttnn
 import tt_lib
 from typing import Optional
 from models.experimental.mistral.tt.mistral_attention import TtAttention
@@ -67,9 +69,9 @@ class TtTransformerBlock(nn.Module):
         seqlen: int,
     ) -> tt_lib.tensor.Tensor:
         r = self.attention.forward(self.attention_norm(x), bcast_freq_xq, bcast_freq_xk, positions, mask, seqlen)
-        h = tt_lib.tensor.add(x, r)
+        h = ttnn.add(x, r)
         x.deallocate()
         r = self.feed_forward.forward(self.ffn_norm(h))
-        out = tt_lib.tensor.add(h, r)
+        out = ttnn.add(h, r)
         h.deallocate()
         return out

@@ -10,6 +10,8 @@
 #include "tt_numpy/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+
 namespace tt {
 
 namespace tt_metal {
@@ -95,22 +97,21 @@ Tensor complex_recip(const Tensor& input, const MemoryConfig& output_mem_config)
     Tensor real = get_real(input, output_mem_config);
     Tensor imag = get_imag(input, output_mem_config);
 
-    Tensor a_plus_b = add(real,imag,{},output_mem_config);
-    Tensor a_minus_b = sub(real, imag,{},output_mem_config);
-    Tensor asqr_plus_bsqr = add(square(real,output_mem_config),square(imag,output_mem_config),
-                                {},output_mem_config);
+    Tensor a_plus_b = ttnn::add(real,imag, std::nullopt, output_mem_config);
+    Tensor a_minus_b = ttnn::subtract(real, imag, std::nullopt,output_mem_config);
+    Tensor asqr_plus_bsqr = ttnn::add(square(real,output_mem_config),square(imag,output_mem_config), std::nullopt, output_mem_config);
     Tensor inv_dr = recip( asqr_plus_bsqr, output_mem_config );
-    Tensor conj_im = mul( neg(imag,output_mem_config), inv_dr, {}, output_mem_config);
-    Tensor conj_re = mul( real, inv_dr, {}, output_mem_config);
+    Tensor conj_im = ttnn::multiply( neg(imag,output_mem_config), inv_dr, std::nullopt, output_mem_config);
+    Tensor conj_re = ttnn::multiply( real, inv_dr, std::nullopt, output_mem_config);
     return mk_complex( conj_re, conj_im, output_mem_config );
 }
 
 Tensor complex_add(const Tensor& input_a, const Tensor& input_b,  const MemoryConfig& output_mem_config) {
-    return add(input_a,input_b,{},output_mem_config);
+    return ttnn::add(input_a,input_b, std::nullopt, output_mem_config);
 }
 
 Tensor complex_sub(const Tensor& input_a, const Tensor& input_b,  const MemoryConfig& output_mem_config) {
-    return sub(input_a,input_b,{},output_mem_config);
+    return ttnn::subtract(input_a,input_b, std::nullopt, output_mem_config);
 }
 
 Tensor complex_mul(const Tensor& input_a, const Tensor& input_b,  const MemoryConfig& output_mem_config) {
@@ -123,8 +124,15 @@ Tensor complex_mul(const Tensor& input_a, const Tensor& input_b,  const MemoryCo
     Tensor r_b = get_real(input_b, output_mem_config);
     Tensor i_b = get_imag(input_b, output_mem_config);
 
-    Tensor re_part = sub( mul(r_a,r_b,{},output_mem_config), mul(i_a,i_b,{},output_mem_config), {}, output_mem_config );
-    Tensor im_part = add( mul(r_a,i_b,{},output_mem_config), mul(i_a,r_b,{},output_mem_config), {}, output_mem_config );
+    Tensor re_part = ttnn::subtract(
+        ttnn::multiply(r_a, r_b, std::nullopt, output_mem_config),
+        ttnn::multiply(i_a, i_b, std::nullopt, output_mem_config),
+        std::nullopt, output_mem_config);
+
+    Tensor im_part = ttnn::add(
+        ttnn::multiply(r_a,i_b,std::nullopt,output_mem_config),
+        ttnn::multiply(i_a,r_b,std::nullopt,output_mem_config),
+        std::nullopt, output_mem_config);
     return mk_complex( re_part, im_part, output_mem_config);
 }
 
@@ -177,8 +185,16 @@ Tensor complex_abs(const ComplexTensor& input, const MemoryConfig& output_mem_co
 
 ComplexTensor complex_mul(const ComplexTensor& ab, const ComplexTensor& cd,  const MemoryConfig& output_mem_config) {
     // (a + ib)*(c + id) = (ac - bd) + i(bc + ad)
-    Tensor re_part = sub( mul(ab[0],cd[0],{},output_mem_config), mul(ab[1],cd[1],{},output_mem_config), {}, output_mem_config );
-    Tensor im_part = add( mul(ab[0],cd[1],{},output_mem_config), mul(ab[1],cd[0],{},output_mem_config), {}, output_mem_config );
+    Tensor re_part = ttnn::subtract(
+        ttnn::multiply(ab[0],cd[0],std::nullopt,output_mem_config),
+        ttnn::multiply(ab[1],cd[1],std::nullopt,output_mem_config),
+        std::nullopt, output_mem_config);
+
+    Tensor im_part = ttnn::add(
+        ttnn::multiply(ab[0],cd[1],std::nullopt,output_mem_config),
+        ttnn::multiply(ab[1],cd[0],std::nullopt,output_mem_config),
+        std::nullopt, output_mem_config);
+
     return ComplexTensor({ re_part, im_part });
 }
 
@@ -187,34 +203,34 @@ ComplexTensor complex_div(const ComplexTensor& input_a, const ComplexTensor& inp
 }
 
 ComplexTensor complex_recip(const ComplexTensor& ab, const MemoryConfig& output_mem_config) {
-    Tensor a_plus_b = add(ab[0],ab[1],{},output_mem_config);
-    Tensor a_minus_b = sub(ab[0],ab[1],{},output_mem_config);
-    Tensor asqr_plus_bsqr = add(square(ab[0],output_mem_config),square(ab[1],output_mem_config),
-                                {},output_mem_config);
+    Tensor a_plus_b = ttnn::add(ab[0],ab[1],std::nullopt,output_mem_config);
+    Tensor a_minus_b = ttnn::subtract(ab[0],ab[1],std::nullopt,output_mem_config);
+    Tensor asqr_plus_bsqr = ttnn::add(square(ab[0],output_mem_config),square(ab[1],output_mem_config),
+                                std::nullopt,output_mem_config);
     Tensor inv_dr = recip( asqr_plus_bsqr, output_mem_config );
-    Tensor conj_im = mul( neg(ab[1],output_mem_config), inv_dr, {}, output_mem_config);
-    Tensor conj_re = mul( ab[0], inv_dr, {}, output_mem_config);
+    Tensor conj_im = ttnn::multiply( neg(ab[1],output_mem_config), inv_dr, std::nullopt, output_mem_config);
+    Tensor conj_re = ttnn::multiply( ab[0], inv_dr, std::nullopt, output_mem_config);
     return ComplexTensor({ conj_re, conj_im});
 }
 
 ComplexTensor complex_add(const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config) {
-    return ComplexTensor({ add(input_a[0],input_b[0],{},output_mem_config),
-             add(input_a[1],input_b[1],{},output_mem_config) });
+    return ComplexTensor({ ttnn::add(input_a[0], input_b[0], std::nullopt, output_mem_config),
+             ttnn::add(input_a[1], input_b[1], std::nullopt, output_mem_config) });
 }
 
 ComplexTensor complex_sub(const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config) {
-    return ComplexTensor({ sub(input_a[0],input_b[0],{},output_mem_config),
-             sub(input_a[1],input_b[1],{},output_mem_config) });
+    return ComplexTensor({ ttnn::subtract(input_a[0], input_b[0], std::nullopt, output_mem_config),
+             ttnn::subtract(input_a[1], input_b[1], std::nullopt, output_mem_config) });
 }
 
 // level-1 type polar
 Tensor polar(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     Tensor c = cos(input_b,output_mem_config);
-    Tensor r = mul(input_a,c,{},output_mem_config);
+    Tensor r = ttnn::multiply(input_a, c ,std::nullopt, output_mem_config);
     c.deallocate();
 
     Tensor s = sin(input_b,output_mem_config);
-    Tensor i = mul(input_a,s,{},output_mem_config);
+    Tensor i = ttnn::multiply(input_a, s, std::nullopt, output_mem_config);
     s.deallocate();
     return mk_complex( r, i, output_mem_config);
 }
@@ -223,11 +239,11 @@ ComplexTensor polar(const ComplexTensor& input, const MemoryConfig& output_mem_c
     const Tensor& input_a = input.real();
     const Tensor& input_b = input.imag();
     Tensor c = cos(input_b,output_mem_config);
-    Tensor r = mul(input_a,c,{},output_mem_config);
+    Tensor r = ttnn::multiply(input_a,c,std::nullopt,output_mem_config);
     c.deallocate();
 
     Tensor s = sin(input_b,output_mem_config);
-    Tensor i = mul(input_a,s,{},output_mem_config);
+    Tensor i = ttnn::multiply(input_a,s,std::nullopt,output_mem_config);
     s.deallocate();
 
     return ComplexTensor({r,i});
@@ -310,7 +326,7 @@ std::vector<ComplexTensor> complex_mul_bw(const ComplexTensor& grad, const Compl
 //  other: -grad * ((self / other) / other).conj();
 std::vector<ComplexTensor> complex_div_bw(const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
-    Tensor condition_nan = logical_and(eqz(other.real(),output_mem_config), eqz(other.imag(),output_mem_config), std::nullopt, output_mem_config);
+    Tensor condition_nan = ttnn::logical_and(eqz(other.real(),output_mem_config), eqz(other.imag(),output_mem_config), std::nullopt, output_mem_config);
     ComplexTensor grad_a = complex_div(grad, conj(other,output_mem_config), output_mem_config);
     Tensor grad_a_r = where(condition_nan, full_like(grad.real(), std::nanf(""), output_mem_config), real(grad_a,output_mem_config),  output_mem_config);
     Tensor grad_a_i = where(condition_nan, full_like(grad.imag(), std::nanf(""), output_mem_config), imag(grad_a,output_mem_config),  output_mem_config);
@@ -336,8 +352,8 @@ std::vector<ComplexTensor> complex_div_bw(const ComplexTensor& grad, const Compl
 std::vector<ComplexTensor> complex_abs_bw(const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
     Tensor result = complex_abs(input, output_mem_config);
-    Tensor grad_inp_r = where(eqz(result, output_mem_config), zeros_like(result, output_mem_config), mul(grad, mul(input.real(), recip(result, output_mem_config), std::nullopt, output_mem_config),std::nullopt, output_mem_config), output_mem_config );
-    Tensor grad_inp_i = where(eqz(result, output_mem_config), zeros_like(result, output_mem_config), mul(grad, mul(input.imag(), recip(result, output_mem_config), std::nullopt, output_mem_config),std::nullopt, output_mem_config), output_mem_config );
+    Tensor grad_inp_r = where(eqz(result, output_mem_config), zeros_like(result, output_mem_config), ttnn::multiply(grad, ttnn::multiply(input.real(), recip(result, output_mem_config), std::nullopt, output_mem_config),std::nullopt, output_mem_config), output_mem_config );
+    Tensor grad_inp_i = where(eqz(result, output_mem_config), zeros_like(result, output_mem_config), ttnn::multiply(grad, ttnn::multiply(input.imag(), recip(result, output_mem_config), std::nullopt, output_mem_config),std::nullopt, output_mem_config), output_mem_config );
     ComplexTensor grad_inp = ComplexTensor({ grad_inp_r, grad_inp_i});
     result.deallocate();
     grad_inp_r.deallocate();
@@ -350,7 +366,7 @@ std::vector<ComplexTensor> complex_abs_bw(const Tensor& grad, const ComplexTenso
 // self: -grad * (result * result).conj()
 std::vector<ComplexTensor> complex_recip_bw(const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
-    Tensor condition_nan = logical_and(eqz(input.real(),output_mem_config), eqz(input.imag(),output_mem_config), std::nullopt, output_mem_config);
+    Tensor condition_nan = ttnn::logical_and(eqz(input.real(),output_mem_config), eqz(input.imag(),output_mem_config), std::nullopt, output_mem_config);
     ComplexTensor neg_grad = ComplexTensor({neg(grad.real(),output_mem_config), neg(grad.imag(),output_mem_config)});
     ComplexTensor inp_recip = complex_recip(input, output_mem_config);
     ComplexTensor grad_inp = complex_mul(neg_grad, conj(complex_mul(inp_recip, inp_recip, output_mem_config), output_mem_config), output_mem_config) ;
@@ -371,10 +387,10 @@ std::vector<ComplexTensor> angle_bw(const Tensor& grad, const ComplexTensor& inp
     std::vector<ComplexTensor> grad_tensor;
     const Tensor &inp_r = input.real();
     const Tensor &inp_i = input.imag();
-    Tensor condition_zero = logical_and(eqz(input.real(),output_mem_config), eqz(input.imag(),output_mem_config), std::nullopt, output_mem_config);
-    Tensor abs_squared = recip(add(square(inp_r, output_mem_config), square(inp_i, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
-    Tensor res_real = where(condition_zero, zeros_like(inp_r, output_mem_config), mul(grad, mul(neg(inp_i, output_mem_config), abs_squared, std::nullopt, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
-    Tensor res_imag = where(condition_zero, zeros_like(inp_i, output_mem_config), mul(grad, mul(inp_r, abs_squared, std::nullopt, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+    Tensor condition_zero = ttnn::logical_and(eqz(input.real(),output_mem_config), eqz(input.imag(),output_mem_config), std::nullopt, output_mem_config);
+    Tensor abs_squared = recip(ttnn::add(square(inp_r, output_mem_config), square(inp_i, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+    Tensor res_real = where(condition_zero, zeros_like(inp_r, output_mem_config), ttnn::multiply(grad, ttnn::multiply(neg(inp_i, output_mem_config), abs_squared, std::nullopt, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+    Tensor res_imag = where(condition_zero, zeros_like(inp_i, output_mem_config), ttnn::multiply(grad, ttnn::multiply(inp_r, abs_squared, std::nullopt, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
     condition_zero.deallocate();
     abs_squared.deallocate();
     ComplexTensor grad_result = ComplexTensor({res_real, res_imag});
@@ -394,8 +410,8 @@ std::vector<ComplexTensor> polar_bw(const ComplexTensor& grad, const ComplexTens
     std::vector<ComplexTensor> grad_tensor;
     ComplexTensor result = polar(input, output_mem_config);
     Tensor abs_result = complex_abs(result, output_mem_config);
-    Tensor sgn_result_r = where(eqz(abs_result, output_mem_config), zeros_like(result.real(), output_mem_config), mul(result.real(), recip(abs_result, output_mem_config), std::nullopt, output_mem_config), output_mem_config );
-    Tensor sgn_result_i = where(eqz(abs_result, output_mem_config), zeros_like(result.imag(), output_mem_config), mul(result.imag(), recip(abs_result, output_mem_config), std::nullopt, output_mem_config), output_mem_config );
+    Tensor sgn_result_r = where(eqz(abs_result, output_mem_config), zeros_like(result.real(), output_mem_config), ttnn::multiply(result.real(), recip(abs_result, output_mem_config), std::nullopt, output_mem_config), output_mem_config );
+    Tensor sgn_result_i = where(eqz(abs_result, output_mem_config), zeros_like(result.imag(), output_mem_config), ttnn::multiply(result.imag(), recip(abs_result, output_mem_config), std::nullopt, output_mem_config), output_mem_config );
     abs_result.deallocate();
     ComplexTensor sgn_result = ComplexTensor({ sgn_result_r, sgn_result_i });
     sgn_result_r.deallocate();

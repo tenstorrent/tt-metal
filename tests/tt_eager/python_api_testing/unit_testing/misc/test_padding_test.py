@@ -8,6 +8,7 @@ import pytest
 import torch
 
 import tt_lib as ttl
+import ttnn
 from models.utility_functions import nearest_32
 
 
@@ -130,7 +131,7 @@ def test_run_padding_and_add_test(input_tensor_shape, output_tensor_shape, input
 
     a_dev = a_pad.to(ttl.tensor.Layout.TILE).to(device)
     b_dev = b_pad.to(ttl.tensor.Layout.TILE).to(device)
-    out_dev = ttl.tensor.add(a_dev, b_dev)
+    out_dev = ttnn.add(a_dev, b_dev)
     out_pad = out_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
 
     # Unpad out to get result
@@ -266,7 +267,7 @@ def test_run_tile_padding_and_add_test(input_tensor_shape, pad_value, device):
 
     a_dev = a_pad.to(ttl.tensor.Layout.TILE).to(device)
     b_dev = b_pad.to(ttl.tensor.Layout.TILE).to(device)
-    out_dev = ttl.tensor.add(a_dev, b_dev)
+    out_dev = ttnn.add(a_dev, b_dev)
     out_pad = out_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
 
     # Unpad out to get result

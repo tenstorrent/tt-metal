@@ -9,6 +9,7 @@ import sys
 import torch
 
 import tt_lib as ttl
+import ttnn
 from models.utility_functions import print_diff_argmax
 import pytest
 from loguru import logger
@@ -267,7 +268,7 @@ def test_level1_add(bs, memcfg, dtype, device, function_level_defaults):
     xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg)
     ytt = ttl.tensor.Tensor(y.metal, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg)
 
-    tt_dev = ttl.tensor.add(xtt, ytt)
+    tt_dev = ttnn.add(xtt, ytt)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     tt_cpu = x.add(y).metal
@@ -296,7 +297,7 @@ def test_level1_sub(bs, memcfg, dtype, device, function_level_defaults):
     xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg)
     ytt = ttl.tensor.Tensor(y.metal, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg)
 
-    tt_dev = ttl.tensor.sub(xtt, ytt)
+    tt_dev = ttnn.sub(xtt, ytt)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     tt_cpu = x.sub(y).metal

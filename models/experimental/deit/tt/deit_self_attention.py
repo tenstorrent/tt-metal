@@ -70,7 +70,7 @@ class TtDeiTSelfAttention(nn.Module):
         attention_head_size_tt = tt_lib.tensor.sqrt(attention_head_size_tt)
         attention_head_size_tt = tt_lib.tensor.recip(attention_head_size_tt)
 
-        attention_scores = tt_lib.tensor.mul(attention_scores, attention_head_size_tt)
+        attention_scores = ttnn.mul(attention_scores, attention_head_size_tt)
 
         # Normalize the attention scores to probabilities.
         attention_probs = fallback_ops.softmax(attention_scores, dim=-1)

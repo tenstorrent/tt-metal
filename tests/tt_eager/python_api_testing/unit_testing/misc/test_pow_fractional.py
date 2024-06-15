@@ -5,6 +5,7 @@
 import math
 import torch
 
+import ttnn
 import tt_lib as ttl
 from models.utility_functions import comp_pcc
 from loguru import logger
@@ -35,7 +36,7 @@ def test_pow_fractional_composite(device):
     yt_trunc = yt - yt_floor
     pow_trunc_log = ttl.tensor.mul_unary(ttl.tensor.log(xt), yt_trunc)
     pow_frac = ttl.tensor.exp(pow_trunc_log)
-    xtt = ttl.tensor.mul(ttl.tensor.pow(xt, yt_floor), pow_frac)
+    xtt = ttnn.mul(ttl.tensor.pow(xt, yt_floor), pow_frac)
     assert list(xtt.get_legacy_shape()) == [N, C, H, W]
     tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 

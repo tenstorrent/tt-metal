@@ -10,6 +10,8 @@
 #include "tt_eager/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
 
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+
 using namespace tt::constants;
 using namespace std;
 using namespace tt::tt_metal;
@@ -28,16 +30,15 @@ Tensor lossfunction(
     std::vector<UnaryWithParam> fused_ops;
     switch(loss_kind) {
         case LossFunction::MAE:
-            fused_ops = {UnaryWithParam{UnaryOpType::ABS}};
-            result = sub(ref,prediction, fused_ops);
+            fused_ops.push_back(UnaryWithParam{UnaryOpType::ABS});
             break;
         case LossFunction::MSE:
-            fused_ops = {UnaryWithParam{UnaryOpType::SQUARE}};
-            result = sub(ref,prediction, fused_ops);
+            fused_ops.push_back(UnaryWithParam{UnaryOpType::SQUARE});
             break;
         default:
             TT_FATAL("unsupported loss function");
     }
+    result = ttnn::subtract(ref, prediction, std::nullopt, std::nullopt, std::nullopt, fused_ops);
     switch( reduce_mode ) {
         case LossReductionMode::SUM:
             return tt::tt_metal::global_sum(result, mem_config);

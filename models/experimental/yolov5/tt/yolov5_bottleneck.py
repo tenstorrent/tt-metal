@@ -44,5 +44,5 @@ class TtYolov5Bottleneck(torch.nn.Module):
         tmp = self.cv1(x)
         conv_res = self.cv2(tmp)
 
-        res = tt_lib.tensor.add(x, conv_res) if self.add else conv_res
+        res = ttnn.add(x, conv_res) if self.add else conv_res
         return res

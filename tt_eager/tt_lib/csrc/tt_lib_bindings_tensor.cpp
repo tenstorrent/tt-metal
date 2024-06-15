@@ -13,7 +13,6 @@
 #include "tt_dnn/op_library/conv/conv_op.hpp"
 #include "tt_dnn/op_library/conv/optimized_conv_op.hpp"
 #include "tt_dnn/op_library/downsample/downsample_op.hpp"
-#include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/embeddings/embeddings_op.hpp"
 #include "tt_dnn/op_library/fully_connected/fully_connected_op.hpp"

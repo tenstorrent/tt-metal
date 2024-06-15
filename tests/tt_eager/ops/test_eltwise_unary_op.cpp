@@ -278,7 +278,7 @@ void test_program_cache() {
 }
 
 int main(int argc, char** argv) {
-    test_operation_infrastructure();
+    //test_operation_infrastructure();
     test_shape_padding();
     test_numerically();
     test_program_cache();

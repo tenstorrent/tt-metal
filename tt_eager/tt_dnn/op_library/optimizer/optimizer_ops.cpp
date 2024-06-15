@@ -5,11 +5,12 @@
 #include "tt_dnn/op_library/optimizer/optimizer_ops.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
-#include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
+
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/concat/concat_op.hpp"
 
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 
 namespace tt {
 
@@ -31,12 +32,12 @@ std::vector<Tensor> _lamb_optimizer(const Tensor& data, const Tensor& grad, cons
     const float beta2_out = 1.0f - beta2;
 
     std::vector<Tensor> output_tensor;
-    Tensor exp_avg_out = add(mul_unary(exp_avg, beta1, output_mem_config), mul_unary(beta1_out, grad, output_mem_config), std::nullopt, output_mem_config);
+    Tensor exp_avg_out = ttnn::add(mul_unary(exp_avg, beta1, output_mem_config), mul_unary(beta1_out, grad, output_mem_config), std::nullopt, output_mem_config);
 
-    Tensor exp_avg_sq_out = add(mul_unary(exp_avg_sq, beta2, output_mem_config),  mul_unary(beta2_out, square(grad, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    Tensor exp_avg_sq_out = ttnn::add(mul_unary(exp_avg_sq, beta2, output_mem_config),  mul_unary(beta2_out, square(grad, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
 
-    Tensor adam_step_mid = mul(exp_avg_out, recip(add_unary(sqrt(exp_avg_sq_out, output_mem_config), eps, output_mem_config),output_mem_config),  std::nullopt, output_mem_config);
-    Tensor adam_step = add(adam_step_mid, mul_unary(weight_decay, data, output_mem_config), std::nullopt, output_mem_config);
+    Tensor adam_step_mid = ttnn::multiply(exp_avg_out, recip(add_unary(sqrt(exp_avg_sq_out, output_mem_config), eps, output_mem_config),output_mem_config),  std::nullopt, output_mem_config);
+    Tensor adam_step = ttnn::add(adam_step_mid, mul_unary(weight_decay, data, output_mem_config), std::nullopt, output_mem_config);
 
     auto rmsnorm = [&output_mem_config](Tensor data) -> Tensor {
         Tensor data_val = square(data, output_mem_config);
@@ -51,10 +52,17 @@ std::vector<Tensor> _lamb_optimizer(const Tensor& data, const Tensor& grad, cons
     Tensor adam_norm = rmsnorm(adam_step);
     Tensor ones = ones_like(weight_norm, output_mem_config);
 
-    Tensor trust_ratio_mid = mul(weight_norm, recip(add_unary(adam_norm, eps, output_mem_config),output_mem_config), std::nullopt, output_mem_config);
+    Tensor trust_ratio_mid = ttnn::multiply(weight_norm, recip(add_unary(adam_norm, eps, output_mem_config),output_mem_config), std::nullopt, output_mem_config);
     Tensor trust_ratio = where(gtz(weight_norm, output_mem_config), where(gtz(adam_norm, output_mem_config), trust_ratio_mid, ones, output_mem_config), ones);
 
-    Tensor param = sub(data, mul(adam_step, mul_unary(trust_ratio_mid, step_size, output_mem_config), std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    Tensor param = ttnn::subtract(
+        data,
+        ttnn::multiply(
+            adam_step,
+            mul_unary(trust_ratio_mid, step_size, output_mem_config),
+            std::nullopt, output_mem_config),
+        std::nullopt, output_mem_config);
+
     output_tensor.emplace_back(exp_avg_out);
     output_tensor.emplace_back(exp_avg_sq_out);
     output_tensor.emplace_back(param);

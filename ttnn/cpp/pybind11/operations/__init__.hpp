@@ -7,7 +7,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "pybind11/operations/binary.hpp"
 #include "pybind11/operations/ccl.hpp"
 #include "pybind11/operations/conv2d.hpp"
 #include "pybind11/operations/core.hpp"
@@ -24,8 +23,9 @@
 #include "pybind11/operations/transformer.hpp"
 #include "pybind11/operations/unary.hpp"
 
-
+#include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
+
 
 namespace py = pybind11;
 

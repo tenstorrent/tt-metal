@@ -256,7 +256,7 @@ class TtLlamaMLP_optimized(nn.Module):
 
         for i in range(len(w1_outs)):
             hidden_states.append(
-                tt_lib.tensor.mul(w1_outs[i], w3_outs[i], output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"])
+                ttnn.mul(w1_outs[i], w3_outs[i], memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"])
             )
             w1_outs[i].deallocate(True)
             w3_outs[i].deallocate(True)
