@@ -103,7 +103,7 @@ class TtMultiHeadSelfAttention(nn.Module):
         dim_per_head_tensor = tt_lib.tensor.sqrt(dim_per_head_tensor)
         dim_per_head_tensor = tt_lib.tensor.recip(dim_per_head_tensor)
 
-        q = tt_lib.tensor.mul(q, dim_per_head_tensor)
+        q = ttnn.mul(q, dim_per_head_tensor)
         scores = tt_lib.tensor.bmm(q, tt_lib.tensor.transpose(k, -2, -1))
         score_value = self.get_min(scores)
         scores = tt_to_torch_tensor(scores)

@@ -11,10 +11,11 @@
 #include "tt_dnn/op_library/ccl/ccl_common.hpp"
 #include "tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
 #include "tt_dnn/op_library/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/circular_buffer_types.hpp"
+
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 
 // Includes that need to be moved to CCL datastructures header
 #include <vector>
@@ -420,7 +421,7 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
     uint32_t ring_size,
     uint32_t worker_index,
     std::map<string, string> const& worker_defines,
-    BinaryOpType binary_math_op) {
+    ttnn::operations::binary::BinaryOpType binary_math_op) {
     TT_ASSERT(worker_defines.size() > 0);
     for (auto const& [key, value] : worker_defines) {
         log_trace(tt::LogOp, "Worker Define: {} = {}", key, value);
@@ -472,10 +473,10 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
         vector<uint32_t> compute_kernel_args = {};
         constexpr bool fp32_dest_acc_en = false;
         constexpr bool math_approx_mode = false;
-        std::map<string, string> eltwise_defines = eltwise_binary_op_utils::get_defines(binary_math_op);
+        std::map<string, string> eltwise_defines = ttnn::operations::binary::utils::get_defines(binary_math_op);
         KernelHandle worker_reduce_kernel_id = tt_metal::CreateKernel(
             program,
-            "tt_eager/tt_dnn/op_library/eltwise_binary/kernels/compute/eltwise_binary.cpp",
+            "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp",
             worker_core,
             tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
@@ -760,7 +761,7 @@ static std::tuple<CBHandle, CBHandle, CBHandle, CBHandle> create_worker_circular
 operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const std::vector<Tensor>& input_tensors,
     const std::vector<Tensor>& output_tensors,
-    BinaryOpType reduce_op,
+    ttnn::operations::binary::BinaryOpType reduce_op,
     const uint32_t scatter_split_dim,
     const uint32_t num_links,
     const uint32_t ring_size,

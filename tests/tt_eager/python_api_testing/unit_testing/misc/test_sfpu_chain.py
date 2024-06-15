@@ -6,6 +6,7 @@
 import torch
 
 import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_pcc
 from loguru import logger
 from models.utility_functions import is_wormhole_b0
@@ -77,10 +78,10 @@ def test_eltwise_binary_fused(device):
         .to(device)
     )
 
-    xtt = ttl.tensor.add(
+    xtt = ttnn.add(
         xt,
         yt,
-        fused_activations=[
+        activations=[
             ttl.tensor.FusibleActivation.RELU,
             [ttl.tensor.FusibleActivation.POWER, 2],
         ],

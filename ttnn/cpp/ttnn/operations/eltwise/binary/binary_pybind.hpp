@@ -8,14 +8,12 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/binary.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
 
-namespace ttnn {
-namespace operations {
-namespace binary {
+namespace ttnn::operations::binary {
 
 namespace detail {
 
@@ -58,18 +56,18 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             [](const binary_operation_t& self,
                const ttnn::Tensor& input_tensor_a,
                const float scalar,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType>& dtype,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<std::vector<std::string>>& activations,
+               const std::optional<FusedActivations>& activations,
                const uint8_t& queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor_a, scalar, memory_config, dtype, output_tensor, activations);
+                return self(queue_id, input_tensor_a, scalar, dtype, memory_config, output_tensor, activations);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("activations") = std::nullopt,
             py::arg("queue_id") = 0},
@@ -79,18 +77,18 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             [](const binary_operation_t& self,
                const ttnn::Tensor& input_tensor_a,
                const ttnn::Tensor& input_tensor_b,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType>& dtype,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<std::vector<std::string>>& activations,
+               const std::optional<FusedActivations>& activations,
                const uint8_t& queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor_a, input_tensor_b, memory_config, dtype, output_tensor, activations);
+                return self(queue_id, input_tensor_a, input_tensor_b, dtype, memory_config, output_tensor, activations);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("activations") = std::nullopt,
             py::arg("queue_id") = 0});
@@ -207,8 +205,18 @@ void py_module(py::module& module) {
         ttnn::squared_difference,
         R"doc(Compute squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+
+    detail::bind_binary_operation(
+        module,
+        ttnn::bias_gelu,
+        R"doc(Compute bias_gelu of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
+        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+
+    detail::bind_binary_operation(
+        module,
+        ttnn::divide,
+        R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
+        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
 }
 
-}  // namespace binary
-}  // namespace operations
-}  // namespace ttnn
+}

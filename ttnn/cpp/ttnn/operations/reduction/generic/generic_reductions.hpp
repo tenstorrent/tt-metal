@@ -12,6 +12,8 @@
 #include "ttnn/operations/core.hpp"
 #include "ttnn/validation.hpp"
 
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+
 namespace ttnn {
 namespace operations::reduction {
 
@@ -141,7 +143,7 @@ struct Reduce {
                     reduce_op_dim,
                     1.0 / reduced_volume,
                     memory_config);
-                output_tensor = tt::tt_metal::sub(
+                output_tensor = ttnn::subtract(
                     mean_square_tensor,
                     tt::tt_metal::pow(mean_tensor, 2.0f, memory_config),
                     std::nullopt,

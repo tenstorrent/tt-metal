@@ -13,6 +13,8 @@
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "ttnn/operations/core.hpp"
 
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+
 namespace ttnn {
 namespace operations {
 namespace transformer {

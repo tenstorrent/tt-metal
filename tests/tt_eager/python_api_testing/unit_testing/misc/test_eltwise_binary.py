@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import tt_lib as ttl
+import ttnn
 from models.utility_functions import untilize, comp_pcc
 from models.utility_functions import is_grayskull
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
@@ -15,19 +16,19 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_ze
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize(
     "dtype",
-    [ttl.tensor.DataType.FLOAT32],
+    [ttnn.float32],
     ids=["float32"],
 )
 @pytest.mark.parametrize(
     "test_func_name, torch_func_name",
-    [(ttl.tensor.add, torch.add), (ttl.tensor.sub, torch.sub), (ttl.tensor.mul, torch.mul)],
+    [(ttnn.add, torch.add), (ttnn.sub, torch.sub), (ttnn.mul, torch.mul)],
 )
 def test_run_elt_binary(dtype, test_func_name, torch_func_name, device):
     shape = [2, 16, 256, 256]
 
     torch.manual_seed(10)
 
-    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     in0 = torch.randn(shape).bfloat16().float()
     in1 = torch.randn(shape).bfloat16().float()

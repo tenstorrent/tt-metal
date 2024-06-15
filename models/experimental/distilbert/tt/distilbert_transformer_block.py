@@ -8,6 +8,8 @@ import torch.nn as nn
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
+
+import ttnn
 import tt_lib
 from models.experimental.distilbert.tt.distilbert_multihead_self_attention import (
     TtMultiHeadSelfAttention,
@@ -24,9 +26,7 @@ class TtTransformerBlock(nn.Module):
         self.device = device
 
         if config.dim % config.n_heads != 0:
-            raise ValueError(
-                f"config.n_heads {config.n_heads} must divide config.dim {config.dim} evenly"
-            )
+            raise ValueError(f"config.n_heads {config.n_heads} must divide config.dim {config.dim} evenly")
 
         self.attention = TtMultiHeadSelfAttention(
             self.config,
@@ -35,12 +35,8 @@ class TtTransformerBlock(nn.Module):
             device=self.device,
         )
 
-        self.sa_gamma = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.sa_layer_norm.weight"], self.device
-        )
-        self.sa_beta = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.sa_layer_norm.bias"], self.device
-        )
+        self.sa_gamma = torch_to_tt_tensor_rm(state_dict[f"{base_address}.sa_layer_norm.weight"], self.device)
+        self.sa_beta = torch_to_tt_tensor_rm(state_dict[f"{base_address}.sa_layer_norm.bias"], self.device)
 
         self.sa_LayerNorm = tt_lib.tensor.layernorm
 
@@ -51,12 +47,8 @@ class TtTransformerBlock(nn.Module):
             device=self.device,
         )
 
-        self.output_gamma = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.output_layer_norm.weight"], self.device
-        )
-        self.output_beta = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.output_layer_norm.bias"], self.device
-        )
+        self.output_gamma = torch_to_tt_tensor_rm(state_dict[f"{base_address}.output_layer_norm.weight"], self.device)
+        self.output_beta = torch_to_tt_tensor_rm(state_dict[f"{base_address}.output_layer_norm.bias"], self.device)
 
         self.output_LayerNorm = tt_lib.tensor.layernorm
 
@@ -83,14 +75,12 @@ class TtTransformerBlock(nn.Module):
             ) = sa_output
         else:
             if type(sa_output) != tuple:
-                raise TypeError(
-                    f"sa_output must be a tuple but it is {type(sa_output)} type"
-                )
+                raise TypeError(f"sa_output must be a tuple but it is {type(sa_output)} type")
 
             sa_output = sa_output[0]
 
         sa_output = self.sa_LayerNorm(
-            tt_lib.tensor.add(sa_output, input),
+            ttnn.add(sa_output, input),
             eps=1e-12,
             gamma=self.sa_gamma,
             beta=self.sa_beta,
@@ -99,7 +89,7 @@ class TtTransformerBlock(nn.Module):
         ffn_output = self.ffn(sa_output)
 
         ffn_output = self.output_LayerNorm(
-            tt_lib.tensor.add(ffn_output, sa_output),
+            ttnn.add(ffn_output, sa_output),
             eps=1e-12,
             gamma=self.output_gamma,
             beta=self.output_beta,

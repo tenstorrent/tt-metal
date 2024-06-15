@@ -461,9 +461,7 @@ def test_falcon7b_attnention_sliced(
         ttnn.experimental.tensor.BcastOpDim.HW,
         output_mem_config=dram_interleaved_memory_config,
     )
-    attn_weights = ttnn.experimental.tensor.add(
-        attn_weights, attention_mask, output_mem_config=dram_interleaved_memory_config
-    )
+    attn_weights = ttnn.add(attn_weights, attention_mask, memory_config=dram_interleaved_memory_config)
     attn_weights = ttnn.experimental.operations.primary.softmax_in_place(
         attn_weights, compute_kernel_config=compute_kernel_config
     )
@@ -906,10 +904,10 @@ def test_softmax(device, num_cores, seq_len):
         output_mem_config=dram_interleaved_memory_config,
     )
 
-    out = ttnn.experimental.tensor.add(
+    out = ttnn.add(
         out,
         tt_attention_mask_full,
-        output_mem_config=dram_interleaved_memory_config,
+        memory_config=dram_interleaved_memory_config,
     )
 
     out = ttnn.experimental.operations.primary.softmax_in_place(out, compute_kernel_config=compute_kernel_config)

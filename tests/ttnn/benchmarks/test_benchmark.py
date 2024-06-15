@@ -16,30 +16,6 @@ import tt_lib as ttl
 ])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 # fmt: on
-def test_benchmark_ttl_add(device, use_program_cache, height, width, dtype):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.rand((1, 1, height, width))
-    torch_input_tensor_b = torch.rand((1, 1, height, width))
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
-    ttl.tensor.matmul(input_tensor_a.value, input_tensor_b.value)
-    for i in range(3):
-        start = time.time()
-        output = ttl.tensor.add(input_tensor_a.value, input_tensor_b.value)
-        end = time.time()
-        duration = end - start
-        print(f"ttl.tensor.add: {duration} seconds")
-        output = output.cpu()
-
-
-# fmt: off
-@pytest.mark.parametrize("height,width", [
-    (1024, 1024),
-])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
-# fmt: on
 def test_benchmark_ttnn_add(device, use_program_cache, height, width, dtype):
     torch.manual_seed(0)
 

@@ -99,7 +99,7 @@ class TtLlamaMLP(nn.Module):
                 xs[i], self.w3_list[i], fp32_dest_acc_en=True, packer_l1_acc=True
             )
 
-            w2_in = tt_lib.tensor.mul(w1_sigmoid, w3_out)
+            w2_in = ttnn.mul(w1_sigmoid, w3_out)
             w2_inputs.append(w2_in)
 
         w2_in_replicated = tt_all_gather_torch(w2_inputs, dim=-1)

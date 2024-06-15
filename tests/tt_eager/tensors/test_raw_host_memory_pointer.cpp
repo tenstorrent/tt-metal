@@ -12,7 +12,7 @@
 #include "tensor/host_buffer/types.hpp"
 #include "tensor/tensor.hpp"
 #include "tensor/tensor_impl.hpp"
-#include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_numpy/functions.hpp"
@@ -172,7 +172,7 @@ void test_raw_host_memory_pointer() {
     Tensor d_dev = a_dev;
     memcpy(d_dev, d_cpu);
 
-    Tensor e_dev = tt::tt_metal::add(c_dev, d_dev);
+    Tensor e_dev = ttnn::add(c_dev, d_dev);
 
     tt::tt_metal::memcpy(tensor_for_printing, e_dev);
 

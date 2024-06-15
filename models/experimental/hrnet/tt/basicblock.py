@@ -4,6 +4,7 @@
 
 import torch.nn as nn
 
+import ttnn
 import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm
@@ -54,7 +55,7 @@ class TtBasicBlock(nn.Module):
 
         out = self.conv2(out)
         out = self.bn2(out)
-        out = tt_lib.tensor.add(out, residual)
+        out = ttnn.add(out, residual)
         out = tt_lib.tensor.relu(out)
 
         return out

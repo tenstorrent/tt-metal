@@ -6,6 +6,7 @@ import torch
 import pytest
 from loguru import logger
 
+import ttnn
 import tt_lib
 import tt_lib as ttl
 
@@ -178,10 +179,10 @@ class Prefill_MLP_128:
             compute_kernel_config=COMPUTE_KERNEL_FP16_CONFIG,
         )
 
-        out = tt_lib.tensor.mul(
+        out = ttnn.mul(
             ff1_out,
             ff3_out,
-            output_mem_config=WIDTH_SHARDED_MEMCFG,
+            memory_config=WIDTH_SHARDED_MEMCFG,
         )
 
         out.deallocate()
@@ -355,7 +356,7 @@ class Prefill_MLP_2k:
             compute_kernel_config=COMPUTE_KERNEL_FP16_CONFIG,
         )
 
-        out = tt_lib.tensor.mul(ff1_out, ff3_out, output_mem_config=self.block_sharded)
+        out = ttnn.mul(ff1_out, ff3_out, memory_config=self.block_sharded)
         ff1_out.deallocate()
         ff3_out.deallocate()
         out.deallocate()

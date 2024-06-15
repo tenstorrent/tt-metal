@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn
 from typing import List, Optional, Callable
 
 from models.experimental.efficientnet.tt.efficientnet_conv import TtEfficientnetConv2dNormActivation
@@ -53,9 +53,7 @@ class TtEfficientnetFusedMBConv(torch.nn.Module):
         if not (1 <= cnf.stride <= 2):
             raise ValueError("illegal stride value")
 
-        self.use_res_connect = (
-            cnf.stride == 1 and cnf.input_channels == cnf.out_channels
-        )
+        self.use_res_connect = cnf.stride == 1 and cnf.input_channels == cnf.out_channels
 
         layers: List[torch.nn.Module] = []
         expanded_channels = cnf.adjust_channels(cnf.input_channels, cnf.expand_ratio)
@@ -118,6 +116,6 @@ class TtEfficientnetFusedMBConv(torch.nn.Module):
 
         if self.use_res_connect:
             # result = self.stochastic_depth(result)
-            result = tt_lib.tensor.add(result, x)
+            result = ttnn.add(result, x)
 
         return result

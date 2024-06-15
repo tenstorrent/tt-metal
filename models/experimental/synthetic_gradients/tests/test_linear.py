@@ -6,6 +6,7 @@ import torch
 from torch import nn
 from torchvision import transforms, datasets
 
+import ttnn
 import tt_lib
 from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
 
@@ -14,7 +15,7 @@ def ttLinear(weight, bias):
     def linear_(activation):
         weight_T = tt_lib.tensor.transpose(weight, -2, -1)
         output = tt_lib.tensor.matmul(activation, weight_T)
-        output_plus_bias = tt_lib.tensor.add(output, bias)
+        output_plus_bias = ttnn.add(output, bias)
         return output_plus_bias
 
     return linear_

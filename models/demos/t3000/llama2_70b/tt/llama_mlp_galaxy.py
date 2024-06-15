@@ -311,10 +311,10 @@ class TtLlamaMLP_galaxy(nn.Module):
             hidden_states_4chips = []
             for j in range(len(w1_32chips[i])):
                 hidden_states_4chips.append(
-                    tt_lib.tensor.mul(
+                    ttnn.mul(
                         w1_32chips[i][j],
                         w3_32chips[i][j],
-                        output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+                        memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
                     )
                 )
                 w1_32chips[i][j].deallocate(True)

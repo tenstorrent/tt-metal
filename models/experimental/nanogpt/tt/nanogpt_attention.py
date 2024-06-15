@@ -105,7 +105,7 @@ class TtCausalSelfAttention(nn.Module):
 
         const_att = self.const_tensor(att.get_legacy_shape(), 1.0 / math.sqrt(k.get_legacy_shape()[-1]))
 
-        att = tt_lib.tensor.mul(att, const_att)
+        att = ttnn.mul(att, const_att)
 
         att = tt_to_torch_tensor(att)
         att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))

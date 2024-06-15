@@ -10,6 +10,7 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 
+import ttnn
 import tt_lib
 
 
@@ -69,7 +70,7 @@ class TtDistilBert_Embeddings(nn.Module):
         position_embeddings = self.position_embeddings(position_ids)
         position_embeddings = torch_to_tt_tensor_rm(position_embeddings, self.device, put_on_device=True)
 
-        embeddings = tt_lib.tensor.add(input_embeds, position_embeddings)
+        embeddings = ttnn.add(input_embeds, position_embeddings)
         embeddings = self.LayerNorm(embeddings, eps=1e-12, gamma=self.gamma, beta=self.beta)
 
         return embeddings

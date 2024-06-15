@@ -64,9 +64,7 @@ class TtWhisperEncoderLayer(nn.Module):
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
 
-        self.self_attn_layer_norm = partial(
-            tt_lib.tensor.layernorm, gamma=gamma, beta=beta, eps=1e-05
-        )
+        self.self_attn_layer_norm = partial(tt_lib.tensor.layernorm, gamma=gamma, beta=beta, eps=1e-05)
 
         # self.self_attn_layer_norm = fallback_ops.LayerNorm(
         #     gamma, beta, eps=1e-05, normalized_shape=self.embed_dim
@@ -109,9 +107,7 @@ class TtWhisperEncoderLayer(nn.Module):
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
 
-        self.final_layer_norm = partial(
-            tt_lib.tensor.layernorm, gamma=gamma_1, beta=beta_1, eps=1e-05
-        )
+        self.final_layer_norm = partial(tt_lib.tensor.layernorm, gamma=gamma_1, beta=beta_1, eps=1e-05)
 
         # self.final_layer_norm = fallback_ops.LayerNorm(
         #     gamma_1, beta_1, eps=1e-05, normalized_shape=self.embed_dim
@@ -150,7 +146,7 @@ class TtWhisperEncoderLayer(nn.Module):
         # TODO: Do not use dropout for now
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
-        hidden_states = tt_lib.tensor.add(hidden_states, residual)
+        hidden_states = ttnn.add(hidden_states, residual)
         residual = hidden_states
 
         hidden_states = self.final_layer_norm(hidden_states)
@@ -159,20 +155,17 @@ class TtWhisperEncoderLayer(nn.Module):
         if self.use_torch_gelu:
             torch_hidden_states = tt2torch_tensor(hidden_states)
             torch_hidden_states = torch.nn.functional.gelu(torch_hidden_states)
-            hidden_states = torch2tt_tensor(
-                torch_hidden_states, self.device, tt_lib.tensor.Layout.ROW_MAJOR
-            )
+            hidden_states = torch2tt_tensor(torch_hidden_states, self.device, tt_lib.tensor.Layout.ROW_MAJOR)
         else:
             hidden_states = tt_lib.tensor.gelu(hidden_states)
 
         hidden_states = linear(hidden_states, self.fc2_weight, self.fc2_bias)
-        hidden_states = tt_lib.tensor.add(hidden_states, residual)
+        hidden_states = ttnn.add(hidden_states, residual)
 
         hidden_states_torch = tt2torch_tensor(hidden_states)
 
         if hidden_states_torch.dtype == torch.float16 and (
-            torch.isinf(hidden_states_torch).any()
-            or torch.isnan(hidden_states_torch).any()
+            torch.isinf(hidden_states_torch).any() or torch.isnan(hidden_states_torch).any()
         ):
             if self.clamp_value is not None:
                 clamp_value = self.clamp_value
@@ -180,13 +173,9 @@ class TtWhisperEncoderLayer(nn.Module):
                 clamp_value = torch.finfo(hidden_states_torch.dtype).max - 1000
                 self.clamp_value = clamp_value
 
-            hidden_states_torch = torch.clamp(
-                hidden_states_torch, min=-clamp_value, max=clamp_value
-            )
+            hidden_states_torch = torch.clamp(hidden_states_torch, min=-clamp_value, max=clamp_value)
 
-        hidden_states = torch2tt_tensor(
-            hidden_states_torch, self.device, tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        hidden_states = torch2tt_tensor(hidden_states_torch, self.device, tt_lib.tensor.Layout.ROW_MAJOR)
 
         outputs = (hidden_states,)
 

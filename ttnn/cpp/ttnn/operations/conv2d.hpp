@@ -82,8 +82,6 @@ struct Conv2dConfig {
     }
 };
 
-extern const std::array<ttnn::TensorSchema, 3> input_schemas;
-
 uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor);
 
 uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t start_divisor);

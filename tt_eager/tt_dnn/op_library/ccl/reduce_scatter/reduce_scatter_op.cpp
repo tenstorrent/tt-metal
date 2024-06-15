@@ -6,8 +6,10 @@
 
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_eager/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
-#include "tt_eager/tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_metal/host_api.hpp"
+
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+
 
 namespace tt {
 namespace tt_metal {
@@ -59,7 +61,7 @@ operation::ProgramWithCallbacks ReduceScatter::create_program(
 
 std::vector<Tensor> reduce_scatter_impl(
     const std::vector<Tensor>& input_tensors,
-    const BinaryOpType binary_op_type,
+    const ttnn::operations::binary::BinaryOpType binary_op_type,
     const uint32_t scatter_dim,
     const uint32_t num_links,
     const MemoryConfig& output_mem_config,
@@ -98,11 +100,11 @@ std::vector<Tensor> reduce_scatter_impl(
     return output_tensors;
 }
 
-static BinaryOpType convert_reduce_type_to_eltwise_type(ReduceOpMath reduce_op) {
+static ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(ReduceOpMath reduce_op) {
     switch (reduce_op) {
-        case ReduceOpMath::SUM: return BinaryOpType::ADD;
+        case ReduceOpMath::SUM: return ttnn::operations::binary::BinaryOpType::ADD;
 
-        default: TT_FATAL("Reduce scatter only support reduce_op_type SUM"); return BinaryOpType::ADD;
+        default: TT_FATAL("Reduce scatter only support reduce_op_type SUM"); return ttnn::operations::binary::BinaryOpType::ADD;
     }
 }
 
@@ -112,7 +114,7 @@ std::vector<Tensor> reduce_scatter(
     ReduceOpMath math_op,
     const uint32_t num_links,
     const MemoryConfig& output_mem_config) {
-    BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);
+    ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);
     return reduce_scatter_impl(
         input_tensors, binary_op_type, scatter_dim, num_links, output_mem_config, ccl::Topology::Ring);
 }

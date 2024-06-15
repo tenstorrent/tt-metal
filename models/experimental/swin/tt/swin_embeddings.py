@@ -6,6 +6,8 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
+import ttnn
+
 from models.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
@@ -62,17 +64,17 @@ class TtSwinEmbeddings(nn.Module):
             mask_tokens = torch_to_tt_tensor_rm(mask_tokens, self.device)
             mask = torch_to_tt_tensor_rm(mask, self.device)
 
-            mask_tokens = tt_lib.tensor.mul(mask_tokens, mask)
+            mask_tokens = ttnn.mul(mask_tokens, mask)
 
             unit_tensor = self.const_tensor(mask.get_legacy_shape(), 1)
-            mask = tt_lib.tensor.sub(unit_tensor, mask)
+            mask = ttnn.sub(unit_tensor, mask)
 
-            embeddings = tt_lib.tensor.mul(embeddings, mask)
-            embeddings = tt_lib.tensor.add(embeddings, mask_tokens)
+            embeddings = ttnn.mul(embeddings, mask)
+            embeddings = ttnn.add(embeddings, mask_tokens)
 
         if self.position_embeddings is not None:
             self.position_embeddings = torch_to_tt_tensor_rm(self.position_embeddings, self.device)
         if self.position_embeddings is not None:
-            embeddings = tt_lib.tensor.add(embeddings, self.position_embeddings)
+            embeddings = ttnn.add(embeddings, self.position_embeddings)
 
         return embeddings, output_dimensions

@@ -8,13 +8,14 @@
 #include "tt_eager/tt_dnn/op_library/ccl/ccl_common.hpp"
 #include "tt_eager/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp"
 #include "tt_eager/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "tt_eager/tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
+
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 
 namespace tt {
 namespace tt_metal {
 
 struct ReduceScatter {
-    const BinaryOpType binary_op_type;
+    const ttnn::operations::binary::BinaryOpType binary_op_type;
     const uint32_t scatter_dim;
     const uint32_t num_links;
     const uint32_t ring_size;
@@ -67,7 +68,7 @@ namespace reduce_scatter_detail {
 operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const std::vector<Tensor>& input_tensors,
     const std::vector<Tensor>& output_tensors,
-    BinaryOpType reduce_op,
+    ttnn::operations::binary::BinaryOpType reduce_op,
     const uint32_t scatter_split_dim,
     const uint32_t num_links,
     const uint32_t ring_size,

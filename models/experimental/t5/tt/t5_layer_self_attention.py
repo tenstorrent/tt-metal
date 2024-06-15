@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import ttnn
 import tt_lib
 
 from models.utility_functions import (
@@ -30,9 +31,7 @@ class TtT5LayerSelfAttention(torch.nn.Module):
             device,
             has_relative_attention_bias,
         )
-        self.layer_norm = TtT5LayerNorm(
-            config, state_dict, f"{base_address}.layer_norm", device
-        )
+        self.layer_norm = TtT5LayerNorm(config, state_dict, f"{base_address}.layer_norm", device)
         # self.dropout = nn.Dropout(config.dropout_rate)
 
     def forward(
@@ -56,8 +55,6 @@ class TtT5LayerSelfAttention(torch.nn.Module):
             output_attentions=output_attentions,
         )
         # hidden_states = hidden_states + self.dropout(attention_output[0])
-        hidden_states = tt_lib.tensor.add(hidden_states, attention_output[0])
-        outputs = (hidden_states,) + attention_output[
-            1:
-        ]  # add attentions if we output them
+        hidden_states = ttnn.add(hidden_states, attention_output[0])
+        outputs = (hidden_states,) + attention_output[1:]  # add attentions if we output them
         return outputs

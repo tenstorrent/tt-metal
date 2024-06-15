@@ -281,7 +281,7 @@ class TtLlamaAttention(nn.Module):
 
             scale = 1 / math.sqrt(self.head_dim)
             attn = tt_lib.tensor.mul_unary(attn, scale)
-            attn = tt_lib.tensor.add(attn, attn_mask)
+            attn = ttnn.add(attn, attn_mask)
             attn = tt_lib.tensor.softmax(attn)
 
             attn_output = tt_lib.operations.primary.transformers.group_attn_matmul(

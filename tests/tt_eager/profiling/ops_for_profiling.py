@@ -421,15 +421,15 @@ def angle_bw(x, y):
 
 all_binary_ops = [
     {
-        "op": tt_lib.tensor.add,
+        "op": ttnn.add,
         "name": "tt_lib.tensor.add",
     },
     {
-        "op": tt_lib.tensor.sub,
+        "op": ttnn.sub,
         "name": "tt_lib.tensor.sub",
     },
     {
-        "op": tt_lib.tensor.mul,
+        "op": ttnn.mul,
         "name": "tt_lib.tensor.mul",
     },
     {
@@ -457,7 +457,7 @@ all_binary_ops = [
         "name": "tt_lib.tensor.atan2",
     },
     {
-        "op": tt_lib.tensor.logical_xor,
+        "op": ttnn.logical_xor,
         "name": "tt_lib.tensor.logical_xor",
     },
     {
@@ -473,11 +473,11 @@ all_binary_ops = [
         "name": "tt_lib.tensor.ldexp",
     },
     {
-        "op": tt_lib.tensor.bias_gelu,
+        "op": ttnn.bias_gelu,
         "name": "tt_lib.tensor.bias_gelu",
     },
     {
-        "op": tt_lib.tensor.logical_and,
+        "op": ttnn.logical_and,
         "name": "tt_lib.tensor.logical_and",
     },
     {
@@ -489,27 +489,27 @@ all_binary_ops = [
         "name": "tt_lib.tensor.isclose",
     },
     {
-        "op": tt_lib.tensor.logical_or,
+        "op": ttnn.logical_or,
         "name": "tt_lib.tensor.logical_or",
     },
     {
-        "op": tt_lib.tensor.gt,
+        "op": ttnn.gt,
         "name": "tt_lib.tensor.gt",
     },
     {
-        "op": tt_lib.tensor.gte,
+        "op": ttnn.ge,
         "name": "tt_lib.tensor.gte",
     },
     {
-        "op": tt_lib.tensor.lt,
+        "op": ttnn.lt,
         "name": "tt_lib.tensor.lt",
     },
     {
-        "op": tt_lib.tensor.lte,
+        "op": ttnn.le,
         "name": "tt_lib.tensor.lte",
     },
     {
-        "op": tt_lib.tensor.eq,
+        "op": ttnn.eq,
         "name": "tt_lib.tensor.eq",
     },
     {

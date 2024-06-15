@@ -15,9 +15,10 @@
 #include "tensor/tensor_impl.hpp"
 #include "tensor/types.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
-#include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_numpy/functions.hpp"
+
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -118,8 +119,8 @@ TEST_F(CommonFixture, TestAsyncEltwiseBinary) {
             tt::numpy::full<float>(Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE).to(device);
         Tensor input_tensor_c =
             tt::numpy::full<float>(Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE).to(device);
-        Tensor output_tensor_device = mul(add(input_tensor_a, input_tensor_b), input_tensor_c);
-        Tensor output_tensor_device_2 = neg(sub(output_tensor_device, input_tensor_c));
+        Tensor output_tensor_device = ttnn::multiply(ttnn::add(input_tensor_a, input_tensor_b), input_tensor_c);
+        Tensor output_tensor_device_2 = neg(ttnn::subtract(output_tensor_device, input_tensor_c));
 
         EXPECT_EQ(output_tensor_device.get_shape(), ttnn::Shape(Shape({1, 1, 1024, 1024})));
         EXPECT_EQ(output_tensor_device.get_dtype(), DataType::BFLOAT16);
@@ -230,8 +231,8 @@ TEST_F(CommonFixture, TestAsyncRefCountManager) {
 //             tt::numpy::full<float>(Shape({1, 1, 1023, 1023}), static_cast<float>(i), DataType::BFLOAT16);
 //         Tensor input_tensor_c =
 //             tt::numpy::full<float>(Shape({1, 1, 1023, 1023}), static_cast<float>(i), DataType::BFLOAT16);
-//         Tensor output_tensor_device = mul(add(input_tensor_a, input_tensor_b), input_tensor_c);
-//         Tensor output_tensor_device_2 = neg(sub(output_tensor_device, input_tensor_c));
+//         Tensor output_tensor_device = ttnn::multiply(ttnn::add(input_tensor_a, input_tensor_b), input_tensor_c);
+//         Tensor output_tensor_device_2 = neg(ttnn::subtract(output_tensor_device, input_tensor_c));
 
 //         EXPECT_EQ(output_tensor_device.get_shape(), ttnn::Shape(Shape({1, 1, 1023, 1023})));
 //         EXPECT_EQ(output_tensor_device.get_dtype(), DataType::BFLOAT16);

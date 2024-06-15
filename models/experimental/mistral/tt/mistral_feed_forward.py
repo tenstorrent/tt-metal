@@ -54,6 +54,6 @@ class TtFeedForward(nn.Module):
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         silu_out = tt_lib.tensor.silu(self.w1(x))
-        x = tt_lib.tensor.mul(silu_out, self.w3(x))
+        x = ttnn.mul(silu_out, self.w3(x))
         out = self.w2(x)
         return out

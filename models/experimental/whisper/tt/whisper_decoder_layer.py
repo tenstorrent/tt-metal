@@ -5,6 +5,8 @@
 from functools import partial
 import torch
 import torch.nn as nn
+
+import ttnn
 import tt_lib
 from typing import Optional, Tuple, Union
 
@@ -92,9 +94,7 @@ class TtWhisperDecoderLayer(nn.Module):
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
 
-        self.encoder_attn_layer_norm = partial(
-            tt_lib.tensor.layernorm, gamma=gamma1, beta=beta1, eps=1e-05
-        )
+        self.encoder_attn_layer_norm = partial(tt_lib.tensor.layernorm, gamma=gamma1, beta=beta1, eps=1e-05)
 
         self.fc1_weight = torch2tt_tensor(
             self.state_dict[f"{base_address}.fc1.weight"],
@@ -127,9 +127,7 @@ class TtWhisperDecoderLayer(nn.Module):
             self.device,
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
-        self.final_layer_norm = partial(
-            tt_lib.tensor.layernorm, gamma=gamma2, beta=beta2, eps=1e-05
-        )
+        self.final_layer_norm = partial(tt_lib.tensor.layernorm, gamma=gamma2, beta=beta2, eps=1e-05)
 
     def forward(
         self,
@@ -167,9 +165,7 @@ class TtWhisperDecoderLayer(nn.Module):
 
         # Self Attention
         # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
-        self_attn_past_key_value = (
-            past_key_value[:2] if past_key_value is not None else None
-        )
+        self_attn_past_key_value = past_key_value[:2] if past_key_value is not None else None
 
         # add present self-attn cache to positions 1,2 of present_key_value tuple
         hidden_states, self_attn_weights, present_key_value = self.self_attn(
@@ -182,7 +178,7 @@ class TtWhisperDecoderLayer(nn.Module):
 
         # TODO: When implement training
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        hidden_states = tt_lib.tensor.add(hidden_states, residual)
+        hidden_states = ttnn.add(hidden_states, residual)
 
         # Cross-Attention Block
         cross_attn_present_key_value = None
@@ -193,9 +189,7 @@ class TtWhisperDecoderLayer(nn.Module):
             hidden_states = self.encoder_attn_layer_norm(hidden_states)
 
             # cross_attn cached key/values tuple is at positions 3,4 of present_key_value tuple
-            cross_attn_past_key_value = (
-                past_key_value[-2:] if past_key_value is not None else None
-            )
+            cross_attn_past_key_value = past_key_value[-2:] if past_key_value is not None else None
             (
                 hidden_states,
                 cross_attn_weights,
@@ -211,7 +205,7 @@ class TtWhisperDecoderLayer(nn.Module):
             # TODO: When implement training
             # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
-            hidden_states = tt_lib.tensor.add(hidden_states, residual)
+            hidden_states = ttnn.add(hidden_states, residual)
 
             # concatenation of two tuples
             # add cross-attn to positions 3,4 of present_key_value tuple
@@ -227,9 +221,7 @@ class TtWhisperDecoderLayer(nn.Module):
         if self.use_torch_gelu:
             torch_hidden_states = tt2torch_tensor(hidden_states)
             torch_hidden_states = torch.nn.functional.gelu(torch_hidden_states)
-            hidden_states = torch2tt_tensor(
-                torch_hidden_states, self.device, tt_lib.tensor.Layout.ROW_MAJOR
-            )
+            hidden_states = torch2tt_tensor(torch_hidden_states, self.device, tt_lib.tensor.Layout.ROW_MAJOR)
         else:
             hidden_states = tt_lib.tensor.gelu(hidden_states)
 
@@ -240,7 +232,7 @@ class TtWhisperDecoderLayer(nn.Module):
         # TODO: When implement training
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
-        hidden_states = tt_lib.tensor.add(residual, hidden_states)
+        hidden_states = ttnn.add(residual, hidden_states)
         outputs = (hidden_states,)
 
         if output_attentions:

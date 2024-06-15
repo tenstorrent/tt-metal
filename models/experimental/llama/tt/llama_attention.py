@@ -6,6 +6,8 @@ import sys
 import math
 import torch
 from torch import nn
+
+import ttnn
 import tt_lib
 from typing import Optional, Tuple
 from loguru import logger
@@ -263,7 +265,7 @@ class TtLlamaAttention(nn.Module):
             # TT eltwise add operation, expand attention_mask shape
             attention_mask = attention_mask.repeat(1, self.num_heads, 1, 1)
             attention_mask = torch_to_tt_tensor_rm(attention_mask, self.device)
-            attn_weights = tt_lib.tensor.add(attn_weights, attention_mask)
+            attn_weights = ttnn.add(attn_weights, attention_mask)
             # convert to PyTorch tensor
             attn_weights = tt_to_torch_tensor(attn_weights)
             attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))

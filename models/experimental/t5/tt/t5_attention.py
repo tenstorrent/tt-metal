@@ -5,6 +5,8 @@
 import math
 import torch
 from torch import nn
+
+import ttnn
 import tt_lib
 
 from loguru import logger
@@ -543,7 +545,7 @@ class TtT5Attention(nn.Module):
             self.cached_key_length = key_length
 
         # scores += position_bias_masked
-        scores = tt_lib.tensor.add(scores, position_bias, output_mem_config=self.mem_config)
+        scores = ttnn.add(scores, position_bias, memory_config=self.mem_config)
 
         # attn_weights = nn.functional.softmax(scores.float(), dim=-1).type_as(scores)
         attn_weights = tt_lib.operations.primary.softmax_in_place(scores)
@@ -553,7 +555,7 @@ class TtT5Attention(nn.Module):
 
         # Mask heads if we want to
         if layer_head_mask is not None:
-            attn_weights = tt_lib.tensor.mul(attn_weights, layer_head_mask, self.mem_config)
+            attn_weights = ttnn.mul(attn_weights, layer_head_mask, self.mem_config)
 
         attn_output = tt_lib.tensor.bmm(attn_weights, value_states, self.mem_config)
         attn_output = unshape(attn_output)  # (batch_size, seq_length, dim)

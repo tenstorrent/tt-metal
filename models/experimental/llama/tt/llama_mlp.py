@@ -52,7 +52,7 @@ class TtLlamaMLP(nn.Module):
         up = linear(x, self.out_up_proj, self.bias, self.device)
 
         # product
-        prod = tt_lib.tensor.mul(gate, up)
+        prod = ttnn.mul(gate, up)
 
         # down
         hidden_states = linear(prod, self.out_down_proj, self.bias, self.device)
