@@ -8,6 +8,7 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #include "debug/ring_buffer.h"
+#include "cq_helpers.hpp"
 
 FORCE_INLINE
 uint32_t round_up_pow2(uint32_t v, uint32_t pow2_size) {
@@ -110,7 +111,10 @@ FORCE_INLINE
 void cq_noc_async_write_init_state(uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0) {
 
     DEBUG_STATUS("NSIW");
-    while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
+    uint32_t heartbeat = 0;
+    while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF)) {
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+    }
     DEBUG_STATUS("NSID");
 
     constexpr bool multicast_path_reserve = false;
@@ -155,7 +159,10 @@ void cb_acquire_pages(uint32_t n) {
     DEBUG_STATUS("DAPW");
     // Use a wrapping compare here to compare distance
     // Required for trace which steals downstream credits and may make the value negative
-    while (wrap_gt(n, *sem_addr));
+    uint32_t heartbeat = 0;
+    while (wrap_gt(n, *sem_addr)) {
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+    }
     DEBUG_STATUS("DAPD");
     noc_semaphore_inc(get_noc_addr_helper(noc_xy, (uint32_t)sem_addr), -n);
 }
@@ -183,8 +190,10 @@ uint32_t cb_acquire_pages(uint32_t cb_fence,
         // Ensure last sem_inc has landed
         noc_async_atomic_barrier();
 
-        DEBUG_STATUS("UAPW");
-        while ((available = *sem_addr) == 0);
+        uint32_t heartbeat = 0;
+        while ((available = *sem_addr) == 0) {
+            IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
+        }
         DEBUG_STATUS("UAPD");
     }
 

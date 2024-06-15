@@ -675,6 +675,10 @@ static void dump_core(
             // requested explicitly
             dump_sync_regs(f, device, core);
         }
+    } else {
+        fprintf(f, "rmsg:");
+        dump_run_state(f, core, &mbox_data->launch, mbox_data->launch.run);
+        fprintf(f, " ");
     }
 
     // Eth core only reports erisc kernel id, uses the brisc field

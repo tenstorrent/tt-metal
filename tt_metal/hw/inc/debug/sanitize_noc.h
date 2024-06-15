@@ -81,6 +81,10 @@ inline void debug_sanitize_post_noc_addr_and_hang(
         v[noc_index].invalid = invalid;
     }
 
+    // Update launch msg to show that we've exited.
+    tt_l1_ptr launch_msg_t *launch_msg = GET_MAILBOX_ADDRESS_DEV(launch);
+    launch_msg->run = RUN_MSG_DONE;
+
 #if defined(COMPILE_FOR_ERISC)
     // For erisc, we can't hang the kernel/fw, because the core doesn't get restarted when a new
     // kernel is written. In this case we'll do an early exit back to base FW.
@@ -88,11 +92,7 @@ inline void debug_sanitize_post_noc_addr_and_hang(
     erisc_early_exit(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_STACK_SAVE);
 #endif
 
-    while (1) {
-#if defined(COMPILE_FOR_ERISC)
-        internal_::risc_context_switch();
-#endif
-    }
+    while (1) { ; }
 }
 
 // Return value is the alignment mask for the type of core the noc address points
