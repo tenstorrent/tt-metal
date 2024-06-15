@@ -107,23 +107,31 @@ DevicePool* DevicePool::_inst = nullptr;
 
 void DevicePool::initialize_device(Device* dev) const {
     detail::ClearProfilerControlBuffer(dev);
-    // TODO: as optimization, investigate removing all thisi call for already initialized devivces
-    dev->initialize_and_launch_firmware();
-
-    DprintServerAttach(dev);
-    watcher_init(dev);
-    watcher_attach(dev);
 
     // Create system memory writer for this device to have an associated interface to hardware command queue (i.e.
-    // hugepage)
-    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+    // hugepage). Need to do this before FW init so we know what dispatch cores to reset.
+    bool using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
+    if (using_fast_dispatch) {
         detail::DispatchStateCheck(true);
-        dev->initialize_command_queue();
+        dev->init_command_queue_host();
     } else {
         detail::DispatchStateCheck(false);
         dev->initialize_synchronous_sw_cmd_queue();
         TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
+
+    DprintServerAttach(dev);
+    watcher_init(dev);
+
+    // TODO: as optimization, investigate removing all this call for already initialized devivces
+    dev->reset_cores();
+    dev->initialize_and_launch_firmware();
+
+    watcher_attach(dev);
+
+    // Set up HW command queues on device for FD
+    if (using_fast_dispatch)
+        dev->init_command_queue_device();
     detail::InitDeviceProfiler(dev);
 }
 
