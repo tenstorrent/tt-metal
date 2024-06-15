@@ -1,0 +1,38 @@
+name: "[internal] Produce data for external analysis"
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - "All post-commit tests"
+      - "[post-commit] all - Static checks, linters etc."
+    types:
+      - completed
+
+jobs:
+  produce-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Output (safe) pipeline values
+        run: |
+          echo "pipeline_id (id / run #): ${{ github.run_id }}/${{ github.run_attempt }}"
+          echo "submissions_ts: "
+          echo "start_ts: "
+          echo "end_ts: "
+          echo "name: ${{ github.workflow }}, but rk recommended name w/out @: ${{ github.workflow_ref }}"
+          echo "trigger: ${{ github.event_name }}"
+          echo "sha: ${{ github.sha }}"
+          echo "(triggering) author/actor: ${{ github.actor }}"
+          echo "author/actor: ${{ github.triggering_actor }}"
+          echo "orchestrator: github (Static)"
+          echo "docker_image: ${{ job.container.image }}"
+          echo "build duration is post-process"
+      - name: Output auxiliary values
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "[Info] Workflow run"
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.run_id }}
+          echo "[Info] Workflow run attempt"
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
