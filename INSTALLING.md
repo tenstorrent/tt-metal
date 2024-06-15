@@ -26,7 +26,8 @@ Note the current compatability matrix:
 
 ```sh
 sudo apt update
-sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.9 libhwloc-dev graphviz
+sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.9 libhwloc-dev graphviz patchelf
+
 wget https://apt.llvm.org/llvm.sh
 chmod u+x llvm.sh
 sudo ./llvm.sh 17
@@ -35,7 +36,7 @@ sudo apt install libc++-17-dev libc++abi-17-dev
 
 ---
 
-### Step 3. Huge Pages
+### Step 3. Hugepages
 
 1. Download latest [setup_hugepages.py](https://github.com/tenstorrent/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py) script.
 
@@ -62,7 +63,18 @@ sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py 
 ```
 ---
 
-### Step 4. Build from source and start using TT-NN and TT-Metalium!
+### Step 4. Install and start using TT-NN and TT-Metalium!
+
+> [!NOTE]
+>
+> You may choose to install from either source or a Python wheel.
+>
+> However, no matter your method, in order to use our pre-built models or to
+> follow along with the documentation and tutorials to get started, you will
+> still need the source code.
+>
+> If you do not want to use the models or follow the tutorials and want to
+> immediately start using the API, you may install just the wheel.
 
 1. Install git and git-lfs
 
@@ -94,7 +106,9 @@ export TT_METAL_HOME=$(pwd)
 export PYTHONPATH=$(pwd)
 ```
 
-4. Build & activate.
+4. Install either from source, or from our release wheel.
+
+### Option 1: From source
 
 We use CMake for our build flows.
 
@@ -108,7 +122,28 @@ source python_env/bin/activate
 
 Note about Python environments: You do not have to use `create_venv.sh`. If you
 are less familiar with Python and its various environment tools, just use
-`create_venv.sh` as shown above.
+`create_venv.sh` as shown above and the pre-built environment.
+
+### Option 2: From wheel
+
+Download the latest wheel from our
+[releases](https://github.com/tenstorrent/tt-metal/releases/latest) page for
+the particular Tenstorrent card architecture that you have installed on your
+system. (ie. Grayskull, Wormhole, etc)
+
+Install the wheel using your Python environment manager of choice. For example,
+to install with `pip`:
+
+```sh
+pip install <wheel_file.whl>
+```
+
+If you are going to try our pre-built models in `models/`, then you must also
+further install their requirements:
+
+```sh
+pip install -r tt_metal/python_env/requirements-dev.txt
+```
 
 5. Start coding
 
@@ -116,14 +151,14 @@ You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent.githu
 
 ---
 
-### Step 5. Software dependencies for codebase contributions
+### Step 5. (Optional) Software dependencies for codebase contributions
 
 Please follow the next additional steps if you want to contribute to the codebase.
 
 1. Install dependencies
 
 ```sh
-sudo apt install git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc libtbb-dev libcapstone-dev pkg-config ninja-build patchelf
+sudo apt install cmake=3.16.3-1ubuntu1.20.04.1 pandoc libtbb-dev libcapstone-dev pkg-config ninja-build
 ```
 
 2. Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
