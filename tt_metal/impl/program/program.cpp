@@ -172,6 +172,7 @@ KernelGroup::KernelGroup(
         this->launch_msg.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0] = kernel->get_watcher_kernel_id();
     }
 
+    this->launch_msg.exit_erisc_kernel = false;
     this->launch_msg.max_cb_index = last_cb_index + 1;
     this->launch_msg.run = RUN_MSG_GO;
 }

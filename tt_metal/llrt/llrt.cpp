@@ -339,13 +339,25 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
     return get_mailbox_is_done(run_mailbox_addr);
 }
 
-void wait_until_cores_done(chip_id_t device_id,
-                           int run_state,
-                           std::unordered_set<CoreCoord>& not_done_phys_cores) {
-
+void wait_until_cores_done(
+    chip_id_t device_id, int run_state, std::unordered_set<CoreCoord> &not_done_phys_cores, int timeout_ms) {
     // poll the cores until the set of not done cores is empty
     int loop_count = 1;
+    auto start = std::chrono::high_resolution_clock::now();
     while (!not_done_phys_cores.empty()) {
+        if (timeout_ms > 0) {
+            auto now = std::chrono::high_resolution_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+            if (elapsed > timeout_ms) {
+                std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
+                TT_THROW(
+                    "Device {}: Timeout ({} ms) waiting for physical cores to finish: {}.",
+                    device_id,
+                    timeout_ms,
+                    cores);
+            }
+        }
+
         // Print not-done cores
         if (loop_count % 1000 == 0) {
             string not_done_cores_str = "Not done phys cores: ";

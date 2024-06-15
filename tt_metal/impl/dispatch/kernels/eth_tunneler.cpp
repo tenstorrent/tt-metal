@@ -5,6 +5,7 @@
 // clang-format off
 #include "dataflow_api.h"
 #include "debug/dprint.h"
+#include "debug/ring_buffer.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen.hpp"
 // clang-format on
@@ -151,6 +152,10 @@ void kernel_main() {
             all_outputs_finished &= output_finished;
         }
 
+        tt_l1_ptr launch_msg_t * const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch);
+        if (launch_msg->exit_erisc_kernel) {
+            return;
+        }
         // need to optimize this.
         // context switch to base fw is very costly.
         internal_::risc_context_switch();
