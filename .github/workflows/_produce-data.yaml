@@ -35,3 +35,10 @@ jobs:
           gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.run_id }}
           echo "[Info] Workflow run attempt"
           gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+      - name: Output auxiliary values (workflow_run completed)
+        if: ${{ github.event_name == 'workflow_run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "[Info] Triggering Workflow run"
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.event.workflow_run.id }}/attempts/${{ github.event.workflow_run.run_attempt }}
