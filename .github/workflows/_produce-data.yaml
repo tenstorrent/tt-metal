@@ -3,9 +3,12 @@ name: "[internal] Produce data for external analysis"
 on:
   workflow_call:
   workflow_dispatch:
-  push:
-    branches:
-      - rkim/9319-data-testing
+  workflow_run:
+    workflows:
+      - "All post-commit tests"
+      - "[post-commit] all - Static checks, linters etc."
+    types:
+      - completed
 
 jobs:
   produce-data:
