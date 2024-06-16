@@ -49,18 +49,18 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, const CoreCoord
     bool pass = true;
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core_coord);
 
+    constexpr uint32_t num_runtime_args0 = 9;
+    constexpr uint32_t rta_base0 = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    std::map<string, string> dummy_defines0 = {{"DATA_MOVEMENT", "1"},
+                                               {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args0)},
+                                               {"RESULTS_ADDR", std::to_string(rta_base0)}};
     auto dummy_kernel0 = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/gtest_unit_tests/command_queue/test_kernels/runtime_args_kernel0.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
         eth_core_coord,
-        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .defines = dummy_defines0});
 
     vector<uint32_t> dummy_kernel0_args = {0, 1, 2, 3, 4, 5, 6, 7, 8};
-
-    // zero out expected L1 values
-    std::vector<uint32_t> all_zeros(dummy_kernel0_args.size(), 0);
-    llrt::write_hex_vec_to_core(device->id(), eth_noc_xy, all_zeros, eth_l1_mem::address_map::ERISC_L1_ARG_BASE);
-
     tt::tt_metal::SetRuntimeArgs(program, dummy_kernel0, eth_core_coord, dummy_kernel0_args);
 
     tt::tt_metal::detail::CompileProgram(device, program);
@@ -71,7 +71,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, const CoreCoord
     vector<uint32_t> dummy_kernel0_args_readback = llrt::read_hex_vec_from_core(
         device->id(),
         eth_noc_xy,
-        eth_l1_mem::address_map::ERISC_L1_ARG_BASE,
+        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
         dummy_kernel0_args.size() * sizeof(uint32_t));
 
     pass &= (dummy_kernel0_args == dummy_kernel0_args_readback);
