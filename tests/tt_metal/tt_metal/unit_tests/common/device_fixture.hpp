@@ -11,10 +11,6 @@
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/test_utils/env_vars.hpp"
 
-inline bool is_multi_device_gs_machine(const tt::ARCH& arch, const size_t num_devices) {
-    return arch == tt::ARCH::GRAYSKULL && num_devices > 1;
-}
-
 class DeviceFixture : public ::testing::Test {
    protected:
     void SetUp() override {
@@ -26,8 +22,11 @@ class DeviceFixture : public ::testing::Test {
         arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-        if (is_multi_device_gs_machine(arch_, num_devices_)) {
-            GTEST_SKIP();
+
+        // Some CI machines have lots of cards, running all tests on all cards is slow
+        // Coverage for multidevices is decent if we just confirm 2 work
+        if (arch_ == tt::ARCH::GRAYSKULL && num_devices_ > 2) {
+            num_devices_ = 2;
         }
 
         vector<chip_id_t> ids;
