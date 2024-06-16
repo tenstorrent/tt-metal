@@ -7,10 +7,10 @@
 namespace {
 void kernel_main() {
 
-    // Get configurable number of unique and common runtime args, and increment them all in place by a fixed value.
-    uint32_t rt_args_base = get_arg_addr(0);
+    // Get configurable number of unique and common runtime args, and increment them all by a fixed value.
     constexpr uint32_t num_unique_rt_args = get_compile_time_arg_val(0);
     constexpr uint32_t num_common_rt_args = get_compile_time_arg_val(1);
+    constexpr uint32_t rt_args_base = get_compile_time_arg_val(2);
     constexpr uint32_t unique_arg_incr_val = 10;
     constexpr uint32_t common_arg_incr_val = 100;
 
