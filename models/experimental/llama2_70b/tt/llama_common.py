@@ -50,7 +50,6 @@ def should_skip_model_load():
 
 
 def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, max_batch_size=16, max_context_len=8192):
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
     if os.getenv("CI") == "true":
         os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
 
