@@ -133,7 +133,6 @@ class JitBuildDataMovement : public JitBuildState {
 
   public:
     JitBuildDataMovement(const JitBuildEnv& env, int which, bool is_fw = false);
-    void pre_compile(const string& kernel_in_path, const string& op_out_path) const;
 };
 
 class JitBuildCompute : public JitBuildState {
@@ -146,7 +145,6 @@ class JitBuildEthernet : public JitBuildState {
   private:
   public:
     JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw = false);
-    void pre_compile(const string& kernel_in_path, const string& op_out_path) const;
 };
 
 // Abstract base class for kernel specialization

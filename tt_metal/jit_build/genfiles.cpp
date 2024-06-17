@@ -22,7 +22,7 @@ using namespace std;
 
 namespace tt::tt_metal {
 
-static void gen_trisc_cpp(const string& src_name, const string& dst_name, vector<string>& prolog)
+static void gen_kernel_cpp(const string& src_name, const string& dst_name, vector<string>& prolog)
 {
     std::ofstream out(dst_name);
     for (auto s: prolog)
@@ -30,6 +30,36 @@ static void gen_trisc_cpp(const string& src_name, const string& dst_name, vector
     out << "#include \"" << src_name << "\"\n";
 }
 
+static string get_absolute_path(const string& file_path_string) {
+    fs::path file_path(file_path_string);
+
+    // If the path doesn't exist as a absolute/relative path, then it must be relative to TT_METAL_HOME.
+    if (!fs::exists(file_path)) {
+        file_path = fs::path(llrt::OptionsG.get_root_dir() + file_path_string);
+        if (!fs::exists(file_path)) {
+            TT_FATAL("Kernel file {} doesn't exist!", file_path_string);
+        }
+    }
+
+    // Convert to absolute path and return
+    return fs::absolute(file_path).string();
+}
+
+void jit_build_genfiles_kernel_include(const JitBuildEnv& env,
+                                   const JitBuildSettings& settings,
+                                   const string& input_hlk_file_path) {
+    // Note: assumes dirs (and descriptors) already created
+    log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
+
+    string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
+    string kernel_header = out_dir + "kernel_includes.hpp";
+
+    // Get absolute path of kernel file to include
+    string abs_file_path = get_absolute_path(input_hlk_file_path);
+
+    vector<string> prolog;
+    gen_kernel_cpp(abs_file_path, kernel_header, prolog);
+}
 void jit_build_genfiles_triscs_src(const JitBuildEnv& env,
                                    const JitBuildSettings& settings,
                                    const string& input_hlk_file_path)
@@ -48,6 +78,9 @@ void jit_build_genfiles_triscs_src(const JitBuildEnv& env,
     string pack_cpp           = pack_base + ".cpp";
     string pack_llk_args_h    = pack_base + "_llk_args.h";
 
+    // Get absolute path of kernel file to include
+    string abs_file_path = get_absolute_path(input_hlk_file_path);
+
     vector<string> unpack_prolog;
     unpack_prolog.push_back("#define TRISC_UNPACK\n");
     unpack_prolog.push_back("#include \"defines_generated.h\"\n");
@@ -59,9 +92,9 @@ void jit_build_genfiles_triscs_src(const JitBuildEnv& env,
     pack_prolog.push_back("#include \"defines_generated.h\"\n");
 
     // TODO(pgk) - is this really worth it?
-    std::thread t0( [&]() { gen_trisc_cpp(input_hlk_file_path, unpack_cpp, unpack_prolog); } );
-    std::thread t1( [&]() { gen_trisc_cpp(input_hlk_file_path, math_cpp, math_prolog); } );
-    std::thread t2( [&]() { gen_trisc_cpp(input_hlk_file_path, pack_cpp, pack_prolog); } );
+    std::thread t0( [&]() { gen_kernel_cpp(abs_file_path, unpack_cpp, unpack_prolog); } );
+    std::thread t1( [&]() { gen_kernel_cpp(abs_file_path, math_cpp, math_prolog); } );
+    std::thread t2( [&]() { gen_kernel_cpp(abs_file_path, pack_cpp, pack_prolog); } );
     t0.join(); t1.join(); t2.join();
 
     // Here we generate an auxiliary header with defines added via add_define() call

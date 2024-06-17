@@ -148,19 +148,19 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     // failing test cases, although all three kernels simply print.
     KernelHandle brisc_print_kernel_id = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/brisc_print.cpp",
+        llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/brisc_print.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
     );
     KernelHandle ncrisc_print_kernel_id = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/ncrisc_print.cpp",
+        llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/ncrisc_print.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}
     );
     KernelHandle trisc_print_kernel_id = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/trisc_print.cpp",
+        llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/trisc_print.cpp",
         core,
         ComputeConfig{}
     );
