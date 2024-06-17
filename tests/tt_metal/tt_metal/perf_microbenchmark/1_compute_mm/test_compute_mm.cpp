@@ -52,7 +52,7 @@ using namespace tt;
 //   cores for certain input shapes. In that case, only some cores are used with
 //   a warning message.
 //   - To measure performance in the slow dispatch mode, build tt_metal project
-//   with the profiler build flag (ENABLE_PROFILER=1) first. This benchmark
+//   with the profiler option using scripts/build_scripts/build_with_profiler_opt.sh first. This benchmark
 //   copied device profiler's internal code to get the "t0 to any riscfw end"
 //   cycles. If device profiler is changed, it also should be updated.
 //   Otherwise, it may get inappropriate cycle value.
@@ -287,11 +287,11 @@ int main(int argc, char** argv) {
         else if (fast_dispatch_mode == false) {
             setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", true);
 
-#if !defined(PROFILER)
+#if !defined(TRACY_ENABLE)
             log_error(
                 "In the slow dispatch mode, device profiler is used to measure the "
-                "performance. Build the Metal library and test code with "
-                "'ENABLE_PROFILER=1'");
+                "profiler option using ./scripts/build_scripts/build_with_profiler_opt.sh");
+
             TT_ASSERT(false);
 #endif
 

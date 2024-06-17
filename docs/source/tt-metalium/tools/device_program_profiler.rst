@@ -28,7 +28,7 @@ The commands to build and run the ``full_buffer`` example after following :ref:`
 
 The generated csv is ``profile_log_device.csv`` and is saved under ``{$TT_METAL_HOME}/generated/profiler/.logs`` by default.
 
-``build_with_profiler_opt.sh`` also enables tracy for the build by using the ``ENABLE_TRACY=1`` flag. In tracy builds, device-side profiling data is also sent to tracy's GUI.
+``build_with_profiler_opt.sh`` also enables tracy for the build by using the ``ENABLE_TRACY=ON`` cmake option. In tracy builds, device-side profiling data is also sent to tracy's GUI.
 
 
 Example

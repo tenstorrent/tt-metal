@@ -18,7 +18,7 @@ run_profiling_test() {
     exit 1
   fi
 
-  echo "Make sure this test runs in a build with ENABLE_PROFILER=1"
+  echo "Make sure this test runs in a build with cmake option ENABLE_TRACY=ON"
 
   source python_env/bin/activate
   export PYTHONPATH=$TT_METAL_HOME

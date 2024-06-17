@@ -32,7 +32,9 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal and libs
-        run: ./scripts/build_scripts/build_with_profiler_opt.sh
+        run: |
+          ./scripts/build_scripts/build_with_profiler_opt.sh
+          ./create_venv.sh
       - name: Build tests
         run: cmake --build build --target tests -- -j`nproc`
       - name: Run microbenchmark tests

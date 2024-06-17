@@ -278,7 +278,7 @@ void DeviceProfiler::dumpResultToFile(
 
 DeviceProfiler::DeviceProfiler(const bool new_logs)
 {
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     ZoneScopedC(tracy::Color::Green);
     new_log = new_logs;
     output_dir = std::filesystem::path(string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME));
@@ -289,7 +289,7 @@ DeviceProfiler::DeviceProfiler(const bool new_logs)
 
 DeviceProfiler::~DeviceProfiler()
 {
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     ZoneScoped;
     pushTracyDeviceResults();
     for (auto tracyCtx : device_tracy_contexts)
@@ -302,7 +302,7 @@ DeviceProfiler::~DeviceProfiler()
 
 void DeviceProfiler::setNewLogFlag(bool new_log_flag)
 {
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     new_log = new_log_flag;
 #endif
 }
@@ -310,7 +310,7 @@ void DeviceProfiler::setNewLogFlag(bool new_log_flag)
 
 void DeviceProfiler::setOutputDir(const std::string& new_output_dir)
 {
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     std::filesystem::create_directories(new_output_dir);
     output_dir = new_output_dir;
 #endif
@@ -319,7 +319,7 @@ void DeviceProfiler::setOutputDir(const std::string& new_output_dir)
 
 void DeviceProfiler::setDeviceArchitecture(tt::ARCH device_arch)
 {
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     device_architecture = device_arch;
 #endif
 }
@@ -361,7 +361,7 @@ void DeviceProfiler::generateZoneSourceLocationsHashes()
 void DeviceProfiler::dumpResults (
         Device *device,
         const vector<CoreCoord> &worker_cores){
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     ZoneScoped;
 
     auto device_id = device->id();
@@ -392,7 +392,7 @@ void DeviceProfiler::dumpResults (
 
 void DeviceProfiler::pushTracyDeviceResults()
 {
-#if defined(PROFILER) && defined(TRACY_ENABLE)
+#if defined(TRACY_ENABLE)
     ZoneScoped;
     std::set<std::pair<uint32_t, CoreCoord>> device_cores_set;
     std::vector<std::pair<uint32_t, CoreCoord>> device_cores;
