@@ -79,7 +79,8 @@ void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
         if (mailboxes->launch.run == RUN_MSG_GO) {
             DeviceZoneScopedMainN("ERISC-FW");
             DEBUG_STATUS("R");
-            l1_arg_base = (uint32_t *)eth_l1_mem::address_map::ERISC_L1_ARG_BASE;
+            uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
+            l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offset_brisc); // overloaded
             kernel_init();
         } else {
             internal_::risc_context_switch();

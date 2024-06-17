@@ -419,13 +419,13 @@ void generate_dispatch_write_packed(
 void EnqueueProgramCommand::assemble_runtime_args_commands() {
     // Maps to enum class RISCV, tt_backend_api_types.h
     thread_local static const std::vector<uint32_t> unique_processor_to_l1_arg_base_addr = {
-        BRISC_L1_ARG_BASE,
-        NCRISC_L1_ARG_BASE,
+        L1_KERNEL_CONFIG_BASE,
+        L1_KERNEL_CONFIG_BASE + max_runtime_args * sizeof(uint32_t),
         0,
         0,
         0,
-        eth_l1_mem::address_map::ERISC_L1_ARG_BASE,
-        TRISC_L1_ARG_BASE,
+        eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE,
+        L1_KERNEL_CONFIG_BASE + 2 * max_runtime_args * sizeof(uint32_t),
     };
     CoreType dispatch_core_type =
         dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());

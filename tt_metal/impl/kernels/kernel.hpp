@@ -22,7 +22,7 @@ namespace tt {
 namespace tt_metal {
 
 constexpr uint32_t max_runtime_args = 256;
-constexpr uint32_t idle_eth_max_runtime_args = eth_l1_mem::address_map::ERISC_L1_ARGS_SIZE / sizeof(uint32_t);
+constexpr uint32_t idle_eth_max_runtime_args = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_SIZE / sizeof(uint32_t);
 
 using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
 

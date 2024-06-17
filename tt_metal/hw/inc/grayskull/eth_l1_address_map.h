@@ -24,8 +24,8 @@ struct address_map {
   static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE = 0;
   static constexpr std::int32_t ERISC_APP_ROUTING_INFO_BASE = 0;
   static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = 0;
-  static constexpr std::int32_t ERISC_L1_ARG_BASE = 0;
-  static constexpr std::int32_t ERISC_L1_ARGS_SIZE = 0;
+  static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_BASE = 0;
+  static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 0;
 
   static constexpr std::int32_t ERISC_FIRMWARE_SIZE = 16;
   static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = 0;

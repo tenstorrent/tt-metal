@@ -47,6 +47,7 @@ struct KernelGroup {
         std::optional<KernelHandle> ncrisc_id,
         std::optional<KernelHandle> trisc_id,
         std::optional<KernelHandle> erisc_id,
+        bool erisc_is_idle,
         int last_cb_index,
         const CoreRangeSet &new_ranges);
 

@@ -471,7 +471,6 @@ void process_write_paged() {
 
     DPRINT << "process_write_paged - pages: " << pages << " page_size: " << page_size
            << " dispatch_cb_page_size: " << dispatch_cb_page_size;
-    DPRINT << " start_page: " << page_id << " base_addr: " << HEX() << base_addr << DEC() << ENDL();
 
     while (write_length != 0) {
         // TODO #7360: Have more performant handling when page_size > dispatch_cb_page_size by not doing multiple writes
