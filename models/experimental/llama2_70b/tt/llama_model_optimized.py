@@ -228,7 +228,7 @@ class TtLlamaModel_optimized:
                 attn_mask,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
+                cache_file_name=cache_name(f"attn_masks_prefill_{seq_len}"),
                 mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
                 memory_config=self.model_config["DRAM_MEMCFG"],
                 device=self.device_mesh,

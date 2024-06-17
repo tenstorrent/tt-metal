@@ -166,12 +166,11 @@ class TtLlamaDecoder_optimized:
 
         ### Fractured residual add
         # Add attn output to residiual first in place to save memory
-        residual = xs
+        output = xs
         output = ttnn.add(
-            residual,
+            output,
             attn_outs,
             memory_config=self.model_config["ATTN_ADD_OUTPUT_MEMCFG"],
-            output_tensor=residual,
         )
         attn_outs.deallocate(True)
 
@@ -200,7 +199,6 @@ class TtLlamaDecoder_optimized:
             output,
             ffn_out,
             memory_config=self.model_config["MLP_ADD_OUTPUT_MEMCFG"],
-            output_tensor=output,
         )
         ffn_out.deallocate(True)
 
