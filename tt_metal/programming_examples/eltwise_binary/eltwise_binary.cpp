@@ -322,14 +322,14 @@ int main(int argc, char **argv) {
          */
         EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
 
-        std::function<bfloat16(const bfloat16 &)> transform_to_golden = [](const bfloat16 &a) {
+        auto transform_to_golden = [](const bfloat16 &a) {
             return bfloat16((a.to_float() + val_to_add) * val_to_mul);
         };
         std::vector<uint32_t> golden_vec = pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_to_golden));
 
         constexpr float abs_tolerance = 0.01f;
         constexpr float rel_tolerance = 0.001f;
-        std::function<bool(const float, const float)> comparison_function = [](const float a, const float b) {
+        auto comparison_function = [](const float a, const float b) {
             return is_close(a, b, rel_tolerance, abs_tolerance);
         };
 

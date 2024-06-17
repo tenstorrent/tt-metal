@@ -5,8 +5,6 @@
 #include <cstdint>
 #include "tensor/types.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
-
 namespace tt {
 
 namespace tt_metal {

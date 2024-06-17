@@ -4,7 +4,6 @@
 
 #include "tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
