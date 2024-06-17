@@ -616,21 +616,21 @@ static uint32_t GetL1ArgBaseAddr(std::shared_ptr<Kernel> kernel) {
 
     switch (riscv) {
         case RISCV::BRISC: {
-            l1_arg_base = BRISC_L1_ARG_BASE;
+            l1_arg_base = L1_KERNEL_CONFIG_BASE;
         } break;
         case RISCV::NCRISC: {
-            l1_arg_base = NCRISC_L1_ARG_BASE;
+            l1_arg_base = L1_KERNEL_CONFIG_BASE + max_runtime_args * sizeof(uint32_t);
         } break;
         case RISCV::ERISC: {
             auto config = std::get<EthernetConfig>(kernel->config());
             if (config.eth_mode == Eth::IDLE) {
-                l1_arg_base = IDLE_ERISC_L1_ARG_BASE;
+                l1_arg_base = IDLE_ERISC_L1_KERNEL_CONFIG_BASE;
             } else {
-                l1_arg_base = eth_l1_mem::address_map::ERISC_L1_ARG_BASE;
+                l1_arg_base = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
             }
         } break;
         case RISCV::COMPUTE: {
-            l1_arg_base = TRISC_L1_ARG_BASE;
+            l1_arg_base = L1_KERNEL_CONFIG_BASE + 2 * max_runtime_args * sizeof(uint32_t);
         } break;
         default: TT_THROW("Unsupported {} processor does not support runtime args", riscv);
     }

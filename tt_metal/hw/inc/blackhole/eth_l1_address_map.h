@@ -24,7 +24,7 @@ struct address_map {
   static constexpr std::int32_t DATA_BUFFER_SIZE_NOC = 16 * 1024;
   static constexpr std::int32_t DATA_BUFFER_SIZE = 24 * 1024;
   static constexpr std::int32_t TOOLS_MAX_L1_SIZE = 3 * 1024;
-  static constexpr std::int32_t ERISC_L1_ARGS_SIZE = 96 * 4;
+  static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 96 * 4;
 
   // Base addresses
   static constexpr std::int32_t FIRMWARE_BASE = 0x9040;
@@ -61,15 +61,15 @@ struct address_map {
   static constexpr std::uint32_t PROFILER_L1_BUFFER_ER = PRINT_BUFFER_ER + 256;
   static constexpr std::uint32_t PROFILER_L1_BUFFER_CONTROL = PROFILER_L1_BUFFER_ER + PROFILER_L1_BUFFER_SIZE;
 
-  static constexpr std::int32_t ERISC_L1_ARG_BASE = PROFILER_L1_BUFFER_CONTROL + PROFILER_L1_CONTROL_BUFFER_SIZE;
+  static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_BASE = PROFILER_L1_BUFFER_CONTROL + PROFILER_L1_CONTROL_BUFFER_SIZE;
 
-  static_assert(ERISC_L1_ARG_BASE - ERISC_RING_BUFFER_ADDR <= TOOLS_MAX_L1_SIZE);
+  static_assert(ERISC_L1_KERNEL_CONFIG_BASE - ERISC_RING_BUFFER_ADDR <= TOOLS_MAX_L1_SIZE);
   static_assert((ERISC_RING_BUFFER_ADDR % 32) == 0);
   static_assert((PRINT_BUFFER_ER % 32) == 0);
   static_assert((PROFILER_L1_BUFFER_ER % 32) == 0);
   static_assert((PROFILER_L1_BUFFER_CONTROL % 32) == 0);
 
-  static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = ERISC_L1_ARG_BASE + ERISC_L1_ARGS_SIZE;
+  static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = ERISC_L1_KERNEL_CONFIG_BASE + ERISC_L1_KERNEL_CONFIG_SIZE;
   static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = MAX_L1_LOADING_SIZE - ERISC_L1_UNRESERVED_BASE;
 
   static_assert((ERISC_L1_UNRESERVED_BASE % 32) == 0);
