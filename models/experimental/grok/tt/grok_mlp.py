@@ -18,7 +18,7 @@ class TtGrokMLP(LightweightModule):
         self.model_args = args
         self.model_config = args.get_model_config()
 
-        base_name = lambda expert_num: f"layers.{layer_num}.moe_block.experts.{expert_num}"
+        base_name = lambda expert_num: f"model.layers.{layer_num}.moe_block.experts.{expert_num}"
         torch_weight = lambda name: torch.concat(
             [
                 self.state_dict[f"{base_name(expert_num)}.{name}.weight"].permute(1, 0).unsqueeze(0).unsqueeze(0)
@@ -30,7 +30,7 @@ class TtGrokMLP(LightweightModule):
             cache_name = lambda _: None
         else:
             cache_name = lambda name: args.weight_cache_path(dtypes[name]) / (
-                f"layers.{layer_num}.moe_block.experts.{name}"
+                f"model.layers.{layer_num}.moe_block.experts.{name}"
             )
         as_tensor = lambda name: ttnn.as_tensor(
             torch_weight(name),

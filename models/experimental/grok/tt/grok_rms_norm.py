@@ -27,7 +27,7 @@ class TtRMSNorm(LightweightModule):
         if layer_num is None:
             weight_name = f"{weight_key}.scale"
         else:
-            weight_name = f"layers.{layer_num}.{weight_key}.scale"
+            weight_name = f"model.layers.{layer_num}.{weight_key}.scale"
 
         torch_weight = self.state_dict[weight_name].unsqueeze(0).expand(32, -1)
 
@@ -71,7 +71,7 @@ class TtRMSNormSharded(LightweightModule):
         if layer_num is None:
             weight_name = f"{weight_key}.scale"
         else:
-            weight_name = f"layers.{layer_num}.{weight_key}.scale"
+            weight_name = f"model.layers.{layer_num}.{weight_key}.scale"
 
         torch_weight = (
             self.state_dict[weight_name].unsqueeze(0).view(1, 1, args.hidden_size).expand([1, 32, args.hidden_size])

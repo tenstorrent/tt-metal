@@ -17,13 +17,13 @@ class TtMoeLayer(LightweightModule):
         self.dtype = dtype
         self.model_config = args.get_model_config()
 
-        gate_name = f"layers.{layer_num}.moe_block.gate.weight"
+        gate_name = f"model.layers.{layer_num}.moe_block.gate.weight"
         if args.dummy_weights:
             cache_name = None
         else:
             cache_name = args.weight_cache_path(dtype) / (gate_name)
 
-        self.gates_H8 = ttnn.as_tensor(
+        self.gates_H_64 = ttnn.as_tensor(
             torch.nn.functional.pad(state_dict[gate_name].permute(1, 0), (1, 55), "constant", 0)
             .unsqueeze(0)
             .unsqueeze(0),
@@ -65,8 +65,8 @@ class TtMoeLayer(LightweightModule):
             mesh_mapper=ReplicateTensorToMesh(device_mesh),
         )
 
-        top2_mask = torch.full((1, 1, 32, 32), fill_value=torch.finfo(torch.float).min)
-        top2_mask[:, :, :, :2] = 0.0
+        top2_mask = torch.full((1, 1, 32, 32), fill_value=0.0)
+        top2_mask[:, :, :, :2] = 1.0
         self.top2_mask_11BB = ttnn.from_torch(
             top2_mask,
             dtype=ttnn.bfloat8_b,
@@ -74,6 +74,10 @@ class TtMoeLayer(LightweightModule):
             device=device_mesh,
             mesh_mapper=ReplicateTensorToMesh(device_mesh),
         )
+        self.softmax_compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
+        self.softmax_program_config = ttnn.experimental.operations.primary.transformers.SoftmaxDefaultProgramConfig()
 
     def forward(self, inputs):
         """
@@ -81,26 +85,36 @@ class TtMoeLayer(LightweightModule):
 
         Tensors are postfixed with 4 characters that represent their 4-D shape:
         B : batch_size (32)
-        H : dim (4096)
+        H : dim (6144)
         S : seq len (1)
         """
         input_i_1SBH = inputs
         expert_i_HH = self.experts
         # get logits for the experts
-        gate_logits_1SB8 = ttnn.experimental.operations.primary.matmul(
+        gate_logits_1SB_64 = ttnn.experimental.operations.primary.matmul(
             input_i_1SBH,
-            self.gates_H8,
+            self.gates_H_64,
             program_config=self.model_config["GATE_MM_OUTPUT_PROGCFG"],
             output_mem_config=self.model_config["GATE_MM_OUTPUT_MEMCFG"],
             compute_kernel_config=self.compute_kernel,
             output_dtype=ttnn.bfloat16,
         )
+
         # get weights for top-2 experts
-        gate_logits_1SB8 = ttnn.add(gate_logits_1SB8, self.top8_mask_11B_64)
-        ttl_topk_values, ttl_topk_indices = ttnn.experimental.operations.primary.topk(gate_logits_1SB8, 32)
-        ttl_topk_values = ttnn.add(ttl_topk_values, self.top2_mask_11BB)
-        mask_B2 = ttnn.eq(self.expert_mask_11BB, ttl_topk_indices)
-        weights_1SB1 = ttnn.sum(ttnn.softmax(ttl_topk_values, dim=-1) * mask_B2, dim=3)
+        gate_logits_1SB_64 = ttnn.add(gate_logits_1SB_64, self.top8_mask_11B_64)
+
+        # Grok does softmax before top-k, seems wrong but ¯\_(ツ)_/¯
+        gate_probs_1SB_64 = ttnn.softmax(gate_logits_1SB_64, dim=-1)
+        del gate_logits_1SB_64
+
+        ttl_topk_values, ttl_topk_indices = ttnn.experimental.operations.primary.topk(
+            gate_probs_1SB_64, 32
+        )  # selects 6, 5 as 8.1, 1.8
+        ttl_topk_values = ttl_topk_values * self.top2_mask_11BB  # masked unwanted ones to 0
+        mask_B2 = ttnn.eq(
+            self.expert_mask_11BB, ttl_topk_indices, dtype=ttnn.bfloat16
+        )  # Each device now masks for its own expert index 1-8
+        weights_1SB1 = ttnn.sum(ttl_topk_values * mask_B2, dim=3)
 
         # MLP and masking
         weights = expert_i_HH(input_i_1SBH)

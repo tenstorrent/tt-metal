@@ -257,6 +257,8 @@ class TtGrokAttention(LightweightModule):
 
         # Softmax and scaling
 
+        # TODO: attn_weights = self.max_attn_val * F.tanh(attn_weights / self.max_attn_val)
+
         attn_1B4P = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
             attn_1B4P,
             self.scale,

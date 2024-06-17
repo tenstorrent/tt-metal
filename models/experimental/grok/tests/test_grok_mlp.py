@@ -28,12 +28,13 @@ from models.utility_functions import (
 def test_grok_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     # Specify different dtypes for each feedForward weights
     dtypes = {
-        "linear": ttnn.bfloat8_b,
+        "linear": ttnn.bfloat4_b,
         "linear_1": ttnn.bfloat8_b,
-        "linear_v": ttnn.bfloat8_b,
+        "linear_v": ttnn.bfloat4_b,
     }
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=True)
+    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
     tt_model = TtGrokMLP(
@@ -45,14 +46,14 @@ def test_grok_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     )
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    key_start = "layers.0.moe_block.experts.0."
+    key_start = "model.layers.0.moe_block.experts.0."
     partial_state_dict = {k[len(key_start) :]: v for k, v in state_dict.items() if k.startswith(key_start)}
 
     reference_model = MoeMLP(hidden_dim=model_args.hidden_size, ffn_dim=model_args.intermediate_size)
     reference_model.load_state_dict(partial_state_dict)
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    key_start = "layers.0.pre_moe_norm."
+    key_start = "model.layers.0.pre_moe_norm."
     rms_state_dict = {k[len(key_start) :]: v for k, v in state_dict.items() if k.startswith(key_start)}
 
     rms = RMSNorm(hidden_size=model_args.hidden_size)
@@ -74,7 +75,7 @@ def test_grok_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     tt_output = tt_model(tt_input)
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
 
-    pcc_required = 0.99
+    pcc_required = 0.99  # random weights = 0.985
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))

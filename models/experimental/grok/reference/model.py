@@ -324,13 +324,28 @@ class MoeBlock(nn.Module):
         self.experts = nn.ModuleList([MoeMLP(hidden_dim, ffn_dim) for _ in range(num_experts)])
 
     def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor]:
+        log = {}
         batch_size, sequence_length, hidden_dim = hidden_states.shape
+        # log['hidden_states'] = hidden_states.clone()
+        # print(f'hidden_states: {hidden_states.shape}, {hidden_states.min()} < {hidden_states.mean()} < {hidden_states.max()}')
         hidden_states = hidden_states.view(-1, hidden_dim)
+        # log['hidden_states_view'] = hidden_states.clone()
+        # print(f'hidden_states_view: {hidden_states.shape}, {hidden_states.min()} < {hidden_states.mean()} < {hidden_states.max()}')
         # router_logits: (batch * sequence_length, n_experts)
         router_logits = self.gate(hidden_states)
+        # log['router_logits'] = router_logits.clone()
+        # print(f'router_logits: {router_logits.shape}, {router_logits.min()} < {router_logits.mean()} < {router_logits.max()}')
 
         routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
+        # log['routing_weights'] = routing_weights.clone()
+        # print(f'routing_weights: {routing_weights.shape}, {routing_weights.min()} < {routing_weights.mean()} < {routing_weights.max()}')
         routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
+        # log['routing_weights_topk'] = routing_weights.clone()
+        # log['selected_experts'] = selected_experts.clone()
+        # print(f'routing_weights_topk: {routing_weights.shape}, {routing_weights.min()} < {routing_weights.mean()} < {routing_weights.max()}')
+        # print(f'selected_experts: {selected_experts.shape}, {selected_experts}')
+        # torch.save(log, 'ref_log.pt')
+
         # we cast back to the input dtype
         routing_weights = routing_weights.to(hidden_states.dtype)
 

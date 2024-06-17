@@ -28,15 +28,16 @@ from models.utility_functions import (
 
 
 def test_grok_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds):
-    pcc = 0.99
+    pcc = 0.99  # random weights = 0.87
     iterations = 1
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=True)
+    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    key_start = "layers.0.moe_block."
+    key_start = "model.layers.0.moe_block."
     partial_state_dict = {k[len(key_start) :]: v for k, v in state_dict.items() if (k.startswith(key_start))}
     reference_model = MoeBlock(
         hidden_dim=model_args.hidden_size,
@@ -87,7 +88,6 @@ def test_grok_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
         )
-
         # Run TT model
         tt_out = tt_model(tt_decode_input)
         tt_output_torch = (

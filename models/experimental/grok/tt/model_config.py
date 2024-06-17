@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+from collections import defaultdict
+import json
 from pathlib import Path
 from loguru import logger
 import torch
@@ -89,17 +91,17 @@ class TtModelArgs:
                 self.DEFAULT_CKPT_DIR
             ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please use export GROK_CKPT_DIR=..."
             assert os.path.isfile(
-                self.DEFAULT_CKPT_DIR + "/repack_weights.pt"
-            ), f"Repacked weights {self.DEFAULT_CKPT_DIR + '/repack_weights.pt'} does not exist, please use export GROK_CKPT_DIR=..."
+                self.DEFAULT_CKPT_DIR + "/pytorch_model.bin.index.json"
+            ), f"Repacked weights {self.DEFAULT_CKPT_DIR + '/pytorch_model.bin.index.json'} does not exist, please use export GROK_CKPT_DIR=..."
             assert os.path.isfile(
-                self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
-            ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please use export GROK_TOKENIZER_PATH=..."
+                self.DEFAULT_TOKENIZER_PATH + "/tokenizer.json"
+            ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.json'} does not exist, please use export GROK_TOKENIZER_PATH=..."
             assert os.path.exists(
                 self.DEFAULT_CACHE_PATH
             ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please use export GROK_CACHE_PATH=..."
 
         logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
-        logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
+        logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.json'}")
         logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
         if dummy_weights:
             logger.info(f"Note: Using dummy weights, weight caching disabled")
@@ -107,8 +109,7 @@ class TtModelArgs:
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
         self.model_cache_path = Path(self.DEFAULT_CACHE_PATH)
         self.consolidated_weights_path = lambda i: str(self.model_base_path / f"consolidated.{i:02d}.pt")
-        self.tokenizer_path = self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
-        self.state_dict_path = str(self.model_base_path / "repack_weights.pt")
+        self.tokenizer_path = self.DEFAULT_TOKENIZER_PATH + "/tokenizer.json"
         self.instruct = instruct
         self.dummy_weights = dummy_weights
 
@@ -279,7 +280,7 @@ class TtModelArgs:
             per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
             per_core_N=16,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 32768
             fuse_batch=True,
-            fused_activation=ttnn.experimental.tensor.FusibleActivation.GELU,
+            fused_activation=(ttnn.experimental.tensor.FusibleActivation.GELU, True),  # FIXME: GET THIS DOCUMENTED
             mcast_in0=True,
         )
 
@@ -404,12 +405,23 @@ class TtModelArgs:
         if self.dummy_weights:
             reference_model = Grok1Model(config=grok1_config)
             state_dict = reference_model.state_dict()
-            state_dict = {k: torch.randn_like(v) for k, v in state_dict.items()}
+            state_dict = {f"model.{k}": torch.randn_like(v) for k, v in state_dict.items()}
         else:
-            state_dict = torch.load(self.state_dict_path)
+            with open(self.model_base_path / "pytorch_model.bin.index.json", "r") as f:
+                index = json.load(f)
+            required_files = set()
+            for layer, file in index["weight_map"].items():
+                layer_number = int(layer.split(".")[2]) if layer.startswith("model.layers.") else 0
+                if layer_number < self.n_layers:
+                    required_files.add(file)
+
+            state_dict = {}
+            for i, file in enumerate(sorted(required_files)):
+                logger.info(f"Loading weight file {i+1}/{len(required_files)}: {file}")
+                state_dict.update(torch.load(self.model_base_path / file))
 
         keys_dict = list(state_dict.keys())[:]
-        remv = [f"layers.{i}" for i in range(self.n_layers, 64)]
+        remv = [f"model.layers.{i}" for i in range(self.n_layers, 64)]
         for k in keys_dict:
             if any([r in k for r in remv]):
                 state_dict.pop(k)
