@@ -212,7 +212,7 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
 
 
 void InitDeviceProfiler(Device *device){
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     ZoneScoped;
 
     TracySetCpuTime (TracyGetCpuTime());
@@ -295,7 +295,7 @@ void InitDeviceProfiler(Device *device){
 }
 
 void DumpDeviceProfileResults(Device *device, bool lastDump) {
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     std::vector<CoreCoord> workerCores;
     auto device_id = device->id();
     auto device_num_hw_cqs = device->num_hw_cqs();
@@ -313,7 +313,7 @@ void DumpDeviceProfileResults(Device *device, bool lastDump) {
 
 
 void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cores, bool lastDump){
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     ZoneScoped;
 
     if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores()) {
@@ -428,7 +428,7 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
 }
 
 void SetDeviceProfilerDir(std::string output_dir){
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     for (auto& device_id : tt_metal_device_profiler_map)
     {
         tt_metal_device_profiler_map.at(device_id.first).setOutputDir(output_dir);
@@ -437,7 +437,7 @@ void SetDeviceProfilerDir(std::string output_dir){
 }
 
 void FreshProfilerDeviceLog(){
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     for (auto& device_id : tt_metal_device_profiler_map)
     {
         tt_metal_device_profiler_map.at(device_id.first).setNewLogFlag(true);

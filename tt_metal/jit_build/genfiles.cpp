@@ -481,7 +481,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "};" << endl;
     ss << endl;
 
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     /*
      * This part is adding the 2D array for sharing the flat IDs soc descriptor has assigned to every NOC coordinate,
      * and the ceiled number of cores per DRAM banks.

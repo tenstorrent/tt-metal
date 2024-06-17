@@ -65,6 +65,7 @@ message(STATUS "Build Python bindings: ${WITH_PYTHON_BINDINGS}")
 
 option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
 option(TT_METAL_VERSIM_DISABLED "Disable TT_METAL_VERSIM" ON)
+option(ENABLE_TRACY "Enable Tracy Profiling" OFF)
 
 # Default to building everything as a shared lib
 if($ENV{TT_METAL_CREATE_STATIC_LIB})
@@ -134,11 +135,7 @@ endif()
 if(ENABLE_CODE_TIMERS)
     target_compile_options(compiler_flags INTERFACE -DTT_ENABLE_CODE_TIMERS)
 endif()
-if($ENV{ENABLE_PROFILER})
-    message(STATUS "PROFILER ENABLED")
-    target_compile_options(compiler_flags INTERFACE -DPROFILER)
-endif()
-if($ENV{ENABLE_TRACY})
+if(ENABLE_TRACY)
     target_compile_options(compiler_flags INTERFACE -DTRACY_ENABLE -fno-omit-frame-pointer)
     target_link_options(linker_flags INTERFACE -rdynamic)
 endif()
@@ -177,7 +174,7 @@ endif()
 ############################################################################################################################
 # Build subdirectories
 ############################################################################################################################
-if($ENV{ENABLE_TRACY})
+if(ENABLE_TRACY)
     include(${PROJECT_SOURCE_DIR}/cmake/tracy.cmake)
 endif()
 

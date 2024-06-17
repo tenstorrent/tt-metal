@@ -11,7 +11,7 @@ if [[ -z "$ARCH_NAME" ]]; then
     exit 1
 fi
 
-ENABLE_TRACY=1 ENABLE_PROFILER=1 cmake -B build -G Ninja
+cmake -B build -G Ninja -DENABLE_TRACY=ON
 
 if [[ $1 == "NO_CLEAN" ]]; then
     cmake --build build
@@ -22,4 +22,3 @@ fi
 
 cmake --build build --target install
 cmake --build build --target programming_examples
-./create_venv.sh

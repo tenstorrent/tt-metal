@@ -23,11 +23,11 @@ Notes:
     - `cmake --build build --target install` is the EXACT same as running `ninja install -C build`, you would use the cmake command if you want to be
         agnostic of the build system (Ninja or Make)
 
-Different configs: to change build type or use profiler/tracy, you have to change the configuration cmake step (step #2)
+Different configs: to change build type or use tracy, you have to change the configuration cmake step (step #2)
     - changing build types: `CONFIG=<type> cmake -B build -G Ninja`
         - valid build_types: `Release`, `Debug`, `RelWithDebInfo`
         - Release is the default if you do not set CONFIG
-    - tracy + profiler: `ENABLE_PROFILER=1 ENABLE_TRACY=1 cmake -B build -G Ninja`
+    - tracy: `cmake -B build -G Ninja -DENABLE_TRACY=ON`
 
 Now you can have multiple build folders with different configs, if you want to switch just run `ninja install -C <your_build_folder` to install different pybinds
     - Caveats:
