@@ -2,14 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
+#include "tt_eager/tt_dnn/kernels/compute/moreh_common.hpp"
 
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
-#include "compute_kernel_api/mask.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tile_move_copy.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -90,11 +84,11 @@ void MAIN {
             cb_wait_front(cb_dy, onetile);  // comes from the reader
             cb_reserve_back(cb_dycopy, onetile);
 
-            copy_tile_init();
+            copy_tile_init_with_dt(cb_dy);
             copy_tile(cb_dy, 0, dst0);
 
             if (do_mask_h && ((h_idx + 1) % origin_Ht == 0)) {
-                copy_tile_init();
+                copy_tile_init_with_dt(cb_mask_h);
                 copy_tile(cb_mask_h, 0, dst1);
 
                 mask_tile_init();
@@ -102,7 +96,7 @@ void MAIN {
             }
 
             if (do_mask_w && ((w_idx + 1) % origin_Wt == 0)) {
-                copy_tile_init();
+                copy_tile_init_with_dt(cb_mask_w);
                 copy_tile(cb_mask_w, 0, dst1);
 
                 mask_tile_init();
@@ -111,7 +105,7 @@ void MAIN {
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile(dst0, cb_dycopy);
+            pack_tile_with_dt(dst0, cb_dycopy);
 
             cb_pop_front(cb_dy, onetile);
             cb_push_back(cb_dycopy, onetile);
@@ -124,12 +118,12 @@ void MAIN {
                     tile_regs_acquire();
                     cb_reserve_back(cb_dyadd, onetile);
 
-                    copy_tile_init();
+                    copy_tile_init_with_dt(cb_dycopy);
                     copy_tile(cb_dycopy, 0, dst0);
                     tile_regs_commit();
 
                     tile_regs_wait();
-                    pack_tile(dst0, cb_dyadd);
+                    pack_tile_with_dt(dst0, cb_dyadd);
 
                     cb_push_back(cb_dyadd, onetile);
                     tile_regs_release();
@@ -138,12 +132,12 @@ void MAIN {
                     cb_wait_front(cb_dyadd, onetile);
                     cb_reserve_back(cb_dyadd, onetile);
 
-                    add_tiles_init();
+                    add_tiles_init_with_dt(cb_dyadd, cb_dycopy);
                     add_tiles(cb_dyadd, cb_dycopy, 0, 0, dst0);
                     tile_regs_commit();
 
                     tile_regs_wait();
-                    pack_tile(dst0, cb_dyadd);
+                    pack_tile_with_dt(dst0, cb_dyadd);
 
                     cb_pop_front(cb_dyadd, onetile);
                     cb_push_back(cb_dyadd, onetile);
@@ -161,15 +155,15 @@ void MAIN {
                 cb_reserve_back(cb_xmm, onetile);
 
                 if (is_lastdim_layernorm) {
-                    sub_bcast_cols_init_short();
+                    sub_bcast_cols_init_short_with_dt(cb_x, cb_mean);
                     sub_tiles_bcast_cols(cb_x, cb_mean, 0, 0, dst0);
                 } else {
-                    sub_tiles_bcast_scalar_init_short();
+                    sub_tiles_bcast_scalar_init_short_with_dt(cb_x, cb_mean);
                     sub_tiles_bcast_scalar(cb_x, cb_mean, 0, 0, dst0);
                 }
 
                 if (do_mask_h && ((h_idx + 1) % origin_Ht == 0)) {
-                    copy_tile_init();
+                    copy_tile_init_with_dt(cb_mask_h);
                     copy_tile(cb_mask_h, 0, dst1);
 
                     mask_tile_init();
@@ -177,7 +171,7 @@ void MAIN {
                 }
 
                 if (do_mask_w && ((w_idx + 1) % origin_Wt == 0)) {
-                    copy_tile_init();
+                    copy_tile_init_with_dt(cb_mask_w);
                     copy_tile(cb_mask_w, 0, dst1);
 
                     mask_tile_init();
@@ -186,7 +180,7 @@ void MAIN {
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_tile(dst0, cb_xmm);
+                pack_tile_with_dt(dst0, cb_xmm);
 
                 cb_pop_front(cb_x, onetile);
                 cb_pop_front(cb_mean, onetile);
@@ -201,16 +195,16 @@ void MAIN {
                 cb_reserve_back(cb_y, onetile);
 
                 if (is_lastdim_layernorm) {
-                    mul_bcast_cols_init_short();
+                    mul_bcast_cols_init_short_with_dt(cb_xmm, cb_rstd);
                     mul_tiles_bcast_cols(cb_xmm, cb_rstd, 0, 0, dst0);
                 } else {
-                    mul_tiles_bcast_scalar_init_short();
+                    mul_tiles_bcast_scalar_init_short_with_dt(cb_xmm, cb_rstd);
                     mul_tiles_bcast_scalar(cb_xmm, cb_rstd, 0, 0, dst0);
                 }
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_tile(dst0, cb_y);
+                pack_tile_with_dt(dst0, cb_y);
 
                 cb_pop_front(cb_xmm, onetile);
                 cb_pop_front(cb_rstd, onetile);
@@ -222,12 +216,12 @@ void MAIN {
                 cb_wait_front(cb_y, onetile);
                 cb_reserve_back(cb_ydy, onetile);
 
-                mul_tiles_init();
+                mul_tiles_init_with_dt(cb_y, cb_dycopy);
                 mul_tiles(cb_y, cb_dycopy, 0, 0, dst0);
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_tile(dst0, cb_ydy);
+                pack_tile_with_dt(dst0, cb_ydy);
 
                 cb_pop_front(cb_y, onetile);
                 cb_push_back(cb_ydy, onetile);
@@ -239,12 +233,12 @@ void MAIN {
                     cb_wait_front(cb_ydy, onetile);
                     cb_reserve_back(cb_ydyadd, onetile);
 
-                    copy_tile_init();
+                    copy_tile_init_with_dt(cb_ydy);
                     copy_tile(cb_ydy, 0, dst0);
                     tile_regs_commit();
 
                     tile_regs_wait();
-                    pack_tile(dst0, cb_ydyadd);
+                    pack_tile_with_dt(dst0, cb_ydyadd);
 
                     cb_pop_front(cb_ydy, onetile);
                     cb_push_back(cb_ydyadd, onetile);
@@ -255,12 +249,12 @@ void MAIN {
                     cb_wait_front(cb_ydyadd, onetile);
                     cb_reserve_back(cb_ydyadd, onetile);
 
-                    add_tiles_init();
+                    add_tiles_init_with_dt(cb_ydyadd, cb_ydy);
                     add_tiles(cb_ydyadd, cb_ydy, 0, 0, dst0);
                     tile_regs_commit();
 
                     tile_regs_wait();
-                    pack_tile(dst0, cb_ydyadd);
+                    pack_tile_with_dt(dst0, cb_ydyadd);
 
                     cb_pop_front(cb_ydy, onetile);
                     cb_pop_front(cb_ydyadd, onetile);
@@ -280,18 +274,18 @@ void MAIN {
 
             if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[y * dy]
-                reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+                reduce_init_delta_with_dt<false>(REDUCE_OP, REDUCE_DIM, cb_dgamma, cb_ydyadd, cb_scaler);
                 reduce_tile(cb_ydyadd, cb_scaler, 0, 0, dst0);
-                reduce_revert_delta();
+                reduce_revert_delta(cb_dgamma);
             } else {
                 // Just copy
-                copy_tile_init();
+                copy_tile_init_with_dt(cb_ydyadd);
                 copy_tile(cb_ydyadd, 0, dst0);
             }
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile(dst0, cb_dgamma);
+            pack_tile_with_dt(dst0, cb_dgamma);
 
             cb_pop_front(cb_ydyadd, onetile);
             cb_push_back(cb_dgamma, onetile);
@@ -306,18 +300,18 @@ void MAIN {
 
             if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[dy]
-                reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+                reduce_init_delta_with_dt<false>(REDUCE_OP, REDUCE_DIM, cb_dbeta, cb_dyadd, cb_scaler);
                 reduce_tile(cb_dyadd, cb_scaler, 0, 0, dst0);
-                reduce_revert_delta();
+                reduce_revert_delta(cb_dbeta);
             } else {
                 // Just copy
-                copy_tile_init();
+                copy_tile_init_with_dt(cb_dyadd);
                 copy_tile(cb_dyadd, 0, dst0);
             }
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile(dst0, cb_dbeta);
+            pack_tile_with_dt(dst0, cb_dbeta);
 
             cb_pop_front(cb_dyadd, onetile);
             cb_push_back(cb_dbeta, onetile);

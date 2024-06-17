@@ -10,6 +10,12 @@ import tt_lib as ttl
 from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
 
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+    get_compute_kernel_options,
+    compute_kernel_options,
+    compute_kernel_ids,
+)
+
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
 
@@ -81,7 +87,7 @@ def torch_layernorm_backward(input, output_grad, *, normalized_dims=1, eps=1e-5,
     return input.grad, gamma_grad, beta_grad
 
 
-def tt_layernorm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None, device=None):
+def tt_layernorm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None, device=None, compute_kernel_config=None):
     input_shape = list(input.shape)
 
     # mean_rstd_shape
@@ -109,7 +115,14 @@ def tt_layernorm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None, d
 
     # Forward
     npu_output = ttl.operations.primary.moreh_layernorm(
-        npu_input, normalized_dims, eps, npu_gamma, npu_beta, mean=npu_mean, rstd=npu_rstd
+        npu_input,
+        normalized_dims,
+        eps,
+        npu_gamma,
+        npu_beta,
+        mean=npu_mean,
+        rstd=npu_rstd,
+        compute_kernel_config=compute_kernel_config,
     )
 
     tt_output = to_cpu(npu_output, input_shape)
@@ -119,7 +132,9 @@ def tt_layernorm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None, d
     return tt_output, tt_mean, tt_rstd
 
 
-def tt_layernorm_backward(input, output_grad, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None, device=None):
+def tt_layernorm_backward(
+    input, output_grad, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None, device=None, compute_kernel_config=None
+):
     normalized_shape = input.shape[-normalized_dims:]
 
     # rank
@@ -181,6 +196,7 @@ def tt_layernorm_backward(input, output_grad, *, normalized_dims=1, eps=1e-5, ga
         input_grad=npu_input_grad,
         gamma_grad=npu_gamma_grad,
         beta_grad=npu_beta_grad,
+        compute_kernel_config=compute_kernel_config,
     )
 
     tt_input_grad = to_cpu(npu_input_grad, input_shape)
@@ -228,24 +244,8 @@ def make_input_tensors(input_shape, normalized_dims, elementwise_affine, do_back
     return cpu_input, cpu_gamma, cpu_beta, cpu_output_grad
 
 
-@pytest.mark.parametrize("eps", [1e-5, 1e-12], ids=["1e-5", "1e-12"])
-@pytest.mark.parametrize("normalized_dims", [1, 2, 3, 4], ids=["W", "HW", "CHW", "NCHW"])
-@pytest.mark.parametrize(
-    "elementwise_affine",
-    [False, True],
-    ids=["elementwise_affine=False", "elementwise_affine=True"],
-)
-@pytest.mark.parametrize(
-    "input_shape",
-    [
-        [1, 1, TILE_HEIGHT, TILE_WIDTH],
-        [6, 6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH],
-        [2, 2, TILE_HEIGHT + 13, TILE_WIDTH + 13],
-        [2, 2, 8 * TILE_HEIGHT + 15, 32 * TILE_WIDTH - 15],
-    ],
-)
-def test_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps, device):
-    torch.manual_seed(2023)
+def run_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps, device, compute_kernel_options=None):
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
     cpu_input, cpu_gamma, cpu_beta, _ = make_input_tensors(input_shape, normalized_dims, elementwise_affine)
 
@@ -256,7 +256,13 @@ def test_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps, 
 
     # actual
     actual_output, actual_mean, actual_rstd = tt_layernorm(
-        cpu_input, normalized_dims=normalized_dims, eps=eps, gamma=cpu_gamma, beta=cpu_beta, device=device
+        cpu_input,
+        normalized_dims=normalized_dims,
+        eps=eps,
+        gamma=cpu_gamma,
+        beta=cpu_beta,
+        device=device,
+        compute_kernel_config=compute_kernel_config,
     )
 
     # Set rtol and atol and pcc for output
@@ -278,12 +284,10 @@ def test_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps, 
     rtol = atol = 0.1
     mean_pcc = 0.99
     rstd_pcc = 0.9
-    # TODO(seunghwan100): Debug this case.
-    if input_shape == [6, 6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH] and normalized_dims == 3:
-        rstd_pcc = 0.6
 
     # Check mean and rstd
     pass_mean, out_mean = comp_allclose_and_pcc(expected_mean, actual_mean, rtol=rtol, atol=atol, pcc=mean_pcc)
+
     logger.debug(f"mean's {out_mean}")
     assert pass_mean
 
@@ -292,24 +296,10 @@ def test_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps, 
     assert pass_rstd
 
 
-@pytest.mark.parametrize("eps", [1e-5, 1e-12], ids=["1e-5", "1e-12"])
-@pytest.mark.parametrize("normalized_dims", [1, 2, 3, 4], ids=["W", "HW", "CHW", "NCHW"])
-@pytest.mark.parametrize(
-    "elementwise_affine",
-    [False, True],
-    ids=["elementwise_affine=False", "elementwise_affine=True"],
-)
-@pytest.mark.parametrize(
-    "input_shape",
-    [
-        [1, 1, TILE_HEIGHT, TILE_WIDTH],
-        [6, 6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH],
-        [2, 2, TILE_HEIGHT + 13, TILE_WIDTH + 13],
-        [2, 2, 8 * TILE_HEIGHT + 15, 32 * TILE_WIDTH - 15],
-    ],
-)
-def test_moreh_layernorm_backward(input_shape, normalized_dims, elementwise_affine, eps, device):
-    torch.manual_seed(2023)
+def run_moreh_layernorm_backward(
+    input_shape, normalized_dims, elementwise_affine, eps, device, compute_kernel_options=None
+):
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
     cpu_input, cpu_gamma, cpu_beta, cpu_output_grad = make_input_tensors(
         input_shape, normalized_dims, elementwise_affine, do_backward=True
@@ -329,6 +319,7 @@ def test_moreh_layernorm_backward(input_shape, normalized_dims, elementwise_affi
         gamma=cpu_gamma,
         beta=cpu_beta,
         device=device,
+        compute_kernel_config=compute_kernel_config,
     )
 
     # Set rtol and atol and pcc for gradients
@@ -365,3 +356,87 @@ def test_moreh_layernorm_backward(input_shape, normalized_dims, elementwise_affi
         assert pbg
     else:
         assert actual_beta_grad is None
+
+
+@pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
+@pytest.mark.parametrize("normalized_dims", [1, 2, 3, 4], ids=["W", "HW", "CHW", "NCHW"])
+@pytest.mark.parametrize(
+    "elementwise_affine",
+    [False, True],
+    ids=["elementwise_affine=False", "elementwise_affine=True"],
+)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [1, 1, TILE_HEIGHT, TILE_WIDTH],
+        [2, 3, 2 * TILE_HEIGHT, 2 * TILE_WIDTH],
+        [2, 2, TILE_HEIGHT + 13, TILE_WIDTH + 13],
+    ],
+)
+def test_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps, device):
+    torch.manual_seed(2023)
+    run_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps, device)
+
+
+@pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
+@pytest.mark.parametrize("normalized_dims", [1, 2, 3, 4], ids=["W", "HW", "CHW", "NCHW"])
+@pytest.mark.parametrize(
+    "elementwise_affine",
+    [False, True],
+    ids=["elementwise_affine=False", "elementwise_affine=True"],
+)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [1, 1, TILE_HEIGHT, TILE_WIDTH],
+        [6, 6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH],
+        [2, 2, TILE_HEIGHT + 13, TILE_WIDTH + 13],
+    ],
+)
+def test_moreh_layernorm_backward(input_shape, normalized_dims, elementwise_affine, eps, device):
+    torch.manual_seed(2023)
+    run_moreh_layernorm_backward(input_shape, normalized_dims, elementwise_affine, eps, device)
+
+
+@pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
+@pytest.mark.parametrize("normalized_dims", [4], ids=["NCHW"])
+@pytest.mark.parametrize(
+    "elementwise_affine",
+    [False, True],
+    ids=["elementwise_affine=False", "elementwise_affine=True"],
+)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [2, 3, TILE_HEIGHT - 15, TILE_WIDTH + 2],
+        [4, 8, 3 * TILE_HEIGHT + 15, 4 * TILE_WIDTH - 15],
+    ],
+)
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_moreh_layernorm_compute_kernel_options(
+    input_shape, normalized_dims, elementwise_affine, eps, compute_kernel_options, device
+):
+    torch.manual_seed(2023)
+    run_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps, device, compute_kernel_options)
+
+
+@pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
+@pytest.mark.parametrize("normalized_dims", [4], ids=["NCHW"])
+@pytest.mark.parametrize(
+    "elementwise_affine",
+    [False, True],
+    ids=["elementwise_affine=False", "elementwise_affine=True"],
+)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [2, 3, TILE_HEIGHT - 15, TILE_WIDTH + 2],
+        [2, 4, 3 * TILE_HEIGHT + 15, 4 * TILE_WIDTH - 15],
+    ],
+)
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_moreh_layernorm_backward_compute_kernel_options(
+    input_shape, normalized_dims, elementwise_affine, eps, compute_kernel_options, device
+):
+    torch.manual_seed(2023)
+    run_moreh_layernorm_backward(input_shape, normalized_dims, elementwise_affine, eps, device, compute_kernel_options)

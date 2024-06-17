@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_eager/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
+
 #include <functional>
 #include <map>
 #include <optional>
@@ -12,7 +14,6 @@
 #include "tt_eager/tensor/tensor.hpp"
 #include "tt_eager/tensor/tensor_impl.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -53,7 +54,8 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> beta,
     const std::optional<const Tensor> mean,
-    const std::optional<const Tensor> rstd) {
+    const std::optional<const Tensor> rstd,
+    const DeviceComputeKernelConfig compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -106,12 +108,6 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const auto Ht = H / TILE_HEIGHT;
     const auto Wt = W / TILE_WIDTH;
 
-    // This could be inefficient.
-    // If Wt is 65, the block_size will be 5. Then, the number of iteration is 13.
-    // It can be 8 * 8 + 1, so the number of iterations is 9. It's more efficient.
-    constexpr uint32_t MAX_BLOCK_SIZE = 8;
-    const uint32_t block_size = find_divisor_with_max_block_size(Wt, MAX_BLOCK_SIZE);
-
     const auto gamma_has_value = gamma.has_value();
     const auto beta_has_value = beta.has_value();
     const auto mean_has_value = mean.has_value();
@@ -141,6 +137,19 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
          num_rows_per_core_group_1,
          num_rows_per_core_group_2] = tt_metal::split_work_to_cores(grid, NCHt);
 
+    auto arch = input.device()->arch();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+        get_compute_kernel_config_args(arch, compute_kernel_config);
+
+    // This could be inefficient.
+    // If Wt is 65, the block_size will be 5. Then, the number of iteration is 13.
+    // It can be 8 * 8 + 1, so the number of iterations is 9. It's more efficient.
+    uint32_t MAX_BLOCK_SIZE = 4;
+    if (fp32_dest_acc_en) {
+        MAX_BLOCK_SIZE = 2;
+    }
+    const uint32_t block_size = find_divisor_with_max_block_size(Wt, MAX_BLOCK_SIZE);
+
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -167,10 +176,12 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
 
     const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
+    const auto intermed_single_tile_size = tt_metal::detail::TileSize(intermed_cb_format);
 
-    const uint32_t cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t +
-                               im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) *
-                              single_tile_size;
+    const uint32_t cb_usage =
+        (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t) * single_tile_size +
+        (im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) * intermed_single_tile_size;
     const uint32_t available_L1 = device->l1_size_per_core() - L1_UNRESERVED_BASE;
     const bool use_large_algorithm = cb_usage >= available_L1;
 
@@ -188,24 +199,24 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
         all_cores,
         cb_data_format,
         {
-            {CB::c_in0, in0_t},        // input
-            {CB::c_in1, in1_t},        // scaler
-            {CB::c_in2, in2_t},        // epsilon
-            {CB::c_in3, in3_t},        // gamma
-            {CB::c_in4, in4_t},        // beta
-            {CB::c_in5, in5_t},        // mask_h
-            {CB::c_in6, in6_t},        // mask_w
-            {CB::c_out0, out0_t},      // output
-            {CB::c_out1, out1_t},      // mean
-            {CB::c_out2, out2_t},      // rstd
-            {CB::c_intermed0, im0_t},  // E[x]
-            {CB::c_intermed1, im1_t},  // x - E[x]
-            {CB::c_intermed2, im2_t},  // (x - E[x])^2
-            {CB::c_intermed3, im3_t},  // Sum[(x - E[x])^2]
-            {CB::c_intermed4, im4_t},  // E[(x - E[x])^2] = Var[x]
-            {CB::c_intermed5, im5_t},  // 1.0/(sqrt(Var[x] + eps))
-            {CB::c_intermed6, im6_t},  // y * gamm + beta
-            {CB::c_intermed7, im7_t},  // Sum[x]
+            {CB::c_in0, in0_t},                            // input
+            {CB::c_in1, in1_t},                            // scaler
+            {CB::c_in2, in2_t},                            // epsilon
+            {CB::c_in3, in3_t},                            // gamma
+            {CB::c_in4, in4_t},                            // beta
+            {CB::c_in5, in5_t},                            // mask_h
+            {CB::c_in6, in6_t},                            // mask_w
+            {CB::c_out0, out0_t},                          // output
+            {CB::c_out1, out1_t},                          // mean
+            {CB::c_out2, out2_t},                          // rstd
+            {CB::c_intermed0, im0_t, intermed_cb_format},  // E[x]
+            {CB::c_intermed1, im1_t, intermed_cb_format},  // x - E[x]
+            {CB::c_intermed2, im2_t, intermed_cb_format},  // (x - E[x])^2
+            {CB::c_intermed3, im3_t, intermed_cb_format},  // Sum[(x - E[x])^2]
+            {CB::c_intermed4, im4_t, intermed_cb_format},  // E[(x - E[x])^2] = Var[x]
+            {CB::c_intermed5, im5_t, intermed_cb_format},  // 1.0/(sqrt(Var[x] + eps))
+            {CB::c_intermed6, im6_t, intermed_cb_format},  // y * gamm + beta
+            {CB::c_intermed7, im7_t, intermed_cb_format},  // Sum[x]
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -226,6 +237,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
         block_size};
 
     std::map<string, string> reader_defines{};
+    std::map<std::string, std::string> compute_defines{};
     if (gamma_has_value) {
         reader_defines["GAMMA_HAS_VALUE"] = "1";
     }
@@ -238,6 +250,16 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     if (do_mask_w) {
         reader_defines["DO_MASK_W"] = "1";
     }
+    compute_defines["REDUCE_OP"] = "PoolType::SUM";
+    if (is_lastdim_layernorm) {
+        compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
+    } else {
+        compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
+    }
+    if (fp32_dest_acc_en) {
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
+    }
 
     const auto reader_kernel_file =
         use_large_algorithm ? "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/reader_moreh_layernorm_large.cpp"
@@ -247,17 +269,6 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const auto reader_kernels_id =
         CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
     const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      ComputeKernel SetUp
-    ////////////////////////////////////////////////////////////////////////////
-    std::map<std::string, std::string> compute_defines{};
-    compute_defines["REDUCE_OP"] = "PoolType::SUM";
-    if (is_lastdim_layernorm) {
-        compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
-    } else {
-        compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
-    }
 
     const std::vector<uint32_t> compute_args_group_1{
         num_rows_per_core_group_1,
@@ -277,7 +288,14 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
                             : "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_small_kernel.cpp";
 
     CreateComputeKernel(
-        program, compute_kernel_file, {core_group_1, num_rows_per_core_group_1, compute_args_group_1}, compute_defines);
+        program,
+        compute_kernel_file,
+        {core_group_1, num_rows_per_core_group_1, compute_args_group_1},
+        compute_defines,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode);
+
 
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{
@@ -297,7 +315,10 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
             program,
             compute_kernel_file,
             {core_group_2, num_rows_per_core_group_2, compute_args_group_2},
-            compute_defines);
+            compute_defines,
+            math_fidelity,
+            fp32_dest_acc_en,
+            math_approx_mode);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -489,7 +510,8 @@ operation::ProgramWithCallbacks MorehLayerNorm::create_program(
 
     auto& output = output_tensors.at(0);
 
-    return moreh_layernorm_impl(input, this->normalized_dims, this->eps, output, gamma, beta, mean, rstd);
+    return moreh_layernorm_impl(
+        input, this->normalized_dims, this->eps, output, gamma, beta, mean, rstd, this->compute_kernel_config);
 }
 
 Tensor moreh_layernorm(
@@ -500,18 +522,26 @@ Tensor moreh_layernorm(
     const std::optional<const Tensor> beta,
     const std::optional<const Tensor> mean,
     const std::optional<const Tensor> rstd,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& output_mem_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<Tensor> output_tensors = {
         Tensor(operation::get_workers_for_op_output({input}, {gamma, beta, mean, rstd}))};
 
+    auto device = input.device();
+    auto compute_kernel_config_val =
+        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+
     operation::launch_op(
-        [normalized_dims, eps, output_mem_config](
+        [normalized_dims, eps, output_mem_config, compute_kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(
                 MorehLayerNorm{
-                    .normalized_dims = normalized_dims, .eps = eps, .output_mem_config = std::move(output_mem_config)},
+                    .normalized_dims = normalized_dims,
+                    .eps = eps,
+                    .output_mem_config = std::move(output_mem_config),
+                    .compute_kernel_config = compute_kernel_config_val},
                 input_tensors,
                 optional_input_tensors,
                 optional_output_tensors);
@@ -537,18 +567,27 @@ Tensor moreh_layernorm(
     const std::optional<const Tensor> beta,
     const std::optional<const Tensor> mean,
     const std::optional<const Tensor> rstd,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& output_mem_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<Tensor> output_tensors = {
         Tensor(operation::get_workers_for_op_output({input}, {gamma, beta, mean, rstd}))};
 
+    auto device = input.device();
+
+    auto compute_kernel_config_val =
+        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+
     operation::launch_op(
-        [normalized_dims, eps, output_mem_config](
+        [normalized_dims, eps, output_mem_config, compute_kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(
                 operations::primary::MorehLayerNorm{
-                    .normalized_dims = normalized_dims, .eps = eps, .output_mem_config = std::move(output_mem_config)},
+                    .normalized_dims = normalized_dims,
+                    .eps = eps,
+                    .output_mem_config = std::move(output_mem_config),
+                    .compute_kernel_config = compute_kernel_config_val},
                 input_tensors,
                 optional_input_tensors,
                 optional_output_tensors);

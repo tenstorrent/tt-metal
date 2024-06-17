@@ -19,9 +19,9 @@ void kernel_main() {
     constexpr bool rstd_has_value = get_compile_time_arg_val(4) == 1;
     constexpr uint32_t block_size = get_compile_time_arg_val(5);
 
-    constexpr uint32_t cb_id_output = 16;
-    constexpr uint32_t cb_id_mean = 17;
-    constexpr uint32_t cb_id_rstd = 18;
+    constexpr uint32_t cb_id_output = tt::CB::c_out0;
+    constexpr uint32_t cb_id_mean = tt::CB::c_out1;
+    constexpr uint32_t cb_id_rstd = tt::CB::c_out2;
 
     // output
     const uint32_t output_tile_bytes = get_tile_size(cb_id_output);
@@ -78,6 +78,7 @@ void kernel_main() {
             noc_async_write_barrier();
             cb_pop_front(cb_id_output, block_size);
         }  // wt loop
+
         offs += Wt;
     }  // ncht loop
 }  // void kernel_main()
