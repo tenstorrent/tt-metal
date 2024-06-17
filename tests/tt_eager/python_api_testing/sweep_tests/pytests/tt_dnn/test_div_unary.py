@@ -24,7 +24,7 @@ mem_configs = [
 ]
 
 
-@pytest.mark.parametrize("accurate_mode", [False, True])
+@pytest.mark.parametrize("accurate_mode", [True])
 @pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
@@ -35,47 +35,40 @@ mem_configs = [
     ],
 )
 @pytest.mark.parametrize(
+    "scalar",
+    {random.uniform(-100, 100) for _ in range(3)},
+)
+@pytest.mark.parametrize(
     "dst_mem_config",
     mem_configs,
 )
 @skip_for_grayskull("#ToDo: GS implementation needs to be done for floor and trunc")
-class TestDiv:
-    def test_run_div(
+class TestUnary_Div:
+    def test_run_unary_div(
         self,
         accurate_mode,
         round_mode,
         input_shapes,
+        scalar,
         dst_mem_config,
         device,
     ):
-        if accurate_mode == False:  # If input_b is non-zero tensor
-            datagen_func = [
-                generation_funcs.gen_func_with_cast(
-                    partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16
-                )
-            ] + [
-                generation_funcs.gen_func_with_cast(
-                    partial(generation_funcs.gen_rand, low=-1e6, high=-1), torch.bfloat16
-                )
-            ]
-        else:
-            datagen_func = [
-                generation_funcs.gen_func_with_cast(
-                    partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16
-                )
-            ] * 2
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16)
+        ] * 2
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(
             {
                 "accurate_mode": accurate_mode,
                 "round_mode": round_mode,
+                "scalar": scalar,
             }
         )
         test_args.update({"output_mem_config": dst_mem_config})
         comparison_func = comparison_funcs.comp_pcc
 
         run_single_pytorch_test(
-            "eltwise-div",
+            "eltwise-unary_div",
             input_shapes,
             datagen_func,
             comparison_func,
