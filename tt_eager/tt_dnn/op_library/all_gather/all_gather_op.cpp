@@ -8,7 +8,6 @@
 #include "tt_metal/host_api.hpp"
 
 #include "tensor/tensor_utils.hpp"
-#include "third_party/magic_enum/magic_enum.hpp"
 
 #include "eth_l1_address_map.h"
 

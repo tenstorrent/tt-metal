@@ -7,7 +7,6 @@
 #include <optional>
 #include <tt_eager/tensor/tensor.hpp>
 
-#include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_dnn/op_library/operation_history.hpp"

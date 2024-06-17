@@ -71,21 +71,6 @@ uint32_t _get_maximum_block_dim(int32_t block_dim, int32_t in0_block_w) {
     return 0;
 }
 
-inline const std::vector<float> unpack_uint32_vec_into_float_vec(
-    const std::vector<std::uint32_t>& data,
-    std::function<bfloat16(const bfloat16 &)> transform = bfloat16_identity_transform
-) {
-    std::vector<float> result;
-    for(auto i = 0 ; i < data.size(); i++) {
-        auto unpacked = unpack_two_bfloat16_from_uint32(data[i]);
-        auto d1 = static_cast<double>(transform(unpacked.first).to_float());
-        auto d2 = static_cast<double>(transform(unpacked.second).to_float());
-        result.push_back(d1);
-        result.push_back(d2);
-    }
-    return result;
-}
-
 inline float check_bfloat16_vector_pcc(const vector<bfloat16> &vec_a, const vector<bfloat16> &vec_b)
 {
     // Calculate the mean of x and y values

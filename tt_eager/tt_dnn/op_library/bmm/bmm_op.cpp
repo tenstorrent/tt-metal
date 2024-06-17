@@ -9,13 +9,11 @@
 #include <optional>
 #include <numeric>
 
-#include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_values.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/types.hpp"
 
 using namespace tt::constants;
