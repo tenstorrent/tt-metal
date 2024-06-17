@@ -52,12 +52,11 @@ struct address_map {
   static constexpr uint32_t ISSUE_CQ_CB_BASE = SEMAPHORE_BASE + SEMAPHORE_SIZE;  // SIZE from shared common addr
   static constexpr uint32_t COMPLETION_CQ_CB_BASE = ISSUE_CQ_CB_BASE + 7 * L1_ALIGNMENT;
 
-  // Extra 4 bytes is to make sure that the launch message is properly aligned.
-  static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = COMPLETION_CQ_CB_BASE + 7 * L1_ALIGNMENT + 4;
+  static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = COMPLETION_CQ_CB_BASE + 7 * L1_ALIGNMENT;
   // erisc early exit functionality re-uses mailboxes_t::ncrisc_halt_msg_t::stack_save memory
   static constexpr std::int32_t ERISC_MEM_MAILBOX_STACK_SAVE = ERISC_MEM_MAILBOX_BASE + 4;
 
-  static constexpr std::int32_t ERISC_RING_BUFFER_ADDR = ERISC_MEM_MAILBOX_BASE + 128 + 12;
+  static constexpr std::int32_t ERISC_RING_BUFFER_ADDR = ERISC_MEM_MAILBOX_BASE + 256 + 16;
   static constexpr std::int32_t PRINT_BUFFER_ER = ERISC_RING_BUFFER_ADDR + RING_BUFFER_SIZE;
   static constexpr std::uint32_t PROFILER_L1_BUFFER_ER = PRINT_BUFFER_ER + 256;
   static constexpr std::uint32_t PROFILER_L1_BUFFER_CONTROL = PROFILER_L1_BUFFER_ER + PROFILER_L1_BUFFER_SIZE;
