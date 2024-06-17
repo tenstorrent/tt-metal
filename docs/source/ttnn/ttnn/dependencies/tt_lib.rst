@@ -407,6 +407,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.bitwise_xor
 
+.. autofunction:: tt_lib.tensor.bitwise_not
+
 .. autofunction:: tt_lib.tensor.right_shift
 
 .. autofunction:: tt_lib.tensor.left_shift

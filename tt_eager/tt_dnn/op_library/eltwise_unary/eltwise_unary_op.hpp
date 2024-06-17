@@ -80,6 +80,7 @@ enum class UnaryOpType {
     TILED_PROD,
     TYPECAST,
     BITWISE_XOR,
+    BITWISE_NOT,
     RIGHT_SHIFT,
     FLOOR,
     LEFT_SHIFT,
@@ -112,6 +113,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::UNARY_LT:
         case UnaryOpType::TYPECAST:
         case UnaryOpType::BITWISE_XOR:
+        case UnaryOpType::BITWISE_NOT:
         case UnaryOpType::RIGHT_SHIFT:
         case UnaryOpType::LEFT_SHIFT:
         case UnaryOpType::REMAINDER: return true;
@@ -418,6 +420,7 @@ constexpr auto prelu = leaky_relu;
 constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
 constexpr auto bitwise_xor = make_eltwise_unary_with_param<UnaryOpType::BITWISE_XOR>{};
+constexpr auto bitwise_not = make_eltwise_unary_with_param<UnaryOpType::BITWISE_NOT>{};
 constexpr auto right_shift = make_eltwise_unary_with_param<UnaryOpType::RIGHT_SHIFT>{};
 constexpr auto left_shift = make_eltwise_unary_with_param<UnaryOpType::LEFT_SHIFT>{};
 constexpr auto unary_remainder = make_eltwise_unary_with_param<UnaryOpType::REMAINDER>{};

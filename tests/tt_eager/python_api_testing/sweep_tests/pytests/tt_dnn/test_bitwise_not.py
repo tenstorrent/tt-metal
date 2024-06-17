@@ -4,7 +4,6 @@
 
 import pytest
 import torch
-import random
 from functools import partial
 import tt_lib as ttl
 
@@ -26,7 +25,7 @@ mem_configs = [
 
 @pytest.mark.parametrize(
     "scalar",
-    {random.randint(-100, 100) for _ in range(10)},
+    (1, 1),
 )
 @pytest.mark.parametrize(
     "input_shapes",
@@ -41,8 +40,8 @@ mem_configs = [
     mem_configs,
 )
 @skip_for_grayskull("#TODO: GS implementation needs to be done")
-class TestBitwiseXor:
-    def test_run_bitwise_xor_op(
+class TestBitwiseNot:
+    def test_run_bitwise_not_op(
         self,
         scalar,
         input_shapes,
@@ -50,7 +49,9 @@ class TestBitwiseXor:
         device,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=0, high=2147483647), torch.int)
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=-2147483647, high=2147483647), torch.int
+            )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(
@@ -63,7 +64,7 @@ class TestBitwiseXor:
         comparison_func = comparison_funcs.comp_equal
 
         run_single_pytorch_test(
-            "eltwise-bitwise_xor",
+            "eltwise-bitwise_not",
             input_shapes,
             datagen_func,
             comparison_func,
