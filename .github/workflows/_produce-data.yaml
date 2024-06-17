@@ -4,8 +4,7 @@ on:
   workflow_call:
   workflow_dispatch:
   workflow_run:
-    workflows:
-      - "All post-commit tests"
+    workflows: ["All post-commit tests", "[post-commit] all - Static checks, linters etc."]
     types:
       - completed
 
