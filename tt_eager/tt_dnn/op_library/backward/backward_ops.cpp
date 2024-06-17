@@ -39,38 +39,46 @@ std::vector<Tensor> unary_mul_bw(
 
 // unary_pow:
 // grad_input = grad * exponent * torch.pow(input, exponent - 1)
-std::vector<Tensor> _unary_pow_bw(
-    const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
+std::vector<std::optional<Tensor>> _unary_pow_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> grad_tensor;
+    TT_FATAL(are_required_outputs.at(0) , "input_grad derivative is required output");
+
     const float ZERO_THRESHOLD = std::numeric_limits<float>::epsilon() * 10.0f;
     TT_FATAL(exponent >= 0.0, "negative exponents are not supported; use recip(pow(input,abs(exponent)))");
     if (std::abs(exponent) < ZERO_THRESHOLD) {
-        grad_tensor.emplace_back(zeros_like(input, output_mem_config));
+        if(input_grad.has_value()){
+            zeros_like(queue_id, input, output_mem_config, input_grad);
+        } else {
+        input_grad = zeros_like(queue_id, input, output_mem_config);
+        }
+        grad_tensor.emplace_back(input_grad);
         return grad_tensor;
     }
 
-    Tensor power_input = power(input, fabs(exponent - 1.0f), output_mem_config);
+    Tensor power_input = power(queue_id,input, fabs(exponent - 1.0f), output_mem_config);
     if (exponent < 1.0f) {
-        power_input = recip(power_input, output_mem_config);
+        power_input = ttnn::reciprocal(queue_id, power_input, output_mem_config);
     }
 
-    Tensor result = mul_unary(power_input, exponent, output_mem_config);
-    Tensor final_result = ttnn::multiply(result, grad, std::nullopt, output_mem_config);
-    final_result = where(
-        gte_unary(final_result, 3.4e+38, output_mem_config),
-        std::numeric_limits<float>::infinity(),
-        where(
-            lte_unary(final_result, -3.4e+38, output_mem_config),
-            -std::numeric_limits<float>::infinity(),
-            final_result,
-            output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(final_result);
+    Tensor result = ttnn::multiply(queue_id, power_input, exponent, std::nullopt, output_mem_config);
+    power_input.deallocate();
+    Tensor final_result = ttnn::multiply(queue_id, result, grad, std::nullopt, output_mem_config);
+    result.deallocate();
+    Tensor temp = where(queue_id, lte_unary(queue_id, final_result, -3.4e+38, output_mem_config), -std::numeric_limits<float>::infinity(), final_result, output_mem_config);
+    if(input_grad.has_value()){
+        where(queue_id, gte_unary(queue_id, final_result, 3.4e+38, output_mem_config), std::numeric_limits<float>::infinity(), temp, output_mem_config, input_grad);
+    } else {
+        input_grad = where(queue_id, gte_unary(queue_id, final_result, 3.4e+38, output_mem_config), std::numeric_limits<float>::infinity(), temp, output_mem_config);
+    }
+    grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
-std::vector<Tensor> unary_pow_bw(
-    const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _unary_pow_bw)(grad, input, exponent, output_mem_config);
+std::vector<std::optional<Tensor>> unary_pow_bw(uint8_t queue_id,  const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    return operation::decorate_as_composite(__func__, _unary_pow_bw)(queue_id, grad, input, exponent, output_mem_config, are_required_outputs, input_grad);
+}
+std::vector<std::optional<Tensor>> unary_pow_bw(const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    uint8_t default_queue_id = 0;
+    return operation::decorate_as_composite(__func__, _unary_pow_bw)(default_queue_id, grad, input, exponent, output_mem_config, are_required_outputs, input_grad);
 }
 
 std::vector<Tensor> _unary_add_bw(
@@ -97,7 +105,7 @@ std::vector<std::optional<Tensor>> _mul_bw(
 
     if (are_required_outputs.at(0)) {
         if(input_a_grad.has_value()) {
-            ttnn::multiply(cq_id, grad, input_b, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, input_a_grad, std::nullopt);
+            ttnn::multiply(cq_id, grad, input_b, std::nullopt, std::nullopt, input_a_grad, std::nullopt);
         } else {
             input_a_grad = ttnn::multiply(cq_id, grad, input_b, std::nullopt, output_mem_config);
         }
@@ -107,7 +115,7 @@ std::vector<std::optional<Tensor>> _mul_bw(
     }
     if (are_required_outputs.at(1)) {
         if(input_b_grad.has_value()) {
-            ttnn::multiply(cq_id, grad, input_a, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, input_b_grad, std::nullopt);
+            ttnn::multiply(cq_id, grad, input_a, std::nullopt, std::nullopt, input_b_grad, std::nullopt);
         } else {
             input_b_grad = ttnn::multiply(cq_id, grad, input_a, std::nullopt, output_mem_config);
         }
@@ -143,27 +151,35 @@ std::vector<std::optional<Tensor>> mul_bw(
         default_queue_id, grad, input_a, input_b, output_mem_config, are_required_outputs, input_a_grad, input_b_grad);
 }
 
-std::vector<Tensor> _exp_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
+std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> grad_tensor;
+    TT_FATAL(are_required_outputs.at(0), "input_grad derivative is a required output");
+
     float t_inf = std::numeric_limits<float>::infinity();
-    Tensor exp_result = exp(input, output_mem_config);
-    Tensor result = ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config);
-    result = where(gte_unary(result, 1e+38, output_mem_config), t_inf, result, output_mem_config);
-    result = where(lte_unary(result, -1e+38, output_mem_config), -t_inf, result, output_mem_config);
-    result = where(
+    Tensor exp_result = exp(queue_id, input, output_mem_config);
+    Tensor result = ttnn::multiply(queue_id, grad, exp_result, std::nullopt, output_mem_config);
+    result = where(queue_id, gte_unary(queue_id, result, 1e+38, output_mem_config), t_inf, result, output_mem_config);
+    result = where(queue_id, lte_unary(queue_id, result, -1e+38, output_mem_config), -t_inf, result, output_mem_config);
+    if(input_grad.has_value()){
+        where(queue_id,
         ttnn::logical_and(
-            gte_unary(abs(exp_result, output_mem_config), 1e+38, output_mem_config),
-            ltz(grad, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        -t_inf,
-        result,
-        output_mem_config);
-    grad_tensor.emplace_back(result);
+            gte_unary(queue_id, abs(queue_id, exp_result, output_mem_config), 1e+38, output_mem_config),
+            ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), -t_inf, result, output_mem_config, input_grad);
+    } else {
+    input_grad = where(queue_id,
+        ttnn::logical_and(
+            gte_unary(queue_id, abs(queue_id, exp_result, output_mem_config), 1e+38, output_mem_config),
+            ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), -t_inf, result, output_mem_config);
+    }
+    grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
-std::vector<Tensor> exp_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _exp_bw)(grad, input, output_mem_config);
+std::vector<std::optional<Tensor>> exp_bw(uint8_t queue_id,  const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    return operation::decorate_as_composite(__func__, _exp_bw)(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
+}
+std::vector<std::optional<Tensor>> exp_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    uint8_t default_queue_id = 0;
+    return operation::decorate_as_composite(__func__, _exp_bw)(default_queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
 }
 
 std::vector<Tensor> _addcmul_bw(
@@ -202,32 +218,37 @@ std::vector<Tensor> unary_assign_bw(const Tensor& grad, const Tensor& input, con
     return operation::decorate_as_composite(__func__, _unary_assign_bw)(grad, input, output_mem_config);
 }
 
-std::vector<Tensor> _sqrt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor sqrt_result = sqrt(input, output_mem_config);
-    Tensor result =
-        ttnn::multiply(grad,
-            recip(mul_unary(sqrt_result, 2.0, output_mem_config), output_mem_config),
-            std::nullopt,
-            output_mem_config);
+// sqrt_bw
+std::vector<std::optional<Tensor>> _sqrt_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> grad_tensor;
+    TT_FATAL(are_required_outputs.at(0), "input_grad derivative is required output");
+
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
-    result = where(lez(input, output_mem_config), t_nan, result, output_mem_config);
-    result = where(
-        ttnn::logical_and(eqz(input, output_mem_config), ltz(grad, output_mem_config), std::nullopt, output_mem_config),
-        -t_inf,
-        result,
-        output_mem_config);
-    result = where(
-        ttnn::logical_and(eqz(input, output_mem_config), gtz(grad, output_mem_config), std::nullopt, output_mem_config),
-        t_inf,
-        result,
-        output_mem_config);
-    grad_tensor.emplace_back(result);
+
+    if(input_grad.has_value()){
+        sqrt(queue_id, input, output_mem_config, input_grad);
+        ttnn::multiply(queue_id, grad, recip(queue_id, mul_unary(queue_id, input_grad.value(), 2.0, output_mem_config), output_mem_config),std::nullopt,output_mem_config, input_grad);
+        where(queue_id, lez(queue_id, input, output_mem_config), t_nan, input_grad.value(), output_mem_config, input_grad);
+        where(queue_id,ttnn::logical_and(queue_id, eqz(queue_id, input, output_mem_config), ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), -t_inf,input_grad.value(),output_mem_config,input_grad);
+        where(queue_id, ttnn::logical_and(queue_id, eqz(queue_id, input, output_mem_config), gtz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), t_inf,input_grad.value(),output_mem_config,input_grad);
+    } else {
+    Tensor sqrt_result = sqrt(queue_id, input, output_mem_config);
+    Tensor result = ttnn::multiply(queue_id, grad, recip(queue_id, ttnn::multiply(queue_id, sqrt_result, 2.0, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    sqrt_result.deallocate();
+    input_grad = where(queue_id, lez(queue_id, input, output_mem_config), t_nan, result, output_mem_config);
+    input_grad = where(queue_id, ttnn::logical_and(queue_id, eqz(queue_id, input, output_mem_config), ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config),-t_inf, input_grad.value(),output_mem_config);
+    input_grad = where(queue_id, ttnn::logical_and(queue_id, eqz(queue_id, input, output_mem_config), gtz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config),t_inf, input_grad.value(), output_mem_config);
+    }
+    grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
-std::vector<Tensor> sqrt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _sqrt_bw)(grad, input, output_mem_config);
+std::vector<std::optional<Tensor>> sqrt_bw(uint8_t queue_id,  const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    return operation::decorate_as_composite(__func__, _sqrt_bw)(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
+}
+std::vector<std::optional<Tensor>> sqrt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    uint8_t default_queue_id = 0;
+    return operation::decorate_as_composite(__func__, _sqrt_bw)(default_queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
 }
 
 std::vector<Tensor> _unary_div_bw(
@@ -373,17 +394,27 @@ std::vector<Tensor> rdiv_bw(
     return operation::decorate_as_composite(__func__, _rdiv_bw)(grad, input, scalar, round_mode, output_mem_config);
 }
 
-std::vector<Tensor> _tanh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor tanh_res = tanh(input, output_mem_config);
-    tanh_res = ttnn::square(tanh_res, output_mem_config);
-    tanh_res = rsub(tanh_res, 1.0, output_mem_config);
-    Tensor result = ttnn::multiply(grad, tanh_res, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
+std::vector<std::optional<Tensor>> _tanh_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> grad_tensor;
+    TT_FATAL(are_required_outputs.at(0), "input_grad derivative is required output");
+
+    Tensor tanh_res = ttnn::tanh(queue_id, input, output_mem_config);
+    tanh_res = ttnn::square(queue_id, tanh_res, output_mem_config);
+    tanh_res = rsub(queue_id, tanh_res, 1.0f, output_mem_config);
+    if(input_grad.has_value()){
+        ttnn::multiply(queue_id, grad, tanh_res, std::nullopt, output_mem_config, input_grad);
+    } else {
+    input_grad = ttnn::multiply(queue_id, grad, tanh_res, std::nullopt, output_mem_config);
+    }
+    grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
-std::vector<Tensor> tanh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _tanh_bw)(grad, input, output_mem_config);
+std::vector<std::optional<Tensor>> tanh_bw(uint8_t queue_id,  const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    return operation::decorate_as_composite(__func__, _tanh_bw)(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
+}
+std::vector<std::optional<Tensor>> tanh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+    uint8_t default_queue_id = 0;
+    return operation::decorate_as_composite(__func__, _tanh_bw)(default_queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
 }
 
 // grad(sigmoid) = grad*(1 - sigmoid(x))*sigmoid(x)
