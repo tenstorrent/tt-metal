@@ -69,7 +69,7 @@ class TtMixtralMLP(LightweightModule):
             compute_kernel_config=self.model_args.get_compute_kernel_config(),
             output_dtype=ttnn.bfloat8_b,
         )
-        w2_in = ttnn.experimental.tensor.mul(w1_out, w3_out)
+        w2_in = ttnn.mul(w1_out, w3_out)
 
         w2_out = ttnn.experimental.operations.primary.matmul_1d(
             w2_in,
