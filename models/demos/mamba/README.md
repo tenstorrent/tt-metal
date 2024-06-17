@@ -76,7 +76,7 @@ pytest -svv models/demos/mamba/tests/test_mamba_perf.py -m models_performance_ba
 
 ### Device-Side Performance
 
-Build with profiler support enabled (use flags `ENABLE_PROFILER=1 ENABLE_TRACY=1`) and run the following command to test device-side performance:
+Build with profiler support enabled (use the build script `./scripts/build_scripts/build_with_profiler_opt.sh`) and run the following command to test device-side performance:
 
 ```
 pytest -svv models/demos/mamba/tests/test_mamba_perf.py -m models_device_performance_bare_metal

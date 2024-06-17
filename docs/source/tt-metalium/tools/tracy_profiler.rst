@@ -49,7 +49,7 @@ Profiling Host
 C++
 ~~~
 
-Build with the ``ENABLE_TRACY=1`` flag is required for profiling with tracy.
+Build with the profiler option (i.e. ``ENABLE_TRACY=ON`` cmake option) is required for profiling with tracy.
 
 ..  code-block:: sh
 
