@@ -13,7 +13,7 @@ set(TT_LIB_SRCS
 # TODO: should be using pybind11_add_module, but right now it introduces many build problems
 # pybinds will always be built as a shared library
 add_library(tt_lib SHARED ${TT_LIB_SRCS})
-target_link_libraries(tt_lib PUBLIC compiler_flags linker_flags tt_eager tt_metal)  # linker_flags = -rdynamic if tracy enabled
+target_link_libraries(tt_lib PUBLIC compiler_flags linker_flags tt_eager tt_metal pch_pybinds)  # linker_flags = -rdynamic if tracy enabled
 target_include_directories(tt_lib PUBLIC
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}
