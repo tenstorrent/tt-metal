@@ -4,11 +4,11 @@
 
 #include "ttnn/op_library/to_layout/to_layout_op.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_eager/tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "tt_eager/tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "ttnn/operations/core.hpp"
-#include "ttnn/validation.hpp"
+
+
 namespace ttnn {
 
 namespace operations {

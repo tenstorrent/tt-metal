@@ -139,8 +139,7 @@ using OptionalConstTensors = std::vector<std::optional<const Tensor>>;
 // To use this function, the arguments in the reader kernel must always be sorted in the order of input followed by
 // optional_input. Furthermore, input and output tensors must always start from the 0th argument.
 template <typename OutputTensors = Tensors>
-const std::function<void(const void *, Program &, const Tensors &, const OptionalConstTensors &, const OutputTensors &)>
-create_override_runtime_arguments_callback(
+auto create_override_runtime_arguments_callback(
     KernelHandle reader_kernel_id, KernelHandle writer_kernel_id, uint32_t num_cores, uint32_t core_h) {
     return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h](
                const void *operation,
@@ -179,8 +178,7 @@ create_override_runtime_arguments_callback(
 // Using this structure is not recommended because directly setting the callback argument map doesn't significantly
 // reduce the amount of code.
 template <typename OutputTensors = Tensors>
-const std::function<void(const void *, Program &, const Tensors &, const OptionalConstTensors &, const OutputTensors &)>
-create_override_runtime_arguments_callback(
+auto create_override_runtime_arguments_callback(
     KernelHandle reader_kernel_id,
     KernelHandle writer_kernel_id,
     uint32_t num_cores,
@@ -222,8 +220,7 @@ create_override_runtime_arguments_callback(
 // To use this function, the arguments in the reader kernel must always be sorted in the order of input followed by
 // optional_input. Furthermore, input and output tensors must always start from the 0th argument.
 template <typename OutputTensors = Tensors>
-const std::function<void(const Program&, const std::vector<Buffer*>&, const std::vector<Buffer*>&)>
-create_override_addresses_callback(
+auto create_override_addresses_callback(
     KernelHandle reader_kernel_id, KernelHandle writer_kernel_id, uint32_t num_cores, uint32_t core_h) {
     return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h](
                const Program& program,

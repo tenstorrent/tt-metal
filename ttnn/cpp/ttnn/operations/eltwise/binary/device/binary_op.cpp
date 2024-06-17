@@ -4,12 +4,10 @@
 
 #include "binary_op.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 
 namespace ttnn::operations::binary {
 

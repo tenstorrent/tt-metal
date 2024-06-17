@@ -5,7 +5,6 @@
 #include <optional>
 #include <utility>
 
-#include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_eager/tensor/tensor.hpp"

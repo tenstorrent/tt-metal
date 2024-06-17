@@ -4,12 +4,8 @@
 
 #pragma once
 
-#include <functional>
-#include "third_party/magic_enum/magic_enum.hpp"
-
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_metal/host_api.hpp"
 
 namespace tt {
 

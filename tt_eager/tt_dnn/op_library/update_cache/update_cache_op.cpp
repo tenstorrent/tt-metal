@@ -7,8 +7,6 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
-
 using namespace tt::constants;
 
 namespace tt {

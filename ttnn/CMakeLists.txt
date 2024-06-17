@@ -30,6 +30,12 @@ target_include_directories(ttnn_lib PUBLIC
 )
 target_precompile_headers(ttnn_lib PRIVATE
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/magic_enum/magic_enum.hpp
+    <functional>
+    <map>
+    <memory>
+    <unordered_map>
+    <variant>
+    <vector>
 )
 
 # TODO: should be using pybind11_add_module, but right now it introduces many build problems

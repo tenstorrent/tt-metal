@@ -10,7 +10,6 @@
 
 #include <unordered_set>
 #include <mutex>
-#include <fmt/ranges.h>
 #include "dev_msgs.h"
 
 namespace tt {
@@ -318,7 +317,7 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
     uint64_t run_mailbox_addr = is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(launch.run) :
                               is_inactive_eth_core ? GET_IERISC_MAILBOX_ADDRESS_HOST(launch.run) : GET_MAILBOX_ADDRESS_HOST(launch.run);
 
-    std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
+    auto get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
         constexpr int RUN_MAILBOX_BOGUS = 3;
         std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
         // read a single uint32_t even though launch.run is smaller than that

@@ -4,18 +4,15 @@
 
 #include "tt_dnn/op_library/run_operation.hpp"
 
-#include <chrono>
 #include <tt_eager/tensor/tensor.hpp>
 #include <tt_eager/tensor/tensor_utils.hpp>
 
-#include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
-#include "tt_numpy/functions.hpp"
 
 namespace tt::tt_metal {
     std::atomic<uint32_t> operation_id_atomic_count = 0;

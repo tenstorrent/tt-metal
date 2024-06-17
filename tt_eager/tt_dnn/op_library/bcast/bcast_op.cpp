@@ -8,14 +8,11 @@
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "impl/buffers/buffer.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 
 #include "tensor/tensor.hpp"
-#include "tt_metal/host_api.hpp"
 
 #include "tt_metal/common/constants.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
 
 namespace bcast_op_utils {
 

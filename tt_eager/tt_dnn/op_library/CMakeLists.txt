@@ -225,12 +225,29 @@ target_include_directories(tt_dnn PUBLIC
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt
 )
 
-target_precompile_headers(tt_dnn PUBLIC
+target_precompile_headers(tt_dnn PRIVATE
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/magic_enum/magic_enum.hpp
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/auto_format.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/compute_kernel_config.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/operation.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt/fmt/core.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt/fmt/format.h
+    ${PROJECT_SOURCE_DIR}/tt_eager/tensor/tensor.hpp
+    ${PROJECT_SOURCE_DIR}/tt_eager/tensor/types.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/impl/device/device.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/run_operation.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/work_split.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/jit_build/build.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/llrt/tt_cluster.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/impl/program/program.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/host_api.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/impl/buffers/buffer.hpp
+    ${PROJECT_SOURCE_DIR}/tt_eager/tt_dnn/op_library/operation.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/common/core_coord.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/device_api.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/tt_device.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/auto_format.hpp
+    <functional>
+    <map>
+    <memory>
+    <unordered_map>
+    <variant>
+    <vector>
 )

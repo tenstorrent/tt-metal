@@ -4,13 +4,9 @@
 
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 
 using namespace tt::constants;
 
