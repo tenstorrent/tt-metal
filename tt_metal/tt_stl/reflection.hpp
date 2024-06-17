@@ -6,7 +6,6 @@
 
 #include <fmt/core.h>
 
-#include <boost/core/demangle.hpp>
 #include <experimental/type_traits>
 #include <optional>
 #include <ostream>
@@ -18,16 +17,18 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
+#include "type_name.hpp"
+
 namespace tt {
 namespace stl {
 
 template <typename T>
-std::string get_type_name() {
-    return boost::core::demangle(typeid(T).name());
+constexpr std::string_view get_type_name() {
+    return short_type_name<T>;
 }
 
 template <typename T>
-std::string get_type_name(const T& object) {
+constexpr std::string_view get_type_name(const T& object) {
     return get_type_name<T>();
 }
 

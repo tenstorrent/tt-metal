@@ -8,6 +8,8 @@
 #include <fstream>
 #include "common/utils.hpp"
 
+#include "tt_metal/common/assert.hpp"
+
 using namespace std;
 
 namespace tt::tt_metal {

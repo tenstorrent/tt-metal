@@ -45,6 +45,10 @@ foreach (TEST ${PERF_MICROBENCH_TESTS_SRCS})
 
     add_executable(${TEST_TARGET} ${TEST})
     target_link_libraries(${TEST_TARGET} PUBLIC test_metal_common_libs)
+    if (${TEST} MATCHES "test_dram_read")
+        target_link_libraries(${TEST_TARGET} PRIVATE yaml-cpp::yaml-cpp)
+    endif()
+
     target_include_directories(${TEST_TARGET} PRIVATE
         ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}

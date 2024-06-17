@@ -10,7 +10,7 @@ set(TTNN_SRCS
 
 add_library(ttnn_lib OBJECT ${TTNN_SRCS})
 target_compile_options(ttnn_lib PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
-target_link_libraries(ttnn_lib PUBLIC compiler_flags metal_header_directories metal_common_libs umd_device)
+target_link_libraries(ttnn_lib PUBLIC compiler_flags metal_header_directories metal_common_libs)
 target_include_directories(ttnn_lib PUBLIC
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}

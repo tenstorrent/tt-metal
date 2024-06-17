@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 
 #include "common/utils.hpp"
@@ -14,6 +15,8 @@
 #include "jit_build/settings.hpp"
 
 #include "noc/noc_parameters.h"
+
+namespace fs = std::filesystem;
 
 using namespace std;
 

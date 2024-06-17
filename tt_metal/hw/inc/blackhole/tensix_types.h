@@ -8,7 +8,7 @@
 #include <cstdint>
 
 #ifndef TENSIX_FIRMWARE
-#include <boost/format.hpp>
+#include <fmt/core.h>
 #endif
 
 //
@@ -64,7 +64,7 @@ typedef struct {
     uint32_t rsvd1;
 #ifndef TENSIX_FIRMWARE
     operator std::string() const {
-        return (boost::format("Fifo Control: rd_ptr(0x%08x) wr_ptr(0x%08x)") % rd_ptr % wr_ptr).str();
+        return fmt::format("Fifo Control: rd_ptr(0x{:08x}) wr_ptr(0x{:08x})", rd_ptr, wr_ptr);
     }
 #endif
 } fifo_ctl_t;
@@ -131,7 +131,7 @@ struct TileHeader {
 
 #ifndef TENSIX_FIRMWARE
     operator std::string() const {
-        return (boost::format("TileHeader:tile_id(0x%04x) size16B(0x%04x)") % tile_id % tile_size_16B).str();
+        return fmt::format("TileHeader:tile_id(0x{:04x}) size16B(0x{:04x})", tile_id, tile_size_16B);
     }
 
     std::size_t size() const { return 16; }
@@ -150,7 +150,7 @@ struct TileHeader {
 union TileHeader_u {
     uint32_t val[4];
     TileHeader header;
-    TileHeader_u() {};
+    TileHeader_u(){};
 };
 
 static_assert(sizeof(TileHeader) == 16, "TileHeader must be 16B");
@@ -166,9 +166,8 @@ struct SectionHeader {
 
 #ifndef TENSIX_FIRMWARE
     operator std::string() const {
-        return (boost::format("SectionHeader: id(0x%04x) size(0x%04x) tile_count(0x%04x)") % section_id % section_size %
-                tile_count)
-            .str();
+        return fmt::format(
+            "SectionHeader: id(0x{:04x}) size(0x{:04x}) tile_count(0x{:04x})", section_id, section_size, tile_count);
     }
 #endif
 };

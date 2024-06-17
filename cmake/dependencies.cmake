@@ -5,41 +5,10 @@ set(ENV{CPM_SOURCE_CACHE} "${PROJECT_SOURCE_DIR}/.cpmcache")
 # Boost
 ############################################################################################################################
 
-include(${PROJECT_SOURCE_DIR}/cmake/CPM.cmake)
-set(BoostPackages
-    Align
-    Config
-    Container_Hash
-    Core
-    Describe
-    Detail
-    Format
-    Interprocess
-    Intrusive
-    Smart_Ptr
-    Assert
-    Integer
-    Type_Traits
-    Optional
-    Static_Assert
-    Throw_Exception
-    Move
-    Utility
-    Preprocessor
-    Date_Time
-    Numeric_Conversion
-    Mpl
-    Mp11
-)
+include(${PROJECT_SOURCE_DIR}/cmake/fetch_boost.cmake)
 
-foreach(package ${BoostPackages})
-    CPMAddPackage(
-        NAME Boost${package}
-        GITHUB_REPOSITORY boostorg/${package}
-        GIT_TAG boost-1.85.0
-        DOWNLOAD_ONLY YES
-    )
-endforeach()
+fetch_boost_library(interprocess)
+fetch_boost_library(smart_ptr)
 
 ############################################################################################################################
 # yaml-cpp

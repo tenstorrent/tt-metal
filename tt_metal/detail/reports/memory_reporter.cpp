@@ -7,7 +7,11 @@
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/program/program.hpp"
+
 #include <algorithm>
+#include <filesystem>
+
+namespace fs = std::filesystem;
 
 namespace tt::tt_metal {
 

@@ -12,6 +12,7 @@
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_dnn/op_library/operation_history.hpp"
 #include "tt_stl/concepts.hpp"
+#include "tt_stl/type_name.hpp"
 
 namespace tt::tt_metal {
 
@@ -209,7 +210,7 @@ static void append_operation_to_operation_history(
 
     operation_history::append(operation_history::OperationRecord{
         ttnn_operation_id,
-        boost::core::demangle(typeid(OperationType).name()),
+        std::string(tt::stl::short_type_name<OperationType>),
         operation.get_type_name(),
         operation.attributes(),
         input_tensor_records,

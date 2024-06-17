@@ -14,11 +14,6 @@ set(UMD_SRC
     ${UMD_HOME}/device/wormhole_implementation.cpp
 )
 
-add_library(umd_device OBJECT ${UMD_SRC})
+add_library(umd_device STATIC ${UMD_SRC})
 target_include_directories(umd_device PRIVATE ${UMD_HOME} ${UMD_HOME}/third_party/fmt/include)
-
-foreach(lib ${BoostPackages})
-    target_include_directories(umd_device PRIVATE ${Boost${lib}_SOURCE_DIR}/include)
-endforeach()
-
-target_link_libraries(umd_device PUBLIC yaml-cpp::yaml-cpp rt compiler_flags)
+target_link_libraries(umd_device PRIVATE yaml-cpp::yaml-cpp Boost::interprocess rt compiler_flags)

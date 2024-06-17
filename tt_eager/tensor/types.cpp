@@ -7,8 +7,6 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
-#include <boost/core/demangle.hpp>
-
 namespace tt {
 
 namespace tt_metal {

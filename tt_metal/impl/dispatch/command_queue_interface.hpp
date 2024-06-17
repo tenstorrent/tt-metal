@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <boost/align/aligned_allocator.hpp>
 #include <mutex>
 
 #include "tt_metal/common/base.hpp"
@@ -23,9 +22,6 @@ static constexpr uint32_t DEVICES_PER_UMD_CHANNEL = MAX_HUGEPAGE_SIZE / MAX_DEV_
 
 
 static constexpr uint32_t MEMCPY_ALIGNMENT = sizeof(__m128i);
-
-template <typename T>
-using vector_memcpy_aligned = std::vector<T, boost::alignment::aligned_allocator<T, MEMCPY_ALIGNMENT>>;
 
 struct dispatch_constants {
    public:
