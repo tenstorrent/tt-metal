@@ -118,7 +118,8 @@ int main() {
             //if (mailboxes->launch.enable_brisc) {
                 //UC FIXME: do i need this?
                 setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
-                l1_arg_base = (uint32_t *)IDLE_ERISC_L1_ARG_BASE;
+                uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
+                l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offset_brisc); // overloaded
                 kernel_init();
             //} else {
                 // This was not initialized in kernel_init

@@ -55,10 +55,13 @@ struct launch_msg_t {  // must be cacheline aligned
     volatile uint16_t triscs_watcher_kernel_id;
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
-    // TODO(agrebenisan): This must be added in to launch_msg_t
-    // volatile uint16_t dispatch_core_x;
-    // volatile uint16_t dispatch_core_y;
-    volatile uint8_t mode;
+    // Ring buffer of kernel configuration data
+    volatile uint32_t kernel_config_base;
+    volatile uint16_t rta_offset_brisc;
+    volatile uint16_t rta_offset_ncrisc;
+    volatile uint16_t rta_offset_trisc;
+
+    volatile uint8_t mode;                   // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
     volatile uint8_t enable_brisc;
     volatile uint8_t enable_ncrisc;

@@ -382,7 +382,8 @@ int main() {
 
             // Run the BRISC kernel
             DEBUG_STATUS("R");
-            l1_arg_base = (uint32_t tt_l1_ptr *)BRISC_L1_ARG_BASE;
+            uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
+            l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offset_brisc);
             if (mailboxes->launch.enable_brisc) {
                 setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
                 kernel_init();
