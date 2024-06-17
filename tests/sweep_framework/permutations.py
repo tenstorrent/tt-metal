@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+
 def get_parameter_names(parameters):
     if isinstance(parameters, dict):
         parameters = list(parameters.items())
@@ -36,3 +41,15 @@ def permutations(parameters):
                 # Single parameter
                 for value in values:
                     yield {**permutation, name: value}
+
+
+def preprocess_parameter_value(parameter_value):
+    if callable(parameter_value):
+        parameter_value = parameter_value.__name__
+    return parameter_value
+
+
+def get_parameter_values(parameter_names, permutation):
+    for parameter_name in parameter_names:
+        parameter_value = preprocess_parameter_value(permutation[parameter_name])
+        yield parameter_value

@@ -7,33 +7,19 @@ import sys
 import z3
 import importlib
 import pathlib
+import sqlite3
+import datetime
 
-from general_contraints import *
 from architecture import str_to_arch
 from permutations import *
+from sql_utils import *
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
 
 
-def generate_vectors_z3(module_name, arch) -> z3.Model:
-    test_module = importlib.import_module("sweeps." + module_name[:3])  # Macro this
-    solver = z3.Solver()  # Probably want this in some test wrapper
-
-    # Apply general purpose arch-specific constraints
-    apply_tensor_constraints(solver, arch)
-    apply_memory_constraints(solver, arch)
-    apply_layout_constraints(solver, arch)
-
-    # Apply op-specific constraints
-    test_module.apply_op_specific_constraints(solver)
-
-    solver.check()
-    return solver.model()
-
-
-def generate_vectors(module_name, arch):
-    test_module = importlib.import_module("sweeps." + module_name[:3])  # Macro this
+# Generate vectors from module parameters
+def generate_vectors(test_module, arch):
     parameters = test_module.parameters
 
     vectors = permutations(parameters)
@@ -47,20 +33,43 @@ def validate_vectors(vectors) -> None:
 
 # Output the individual test vectors from solver.model()
 def export_test_vectors(vectors):
+    vectors = list(vectors)
     # Perhaps we export with some sort of readable id, which can be passed to a runner to run specific sets of input vectors. (export seed as well for reproducability)
-    print(vectors)
-    pass
+    connection = sqlite3.connect(str(OUTPUT_DIR) + "/vectors.sqlite")
+    cursor = connection.cursor()
+
+    parameter_names = get_parameter_names(list(vectors)[0])
+    column_names = ["sweep_name", "timestamp", "batch_id"] + parameter_names
+
+    table_name = MODULE_NAME + "_test_vectors"
+    table = f"CREATE TABLE IF NOT EXISTS {table_name} ({column_names_to_sql_string(column_names)})"
+    cursor.execute(table)
+
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    for vector in vectors:
+        row = [MODULE_NAME, current_time, ""] + list(get_parameter_values(parameter_names, vector))
+        row = [str(value) for value in row]
+        row_placeholders = ", ".join(["?"] * len(row))
+        command = f"INSERT INTO {table_name} VALUES ({row_placeholders})"
+        cursor.execute(command, row)
+
+    connection.commit()
+    connection.close()
 
 
 # Generate one or more sets of test vectors depending on module_name
 def generate_tests(module_name, arch, output_dir):
+    global MODULE_NAME
+    MODULE_NAME = module_name
+
     if not module_name:
         for file_name in sorted(SWEEP_SOURCES_DIR.glob("**/*.py")):
             vectors = generate_vectors(pathlib.Path(file_name).relative_to(SWEEP_SOURCES_DIR), arch)
             validate_vectors(vectors)
             export_test_vectors(vectors)
     else:
-        vectors = generate_vectors(module_name, arch)
+        vectors = generate_vectors(importlib.import_module("sweeps." + module_name[:3]), arch)  # Macro this
         validate_vectors(vectors)
         export_test_vectors(vectors)
 
@@ -79,5 +88,11 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args(sys.argv[1:])
+
+    global OUTPUT_DIR
+    OUTPUT_DIR = pathlib.Path(__file__).parent / args.output_dir
+
+    if not OUTPUT_DIR.exists():
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     generate_tests(args.module_name, str_to_arch(args.arch), args.output_dir)
