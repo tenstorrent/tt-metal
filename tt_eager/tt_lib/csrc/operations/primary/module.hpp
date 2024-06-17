@@ -634,6 +634,7 @@ void py_module(py::module& m_primary) {
         py::arg("bias").noconvert() = std::nullopt,
         py::arg("output").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
         "Performs a moreh_linear operation.
     )doc");
@@ -653,6 +654,7 @@ void py_module(py::module& m_primary) {
         py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("weight_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("bias_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
         "Performs a moreh_linear_backward operation.
     )doc");
@@ -669,6 +671,7 @@ void py_module(py::module& m_primary) {
         py::arg("output").noconvert() = std::nullopt,
         py::arg("bias").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a moreh_matmul operation.");
 
     // moreh_matmul_backward
@@ -682,6 +685,7 @@ void py_module(py::module& m_primary) {
         py::arg("input_a_grad").noconvert() = std::nullopt,
         py::arg("input_b_grad").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
         "Performs a moreh_matmul_backward operation.
     )doc");

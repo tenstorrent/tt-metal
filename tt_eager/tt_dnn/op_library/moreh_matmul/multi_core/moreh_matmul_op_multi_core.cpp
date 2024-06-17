@@ -69,7 +69,8 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     const Tensor &output,
     const std::optional<const Tensor>& bias,
     bool transpose_input,
-    bool transpose_other) {
+    bool transpose_other,
+    const DeviceComputeKernelConfig &compute_kernel_config) {
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
@@ -171,6 +172,15 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     log_debug(LogOp, "{}:{} {} {} mask_h {} mask_w {}", __func__, __LINE__,
         need_other_mask_h, need_other_mask_w,
         other_mask_h, other_mask_w);
+
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    log_debug(
+        LogOp,
+        "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
+        math_fidelity,
+        math_approx_mode,
+        fp32_dest_acc_en,
+        packer_l1_acc);
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Grid Configuration For Workload
     ////////////////////////////////////////////////////////////////////////////
@@ -210,7 +220,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
             {CB::c_in2, in2_t},
             {CB::c_in3, in3_t},
             {CB::c_in4, in4_t},
-            {CB::c_intermed0, im0_t},
+            {CB::c_intermed0, im0_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32: cb_data_format},
             {CB::c_intermed1, im1_t},
             {CB::c_intermed2, im2_t},
             {CB::c_out0, out0_t},
@@ -274,8 +284,18 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
         compute_args_group_1.push_back(static_cast<uint32_t>(is_scalar_bias));
     }
 
+    if (fp32_dest_acc_en) {
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+
     const auto compute_kernel_1_id = CreateComputeKernel(
-        program, compute_kernel_file, { core_group_1, num_output_tiles_per_core_group_1, compute_args_group_1 }, compute_defines);
+        program,
+        compute_kernel_file,
+        {core_group_1, num_output_tiles_per_core_group_1, compute_args_group_1},
+        compute_defines,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode);
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
@@ -299,8 +319,11 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
         compute_kernel_2_id = CreateComputeKernel(
             program,
             compute_kernel_file,
-            { core_group_2, num_output_tiles_per_core_group_2, compute_args_group_2 },
-            compute_defines);
+            {core_group_2, num_output_tiles_per_core_group_2, compute_args_group_2},
+            compute_defines,
+            math_fidelity,
+            fp32_dest_acc_en,
+            math_approx_mode);
     }
     log_debug(LogOp, "{}:{} Compute ", __func__, __LINE__, static_cast<uint32_t>(transpose_input), static_cast<uint32_t>(transpose_other));
 
@@ -373,30 +396,39 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
                                            num_cores,
                                            num_cores_y
                                             ](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<Tensor>& output_tensors
+        ) {
         log_debug(LogOp, "{}:{} args_callback ", __func__, __LINE__);
-        auto src_buffer_a = input_buffers.at(0);
-        auto src_buffer_b = input_buffers.at(1);
+        const auto input_address = input_tensors.at(0).buffer()->address();
+        const auto other_address = input_tensors.at(1).buffer()->address();
+        const auto output_address = output_tensors.at(0).buffer()->address();
+        const auto bias = optional_input_tensors.at(0);
 
-        auto dst_buffer = output_buffers.at(0);
         for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             {
                 auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_buffer_a->address();
-                runtime_args[1] = src_buffer_b->address();
+                runtime_args[0] = input_address;
+                runtime_args[1] = other_address;
+
+                if (bias.has_value()) {
+                    const auto bias_address = bias.value().buffer()->address();
+                    runtime_args[runtime_args.size() - 1] = bias_address;
+                }
             }
 
             {
                 auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
+                runtime_args[0] = output_address;
             }
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 }  // namespace primary

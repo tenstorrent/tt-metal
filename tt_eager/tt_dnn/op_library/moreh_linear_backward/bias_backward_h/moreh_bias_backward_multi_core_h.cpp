@@ -15,7 +15,7 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &output_grad, const Tensor &bias_grad) {
+operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &output_grad, const Tensor &bias_grad, const DeviceComputeKernelConfig &compute_kernel_config) {
     Program program{};
 
     DataFormat cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
@@ -43,6 +43,14 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
     Device *device = output_grad.device();
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    log_debug(
+        LogOp,
+        "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
+        math_fidelity,
+        math_approx_mode,
+        fp32_dest_acc_en,
+        packer_l1_acc);
 
     const auto
         [num_cores_to_be_used,
@@ -73,7 +81,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
             {CB::c_in2, in2_t},    // mask_h_w
             {CB::c_out0, out0_t},  // bias_grad
             {CB::c_intermed0, im0_t},
-            {CB::c_intermed1, im1_t},
+            {CB::c_intermed1, im1_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32: cb_data_format}
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -98,10 +106,19 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
     std::map<string, string> compute_defines;
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";
+    if (fp32_dest_acc_en) {
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
+    }
     const auto compute_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_linear_backward/kernels/moreh_bias_backward_multi_core_h.cpp";
     const auto compute_kernel_1_id = CreateComputeKernel(
-        program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
+        program,
+        compute_kernel_file,
+        {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
+        compute_defines,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode);
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
@@ -110,7 +127,10 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
             program,
             compute_kernel_file,
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
-            compute_defines);
+            compute_defines,
+            math_fidelity,
+            fp32_dest_acc_en,
+            math_approx_mode);
     }
 
     ////////////////////////////////////////////////////////////////////////////
