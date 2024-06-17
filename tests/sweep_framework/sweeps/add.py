@@ -3,21 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # from z3 import *
-import ttnn
+# import ttnn
 
 
 parameters = {
     "batch_sizes": [(1,)],
     "height": [384, 1024],
     "width": [1024, 4096],
-    "broadcast": [None, "h", "w", "hw"],
-    "input_a_dtype": [ttnn.bfloat16],
-    "input_b_dtype": [ttnn.bfloat16],
-    "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
-    "input_b_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
-    "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-    "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-    "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+    "broadcast": [None, "h", "w", "hw"]
+    # "input_a_dtype": [ttnn.bfloat16],
+    # "input_b_dtype": [ttnn.bfloat16],
+    # "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    # "input_b_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    # "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+    # "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+    # "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
 }
 
 # # Add op-specific test vector properties to be generated
