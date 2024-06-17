@@ -29,6 +29,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t normalized_dims,
+    const DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<const Tensor> gamma_grad,
     const std::optional<const Tensor> beta_grad) {
     ////////////////////////////////////////////////////////////////////////////
@@ -106,6 +107,10 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
          num_cols_per_core_group_1,
          num_cols_per_core_group_2] = tt_metal::split_work_to_cores(grid, Wt);
 
+    auto arch = input.device()->arch();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+        get_compute_kernel_config_args(arch, compute_kernel_config);
+
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -127,6 +132,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const uint32_t im5_t = 1;  // dycopy
 
     const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.get_dtype());
+    auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
 
     CreateCircularBuffer(
         program,
@@ -141,12 +147,12 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
             {CB::c_in5, in5_t},        // mask_h
             {CB::c_out0, out0_t},      // gamma_grad(==dgamma)
             {CB::c_out1, out1_t},      // beta_grad(==dbeta)
-            {CB::c_intermed0, im0_t},  // output(==y)
-            {CB::c_intermed1, im1_t},  // y * dy
-            {CB::c_intermed2, im2_t},  // Add[dy]
-            {CB::c_intermed3, im3_t},  // Add[y * dy]
-            {CB::c_intermed4, im4_t},  // x - mean
-            {CB::c_intermed5, im5_t},  // dycopy
+            {CB::c_intermed0, im0_t, intermed_cb_format},  // output(==y)
+            {CB::c_intermed1, im1_t, intermed_cb_format},  // y * dy
+            {CB::c_intermed2, im2_t, intermed_cb_format},  // Add[dy]
+            {CB::c_intermed3, im3_t, intermed_cb_format},  // Add[y * dy]
+            {CB::c_intermed4, im4_t, intermed_cb_format},  // x - mean
+            {CB::c_intermed5, im5_t, intermed_cb_format},  // dycopy
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -166,6 +172,15 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
         static_cast<uint32_t>(gamma_grad_has_value),
         static_cast<uint32_t>(beta_grad_has_value)};
 
+    std::map<string, string> reader_defines{};
+    std::map<std::string, std::string> compute_defines{};
+    compute_defines["REDUCE_OP"] = "PoolType::SUM";
+    compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";
+    if (fp32_dest_acc_en) {
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+
     const auto reader_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
         "reader_moreh_layernorm_backward_gamma_beta_grad.cpp";
@@ -173,15 +188,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
         "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
         "writer_moreh_layernorm_backward_gamma_beta_grad.cpp";
 
-    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
     const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      ComputeKernel SetUp
-    ////////////////////////////////////////////////////////////////////////////
-    std::map<std::string, std::string> compute_defines{};
-    compute_defines["REDUCE_OP"] = "PoolType::SUM";
-    compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";
 
     const std::vector<uint32_t> compute_args_group_1{
         num_cols_per_core_group_1,
@@ -199,7 +207,13 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
         "moreh_layernorm_backward_gamma_beta_grad_kernel.cpp";
 
     CreateComputeKernel(
-        program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
+        program,
+        compute_kernel_file,
+        {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
+        compute_defines,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode);
 
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{
@@ -217,7 +231,11 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
             program,
             compute_kernel_file,
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
-            compute_defines);
+
+            compute_defines,
+            math_fidelity,
+            fp32_dest_acc_en,
+            math_approx_mode);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -277,7 +295,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
                 runtime_args[0] = output_grad_buffer->address();
                 runtime_args[1] = input_buffer->address();
                 runtime_args[2] = mean_buffer->address();
@@ -285,7 +303,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
                 if (gamma_grad_buffer != nullptr) {
                     runtime_args[0] = gamma_grad_buffer->address();
                 }

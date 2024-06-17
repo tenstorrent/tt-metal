@@ -82,7 +82,7 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardInputGrad::create_program(
     const auto& gamma = optional_input_tensors.at(0);
 
     return moreh_layernorm_backward_input_grad_impl(
-        output_grad, input, mean, rstd, this->normalized_dims, input_grad, gamma);
+        output_grad, input, mean, rstd, this->normalized_dims, input_grad, this->compute_kernel_config, gamma);
 }
 
 // gamma_grad and beta_grad
@@ -143,7 +143,7 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
     auto& beta_grad = optional_input_tensors.at(1);
 
     return moreh_layernorm_backward_gamma_beta_grad_impl(
-        output_grad, input, mean, rstd, this->normalized_dims, gamma_grad, beta_grad);
+        output_grad, input, mean, rstd, this->normalized_dims, this->compute_kernel_config, gamma_grad, beta_grad);
 }
 
 // input_grad
@@ -155,18 +155,25 @@ Tensor moreh_layernorm_backward_input_grad(
     uint32_t normalized_dims,
     const tt_metal::Tensor& input_grad,
     const std::optional<const Tensor> gamma,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& output_mem_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+
+    auto device = input.device();
+    auto compute_kernel_config_val =
+        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+
     std::vector<Tensor> dummy_output_tensors = {
         Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd, input_grad}, {gamma}))};
     // Inplace
     operation::launch_op(
-        [normalized_dims, output_mem_config](
+        [normalized_dims, output_mem_config, compute_kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(
                 MorehLayerNormBackwardInputGrad{
-                    .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
+                    .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config),
+                    .compute_kernel_config = compute_kernel_config_val},
                 input_tensors,
                 optional_input_tensors,
                 optional_output_tensors);
@@ -187,7 +194,13 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
     uint32_t normalized_dims,
     const std::optional<const Tensor> gamma_grad,
     const std::optional<const Tensor> beta_grad,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& output_mem_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+
+    auto device = input.device();
+    auto compute_kernel_config_val =
+        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+
     std::vector<std::optional<Tensor>> outputs(2);
     if (!gamma_grad.has_value() && !beta_grad.has_value()) {
         return outputs;
@@ -197,13 +210,14 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
         Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma_grad, beta_grad}))};
     // Inplace
     operation::launch_op(
-        [normalized_dims, output_mem_config](
+        [normalized_dims, output_mem_config, compute_kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             return operation::run(
                 MorehLayerNormBackwardGammaBetaGrad{
-                    .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
+                    .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config),
+                    .compute_kernel_config = compute_kernel_config_val},
                 input_tensors,
                 optional_input_tensors,
                 optional_output_tensors);
@@ -232,21 +246,22 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward(
     const std::optional<const Tensor> input_grad,
     const std::optional<const Tensor> gamma_grad,
     const std::optional<const Tensor> beta_grad,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& output_mem_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<std::optional<Tensor>> outputs;
     outputs.reserve(3);
 
     // input_grad
     if (input_grad.has_value()) {
         outputs.push_back(moreh_layernorm_backward_input_grad(
-            output_grad, input, mean, rstd, normalized_dims, input_grad.value(), gamma, output_mem_config));
+            output_grad, input, mean, rstd, normalized_dims, input_grad.value(), gamma, output_mem_config, compute_kernel_config));
     } else {
         outputs.push_back(std::nullopt);
     }
 
     // gamma_grad and beta_grad
     const auto& gamma_beta_grad = moreh_layernorm_backward_gamma_beta_grad(
-        output_grad, input, mean, rstd, normalized_dims, gamma_grad, beta_grad, output_mem_config);
+        output_grad, input, mean, rstd, normalized_dims, gamma_grad, beta_grad, output_mem_config, compute_kernel_config);
     outputs.push_back(gamma_beta_grad[0]);
     outputs.push_back(gamma_beta_grad[1]);
 
