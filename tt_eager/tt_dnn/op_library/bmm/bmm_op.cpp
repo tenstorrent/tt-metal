@@ -422,8 +422,8 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
             TT_FATAL(
                 cores_along_x_match_grid_size || virtual_x == div_up(K, (shard_shape[1] / TILE_WIDTH)), "Num cores along x must match provided grid size!");
 
-            uint32_t per_core_M = (M < virtual_y) ? 1 : M / virtual_y;
-            uint32_t per_core_N = (N < virtual_x) ? 1 : N / virtual_x;
+            uint32_t per_core_M = div_up(M, virtual_y);
+            uint32_t per_core_N = div_up(N, virtual_x);
             uint32_t in0_block_w = cores_along_x_match_grid_size ? shard_shape[1] / TILE_WIDTH : 1;
 
             auto subblock_hw = get_matmul_subblock_params(
@@ -826,14 +826,22 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 std::nullopt /* compute_with_storage_grid_size */,
                 compute_kernel_config);
         } else if (core_range.y > 0) {
+            bool transpose_mcast =
+                input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED &&
+                input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
+            out_subblock_h = 4;
+            out_subblock_w = 2;
+            if (out_subblock_w != per_core_N) {
+                out_subblock_h = 1;
+            }
             return MatmulMultiCoreReuseMultiCastProgramConfig{
                 .compute_with_storage_grid_size = {num_cores_x, num_cores_y},
                 .in0_block_w = in0_block_w,
-                .out_subblock_h = 4,
-                .out_subblock_w = 2,
+                .out_subblock_h = out_subblock_h,
+                .out_subblock_w = out_subblock_w,
                 .per_core_M = per_core_M,
                 .per_core_N = per_core_N,
-                .transpose_mcast = false,
+                .transpose_mcast = transpose_mcast,
                 .fused_activation = std::nullopt,
                 .fuse_batch = false,
             };
@@ -1549,7 +1557,8 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     const ttnn::types::Shape& input_shape_b,
     const CoreCoord& core_coord,
     const std::optional<const UnaryWithParam> fused_activation,
-    const bool fp32_dest_acc_en) {
+    const bool fp32_dest_acc_en,
+    const TensorMemoryLayout input_layout_a) {
     auto a_padded_shape = input_shape_a.with_tile_padding();
     auto b_padded_shape = input_shape_b.with_tile_padding();
     auto k_size = a_padded_shape[-1];
@@ -1569,6 +1578,13 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     uint32_t n_tiles = n_size / ttnn::TILE_SIZE;
     uint32_t num_cores = core_coord.x * core_coord.y;
     bool is_tall = batch_and_m_tiles > n_tiles;
+    // specific 1D mcasts require specific layout types. Override accordingly.
+    if (input_layout_a == TensorMemoryLayout::HEIGHT_SHARDED) {
+        is_tall = true;
+    } else if (input_layout_a == TensorMemoryLayout::WIDTH_SHARDED) {
+        is_tall = false;
+    }
+
     bool is_wide = !is_tall;
     uint32_t batch_and_m_tiles_per_core;
     uint32_t k_tiles_per_core;
@@ -1612,6 +1628,7 @@ MatmulProgramConfig create_matmul_program_config(
     auto b_shape = input_tensor_b.get_shape();
     auto a_padded_shape = a_shape.with_tile_padding();
     auto b_padded_shape = b_shape.with_tile_padding();
+    auto a_layout = input_tensor_a.memory_config().memory_layout;
     auto inteneded_k_size_of_a = a_shape[-1];
     auto inteneded_k_size_of_b = b_shape[-2];
     auto k_size = a_padded_shape[-1];
@@ -1652,7 +1669,7 @@ MatmulProgramConfig create_matmul_program_config(
             k_tiles_per_core = 1;  // TODO(arakhmati): Can it be more than 1 without running out of memory?
         } else if (a_is_sharded) {
             TT_FATAL(
-                input_tensor_a_memory_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED,
+                a_layout != TensorMemoryLayout::WIDTH_SHARDED,
                 "MatmulMultiCoreReuseProgramConfig: Cannot be width sharded");
             auto shard_shape = input_tensor_a_memory_config.shard_spec.value().shape;
             uint32_t n = b_shape[-1] / ttnn::TILE_SIZE;
@@ -1688,7 +1705,7 @@ MatmulProgramConfig create_matmul_program_config(
     auto height_width_ratio = (height > width) ? height / width : width / height;
     if (height_width_ratio > 8 || any_size_within_tile) {
         return create_matmul_1d_systolic_array_program_config(
-            a_shape, b_shape, core_coord, fused_activation, fp32_dest_acc_en);
+            a_shape, b_shape, core_coord, fused_activation, fp32_dest_acc_en, a_layout);
     }
     if (!a_is_sharded) {
         m_tiles_per_core = (uint32_t)std::ceil((((double)batch_size_a * m_size) / ttnn::TILE_SIZE) / core_coord.y);
@@ -1698,9 +1715,9 @@ MatmulProgramConfig create_matmul_program_config(
             k_tiles_per_core -= 1;
         }
     } else {
-        if (input_tensor_a_memory_config.memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
+        if (a_layout != TensorMemoryLayout::BLOCK_SHARDED) {
             return create_matmul_1d_systolic_array_program_config(
-                    a_shape, b_shape, core_coord, fused_activation, fp32_dest_acc_en);
+                    a_shape, b_shape, core_coord, fused_activation, fp32_dest_acc_en, a_layout);
         }
         uint32_t k = a_shape[-1] / ttnn::TILE_SIZE;
         uint32_t n = b_shape[-1] / ttnn::TILE_SIZE;
@@ -1713,6 +1730,12 @@ MatmulProgramConfig create_matmul_program_config(
     auto matmul_params = bmm_op_utils::get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, fp32_dest_acc_en);
     uint32_t out_subblock_h = std::get<0>(matmul_params);
     uint32_t out_subblock_w = std::get<1>(matmul_params);
+    bool transpose_mcast =
+        a_layout == TensorMemoryLayout::BLOCK_SHARDED &&
+        input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
+    if (out_subblock_w != n_tiles_per_core) {
+        out_subblock_h = 1;
+    }
 
     return MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
@@ -1721,7 +1744,7 @@ MatmulProgramConfig create_matmul_program_config(
         .out_subblock_w = out_subblock_w,
         .per_core_M = m_tiles_per_core,
         .per_core_N = n_tiles_per_core,
-        .transpose_mcast = false,
+        .transpose_mcast = transpose_mcast,
         .fused_activation = fused_activation,
     };
 }
