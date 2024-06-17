@@ -25,7 +25,7 @@ def pretty_print_model_config(model_config):
 
 
 def get_model_config(
-    llama_version="llama3", batch=32, seq_len=1, num_devices=8, max_batch_size=16, max_context_len=8192
+    llama_version="llama3", batch=32, seq_len=1, num_devices=8, max_batch_size=32, max_context_len=2048
 ):
     llm_mode = "decode" if seq_len == 1 else "prefill"
     assert num_devices == 8
@@ -65,6 +65,8 @@ def get_model_config(
         "NUM_DEVICES": num_devices,
         "MAX_GRID_SIZE": (8, 8),
         "ALL_GATHER_NUM_LINKS": 1,
+        "MAX_BATCH_SIZE": max_batch_size,
+        "MAX_CONTEXT_LEN": max_context_len,
         "COMPUTE_KERNEL_CONFIG": ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.HiFi2,
             math_approx_mode=True,

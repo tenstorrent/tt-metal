@@ -49,7 +49,7 @@ def should_skip_model_load():
     return skip_model_load
 
 
-def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, max_batch_size=16, max_context_len=8192):
+def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, max_batch_size=32, max_context_len=2048):
     if os.getenv("CI") == "true":
         os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
 

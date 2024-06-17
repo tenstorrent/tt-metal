@@ -40,7 +40,7 @@ class TtLlamaAttention_optimized:
         self.n_kv_heads = configuration.n_kv_heads
         self.head_dim = self.hidden_size // self.n_heads
         self.max_seq_len = configuration.max_seq_len
-        self.max_batch_size = configuration.max_batch_size if batch_size is None else batch_size
+        self.max_batch_size = model_config["MAX_BATCH_SIZE"]
         self.llama3 = configuration.vocab_size == 128256
         self.scale = 1 / math.sqrt(self.head_dim)
 
@@ -71,7 +71,7 @@ class TtLlamaAttention_optimized:
                 self.n_kv_heads,
                 self.max_batch_size,
                 # self.max_seq_len,
-                (2048 + 128) if not self.llama3 else MAX_SEQ_LEN_LLAMA3,  # Meets benchmarking spec needs
+                self.model_config["MAX_CONTEXT_LEN"],
                 self.head_dim,
             )
         )
@@ -80,7 +80,7 @@ class TtLlamaAttention_optimized:
                 self.n_kv_heads,
                 self.max_batch_size,
                 # self.max_seq_len,
-                (2048 + 128) if not self.llama3 else MAX_SEQ_LEN_LLAMA3,  # Meets benchmarking spec needs
+                self.model_config["MAX_CONTEXT_LEN"],
                 self.head_dim,
             )
         )
