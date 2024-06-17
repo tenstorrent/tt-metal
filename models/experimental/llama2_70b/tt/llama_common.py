@@ -56,11 +56,11 @@ def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, ma
         if llama_version == "llama3":
             ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-3/llama-3-70b-repacked/"
             tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama-3/tokenizer.model"
-            cache_path = "/mnt/MLPerf/tt_dnn-models/llama-3/llama-data-cache/weights-cache-3"
+            cache_path = Path("/mnt/MLPerf/tt_dnn-models/llama-3/llama-data-cache/weights-cache-3")
         else:
             ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-2/llama-2-70b-repacked/"
             tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama-2/tokenizer.model"
-            cache_path = "/mnt/MLPerf/tt_dnn-models/llama-2/llama-data-cache/weights-cache-2"
+            cache_path = Path("/mnt/MLPerf/tt_dnn-models/llama-2/llama-data-cache/weights-cache-2")
     else:
         if llama_version == "llama3":
             ckpt_dir = os.getenv("LLAMA_CKPT_DIR", "/home/llama3-data-repacked/llama-3-70b/")

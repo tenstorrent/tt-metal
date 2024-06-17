@@ -41,9 +41,6 @@ def get_model_config(
     assert batch <= max_batch_size
     assert seq_len <= max_context_len
 
-    if llama_version == "llama2" and seq_len > 2048:
-        raise Exception("Llama2 only supports a maximum sequence length of 2048")
-
     seq_tiles = seq_len // 32
 
     DRAM_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
