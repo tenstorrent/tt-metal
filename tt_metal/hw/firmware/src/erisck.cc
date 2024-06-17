@@ -20,7 +20,7 @@
 #include "noc_addr_ranges_gen.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
-#include <kernel.cpp>
+#include <kernel_includes.hpp>
 
 
 uint8_t noc_index = NOC_INDEX;

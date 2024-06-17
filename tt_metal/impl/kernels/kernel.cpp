@@ -319,6 +319,7 @@ void ComputeKernel::set_build_options(JitBuildOptions &build_options) const {
 }
 
 void DataMovementKernel::generate_binaries(Device *device, JitBuildOptions &build_options) const {
+    jit_build_genfiles_kernel_include(device->build_env(), *this, this->kernel_path_file_name_);
     detail::GenerateDeviceHeaders(device, build_options.path);
     int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
     jit_build(
@@ -326,6 +327,7 @@ void DataMovementKernel::generate_binaries(Device *device, JitBuildOptions &buil
 }
 
 void EthernetKernel::generate_binaries(Device *device, JitBuildOptions &build_options) const {
+    jit_build_genfiles_kernel_include(device->build_env(), *this, this->kernel_path_file_name_);
     detail::GenerateDeviceHeaders(device, build_options.path);
     int erisc_id = this->config_.eth_mode == Eth::IDLE ? 1 : 0;
     jit_build(

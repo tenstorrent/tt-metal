@@ -18,7 +18,7 @@
 #include "tensix_functions.h"
 #include "c_tensix_core.h"
 
-#include "kernel.cpp"
+#include "kernel_includes.hpp"
 
 uint8_t noc_index = NOC_INDEX;
 
