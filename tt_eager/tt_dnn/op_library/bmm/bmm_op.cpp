@@ -14,6 +14,7 @@
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/hostdevcommon/common_values.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/types.hpp"
 
@@ -421,8 +422,8 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
             TT_FATAL(
                 cores_along_x_match_grid_size || virtual_x == div_up(K, (shard_shape[1] / TILE_WIDTH)), "Num cores along x must match provided grid size!");
 
-            uint32_t per_core_M = (M < virtual_y) ? 1 : M / virtual_y;
-            uint32_t per_core_N = (N < virtual_x) ? 1 : N / virtual_x;
+            uint32_t per_core_M = div_up(M, virtual_y);
+            uint32_t per_core_N = div_up(N, virtual_x);
             uint32_t in0_block_w = cores_along_x_match_grid_size ? shard_shape[1] / TILE_WIDTH : 1;
 
             auto subblock_hw = get_matmul_subblock_params(
@@ -733,6 +734,44 @@ Tensor resnet_matmul(
 namespace operations {
 
 namespace primary {
+
+inline uint32_t get_estimated_size_of_cbs(uint32_t per_core_M, uint32_t per_core_N, uint32_t in0_block_w, uint32_t in0_single_tile_size, uint32_t in1_single_tile_size, uint32_t output_single_tile_size) {
+    // Circular Buffer sizes:
+    // src0 CB: per_core_M * in0_block_w * 2 (for double buffer)
+    // src1 CB: per_core_N * in0_block_w * 2 (for double buffer)
+    // out CB:  per_core_M * per_core_N
+    // Ignore optional intermediate CB because not needed when need to create a program config.
+    uint32_t in0_size = per_core_M * in0_block_w * 2 * in0_single_tile_size;
+    uint32_t in1_size = per_core_M * in0_block_w * 2 * in1_single_tile_size;
+    uint32_t out_size = per_core_M * per_core_N * output_single_tile_size;
+    return in0_size + in1_size + out_size;
+}
+
+
+inline uint32_t get_per_core_factor(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+        uint32_t in0_block_w) {
+    tt::tt_metal::Device* device = input_tensor_a.device();
+    const std::vector<uint32_t> &bank_ids =
+        device->bank_ids_from_logical_core(BufferType::L1, *device->compute_cores_.begin());
+    std::optional<uint64_t> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
+    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
+    max_l1_space = max_l1_space - L1_UNRESERVED_BASE;
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_a.get_dtype());
+    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_b.get_dtype());
+    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format); // use as estimate for output as well
+    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
+    for (uint32_t per_core_factor = 16; per_core_factor > 1; per_core_factor /= 2) {
+        uint32_t size = get_estimated_size_of_cbs(
+                per_core_factor, per_core_factor, in0_block_w, in0_single_tile_size, in1_single_tile_size, in0_single_tile_size);
+        if (size < max_l1_space) {
+            return per_core_factor;
+        }
+    }
+    return 1;
+}
+
 inline MatmulProgramConfig create_simple_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -757,8 +796,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
     uint32_t num_blocks_x, num_blocks_y;
 
     // out_subblock h/w doesn't matter
-    per_core_M = 16;
-    per_core_N = 16;
+    per_core_M = get_per_core_factor(input_tensor_a, input_tensor_b, in0_block_w);
+    per_core_N = per_core_M;
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
     num_blocks_y = (Mt - 1) / per_core_M + 1;
@@ -787,15 +826,22 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 std::nullopt /* compute_with_storage_grid_size */,
                 compute_kernel_config);
         } else if (core_range.y > 0) {
-            uint32_t in0_block_w = Kt % 2 == 0 ? 2 : 1;
+            bool transpose_mcast =
+                input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED &&
+                input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
+            out_subblock_h = 4;
+            out_subblock_w = 2;
+            if (out_subblock_w != per_core_N) {
+                out_subblock_h = 1;
+            }
             return MatmulMultiCoreReuseMultiCastProgramConfig{
                 .compute_with_storage_grid_size = {num_cores_x, num_cores_y},
                 .in0_block_w = in0_block_w,
-                .out_subblock_h = 4,
-                .out_subblock_w = 2,
-                .per_core_M = 16,
-                .per_core_N = 16,
-                .transpose_mcast = false,
+                .out_subblock_h = out_subblock_h,
+                .out_subblock_w = out_subblock_w,
+                .per_core_M = per_core_M,
+                .per_core_N = per_core_N,
+                .transpose_mcast = transpose_mcast,
                 .fused_activation = std::nullopt,
                 .fuse_batch = false,
             };
@@ -1511,7 +1557,8 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     const ttnn::types::Shape& input_shape_b,
     const CoreCoord& core_coord,
     const std::optional<const UnaryWithParam> fused_activation,
-    const bool fp32_dest_acc_en) {
+    const bool fp32_dest_acc_en,
+    const TensorMemoryLayout input_layout_a) {
     auto a_padded_shape = input_shape_a.with_tile_padding();
     auto b_padded_shape = input_shape_b.with_tile_padding();
     auto k_size = a_padded_shape[-1];
@@ -1531,6 +1578,13 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     uint32_t n_tiles = n_size / ttnn::TILE_SIZE;
     uint32_t num_cores = core_coord.x * core_coord.y;
     bool is_tall = batch_and_m_tiles > n_tiles;
+    // specific 1D mcasts require specific layout types. Override accordingly.
+    if (input_layout_a == TensorMemoryLayout::HEIGHT_SHARDED) {
+        is_tall = true;
+    } else if (input_layout_a == TensorMemoryLayout::WIDTH_SHARDED) {
+        is_tall = false;
+    }
+
     bool is_wide = !is_tall;
     uint32_t batch_and_m_tiles_per_core;
     uint32_t k_tiles_per_core;
@@ -1574,6 +1628,7 @@ MatmulProgramConfig create_matmul_program_config(
     auto b_shape = input_tensor_b.get_shape();
     auto a_padded_shape = a_shape.with_tile_padding();
     auto b_padded_shape = b_shape.with_tile_padding();
+    auto a_layout = input_tensor_a.memory_config().memory_layout;
     auto inteneded_k_size_of_a = a_shape[-1];
     auto inteneded_k_size_of_b = b_shape[-2];
     auto k_size = a_padded_shape[-1];
@@ -1614,7 +1669,7 @@ MatmulProgramConfig create_matmul_program_config(
             k_tiles_per_core = 1;  // TODO(arakhmati): Can it be more than 1 without running out of memory?
         } else if (a_is_sharded) {
             TT_FATAL(
-                input_tensor_a_memory_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED,
+                a_layout != TensorMemoryLayout::WIDTH_SHARDED,
                 "MatmulMultiCoreReuseProgramConfig: Cannot be width sharded");
             auto shard_shape = input_tensor_a_memory_config.shard_spec.value().shape;
             uint32_t n = b_shape[-1] / ttnn::TILE_SIZE;
@@ -1650,7 +1705,7 @@ MatmulProgramConfig create_matmul_program_config(
     auto height_width_ratio = (height > width) ? height / width : width / height;
     if (height_width_ratio > 8 || any_size_within_tile) {
         return create_matmul_1d_systolic_array_program_config(
-            a_shape, b_shape, core_coord, fused_activation, fp32_dest_acc_en);
+            a_shape, b_shape, core_coord, fused_activation, fp32_dest_acc_en, a_layout);
     }
     if (!a_is_sharded) {
         m_tiles_per_core = (uint32_t)std::ceil((((double)batch_size_a * m_size) / ttnn::TILE_SIZE) / core_coord.y);
@@ -1660,9 +1715,9 @@ MatmulProgramConfig create_matmul_program_config(
             k_tiles_per_core -= 1;
         }
     } else {
-        if (input_tensor_a_memory_config.memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
+        if (a_layout != TensorMemoryLayout::BLOCK_SHARDED) {
             return create_matmul_1d_systolic_array_program_config(
-                    a_shape, b_shape, core_coord, fused_activation, fp32_dest_acc_en);
+                    a_shape, b_shape, core_coord, fused_activation, fp32_dest_acc_en, a_layout);
         }
         uint32_t k = a_shape[-1] / ttnn::TILE_SIZE;
         uint32_t n = b_shape[-1] / ttnn::TILE_SIZE;
@@ -1675,6 +1730,12 @@ MatmulProgramConfig create_matmul_program_config(
     auto matmul_params = bmm_op_utils::get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, fp32_dest_acc_en);
     uint32_t out_subblock_h = std::get<0>(matmul_params);
     uint32_t out_subblock_w = std::get<1>(matmul_params);
+    bool transpose_mcast =
+        a_layout == TensorMemoryLayout::BLOCK_SHARDED &&
+        input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
+    if (out_subblock_w != n_tiles_per_core) {
+        out_subblock_h = 1;
+    }
 
     return MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
@@ -1683,7 +1744,7 @@ MatmulProgramConfig create_matmul_program_config(
         .out_subblock_w = out_subblock_w,
         .per_core_M = m_tiles_per_core,
         .per_core_N = n_tiles_per_core,
-        .transpose_mcast = false,
+        .transpose_mcast = transpose_mcast,
         .fused_activation = fused_activation,
     };
 }
