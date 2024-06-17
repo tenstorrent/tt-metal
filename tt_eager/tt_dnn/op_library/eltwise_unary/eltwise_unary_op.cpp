@@ -493,17 +493,33 @@ Tensor tie_binop_to_unary(
     return bcast(queue_id, input_tensor, t_value, OP, BcastOpDim::HW, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
 }
 
-Tensor lte_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
-    return lez(sub_unary_sfpu(input_tensor, value, output_mem_config), output_mem_config);
+Tensor lte_unary(uint8_t queue_id, const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return lez(queue_id, sub_unary_sfpu(input_tensor, value, output_mem_config), output_mem_config, output_tensor);
 }
-Tensor lte_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
-    return lez(sub_unary_sfpu(value, input_tensor, output_mem_config), output_mem_config);
+Tensor lte_unary(uint8_t queue_id, float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return lez(queue_id, sub_unary_sfpu(value, input_tensor, output_mem_config), output_mem_config, output_tensor);
 }
-Tensor gte_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
-    return gez(sub_unary_sfpu(input_tensor, value, output_mem_config), output_mem_config);
+Tensor gte_unary(uint8_t queue_id, const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return gez(queue_id, sub_unary_sfpu(input_tensor, value, output_mem_config), output_mem_config, output_tensor);
 }
-Tensor gte_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
-    return gez(sub_unary_sfpu(value, input_tensor, output_mem_config), output_mem_config);
+Tensor gte_unary(uint8_t queue_id, float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return gez(queue_id, sub_unary_sfpu(value, input_tensor, output_mem_config), output_mem_config, output_tensor);
+}
+Tensor lte_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    uint8_t default_queue_id = 0;
+    return lez(default_queue_id, sub_unary_sfpu(input_tensor, value, output_mem_config), output_mem_config, output_tensor);
+}
+Tensor lte_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    uint8_t default_queue_id = 0;
+    return lez(default_queue_id, sub_unary_sfpu(value, input_tensor, output_mem_config), output_mem_config, output_tensor);
+}
+Tensor gte_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    uint8_t default_queue_id = 0;
+    return gez(default_queue_id, sub_unary_sfpu(input_tensor, value, output_mem_config), output_mem_config, output_tensor);
+}
+Tensor gte_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    uint8_t default_queue_id = 0;
+    return gez(default_queue_id, sub_unary_sfpu(value, input_tensor, output_mem_config), output_mem_config, output_tensor);
 }
 Tensor eq_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
     return eqz(sub_unary_sfpu(input_tensor, value, output_mem_config), output_mem_config);

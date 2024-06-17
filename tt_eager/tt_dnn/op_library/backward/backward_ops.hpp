@@ -35,11 +35,22 @@ std::vector<Tensor> unary_add_bw(
     float alpha,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> unary_pow_bw(
+std::vector<std::optional<Tensor>> unary_pow_bw(
+    uint8_t cq_id,
     const Tensor& grad,
     const Tensor& input,
     float exponent,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
+
+std::vector<std::optional<Tensor>> unary_pow_bw(
+    const Tensor& grad,
+    const Tensor& input,
+    float exponent,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
 
 std::vector<Tensor> addcdiv_bw(
     const Tensor& grad,
@@ -68,15 +79,35 @@ std::vector<std::optional<Tensor>> mul_bw(
     std::optional<Tensor> input_a_grad = std::nullopt,
     std::optional<Tensor> input_b_grad = std::nullopt);
 
-std::vector<Tensor> exp_bw(
+std::vector<std::optional<Tensor>> exp_bw(
+    uint8_t cq_id,
     const Tensor& grad,
     const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
 
-std::vector<Tensor> sqrt_bw(
+std::vector<std::optional<Tensor>> exp_bw(
     const Tensor& grad,
     const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
+
+std::vector<std::optional<Tensor>> sqrt_bw(
+    uint8_t cq_id,
+    const Tensor& grad,
+    const Tensor& input,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
+
+std::vector<std::optional<Tensor>> sqrt_bw(
+    const Tensor& grad,
+    const Tensor& input,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
 
 std::vector<Tensor> unary_assign_bw(
     const Tensor& grad,
@@ -117,10 +148,20 @@ std::vector<Tensor> min_bw(
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // bw = grad(1 - tanh(x) ** 2)
-std::vector<Tensor> tanh_bw(
+std::vector<std::optional<Tensor>> tanh_bw(
+    uint8_t cq_id,
     const Tensor& grad,
     const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
+
+std::vector<std::optional<Tensor>> tanh_bw(
+    const Tensor& grad,
+    const Tensor& input,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
 
 // grad(sigmoid) = grad*(1 - sigmoid(x))*sigmoid(x)
 std::vector<Tensor> sigmoid_bw(
