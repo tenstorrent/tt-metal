@@ -765,18 +765,11 @@ Tensor _addalpha(
     const MemoryConfig& output_mem_config,
     std::optional<Tensor> output_tensor) {
     if (output_tensor.has_value()) {
-        ttnn::add(
-            cq_id,
-            mul_unary(cq_id, input_b, alpha, output_mem_config),
-            input_a,
-            std::nullopt,
-            operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            output_tensor);
+        ttnn::add(cq_id, ttnn::multiply(cq_id, input_b, alpha, std::nullopt, output_mem_config), input_a, std::nullopt, std::nullopt, output_tensor);
         return output_tensor.value();
     }
 
-    return ttnn::add(
-        cq_id, mul_unary(cq_id, input_b, alpha, output_mem_config), input_a, std::nullopt, output_mem_config);
+    return ttnn::add(cq_id, ttnn::multiply(cq_id, input_b, alpha, std::nullopt, output_mem_config), input_a, std::nullopt, output_mem_config);
 }
 
 Tensor addalpha(
@@ -1503,87 +1496,57 @@ Tensor _where(
     const Tensor& value_false,
     const MemoryConfig& output_mem_config,
     std::optional<Tensor> output_tensor) {
-    Tensor t2 =
-        ttnn::multiply(queue_id, gtz(predicate, output_mem_config), value_true, std::nullopt, output_mem_config);
-    if (output_tensor.has_value()) {
-        ttnn::multiply(
-            queue_id,
-            lez(predicate, output_mem_config),
-            value_false,
-            std::nullopt,
-            operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            output_tensor);
-        ttnn::add(
-            queue_id, t2, output_tensor.value(), std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
-    } else {
-        Tensor t1 =
-            ttnn::multiply(queue_id, lez(predicate, output_mem_config), value_false, std::nullopt, output_mem_config);
+
+    Tensor t2 = ttnn::multiply(queue_id, gtz(queue_id, predicate, output_mem_config), value_true, std::nullopt, output_mem_config);
+    if(output_tensor.has_value())
+    {
+        ttnn::multiply(queue_id, lez(queue_id, predicate, output_mem_config), value_false, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
+        ttnn::add(queue_id, t2, output_tensor.value(), std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
+    }
+    else
+    {
+        Tensor t1 = ttnn::multiply(queue_id, lez(queue_id, predicate, output_mem_config), value_false, std::nullopt, output_mem_config);
         output_tensor = ttnn::add(queue_id, t2, t1, std::nullopt, output_mem_config);
     }
     return output_tensor.value();
 }
 Tensor _where_v1(
-    uint8_t queue_id,
-    const Tensor& predicate,
-    const float value_true,
-    const Tensor& value_false,
-    const MemoryConfig& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    Tensor t2 = mul_unary(queue_id, gtz(predicate, output_mem_config), value_true, output_mem_config);
+    uint8_t queue_id, const Tensor& predicate, const float value_true, const Tensor& value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
 
-    if (output_tensor.has_value()) {
-        ttnn::multiply(
-            queue_id,
-            lez(predicate, output_mem_config),
-            value_false,
-            std::nullopt,
-            operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            output_tensor);
-        ttnn::add(
-            queue_id, t2, output_tensor.value(), std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
-    } else {
-        Tensor t1 =
-            ttnn::multiply(queue_id, lez(predicate, output_mem_config), value_false, std::nullopt, output_mem_config);
+    Tensor t2 = ttnn::multiply(queue_id, gtz(queue_id, predicate, output_mem_config), value_true, std::nullopt, output_mem_config);
+
+    if(output_tensor.has_value()){
+        ttnn::multiply(queue_id, lez(queue_id, predicate, output_mem_config), value_false, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG , output_tensor);
+        ttnn::add(queue_id, t2, output_tensor.value(), std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
+    }
+    else
+    {
+        Tensor t1 = ttnn::multiply(queue_id, lez(queue_id, predicate, output_mem_config), value_false, std::nullopt, output_mem_config);
         output_tensor = ttnn::add(queue_id, t2, t1, std::nullopt, output_mem_config);
     }
     return output_tensor.value();
 }
 Tensor _where_v2(
-    uint8_t queue_id,
-    const Tensor& predicate,
-    const Tensor& value_true,
-    float value_false,
-    const MemoryConfig& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    Tensor t1 = mul_unary(queue_id, lez(predicate, output_mem_config), value_false, output_mem_config);
+    uint8_t queue_id, const Tensor& predicate, const Tensor& value_true, float value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
 
-    if (output_tensor.has_value()) {
-        ttnn::multiply(
-            queue_id,
-            gtz(predicate, output_mem_config),
-            value_true,
-            std::nullopt,
-            operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            output_tensor);
-        ttnn::add(
-            queue_id, output_tensor.value(), t1, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
-    } else {
-        Tensor t2 =
-            ttnn::multiply(queue_id, gtz(predicate, output_mem_config), value_true, std::nullopt, output_mem_config);
+    Tensor t1 = ttnn::multiply(queue_id, lez(queue_id, predicate, output_mem_config), value_false, std::nullopt, output_mem_config);
+
+    if(output_tensor.has_value()){
+        ttnn::multiply(queue_id, gtz(queue_id, predicate, output_mem_config), value_true, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
+        ttnn::add(queue_id, output_tensor.value(), t1, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
+    }
+    else
+    {
+        Tensor t2 = ttnn::multiply(queue_id, gtz(queue_id, predicate, output_mem_config), value_true, std::nullopt, output_mem_config);
         output_tensor = ttnn::add(queue_id, t2, t1, std::nullopt, output_mem_config);
     }
     return output_tensor.value();
 }
 Tensor _where_v3(
-    uint8_t queue_id,
-    const Tensor& predicate,
-    const float value_true,
-    const float value_false,
-    const MemoryConfig& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    Tensor t2 = mul_unary(queue_id, gtz(predicate, output_mem_config), value_true, output_mem_config);
-    Tensor t1 = mul_unary(queue_id, lez(predicate, output_mem_config), value_false, output_mem_config);
-    if (output_tensor.has_value()) {
+    uint8_t queue_id, const Tensor& predicate, const float value_true, const float value_false, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    Tensor t2 = ttnn::multiply(queue_id, gtz(queue_id, predicate, output_mem_config), value_true, std::nullopt, output_mem_config);
+    Tensor t1 = ttnn::multiply(queue_id, lez(queue_id, predicate, output_mem_config), value_false, std::nullopt, output_mem_config);
+    if(output_tensor.has_value()){
         ttnn::add(queue_id, t2, t1, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
     } else {
         output_tensor = ttnn::add(queue_id, t2, t1, std::nullopt, output_mem_config);
@@ -1951,37 +1914,54 @@ Tensor triu(
     return operation::decorate_as_composite(__func__, _triu)(input_a, dim, output_mem_config);
 }
 
-Tensor _power_fp(const Tensor& input_a, float exponent, const MemoryConfig& output_mem_config) {
+Tensor _power_fp(uint8_t queue_id, const Tensor& input_a, float exponent, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
     TT_FATAL(exponent >= 0.0f, "works for positive exponents only");
     const uint32_t exponent_floor = static_cast<uint32_t>(std::floor(exponent));
     if (static_cast<float>(exponent_floor) == exponent) {
-        return power(input_a, exponent_floor, output_mem_config);
+        if(output_tensor.has_value()){
+            power(queue_id,input_a, exponent_floor, output_mem_config, output_tensor);
+            return output_tensor.value();
+        }
+        return power(queue_id, input_a, exponent_floor, output_mem_config);
     }
     const float exponent_trunc = exponent - static_cast<float>(exponent_floor);
-    Tensor pow_trunc_log = mul_unary(log(input_a, output_mem_config), exponent_trunc, output_mem_config);
-    Tensor pow_frac = exp(pow_trunc_log, output_mem_config);
+    Tensor pow_trunc_log = ttnn::multiply(queue_id, log(queue_id, input_a, output_mem_config), exponent_trunc, std::nullopt, output_mem_config);
+    Tensor pow_frac = ttnn::exp(queue_id, pow_trunc_log, false, output_mem_config);
     pow_trunc_log.deallocate();
     float t_nan = std::nanf("");
-    Tensor result =
-        ttnn::multiply(power(input_a, exponent_floor, output_mem_config), pow_frac, std::nullopt, output_mem_config);
+    Tensor result = ttnn::multiply(queue_id, power(queue_id, input_a, exponent_floor, output_mem_config), pow_frac, std::nullopt, output_mem_config);
     // To handle negative inputs:
     // in torch For -ve inputs with float exponent power returns nan
-    result = where(ltz(input_a, output_mem_config), t_nan, result);
+    if(output_tensor.has_value()){
+        where(queue_id, ttnn::ltz(queue_id, input_a, output_mem_config), t_nan, result, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, output_tensor);
+        return output_tensor.value();
+    }
+    result = where(queue_id, ttnn::ltz(queue_id, input_a, output_mem_config), t_nan, result);
     return result;
 }
 Tensor power_fp(
+    uint8_t queue_id,
     const Tensor& input_a,
     float exponent,
-    const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    return operation::decorate_as_composite(__func__, _power_fp)(input_a, exponent, output_mem_config);
+    const MemoryConfig& output_mem_config, /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */
+    std::optional<Tensor> output_tensor) {
+    return operation::decorate_as_composite(__func__, _power_fp)(queue_id, input_a, exponent, output_mem_config, output_tensor);
 }
 
-Tensor pow(const Tensor& input_a, float exponent, const MemoryConfig& output_mem_config) {
-    return power_fp(input_a, exponent, output_mem_config);
+Tensor pow(uint8_t queue_id, const Tensor& input_a, float exponent, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return power_fp(queue_id, input_a, exponent, output_mem_config, output_tensor);
+}
+Tensor pow(const Tensor& input_a, float exponent, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    uint8_t default_queue_id = 0;
+    return power_fp(default_queue_id, input_a, exponent, output_mem_config, output_tensor);
 }
 
-Tensor pow(const Tensor& input_a, int exponent, const MemoryConfig& output_mem_config) {
-    return power(input_a, exponent, output_mem_config);
+Tensor pow(uint8_t queue_id, const Tensor& input_a, int exponent, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    return power(queue_id, input_a, exponent, output_mem_config, output_tensor);
+}
+Tensor pow(const Tensor& input_a, int exponent, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
+    uint8_t default_queue_id = 0;
+    return power(default_queue_id, input_a, exponent, output_mem_config, output_tensor);
 }
 
 Tensor create_mask(const Tensor& input_a, const MemoryConfig& output_mem_config) {
