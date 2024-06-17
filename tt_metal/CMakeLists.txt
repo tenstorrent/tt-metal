@@ -20,7 +20,7 @@ add_library(tt_metal ${TT_METAL_OBJECTS})
 
 target_link_libraries(tt_metal PUBLIC umd_device metal_common_libs)
 
-target_link_libraries(tt_metal PUBLIC compiler_flags linker_flags metal_header_directories yaml-cpp::yaml-cpp $<$<BOOL:$ENV{ENABLE_TRACY}>:TracyClient>)  # linker_flags = -rdynamic if tracy enabled
+target_link_libraries(tt_metal PUBLIC compiler_flags linker_flags metal_header_directories $<$<BOOL:$ENV{ENABLE_TRACY}>:TracyClient>)  # linker_flags = -rdynamic if tracy enabled
 target_link_directories(tt_metal PUBLIC ${PROJECT_BINARY_DIR}/lib)    # required so tt_metal can find device library
 target_include_directories(tt_metal PUBLIC
     ${UMD_HOME}

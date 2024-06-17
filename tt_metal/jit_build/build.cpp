@@ -22,6 +22,8 @@
 #include "tools/profiler/profiler_state.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 
+namespace fs = std::filesystem;
+
 using namespace std;
 using namespace tt;
 

@@ -12,6 +12,10 @@
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include "tt_metal/tt_stl/aligned_allocator.hpp"
+
+template <typename T>
+using vector_memcpy_aligned = std::vector<T, tt::stl::aligned_allocator<T, MEMCPY_ALIGNMENT>>;
 
 template <bool hugepage_write = false>
 class DeviceCommand {
@@ -469,7 +473,7 @@ class DeviceCommand {
     template <typename Command>
     void zero(Command *cmd) {
         if constexpr (hugepage_write) {
-            std::vector<char, boost::alignment::aligned_allocator<char, MEMCPY_ALIGNMENT>> zero_cmd(sizeof(Command), 0);
+            vector_memcpy_aligned<char> zero_cmd(sizeof(Command), 0);
             this->memcpy(cmd, zero_cmd.data(), sizeof(Command));
         } else {
             std::fill((uint8_t *)cmd, (uint8_t *)cmd + sizeof(Command), 0);
