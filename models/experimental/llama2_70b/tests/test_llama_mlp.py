@@ -175,6 +175,9 @@ def test_LlamaMLP_inference(
     if batch == 1 and seq_len > max_context_len:
         pytest.skip(f"Prefill with {seq_len=} is not supported with short context")
 
+    if llama_version == "llama2" and seq_len > 2048:
+        pytest.skip(f"Llama2 with {seq_len=} is not supported (max 2048)")
+
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
         batch=batch,

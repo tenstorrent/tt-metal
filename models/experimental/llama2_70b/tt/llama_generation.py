@@ -21,9 +21,7 @@ from models.experimental.llama2_70b.tt.model_config import (
 
 
 class TtLlamaModelForGeneration:
-    def __init__(
-        self, configuration, state_dict, device_mesh, n_devices, n_layers, batch, emulated=False, cache_path=None
-    ):
+    def __init__(self, configuration, state_dict, device_mesh, n_devices, n_layers, batch, cache_path=None):
         ## Get state dict
         configuration = copy.deepcopy(configuration)
 
@@ -31,7 +29,7 @@ class TtLlamaModelForGeneration:
         if n_layers == None:
             n_layers = 80
 
-        model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices)
+        model_config = get_model_config()
 
         # TT model -------------------------------------------------------------
         self.tt_model = TtLlamaModel(
@@ -42,9 +40,8 @@ class TtLlamaModelForGeneration:
             model_config,
             configuration,
             batch,
-            emulated=emulated,
             cache_path=cache_path,
-            read_cache=False,
+            read_cache=True,
         )
         self.params = configuration
         self.device_mesh = device_mesh
@@ -65,9 +62,7 @@ class TtLlamaModelForGeneration:
             # if current model config is not for decode, change it to decode
             if self.tt_model.model_config["LLM_MODE"] != "decode":
                 logger.info("Changing mode to decode")
-                model_config = get_model_config(
-                    model_config_str="BFLOAT16-DRAM", num_devices=self.n_devices, seq_len=seq_len
-                )
+                model_config = get_model_config(batch=batch, seq_len=seq_len)
                 self.tt_model.set_model_config(model_config)
             return self.decode_forward(tokens, start_pos, *args, **kwargs)
         else:
@@ -77,9 +72,7 @@ class TtLlamaModelForGeneration:
                 logger.info("Changing mode to prefill")
                 assert seq_len <= 2048, f"Only prefill up to 2048 tokens is supported, got {seq_len}"
                 prefill_seq_len = 128 if seq_len <= 128 else 2048
-                model_config = get_model_config(
-                    model_config_str="BFLOAT16-DRAM", num_devices=self.n_devices, seq_len=prefill_seq_len
-                )
+                model_config = get_model_config(batch=batch, seq_len=prefill_seq_len)
                 self.tt_model.set_model_config(model_config)
             return self.prefill_forward(tokens, start_pos, *args, **kwargs)
 
