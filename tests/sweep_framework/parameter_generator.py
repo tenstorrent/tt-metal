@@ -9,6 +9,7 @@ import importlib
 import pathlib
 import sqlite3
 import datetime
+import shortuuid
 
 from architecture import str_to_arch
 from permutations import *
@@ -38,7 +39,9 @@ def export_test_vectors(vectors):
     connection = sqlite3.connect(str(OUTPUT_DIR) + "/vectors.sqlite")
     cursor = connection.cursor()
 
-    parameter_names = get_parameter_names(list(vectors)[0])
+    parameter_names = get_parameter_names(vectors[0])
+    batch_id = str(shortuuid.uuid())
+    # TODO: Duplicate batch check?
     column_names = ["sweep_name", "timestamp", "batch_id"] + parameter_names
 
     table_name = MODULE_NAME + "_test_vectors"
@@ -48,7 +51,7 @@ def export_test_vectors(vectors):
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     for vector in vectors:
-        row = [MODULE_NAME, current_time, ""] + list(get_parameter_values(parameter_names, vector))
+        row = [MODULE_NAME, current_time, batch_id] + list(get_parameter_values(parameter_names, vector))
         row = [str(value) for value in row]
         row_placeholders = ", ".join(["?"] * len(row))
         command = f"INSERT INTO {table_name} VALUES ({row_placeholders})"
@@ -59,7 +62,7 @@ def export_test_vectors(vectors):
 
 
 # Generate one or more sets of test vectors depending on module_name
-def generate_tests(module_name, arch, output_dir):
+def generate_tests(module_name, arch):
     global MODULE_NAME
     MODULE_NAME = module_name
 
@@ -95,4 +98,4 @@ if __name__ == "__main__":
     if not OUTPUT_DIR.exists():
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    generate_tests(args.module_name, str_to_arch(args.arch), args.output_dir)
+    generate_tests(args.module_name, str_to_arch(args.arch))
