@@ -398,24 +398,6 @@ static void build_failure(const string& target_name, const string& op, const str
 
 void JitBuildState::pre_compile(const string& kernel_in_path, const string& op_out_path) const {}
 
-void JitBuildState::copy_kernel(const string& kernel_in_path, const string& op_out_path) const {
-    // TODO(pgk): get rid of this copy, compile kernel file in place as its own .o
-    const string out_dir = this->out_path_ + op_out_path + this->target_name_;
-    const string dst = out_dir + "/kernel.cpp";
-    // Assume kernel_in_path is absolute and test if it exists, if it doesn't exist then assume
-    // it's relative to TT_METAL_HOME.
-    const string src = fs::exists(kernel_in_path) ? kernel_in_path : env_.get_root_path() + kernel_in_path;
-    fs::copy(src, dst, fs::copy_options::overwrite_existing);
-}
-
-void JitBuildDataMovement::pre_compile(const string& kernel_in_path, const string& op_out_path) const {
-    copy_kernel(kernel_in_path, op_out_path);
-}
-
-void JitBuildEthernet::pre_compile(const string& kernel_in_path, const string& op_out_path) const {
-    copy_kernel(kernel_in_path, op_out_path);
-}
-
 void JitBuildState::compile_one(
     const string& log_file,
     const string& out_dir,
