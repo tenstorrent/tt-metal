@@ -891,30 +891,6 @@ std::vector<Tensor> relu_bw(const Tensor& grad, const Tensor& input, const Memor
     return operation::decorate_as_composite(__func__, _relu_bw)(grad, input, output_mem_config);
 }
 
-std::vector<Tensor> _atan2_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    float t_nan = std::nanf("");
-    UnaryWithParam op1{UnaryOpType::SQUARE};
-    UnaryWithParam op2{UnaryOpType::RECIP};
-    Tensor recip_mul =
-        ttnn::multiply(grad, unary_chain(hypot(input, other), {op1, op2}, output_mem_config), std::nullopt, output_mem_config);
-    Tensor grad_a = ttnn::multiply(other, recip_mul, std::nullopt, output_mem_config);
-    Tensor cond = ttnn::logical_and(eqz(input, output_mem_config), eqz(other, output_mem_config));
-    grad_a = where(cond, t_nan, grad_a, output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    Tensor grad_b = ttnn::multiply(neg(input), recip_mul, std::nullopt, output_mem_config);
-    grad_b = where(cond, t_nan, grad_b, output_mem_config);
-    recip_mul.deallocate();
-    cond.deallocate();
-    grad_tensor.emplace_back(grad_b);
-    return grad_tensor;
-}
-std::vector<Tensor> atan2_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _atan2_bw)(grad, input, other, output_mem_config);
-}
-
 std::vector<Tensor> _hypot_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
