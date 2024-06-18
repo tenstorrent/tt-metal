@@ -129,7 +129,7 @@ class TtFalconMLP:
             hidden_states,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
         for i in range(len(hidden_states)):
             hidden_states[i] = ttnn.experimental.tensor.interleaved_to_sharded(
@@ -173,7 +173,7 @@ class TtFalconMLP:
             hidden_states,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
 
         for i in range(len(hidden_states)):

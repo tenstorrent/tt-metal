@@ -521,7 +521,7 @@ class TtFalconAttention:
             attn_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
 
         for i in range(len(attn_output)):
@@ -811,7 +811,7 @@ class TtFalconAttention:
             attn_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
 
         for i in range(len(attn_output)):
