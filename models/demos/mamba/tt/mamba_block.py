@@ -10,6 +10,7 @@ from typing import Callable
 
 from models.demos.mamba.reference.args import ModelArgs
 from models.demos.mamba.tt.mamba_one_step_ssm import TtMambaSSM
+from models.demos.mamba.tt.types import ModelMode
 
 
 class TtMambaBlock(torch.nn.Module):
@@ -20,8 +21,10 @@ class TtMambaBlock(torch.nn.Module):
         self.args = args
         self.batch_size = args.batch_size
         self.configs = configs
+        self.mode = args.mode
 
-        assert self.batch_size == 32, "Batch size must be 32 for now"
+        if self.mode == ModelMode.DECODE:
+            assert self.batch_size == 32, "Batch size must be 32 for now"
 
         in_proj_weight_name = "mixer.in_proj.weight"
 
@@ -45,35 +48,48 @@ class TtMambaBlock(torch.nn.Module):
         out_proj_weight_name = "mixer.out_proj.weight"
         self.out_proj_weights = load_fn(out_proj_weight_name, lambda x: x.transpose(-1, -2), tt_dtype=ttnn.bfloat8_b)
 
-        # conv states
         conv1d_weight_name = "mixer.conv1d.weight"
-        self.conv1d_weights = []
-        # conv1d_weights (2E, 1, 4)->(2E, 1)->(2E, 1, 1)->(1, 1, 2E)
-        for i in range(4):
-            self.conv1d_weights.append(
-                load_fn(
-                    conv1d_weight_name,
-                    lambda x: x[:, :, i].transpose(-1, -2).repeat(self.batch_size, 1).unsqueeze(0).unsqueeze(0),
-                    postfix=f"{i}_{args.batch_size}",
-                )
-            )
-
         conv1d_bias_name = "mixer.conv1d.bias"
-        self.conv1d_bias = load_fn(
-            conv1d_bias_name,
-            lambda x: x.repeat(self.args.batch_size, 1),
-            postfix=f"{args.batch_size}",
-        )
 
-        self.conv_states = []
-        for i in range(4):
-            self.conv_states.append(
-                load_fn(
-                    f"conv_state{i}",
-                    torch_tensor=torch.zeros(1, 1, self.batch_size, self.args.d_inner),
-                    postfix=f"{args.batch_size}",
+        if self.mode == ModelMode.DECODE:
+            self.conv1d_weights = []
+            # conv1d_weights (2E, 1, 4)->(2E, 1)->(2E, 1, 1)->(1, 1, 2E)
+            for i in range(4):
+                self.conv1d_weights.append(
+                    load_fn(
+                        conv1d_weight_name,
+                        lambda x: x[:, :, i].transpose(-1, -2).repeat(self.batch_size, 1).unsqueeze(0).unsqueeze(0),
+                        postfix=f"{i}_{args.batch_size}",
+                    )
                 )
+
+            self.conv1d_bias = load_fn(
+                conv1d_bias_name,
+                lambda x: x.repeat(self.args.batch_size, 1),
+                postfix=f"{args.batch_size}",
             )
+
+            # conv states
+            self.conv_states = []
+            for i in range(4):
+                self.conv_states.append(
+                    load_fn(
+                        f"conv_state{i}",
+                        torch_tensor=torch.zeros(1, 1, self.batch_size, self.args.d_inner),
+                        postfix=f"{args.batch_size}",
+                    )
+                )
+        elif self.mode == ModelMode.PREFILL:
+            self.torch_depthwise_conv1d = torch.nn.Conv1d(
+                in_channels=self.args.d_inner,
+                out_channels=self.args.d_inner,
+                kernel_size=4,
+                padding=3,
+                groups=self.args.d_inner,
+                bias=True,
+            )
+            self.torch_depthwise_conv1d.weight.data = load_fn(conv1d_weight_name, return_as_torch=True)
+            self.torch_depthwise_conv1d.bias.data = load_fn(conv1d_bias_name, return_as_torch=True)
 
         self.tt_ssm = TtMambaSSM(self.args, self.device, configs, load_fn)
 
@@ -97,28 +113,20 @@ class TtMambaBlock(torch.nn.Module):
             dtype=self.configs["dtype"]["activations"],
         )
 
-        # shift the states leftward
-        ttnn.deallocate(self.conv_states[0])
-        for i in range(3):
-            self.conv_states[i] = self.conv_states[i + 1]
+        if self.mode == ModelMode.DECODE:
+            # shift the states leftward
+            ttnn.deallocate(self.conv_states[0])
+            for i in range(3):
+                self.conv_states[i] = self.conv_states[i + 1]
 
-        # update the last state and move it back to DRAM with all the other states
-        self.conv_states[3] = ttnn.to_memory_config(x_ssm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(x_ssm)
+            # update the last state and move it back to DRAM with all the other states
+            self.conv_states[3] = ttnn.to_memory_config(x_ssm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(x_ssm)
 
-        # do the convolution
-        conv1d_wt = ttnn.to_memory_config(self.conv1d_weights[0], memory_config=self.configs["sharded_d"])
-        conv_state = ttnn.to_memory_config(self.conv_states[0], memory_config=self.configs["sharded_d"])
-        conv_accumulator = ttnn.mul(
-            conv_state, conv1d_wt, memory_config=self.configs["sharded_d"], dtype=self.configs["dtype"]["activations"]
-        )
-        ttnn.deallocate(conv1d_wt)
-        ttnn.deallocate(conv_state)
-
-        for i in range(1, 4):
-            conv1d_wt = ttnn.to_memory_config(self.conv1d_weights[i], memory_config=self.configs["sharded_d"])
-            conv_state = ttnn.to_memory_config(self.conv_states[i], memory_config=self.configs["sharded_d"])
-            prod = ttnn.mul(
+            # do the convolution
+            conv1d_wt = ttnn.to_memory_config(self.conv1d_weights[0], memory_config=self.configs["sharded_d"])
+            conv_state = ttnn.to_memory_config(self.conv_states[0], memory_config=self.configs["sharded_d"])
+            conv_accumulator = ttnn.mul(
                 conv_state,
                 conv1d_wt,
                 memory_config=self.configs["sharded_d"],
@@ -127,22 +135,54 @@ class TtMambaBlock(torch.nn.Module):
             ttnn.deallocate(conv1d_wt)
             ttnn.deallocate(conv_state)
 
-            conv_out = ttnn.add(
-                conv_accumulator,
-                prod,
+            for i in range(1, 4):
+                conv1d_wt = ttnn.to_memory_config(self.conv1d_weights[i], memory_config=self.configs["sharded_d"])
+                conv_state = ttnn.to_memory_config(self.conv_states[i], memory_config=self.configs["sharded_d"])
+                prod = ttnn.mul(
+                    conv_state,
+                    conv1d_wt,
+                    memory_config=self.configs["sharded_d"],
+                    dtype=self.configs["dtype"]["activations"],
+                )
+                ttnn.deallocate(conv1d_wt)
+                ttnn.deallocate(conv_state)
+
+                conv_out = ttnn.add(
+                    conv_accumulator,
+                    prod,
+                    memory_config=self.configs["sharded_d"],
+                    dtype=self.configs["dtype"]["activations"],
+                )
+                ttnn.deallocate(conv_accumulator)
+                ttnn.deallocate(prod)
+                conv_accumulator = conv_out
+
+            conv1d_bias = ttnn.to_memory_config(self.conv1d_bias, memory_config=self.configs["sharded_d"])
+            conv_out_with_bias = ttnn.add(
+                conv_out,
+                conv1d_bias,
                 memory_config=self.configs["sharded_d"],
                 dtype=self.configs["dtype"]["activations"],
             )
-            ttnn.deallocate(conv_accumulator)
-            ttnn.deallocate(prod)
-            conv_accumulator = conv_out
+            ttnn.deallocate(conv_out)
+            ttnn.deallocate(conv1d_bias)
 
-        conv1d_bias = ttnn.to_memory_config(self.conv1d_bias, memory_config=self.configs["sharded_d"])
-        conv_out_with_bias = ttnn.add(
-            conv_out, conv1d_bias, memory_config=self.configs["sharded_d"], dtype=self.configs["dtype"]["activations"]
-        )
-        ttnn.deallocate(conv_out)
-        ttnn.deallocate(conv1d_bias)
+        elif self.mode == ModelMode.PREFILL:
+            x_ssm_torch = ttnn.to_torch(x_ssm)
+            ttnn.deallocate(x_ssm)
+            x_ssm_torch = x_ssm_torch.squeeze(0).squeeze(0).permute(1, 0).unsqueeze(0)
+            conv_out_with_bias = self.torch_depthwise_conv1d(x_ssm_torch)
+            x_ssm_torch.data = torch.tensor([])
+            # omit the padding at the end
+            conv_out_with_bias = conv_out_with_bias[:, :, :-3]
+            conv_out_with_bias = conv_out_with_bias.squeeze(0).permute(1, 0).unsqueeze(0).unsqueeze(0)
+            conv_out_with_bias = ttnn.from_torch(
+                conv_out_with_bias,
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=self.configs["dtype"]["activations"],
+            )
 
         conv_out_with_bias_l1 = ttnn.to_memory_config(conv_out_with_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
         conv_out_after_silu = ttnn.silu(conv_out_with_bias_l1, memory_config=ttnn.L1_MEMORY_CONFIG)
