@@ -28,6 +28,7 @@ run_t3000_ttnn_tests() {
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
   pytest tests/ttnn/unit_tests/test_multi_device_trace.py
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_trace.py
   pytest tests/ttnn/unit_tests/test_multi_device.py
   pytest tests/ttnn/unit_tests/test_multi_device_async.py
   # Record the end time

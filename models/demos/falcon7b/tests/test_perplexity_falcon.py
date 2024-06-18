@@ -8,20 +8,25 @@ from loguru import logger
 from transformers import AutoTokenizer
 from tqdm import tqdm
 import time
+import numpy as np
 import ttnn
 from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b.tt.model_config import get_model_config
 from models.demos.falcon7b.tests.test_utils import initialize_kv_cache, load_hf_model
-from models.datasets.llm_dataset_utils import prepare_textgen_dataset, prepare_textgen_dataloader
-from models.utility_functions import is_wormhole_b0, get_devices_for_t3000, tt_tensors_to_torch_tensors
+from models.datasets.llm_dataset_utils import (
+    prepare_textgen_dataset,
+    prepare_textgen_dataloader,
+    calculate_acc_metrics,
+    verify_acc_metrics,
+)
+from models.utility_functions import is_wormhole_b0, tt_tensors_to_torch_tensors
 
 
 def calculate_perplexity(model, dataloader, llm_mode, batch_size, seq_len, kv_cache, configuration, use_hf_model=False):
     if llm_mode == "prefill" and not use_hf_model:
         assert batch_size == 1
     use_cache = True
-    loss_func = torch.nn.CrossEntropyLoss()
-    nlls = []
+    running_nll, running_top1_acc, running_top5_acc = 0.0, 0.0, 0.0
     with torch.no_grad():
         for input_ids, labels in tqdm(dataloader, desc="Evaluating batches"):
             if llm_mode == "prefill":
@@ -96,12 +101,19 @@ def calculate_perplexity(model, dataloader, llm_mode, batch_size, seq_len, kv_ca
 
                 logits = torch.cat(logits, dim=1)
 
-            loss = loss_func(logits.view(batch_size * seq_len, configuration.vocab_size), labels.view(-1))
-            nlls.append(loss.float())
+            # Re-shape logits and labels and calculate metrics
+            logits = logits.view(batch_size * seq_len, configuration.vocab_size)
+            labels = labels.view(-1)
+            nll, top1_acc, top5_acc = calculate_acc_metrics(logits, labels)
+            running_nll += nll
+            running_top1_acc += top1_acc
+            running_top5_acc += top5_acc
 
-    nll = torch.stack(nlls).mean()
-    ppl = torch.exp(nll)
-    return nll.item(), ppl.item()
+    nll = running_nll / len(dataloader)
+    ppl = np.exp(nll)
+    top1_acc = running_top1_acc / len(dataloader)
+    top5_acc = running_top5_acc / len(dataloader)
+    return nll, ppl, top1_acc, top5_acc
 
 
 def run_test_perplexity(
@@ -113,7 +125,7 @@ def run_test_perplexity(
     get_tt_cache_path,
     devices,
     num_samples,
-    expected_ppl,
+    expected_acc_metrics,
     stride=None,
     model_version="tiiuae/falcon-7b-instruct",
     num_layers=32,
@@ -168,29 +180,37 @@ def run_test_perplexity(
     # Evaluate perplexity
     logger.info("Evaluating perplexity...")
     start = time.time()
-    nll, ppl = calculate_perplexity(
+    nll, ppl, top1_acc, top5_acc = calculate_perplexity(
         model, dataloader, llm_mode, batch_size, max_seq_len, kv_cache, configuration, use_hf_model=use_hf_model
     )
     logger.info(f"Perplexity evaluation time: {(time.time() - start):.2f} s")
     logger.info(f"Negative log-likelihood: {nll:.4f}")
     logger.info(f"Perplexity: {ppl:.4f}")
+    logger.info(f"Top-1 accuracy: {top1_acc:.4f}")
+    logger.info(f"Top-5 accuracy: {top5_acc:.4f}")
 
-    if ppl > expected_ppl:
-        assert False, f"Perplexity {ppl} is higher (worse) than {expected_ppl}"
-    elif ppl < 0.95 * expected_ppl:
-        assert False, f"Perplexity {ppl} is lower (better) than {expected_ppl}. Please update the expected perplexity."
-    logger.info("Falcon Perplexity Check Passed!")
+    # Verify metrics against targets
+    calculated_acc_metrics = {"ppl": ppl, "top1_acc": top1_acc, "top5_acc": top5_acc}
+    verify_acc_metrics(calculated_acc_metrics, expected_acc_metrics)
 
 
 @pytest.mark.parametrize(
-    "llm_mode, batch_size, max_seq_len, num_samples, expected_ppl",
+    "llm_mode, batch_size, max_seq_len, num_samples, expected_ppl, expected_top1, expected_top5",
     (
-        ("prefill", 32, 1024, 64, 11.5),
-        ("decode", 64, 1024, 64, 11.5),
+        ("prefill", 32, 128, 64, 19.67, 0.41, 0.66),
+        ("prefill", 32, 1024, 64, 11.19, 0.48, 0.72),
+        ("prefill", 32, 2048, 64, 9.81, 0.50, 0.74),
+        ("decode", 64, 128, 64, 19.67, 0.41, 0.66),
+        ("decode", 64, 1024, 64, 11.19, 0.48, 0.72),
+        ("decode", 64, 2048, 64, 9.81, 0.50, 0.74),
     ),
     ids=[
+        "prefill_seq128",
         "prefill_seq1024",
+        "prefill_seq2048",
+        "decode_128",
         "decode_1024",
+        "decode_2048",
     ],
 )
 def test_perplexity_huggingface(
@@ -199,6 +219,8 @@ def test_perplexity_huggingface(
     max_seq_len,
     num_samples,  # Total number of prompts to evaluate (all if None)
     expected_ppl,
+    expected_top1,
+    expected_top5,
     model_location_generator,
 ):
     run_test_perplexity(
@@ -210,24 +232,31 @@ def test_perplexity_huggingface(
         None,
         None,
         num_samples,
-        expected_ppl,
+        {"ppl": expected_ppl, "top1_acc": expected_top1, "top5_acc": expected_top5},
         use_hf_model=True,
     )
 
 
 @pytest.mark.parametrize(
-    "llm_mode, batch_size, max_seq_len, model_config_str, num_samples, expected_ppl",
+    "llm_mode, batch_size, max_seq_len, model_config_str, num_samples, expected_ppl, expected_top1, expected_top5",
     (
-        ("prefill", 1, 1024, "BFLOAT16-DRAM", 64, 12.0),
-        ("decode", 32, 1024, "BFLOAT16-L1_SHARDED", 64, 12.5),
+        ("prefill", 1, 128, "BFLOAT16-DRAM", 64, 20.69, 0.40, 0.65),
+        ("prefill", 1, 1024, "BFLOAT16-DRAM", 64, 11.77, 0.48, 0.71),
+        ("prefill", 1, 2048, "BFLOAT16-DRAM", 64, 10.31, 0.49, 0.73),
+        ("decode", 32, 128, "BFLOAT16-L1_SHARDED", 64, 21.39, 0.39, 0.64),
+        ("decode", 32, 1024, "BFLOAT16-L1_SHARDED", 64, 12.01, 0.47, 0.71),
+        ("decode", 32, 2048, "BFLOAT16-L1_SHARDED", 64, 10.59, 0.49, 0.73),
     ),
     ids=[
+        "prefill_seq128_dram",
         "prefill_seq1024_dram",
+        "prefill_seq2048_dram",
+        "decode_128_l1_sharded",
         "decode_1024_l1_sharded",
+        "decode_2048_l1_sharded",
     ],
 )
 @pytest.mark.parametrize("async_mode", (True,))  # Option to run Falcon in Async mode
-@pytest.mark.parametrize("num_devices", (1,))
 def test_perplexity(
     llm_mode,
     batch_size,
@@ -235,18 +264,17 @@ def test_perplexity(
     model_config_str,
     num_samples,  # Total number of prompts to evaluate (all if None)
     expected_ppl,
+    expected_top1,
+    expected_top5,
     async_mode,
-    num_devices,
     model_location_generator,
     get_tt_cache_path,
-    all_devices,
+    device,
     use_program_cache,
 ):
-    assert is_wormhole_b0(), "Multi-chip is only supported for Wormhole B0"
-    devices = get_devices_for_t3000(all_devices, num_devices)
+    assert is_wormhole_b0(), "This test is only for Wormhole B0"
 
-    for device in devices:
-        device.enable_async(async_mode)
+    device.enable_async(async_mode)
 
     run_test_perplexity(
         llm_mode,
@@ -255,7 +283,7 @@ def test_perplexity(
         model_config_str,
         model_location_generator,
         get_tt_cache_path,
-        devices,
+        [device],
         num_samples,
-        expected_ppl,
+        {"ppl": expected_ppl, "top1_acc": expected_top1, "top5_acc": expected_top5},
     )

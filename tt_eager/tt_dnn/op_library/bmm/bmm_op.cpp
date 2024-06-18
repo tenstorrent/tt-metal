@@ -1703,9 +1703,12 @@ MatmulProgramConfig create_matmul_program_config(
     auto height = batch_size_a * m_size;
     auto width = n_size;
     auto height_width_ratio = (height > width) ? height / width : width / height;
+    bool a_is_block_sharded = a_layout == TensorMemoryLayout::BLOCK_SHARDED;
     if (height_width_ratio > 8 || any_size_within_tile) {
-        return create_matmul_1d_systolic_array_program_config(
-            a_shape, b_shape, core_coord, fused_activation, fp32_dest_acc_en, a_layout);
+        if (!a_is_block_sharded) {
+            return create_matmul_1d_systolic_array_program_config(
+                    a_shape, b_shape, core_coord, fused_activation, fp32_dest_acc_en, a_layout);
+        }
     }
     if (!a_is_sharded) {
         m_tiles_per_core = (uint32_t)std::ceil((((double)batch_size_a * m_size) / ttnn::TILE_SIZE) / core_coord.y);
@@ -1715,7 +1718,7 @@ MatmulProgramConfig create_matmul_program_config(
             k_tiles_per_core -= 1;
         }
     } else {
-        if (a_layout != TensorMemoryLayout::BLOCK_SHARDED) {
+        if (!a_is_block_sharded) {
             return create_matmul_1d_systolic_array_program_config(
                     a_shape, b_shape, core_coord, fused_activation, fp32_dest_acc_en, a_layout);
         }
@@ -1730,9 +1733,7 @@ MatmulProgramConfig create_matmul_program_config(
     auto matmul_params = bmm_op_utils::get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, fp32_dest_acc_en);
     uint32_t out_subblock_h = std::get<0>(matmul_params);
     uint32_t out_subblock_w = std::get<1>(matmul_params);
-    bool transpose_mcast =
-        a_layout == TensorMemoryLayout::BLOCK_SHARDED &&
-        input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
+    bool transpose_mcast = a_is_block_sharded && input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
     if (out_subblock_w != n_tiles_per_core) {
         out_subblock_h = 1;
     }

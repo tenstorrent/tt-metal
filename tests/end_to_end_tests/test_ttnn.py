@@ -13,7 +13,6 @@ import ttnn.operations.binary
 @pytest.mark.eager_host_side
 def test_ttnn_host_tensor(reset_seeds):
     torch_input_tensor = torch.zeros(2, 4, dtype=torch.float32)
-
     tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16)
     torch_output_tensor = ttnn.to_torch(tensor)
 
