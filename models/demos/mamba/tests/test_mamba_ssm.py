@@ -56,6 +56,8 @@ def test_mamba_ssm_inference(
 
     reference_model = MambaDecode.from_pretrained(model_version)
     reference_model.args.batch_size = batch
+    reference_model.args.seq_len = 1
+    reference_model.args.mode = ModelMode.DECODE
 
     d_in = reference_model.args.d_model * reference_model.args.expand
     input = torch.rand(batch, 1, d_in)
@@ -124,6 +126,9 @@ def test_mamba_ssm_prefill(
 
     logger.info(f"Creating prefill reference model on CPU (model_version='{model_version}')")
     reference_model = MambaPrefill.from_pretrained(model_version)
+    reference_model.args.batch_size = batch
+    reference_model.args.seq_len = seqlen
+    reference_model.args.mode = ModelMode.PREFILL
 
     d_in = reference_model.args.d_model * reference_model.args.expand
     input = torch.rand(batch, seqlen, d_in)  # (B, L, D_IN)
@@ -144,7 +149,7 @@ def test_mamba_ssm_prefill(
     )
 
     logger.info(f"Running model on device (input={input.shape})")
-    actual = model(input, mode=ModelMode.PREFILL)  # (1, B, L, D_IN)
+    actual = model(input)  # (1, B, L, D_IN)
     actual = ttnn.to_torch(actual)
 
     does_pass, output_pcc = comp_pcc(expected, actual, pcc)

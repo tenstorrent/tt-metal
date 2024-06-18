@@ -26,6 +26,8 @@ class TtMambaSSM(torch.nn.Module):
         self.configs = configs
         self.n = 32
         self.rank = self.args.dt_rank
+        self.seq_len = args.seq_len
+        self.mode = args.mode
 
         """
         We need to split up the x_proj weights because in the reference
@@ -79,7 +81,7 @@ class TtMambaSSM(torch.nn.Module):
             x = -torch.exp(x.float())  # (2E, N) where N=16
             x = torch.nn.functional.pad(x, (0, 16), "constant", float("-inf"))  # (2E, N) where N=32
             x = x.reshape(1, x.shape[0] * x.shape[1])  # (1, 2EN)
-            return x.repeat(self.batch_size, 1)  # (B, 2EN)
+            return x.repeat(self.batch_size * self.seq_len, 1)  # (B, 2EN)
 
         self.A = load_fn(A_weight_name, tm_fn=preprocess_A, postfix=f"A_{self.args.batch_size}")
 
@@ -113,7 +115,7 @@ class TtMambaSSM(torch.nn.Module):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    def forward(self, x: ttnn.Tensor, mode: ModelMode = ModelMode.DECODE):
+    def forward(self, x: ttnn.Tensor):
         assert len(x.shape) == 4, "SSM block expects inputs to be rank 4"
 
         # delta
@@ -206,7 +208,7 @@ class TtMambaSSM(torch.nn.Module):
         # deallocate bbar
         ttnn.deallocate(bbar0)
 
-        if mode == ModelMode.PREFILL:
+        if self.mode == ModelMode.PREFILL:
             hidden_state1 = self.prefix_scan(abar2, bmulx0)
         else:
             # multiply abar and hidden_state
