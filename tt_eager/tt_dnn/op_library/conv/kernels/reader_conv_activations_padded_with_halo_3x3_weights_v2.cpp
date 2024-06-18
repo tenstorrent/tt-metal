@@ -21,12 +21,12 @@ void kernel_main() {
     constexpr uint32_t window_outer = get_compile_time_arg_val(6);
     constexpr uint32_t window_inner = get_compile_time_arg_val(7);
     constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(8);
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(9);
     constexpr uint32_t weight_size_w = get_compile_time_arg_val(10);
     constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(11);
     constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(12);
     constexpr uint32_t weight_size_h= get_compile_time_arg_val(13);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(14);
+    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(15);
 
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;

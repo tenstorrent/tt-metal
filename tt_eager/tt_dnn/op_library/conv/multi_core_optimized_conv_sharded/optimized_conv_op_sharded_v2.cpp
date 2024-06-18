@@ -1593,7 +1593,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
 
     //uint32_t num_blocks_act_h = act_matrix_height_ntiles / act_block_h_ntiles;
     //uint32_t num_blocks_out_h = act_matrix_height_ntiles / out_block_h_ntiles;
-    uint32_t num_blocks_act_w = a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ? weight_size_h * weight_size_w : weight_size_h;
+    uint32_t num_blocks_act_w = a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ? 1 : weight_size_h;
+    uint32_t num_blocks_weight_h = a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ? weight_size_h * weight_size_w : num_blocks_act_w;
     //uint32_t num_blocks_weight_w = weight_matrix_width_ntiles / weight_block_w_ntiles;
 
     // act block info
@@ -1608,8 +1609,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     uint32_t weight_block_w_datums = weight_block_w_ntiles * TILE_WIDTH;
     assert(weight_block_w_ntiles % out_subblock_w_ntiles == 0);
     uint32_t weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
-    uint32_t weight_block_h_ntiles = act_block_w_ntiles;
-    uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles * conv_act_c_blocks;
+    uint32_t weight_block_h_ntiles = a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ? input_channels_padded / TILE_HEIGHT : act_block_w_ntiles;
+    uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles;
 
     //uint32_t num_groups = num_blocks_act_h * num_blocks_act_w * num_blocks_weight_w;
     // writer of conv op partially removes padding on the width
@@ -1692,53 +1693,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     //uint32_t dst_l1_weight_buffer_size_bytes =
     //    weight_block_h_ntiles * weight_block_w_ntiles * tt::tt_metal::detail::TileSize(weight_df);
 
-    // For debug
-    {
-        log_debug(LogOp, "multi_core_optimized_conv_sharded_v2_");
-        //log_debug(LogOp, "conv_act_size_h: {}", conv_act_size_h);
-        //log_debug(LogOp, "conv_act_size_w: {}", conv_act_size_w);
-        //log_debug(LogOp, "act_matrix_height: {}", act_matrix_height);
-        log_debug(LogOp, "act_matrix_width: {}", act_matrix_width);
-        //log_debug(LogOp, "act_matrix_height_unpadded: {}", act_matrix_height_unpadded);
-        log_debug(LogOp, "act_matrix_width_unpadded: {}", act_matrix_width_unpadded);
-        //log_debug(LogOp, "act_matrix_height_ntiles: {}", act_matrix_height_ntiles);
-        //log_debug(LogOp, "act_matrix_width_ntiles: {}", act_matrix_width_ntiles);
-        log_debug(LogOp, "weight_matrix_width_ntiles: {}", weight_matrix_width_ntiles);
-        log_debug(LogOp, "per_core_out_matrix_height_ntiles: {}", per_core_out_matrix_height_ntiles);
-        log_debug(LogOp, "per_core_out_matrix_width_ntiles: {}", per_core_out_matrix_width_ntiles);
-        //log_debug(LogOp, "num_blocks_act_h: {}", num_blocks_act_h);
-        log_debug(LogOp, "num_blocks_act_w: {}", num_blocks_act_w);
-        //log_debug(LogOp, "num_blocks_weight_w: {}", num_blocks_weight_w);
-        //log_debug(LogOp, "num_blocks_out_h: {}", num_blocks_out_h);
-        log_debug(LogOp, "act_dram_addr: {}", act_dram_addr);
-        log_debug(LogOp, "act_block_h_ntiles: {}", act_block_h_ntiles);
-        log_debug(LogOp, "act_block_h_datums: {}", act_block_h_datums);
-        log_debug(LogOp, "act_block_w_ntiles: {}", act_block_w_ntiles);
-        log_debug(LogOp, "act_block_w_datums: {}", act_block_w_datums);
-        log_debug(LogOp, "out_block_h_ntiles: {}", out_block_h_ntiles);
-        log_debug(LogOp, "act_num_subblocks: {}", act_num_subblocks);
-        log_debug(LogOp, "act_block_num_tiles: {}", act_block_num_tiles);
-        log_debug(LogOp, "act_subblock_h_ntiles: {}", act_subblock_h_ntiles);
-        log_debug(LogOp, "act_subblock_num_tiles: {}", act_subblock_num_tiles);
-        log_debug(LogOp, "out_subblock_num_tiles: {}", out_subblock_num_tiles);
-        log_debug(LogOp, "weight_dram_addr: {}", weight_dram_addr);
-        log_debug(LogOp, "weight_num_subblocks: {}", weight_num_subblocks);
-        log_debug(LogOp, "weight_block_num_tiles: {}", weight_block_num_tiles);
-        log_debug(LogOp, "weight_block_w_ntiles: {}", weight_block_w_ntiles);
-        log_debug(LogOp, "weight_block_h_ntiles: {}", weight_block_h_ntiles);
-        log_debug(LogOp, "has_bias: {}", has_bias);
-        log_debug(LogOp, "bias_dram_addr: {}", bias_dram_addr);
-        log_debug(LogOp, "bias_ntiles: {}", bias_ntiles);
-        log_debug(LogOp, "out_dram_addr: {}", out_dram_addr);
-        log_debug(LogOp, "out_subblock_h_ntiles: {}", out_subblock_h_ntiles);
-        log_debug(LogOp, "out_subblock_w_ntiles: {}", out_subblock_w_ntiles);
-        log_debug(LogOp, "out_subblock_num_tiles: {}", out_subblock_num_tiles);
-        //log_debug(LogOp, "num_groups: {}", num_groups);
-        log_debug(LogOp, "math_fidelity: {}", math_fidelity);
-        log_debug(LogOp, "math_approx_mode: {}", math_approx_mode);
-        log_debug(LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
-        log_debug(LogOp, "packer_l1_acc: {}", packer_l1_acc);
-    }
 
     uint32_t window_outer;
     uint32_t window_inner;
@@ -1792,8 +1746,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     }
 
     //log_debug(LogOp, "total_num_cores_per_weight_slice: {}", total_num_cores_per_weight_slice);
-    log_debug(LogOp, "num_blocks_act_h_per_core: {}", num_blocks_act_h_per_core);
-    log_debug(LogOp, "num_blocks_out_h_per_core: {}", num_blocks_out_h_per_core);
 
     //assert(act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0);
     //uint32_t total_active_num_cores_per_weight_slice = act_matrix_height_ntiles / per_core_out_matrix_height_ntiles;
@@ -1886,7 +1838,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     }
 
     bool read_window_in_inner_loop = false;
-    uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles;
+    uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles / conv_act_c_blocks;
     bool fully_buffer_weights = false;
     uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles;
     // TODO: This flag should be set in kernel logic but need this for create_CB
@@ -1897,7 +1849,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         // TODO: Generalize this to not make this assumption
         read_window_in_inner_loop = true;
         num_weight_cb_tiles *= weight_size_h * weight_size_w;
-        num_act_cb_tiles *= weight_size_h * weight_size_w;
+        //num_act_cb_tiles *= weight_size_h * weight_size_w;
     } else if (num_blocks_act_h_per_core > 1) {
         fully_buffer_weights = true;
     }
@@ -1929,9 +1881,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         (round_up(a_shard_spec.shape[1] * weight_size_w, TILE_WIDTH) - (a_shard_spec.shape[1] * weight_size_w)) * a.element_size();
     cout << "act_block_w_extra_align_bytes: " << act_block_w_extra_align_bytes << endl;
     uint32_t in0_block_w = act_block_w_ntiles; // todo (nitika): fix how this value is set in conv2d.cpp
-    uint32_t in0_block_num_tiles = act_block_num_tiles;
-    uint32_t in0_subblock_num_tiles = act_subblock_num_tiles;
-    uint32_t in1_block_num_tiles = weight_block_num_tiles;
+    uint32_t in1_block_num_tiles = weight_block_num_tiles / conv_act_c_blocks;
     uint32_t in0_num_blocks_w =
         num_blocks_act_w * conv_act_c_blocks;  // Fold outer c_block loop together with weight_block_num_tiles = 9
 
@@ -2052,11 +2002,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
 
     if (read_window_in_inner_loop) {
         const uint32_t window_size = weight_size_h * weight_size_w;
-        in0_block_w *= window_size;
-        in0_block_num_tiles *= window_size;
-        in0_subblock_num_tiles *= window_size;
+        //in0_block_w *= window_size;
+        //act_block_num_tiles *= window_size;
+        //act_subblock_num_tiles *= window_size;
         in1_block_num_tiles *= window_size;
-        in0_num_blocks_w /= window_size;
+        //in0_num_blocks_w /= window_size;
     }
 
     reader_compile_time_args = {
@@ -2075,13 +2025,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         (uint32_t)act_block_w_extra_align_bytes,  // only used for 1d systolic variant
         (uint32_t)weight_size_h,
         (uint32_t)num_blocks_act_h_per_core,                              // act_num_blocks_h
-        (uint32_t)in0_block_num_tiles,                                    // act_block_num_tiles
+        (uint32_t)act_block_num_tiles,                                    // act_block_num_tiles
         (uint32_t)conv_act_c_blocks,                                      // act_w_num_outer
         (uint32_t)(transpose_mcast ? num_cores_y - 1 : num_cores_x - 1),  // act_mcast_num_dests
         (uint32_t)(transpose_mcast ? num_cores_y - 1 : num_cores_x - 1),  // act_mcast_num_cores
         (uint32_t)act_mcast_sender_semaphore,
         (uint32_t)act_mcast_receiver_semaphore,
-        (uint32_t)in0_block_num_tiles * tilized_act_tile_size,  // act_mcast_sender_size_bytes
+        (uint32_t)act_block_num_tiles * tilized_act_tile_size,  // act_mcast_sender_size_bytes
         (uint32_t)(transpose_mcast ? 1 : 0),
     };
 
@@ -2125,13 +2075,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         weight_cb,
         bias_cb,
         (uint32_t)(bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0)),
-        num_blocks_act_w,  // = number of blocks of weight in height dim
+        num_blocks_weight_h,  // = number of blocks of weight in height dim
         in1_block_num_tiles,
         conv_act_c_blocks,
-        weight_block_h_ntiles,
+        weight_block_h_ntiles / conv_act_c_blocks,
         weight_block_w_ntiles,
         weight_matrix_width_ntiles,                          // weight_stride_h
-        weight_matrix_width_ntiles * weight_block_h_ntiles * conv_act_c_blocks,  // weight_next_block_stride_h,
+        weight_matrix_width_ntiles * weight_block_h_ntiles,  // weight_next_block_stride_h,
         weight_block_w_ntiles,                               // weight_next_block_stride_w
 
         // bias
@@ -2174,8 +2124,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     vector<uint32_t> compute_kernel_args = {
         in0_block_w,
         act_num_subblocks,
-        in0_block_num_tiles,
-        in0_subblock_num_tiles,
+        act_block_num_tiles,
+        act_subblock_num_tiles,
         act_subblock_h_ntiles,
 
         weight_num_subblocks,
@@ -2369,13 +2319,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
             out_start_tile_id_h,
             out_start_tile_id_w,
 
-            num_blocks_act_w,  // = number of blocks of weight in height dim
+            num_blocks_weight_h,  // = number of blocks of weight in height dim
             in1_block_num_tiles,
             conv_act_c_blocks,
-            weight_block_h_ntiles,
+            weight_block_h_ntiles / conv_act_c_blocks,
             weight_block_w_ntiles,
             weight_matrix_width_ntiles,                          // weight_stride_h
-            weight_matrix_width_ntiles * weight_block_h_ntiles * conv_act_c_blocks,  // weight_next_block_stride_h,
+            weight_matrix_width_ntiles * weight_block_h_ntiles,  // weight_next_block_stride_h,
             weight_block_w_ntiles,                               // weight_next_block_stride_w
 
             // bias
@@ -2566,6 +2516,56 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
                 UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
             }
         };
+        // For debug
+    {
+        log_debug(LogOp, "multi_core_optimized_conv_sharded_v2_");
+        //log_debug(LogOp, "conv_act_size_h: {}", conv_act_size_h);
+        //log_debug(LogOp, "conv_act_size_w: {}", conv_act_size_w);
+        //log_debug(LogOp, "act_matrix_height: {}", act_matrix_height);
+        log_debug(LogOp, "act_matrix_width: {}", act_matrix_width);
+        //log_debug(LogOp, "act_matrix_height_unpadded: {}", act_matrix_height_unpadded);
+        log_debug(LogOp, "act_matrix_width_unpadded: {}", act_matrix_width_unpadded);
+        //log_debug(LogOp, "act_matrix_height_ntiles: {}", act_matrix_height_ntiles);
+        //log_debug(LogOp, "act_matrix_width_ntiles: {}", act_matrix_width_ntiles);
+        log_debug(LogOp, "weight_matrix_width_ntiles: {}", weight_matrix_width_ntiles);
+        log_debug(LogOp, "per_core_out_matrix_height_ntiles: {}", per_core_out_matrix_height_ntiles);
+        log_debug(LogOp, "per_core_out_matrix_width_ntiles: {}", per_core_out_matrix_width_ntiles);
+        //log_debug(LogOp, "num_blocks_act_h: {}", num_blocks_act_h);
+        log_debug(LogOp, "num_blocks_act_w: {}", num_blocks_act_w);
+        log_debug(LogOp, "num_blocks_weight_h: {}", num_blocks_weight_h);
+        //log_debug(LogOp, "num_blocks_out_h: {}", num_blocks_out_h);
+        log_debug(LogOp, "act_dram_addr: {}", act_dram_addr);
+        log_debug(LogOp, "act_block_h_ntiles: {}", act_block_h_ntiles);
+        log_debug(LogOp, "act_block_h_datums: {}", act_block_h_datums);
+        log_debug(LogOp, "act_block_w_ntiles: {}", act_block_w_ntiles);
+        log_debug(LogOp, "act_block_w_datums: {}", act_block_w_datums);
+        log_debug(LogOp, "out_block_h_ntiles: {}", out_block_h_ntiles);
+        log_debug(LogOp, "act_num_subblocks: {}", act_num_subblocks);
+        log_debug(LogOp, "act_block_num_tiles: {}", act_block_num_tiles);
+        log_debug(LogOp, "act_subblock_h_ntiles: {}", act_subblock_h_ntiles);
+        log_debug(LogOp, "act_subblock_num_tiles: {}", act_subblock_num_tiles);
+        log_debug(LogOp, "out_subblock_num_tiles: {}", out_subblock_num_tiles);
+        log_debug(LogOp, "weight_dram_addr: {}", weight_dram_addr);
+        log_debug(LogOp, "weight_num_subblocks: {}", weight_num_subblocks);
+        log_debug(LogOp, "weight_block_num_tiles: {}", weight_block_num_tiles);
+        log_debug(LogOp, "weight_block_w_ntiles: {}", weight_block_w_ntiles);
+        log_debug(LogOp, "weight_block_h_ntiles: {}", weight_block_h_ntiles);
+        log_debug(LogOp, "has_bias: {}", has_bias);
+        log_debug(LogOp, "bias_dram_addr: {}", bias_dram_addr);
+        log_debug(LogOp, "bias_ntiles: {}", bias_ntiles);
+        log_debug(LogOp, "out_dram_addr: {}", out_dram_addr);
+        log_debug(LogOp, "out_subblock_h_ntiles: {}", out_subblock_h_ntiles);
+        log_debug(LogOp, "out_subblock_w_ntiles: {}", out_subblock_w_ntiles);
+        log_debug(LogOp, "out_subblock_num_tiles: {}", out_subblock_num_tiles);
+        //log_debug(LogOp, "num_groups: {}", num_groups);
+        log_debug(LogOp, "math_fidelity: {}", math_fidelity);
+        log_debug(LogOp, "math_approx_mode: {}", math_approx_mode);
+        log_debug(LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
+        log_debug(LogOp, "packer_l1_acc: {}", packer_l1_acc);
+        log_debug(LogOp, "num_blocks_act_h_per_core: {}", num_blocks_act_h_per_core);
+        log_debug(LogOp, "num_blocks_out_h_per_core: {}", num_blocks_out_h_per_core);
+    }
+
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 

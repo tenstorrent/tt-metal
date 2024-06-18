@@ -241,6 +241,7 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(
     const tt::tt_metal::OptimizedConvParallelizationConfigNew& conv_op_parallel_config,
     uint32_t padded_in_channels,
     uint32_t act_block_h_override,
+    uint32_t window_h,
     uint32_t window_w,
     bool fp32_accum,
     bool use_shallow_conv_variant) {
@@ -251,14 +252,14 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(
     }
     auto grid_size = parallel_config.grid.bounding_box().grid_size();
     uint32_t act_block_h_ntiles = act_block_h_override > 0 ? act_block_h_override / 32
-                                                           : conv_op_parallel_config.per_core_out_matrix_height * TILE_HEIGHT;
+                                                           : conv_op_parallel_config.per_core_out_matrix_height / TILE_HEIGHT;
     uint32_t act_c_num_blocks = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? 1
                                 : parallel_config.shard_orientation == ShardOrientation::COL_MAJOR ? grid_size.y
                                                                                                    : grid_size.x;
     TT_FATAL(padded_in_channels % act_c_num_blocks == 0);
     uint32_t act_block_w = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED
                             ? round_up(padded_in_channels * window_w, 32)
-                            : padded_in_channels / act_c_num_blocks;
+                            : (padded_in_channels / act_c_num_blocks) * window_h * window_w;
     TT_ASSERT(act_block_w % 32 == 0);
     uint32_t act_block_w_ntiles = act_block_w / 32;
     TT_FATAL(conv_op_parallel_config.per_core_out_matrix_height % TILE_HEIGHT == 0);
@@ -274,7 +275,7 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(
         out_subblock_h_ntiles = act_block_h_ntiles / 2;
         TT_ASSERT((out_subblock_h_ntiles * out_subblock_w_ntiles) <= 8);
     }
-    cout << "act_block_h_ntiles = " << act_block_h_ntiles << " act_block_w_ntiles = " << act_block_w_ntiles
+    cout << "act_block_h_override = " << act_block_h_override << " act_block_h_ntiles = " << act_block_h_ntiles << " act_block_w_ntiles = " << act_block_w_ntiles
          << " act_c_num_blocks = " << act_c_num_blocks << " out_block_h_ntiles = " << out_block_h_ntiles
          << " out_subblock_h_ntiles = " << out_subblock_h_ntiles << " out_subblock_w_ntiles = " << out_subblock_w_ntiles
          << endl;
@@ -473,6 +474,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t in_channels = weights_shape[1];
     uint32_t window_h = weights_shape[2];
     uint32_t window_w = weights_shape[3];
+    TT_FATAL(window_h == window_w, "Conv error: Uneven filter windows not supported");
     tt::tt_metal::Shape weights_channels_padded_shape = tt::tt_metal::Shape(std::array<uint32_t, 4>(
         {round_up(out_channels, 32), round_up(in_channels, input_channels_alignment), window_h, window_w}));
 
@@ -598,6 +600,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         opt_conv_op_parallel_config,
         round_up(in_channels, conv_config.input_channels_alignment),
         conv_config.act_block_h_override,
+        kernel_size[0],
         kernel_size[1],
         conv_config.fp32_dest_acc_enabled,
         conv_config.input_channels_alignment == 16);
