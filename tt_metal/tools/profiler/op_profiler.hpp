@@ -268,7 +268,8 @@ inline json get_base_json(
     json j;
     j["global_call_count"] = operation_id;
 
-    std::string opName = "device operation";
+    auto as_string = [](std::string_view v) -> std::string { return {v.data(), v.size()}; };
+    std::string opName = as_string(tt::stl::get_type_name<operation_t>());
     std::replace(opName.begin(), opName.end(), ',', ';');
     j["op_code"] = opName;
 
