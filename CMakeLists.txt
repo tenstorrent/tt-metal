@@ -140,6 +140,7 @@ if ("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
         ${UMD_HOME}/src/firmware/riscv/wormhole
     )
 else()
+    target_compile_options(compiler_flags INTERFACE -DDISABLE_ISSUE_3487_FIX)
     target_include_directories(metal_header_directories INTERFACE
         tt_metal/hw/inc/$ENV{ARCH_NAME}
         ${UMD_HOME}/device/$ENV{ARCH_NAME}
