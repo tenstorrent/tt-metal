@@ -722,7 +722,7 @@ void EnableAllocs(Device *device) { tt::tt_metal::allocator::enable_allocs(*(dev
 
 size_t GetNumAvailableDevices() {
 #ifdef TT_METAL_VERSIM_DISABLED
-    return tt::Cluster::instance().number_of_devices();
+    return tt::Cluster::instance().number_of_user_devices();
 #else
     return 1;
 #endif

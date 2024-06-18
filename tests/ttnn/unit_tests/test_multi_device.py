@@ -65,6 +65,32 @@ def test_multi_device_open_close_using_context_manager(silicon_arch_name, silico
         pass
 
 
+def test_multi_device_open_close_galaxy_mesh(silicon_arch_name, silicon_arch_wormhole_b0):
+    if ttnn.get_num_devices() < 32:
+        pytest.skip("Test is only valid on Galaxy")
+
+    """Manually open and close multi-device"""
+    device_grid, device_ids = ttnn.DeviceGrid(1, 4), ttnn.get_device_ids()
+    multi_device = ttnn.open_device_mesh(device_grid, device_ids)
+    assert multi_device.get_num_devices() == 4
+    ttnn.close_device_mesh(multi_device)
+
+    device_grid, device_ids = ttnn.DeviceGrid(8, 1), ttnn.get_device_ids()
+    multi_device = ttnn.open_device_mesh(device_grid, device_ids)
+    assert multi_device.get_num_devices() == 8
+    ttnn.close_device_mesh(multi_device)
+
+    device_grid, device_ids = ttnn.DeviceGrid(8, 4), ttnn.get_device_ids()
+    multi_device = ttnn.open_device_mesh(device_grid, device_ids)
+    assert multi_device.get_num_devices() == 32
+    ttnn.close_device_mesh(multi_device)
+
+    device_grid = ttnn.DeviceGrid(3, 2)
+    multi_device = ttnn.open_device_mesh(device_grid, device_ids)
+    assert multi_device.get_num_devices() == 6
+    ttnn.close_device_mesh(multi_device)
+
+
 #######
 # Simple Multi-Device Tensor tests
 #######
