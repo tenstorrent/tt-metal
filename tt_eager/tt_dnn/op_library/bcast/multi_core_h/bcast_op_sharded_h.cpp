@@ -82,10 +82,7 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
                                           .set_globally_allocated_address(*output.buffer());
     auto out_cb = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
-    uint32_t h_blk = std::min(Ht, 8u);
-    uint32_t w_blk = std::min(Wt, 8u);
-
-    uint32_t num_input_tiles = w_blk;
+    uint32_t num_input_tiles = (b.get_legacy_shape()[-1] * output.element_size() + TILE_HW - 1)/ TILE_HW;
     uint32_t src1_cb_index = CB::c_in1;
     tt_metal::CircularBufferConfig src1_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * aligned_input_tile_nbytes, {{src1_cb_index, act_df}})
         .set_page_size(src1_cb_index, aligned_input_tile_nbytes);
@@ -110,13 +107,13 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
     //const char* compute_name = bcast_op_utils::get_compute_name(BcastOpDim::H));
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/bcast/kernels/compute/bcast_h_sharded.cpp",
+        "tt_eager/tt_dnn/op_library/bcast/kernels/compute/bcast_h.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines}
     );
 
     uint32_t ncores_y = ncores / ncores_x;
-    log_debug("ncores {}, ncores_x {}, Wt {}, Ht {}, h_blk {}, w_blk {}, src0_cb_index {}, src1_cb_index {}, output_cb_index {}, src1_is_dram {}, dst_is_dram {}", ncores, ncores_x, Wt, Ht, h_blk, w_blk, src0_cb_index, src1_cb_index, output_cb_index, src1_is_dram, dst_is_dram);
+    log_debug("ncores {}, ncores_x {}, Wt {}, Ht {}, src0_cb_index {}, src1_cb_index {}, output_cb_index {}, src1_is_dram {}, dst_is_dram {}", ncores, ncores_x, Wt, Ht, src0_cb_index, src1_cb_index, output_cb_index, src1_is_dram, dst_is_dram);
     for (uint32_t i = 0; i < ncores; i++){
         CoreCoord core;
         uint32_t offset = 0;
@@ -152,8 +149,7 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
                 Wt, // 2
                 offset, // 3
                 Ht_per_core, // 4
-                tile_offset, // 5
-                w_blk, // 6
+                tile_offset, //5
             }
         );
 
@@ -165,7 +161,6 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
                 NC, // B
                 Ht, // Hbatch  for block shardeshardedt
                 Wt,  // Wt
-                h_blk, // h block size
             }
         );
     }
@@ -226,9 +221,6 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
             }
             uint32_t tile_offset = Wt * ncores;
 
-            uint32_t h_blk = std::min(Ht, 8u);
-            uint32_t w_blk = std::min(Wt, 8u);
-
             tt_metal::SetRuntimeArgs(
                 program,
                 binary_reader_kernel_id,
@@ -240,7 +232,6 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
                     offset, // 3
                     Ht_per_core, // 4
                     tile_offset, //5
-                    w_blk, // 6
                 }
             );
 
@@ -252,7 +243,6 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
                     NC, // B
                     Ht, // Ht
                     Wt,  // Wt
-                    h_blk, // h block size
                 }
             );
         }
