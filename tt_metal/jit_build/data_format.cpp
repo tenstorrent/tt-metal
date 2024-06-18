@@ -211,7 +211,7 @@ const DataFormat get_single_unpack_dst_format(const DataFormat src_format, const
 
     DataFormat dst_format = src_format;
     if (src_format == DataFormat::Float32){
-        TT_FATAL((unpack_conditional_dst_format == DataFormat::Float16) || (unpack_conditional_dst_format == DataFormat::Float16_b) || (unpack_conditional_dst_format == DataFormat::Tf32),
+        TT_FATAL((unpack_conditional_dst_format == DataFormat::Float16) || (unpack_conditional_dst_format == DataFormat::Float16_b) || (unpack_conditional_dst_format == DataFormat::Tf32) || (unpack_conditional_dst_format == DataFormat::Float32),
                     "fp32 conditional format can only be fp16a/b or fp32");
         dst_format = unpack_conditional_dst_format;
     } else if (is_bfp_format(src_format)) {
@@ -230,13 +230,13 @@ bool is_all_fp32_formats(const DataFormat data_format[NUM_OPERANDS]) {
     return true;
 }
 
-std::vector<DataFormat> get_unpack_dst_formats(DataFormat input_formats[NUM_OPERANDS], DataFormat param_formats[NUM_OPERANDS], DataFormat intermed_formats[NUM_OPERANDS], DataFormat output_formats[NUM_OPERANDS], DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, bool int_fpu_en) {
+std::vector<DataFormat> get_unpack_dst_formats(DataFormat input_formats[NUM_OPERANDS], DataFormat param_formats[NUM_OPERANDS], DataFormat intermed_formats[NUM_OPERANDS], DataFormat output_formats[NUM_OPERANDS], DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, bool preserve_fp32_precision, bool int_fpu_en) {
     DataFormat pack_format = get_pack_data_format(output_formats, intermed_formats);
     ExpPrecision input_precision = get_data_exp_precision(input_formats);
 
     std::vector<DataFormat> unpack_dst_format;
 
-    const bool en_unpack_tf32 = fp32_dest_acc_en && (tt::is_all_fp32_formats(input_formats) || (input_precision == ExpPrecision::B));
+    const bool en_unpack_tf32 = !preserve_fp32_precision && fp32_dest_acc_en && (tt::is_all_fp32_formats(input_formats) || (input_precision == ExpPrecision::B));
     DataFormat unpack_cond_dst_format = en_unpack_tf32 ? DataFormat::Tf32 : unpack_conditional_dst_format;
     for (int i=0 ; i<NUM_OPERANDS ; i++) {
         DataFormat src_format = input_formats[i];

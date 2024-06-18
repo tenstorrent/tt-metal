@@ -17,7 +17,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks eltwise_unary_sharded(const Tensor &input, Tensor &output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en){
+operation::ProgramWithCallbacks eltwise_unary_sharded(const Tensor &input, Tensor &output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en, bool preserve_fp32_precision){
     Program program = CreateProgram();
     Device *device = input.device();
 
@@ -108,6 +108,7 @@ operation::ProgramWithCallbacks eltwise_unary_sharded(const Tensor &input, Tenso
         tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .preserve_fp32_precision = preserve_fp32_precision,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args_group_1,
             .defines = unary_defines

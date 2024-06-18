@@ -46,6 +46,7 @@ struct WriterDataMovementConfig : public DataMovementConfig {
 struct ComputeConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
+    bool preserve_fp32_precision = false;
     bool math_approx_mode = false;
     std::vector<uint32_t> compile_args;
     // Will cause CompileProgram to emit a file hlk_defines_generated.h

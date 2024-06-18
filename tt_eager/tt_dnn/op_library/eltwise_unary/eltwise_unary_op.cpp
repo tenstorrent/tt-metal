@@ -417,9 +417,9 @@ operation::ProgramWithCallbacks EltwiseUnary::create_program(
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
     switch (parallelization_strategy) {
         case UnaryOpParallelizationStrategy::SHARDED_MULTI_CORE:
-            return eltwise_unary_sharded(input_tensor, output_tensor, this->op_chain, this->fp32_dest_acc_en);
+            return eltwise_unary_sharded(input_tensor, output_tensor, this->op_chain, this->fp32_dest_acc_en, this->preserve_fp32_precision);
         case UnaryOpParallelizationStrategy::MULTI_CORE:
-        default: return eltwise_unary_multi_core(input_tensor, output_tensor, this->op_chain, this->fp32_dest_acc_en);
+        default: return eltwise_unary_multi_core(input_tensor, output_tensor, this->op_chain, this->fp32_dest_acc_en, this->preserve_fp32_precision);
     }
 }
 
