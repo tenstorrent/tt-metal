@@ -13,7 +13,7 @@ void MAIN {
     constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
     constexpr uint32_t origin_H = get_compile_time_arg_val(1);
     constexpr uint32_t origin_W = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt = get_compile_time_arg_val(3);
+    constexpr uint32_t num_inner = get_compile_time_arg_val(3);
     constexpr uint32_t block_size = get_compile_time_arg_val(4);
     constexpr bool gamma_has_value = get_compile_time_arg_val(5) == 1;
     constexpr bool beta_has_value = get_compile_time_arg_val(6) == 1;
@@ -63,7 +63,6 @@ void MAIN {
         cb_wait_front(cb_mask_w, onetile);
     }
 
-    constexpr uint32_t NCHt = num_rows_per_core;
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t first_tile = 0;
@@ -71,15 +70,15 @@ void MAIN {
     constexpr uint32_t origin_Ht = (origin_H + TILE_H - 1) / TILE_H;
     constexpr uint32_t origin_Wt = (origin_W + TILE_W - 1) / TILE_W;
 
-    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+    for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; outer_idx++) {
         /*
          * Sum[x]
          * cb_xsum
          */
-        cb_wait_front(cb_x, Wt);
-        for (uint32_t wt = 0; wt < Wt; wt += block_size) {
+        cb_wait_front(cb_x, num_inner);
+        for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
             for (uint32_t j = 0; j < block_size; j++) {
-                const uint32_t w_idx = wt + j;
+                const uint32_t w_idx = inner_idx + j;
                 if (w_idx == 0) {
                     tile_regs_acquire();
                     cb_reserve_back(cb_xsum, onetile);
@@ -115,7 +114,7 @@ void MAIN {
                     cb_reserve_back(cb_tmp, onetile);
 
                     copy_tile_init_with_dt(cb_x);
-                    copy_tile(cb_x, wt + j, dst0);  // input
+                    copy_tile(cb_x, inner_idx + j, dst0);  // input
 
                     const uint32_t mask_dst = dst0 < 15 ? dst0 + 1 : 0;
 
@@ -159,7 +158,7 @@ void MAIN {
                     tile_regs_release();
                 }
             }  // block_size loop
-        }      // Wt loop
+        } // num_inner loop
         // We don't pop cb_x until we compute xmm.
 
         /*
@@ -204,10 +203,10 @@ void MAIN {
          * x - E[x]
          * xmm
          */
-        cb_reserve_back(cb_xmm, Wt);
-        for (uint32_t wt = 0; wt < Wt; wt += block_size) {
+        cb_reserve_back(cb_xmm, num_inner);
+        for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
             for (uint32_t j = 0; j < block_size; j++) {
-                const uint32_t w_idx = wt + j;
+                const uint32_t w_idx = inner_idx + j;
                 tile_regs_acquire();
                 if (is_lastdim_layernorm) {
                     sub_bcast_cols_init_short_with_dt(cb_x, cb_ex);
@@ -241,21 +240,21 @@ void MAIN {
                 tile_regs_release();
             }  // block_size loop
             cb_push_back(cb_xmm, block_size);
-        }  // Wt loop
+        }  // num_inner loop
         cb_pop_front(cb_ex, onetile);
-        cb_pop_front(cb_x, Wt);
+        cb_pop_front(cb_x, num_inner);
 
         /*
          * Sum[(x - E[x])^2]
          * cb_xmm2sum
          */
-        cb_wait_front(cb_xmm, Wt);
-        for (uint32_t wt = 0; wt < Wt; wt++) {
+        cb_wait_front(cb_xmm, num_inner);
+        for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx++) {
             tile_regs_acquire();
             cb_reserve_back(cb_xmm2, onetile);
 
             mul_tiles_init_with_dt(cb_xmm, cb_xmm);
-            mul_tiles(cb_xmm, cb_xmm, wt, wt, dst0);
+            mul_tiles(cb_xmm, cb_xmm, inner_idx, inner_idx, dst0);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -263,7 +262,7 @@ void MAIN {
 
             cb_push_back(cb_xmm2, onetile);
             tile_regs_release();
-            if (wt == 0) {
+            if (inner_idx == 0) {
                 tile_regs_acquire();
                 cb_wait_front(cb_xmm2, onetile);
                 cb_reserve_back(cb_xmm2sum, onetile);
@@ -296,7 +295,7 @@ void MAIN {
                 cb_push_back(cb_xmm2sum, onetile);
                 tile_regs_release();
             }
-        }  // Wt loop
+        }  // num_inner loop
         // We don't pop cb_xmm here.
 
         /*
@@ -364,16 +363,16 @@ void MAIN {
          * cb_out
          */
         constexpr auto cb_gamma_beta_or_out = (gamma_has_value || beta_has_value) ? cb_gamma_beta : cb_out;
-        for (uint32_t wt = 0; wt < Wt; wt += block_size) {
+        for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
             cb_reserve_back(cb_gamma_beta_or_out, block_size);
             for (uint32_t j = 0; j < block_size; j++) {
                 tile_regs_acquire();
                 if (is_lastdim_layernorm) {
                     mul_bcast_cols_init_short_with_dt(cb_xmm, cb_recip_std);
-                    mul_tiles_bcast_cols(cb_xmm, cb_recip_std, wt + j, first_tile, j);
+                    mul_tiles_bcast_cols(cb_xmm, cb_recip_std, inner_idx + j, first_tile, j);
                 } else {
                     mul_tiles_bcast_scalar_init_short_with_dt(cb_xmm, cb_recip_std);
-                    mul_tiles_bcast_scalar(cb_xmm, cb_recip_std, wt + j, first_tile, j);
+                    mul_tiles_bcast_scalar(cb_xmm, cb_recip_std, inner_idx + j, first_tile, j);
                 }
                 tile_regs_commit();
 
@@ -443,10 +442,10 @@ void MAIN {
                 cb_pop_front(cb_beta, block_size);
                 cb_push_back(cb_out, block_size);
             }  // if (beta_has_value)
-        }      // Wt loop
+        } // num_inner loop
         cb_pop_front(cb_recip_std, onetile);
-        cb_pop_front(cb_xmm, Wt);
-    }  // NCHt loop
+        cb_pop_front(cb_xmm, num_inner);
+    }  // num_rows_per_core loop
     cb_pop_front(cb_scaler, onetile);
     cb_pop_front(cb_eps, onetile);
 

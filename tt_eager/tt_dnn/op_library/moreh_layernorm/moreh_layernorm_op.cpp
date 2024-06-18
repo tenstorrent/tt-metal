@@ -18,6 +18,21 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
+
+namespace {
+bool is_hw_dim(uint32_t dim, uint32_t rank) {
+    if (rank == 1 || rank == 2) {
+        return true;
+    }
+    if (rank >= 3) {
+        if (dim >= rank - 2) {
+            return true;
+        }
+    }
+    return false;
+}
+}  // namespace
+
 namespace tt {
 
 namespace operations {
@@ -66,52 +81,39 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto input_shape = input.get_legacy_shape();
+    const auto input_shape_without_padding = input_shape.without_padding();
+    const auto input_rank = input_shape.rank();
 
     const bool is_lastdim_layernorm = normalized_dims == 1;
     const bool is_groupnorm = false;
 
-    const auto input_shape_without_padding = input_shape.without_padding();
-
-    const auto origin_N = input_shape_without_padding[0];
-    const auto origin_C = input_shape_without_padding[1];
-    const auto origin_H = input_shape_without_padding[2];
-    const auto origin_W = input_shape_without_padding[3];
-
-    auto adjusted_input_shape = input_shape;
-    if (normalized_dims == 2) {
-        // HW
-        // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (N, C, TILE_HEIGHT, Ht * Wt * TILE_WIDTH)
-        adjusted_input_shape[2] = TILE_HEIGHT;
-        adjusted_input_shape[3] = (input_shape[2] / TILE_HEIGHT) * input_shape[3];
-    } else if (normalized_dims == 3) {
-        // CHW
-        // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (N, 1, TILE_HEIGHT, C * Ht * Wt * TILE_WIDTH)
-        adjusted_input_shape[1] = 1;
-        adjusted_input_shape[2] = TILE_HEIGHT;
-        adjusted_input_shape[3] = input_shape[1] * (input_shape[2] / TILE_HEIGHT) * input_shape[3];
-    } else if (normalized_dims == 4) {
-        // NCHW
-        // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (1, 1, TILE_HEIGHT, N * C * Ht * Wt * TILE_WIDTH)
-        adjusted_input_shape[0] = 1;
-        adjusted_input_shape[1] = 1;
-        adjusted_input_shape[2] = TILE_HEIGHT;
-        adjusted_input_shape[3] = input_shape[0] * input_shape[1] * (input_shape[2] / TILE_HEIGHT) * input_shape[3];
-    } else {
-        TT_ASSERT(is_lastdim_layernorm);
+    // compute num_inner
+    uint32_t num_inner = 1;
+    for (uint32_t i = input_rank - normalized_dims; i < input_rank; i++) {
+        auto size = input_shape[i];
+        if (is_hw_dim(i, input_rank)) {
+            size = div_up(size, TILE_WIDTH);
+        }
+        num_inner *= size;
     }
 
-    const auto N = adjusted_input_shape[0];
-    const auto C = adjusted_input_shape[1];
-    const auto H = adjusted_input_shape[2];
-    const auto W = adjusted_input_shape[3];
-
-    const auto Ht = H / TILE_HEIGHT;
-    const auto Wt = W / TILE_WIDTH;
+    // compute num_outer
+    uint32_t num_outer = 1;
+    for (uint32_t i = 0; i < input_rank - normalized_dims; i++) {
+        auto size = input_shape[i];
+        if (is_hw_dim(i, input_rank)) {
+            size = div_up(size, TILE_WIDTH);
+        }
+        num_outer *= size;
+    }
 
     const auto gamma_has_value = gamma.has_value();
     const auto beta_has_value = beta.has_value();
     const auto mean_has_value = mean.has_value();
     const auto rstd_has_value = rstd.has_value();
+
+    const auto origin_H = input_shape_without_padding[-2];
+    const auto origin_W = input_shape_without_padding[-1];
 
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && !is_lastdim_layernorm;
     const auto mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
@@ -122,12 +124,11 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto NCHt = N * C * Ht;
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
 
     // core_group_2 works more.
-    // If number of working cores is 108 and NCHt is 110,
+    // If number of working cores is 108 and num_outer is 110,
     // core_group_2[(x=0, y=0), (x=0, y=1)] works for 2 rows. Others work for 1 row.
     const auto
         [num_cores_to_be_used,
@@ -135,7 +136,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
          core_group_1,
          core_group_2,
          num_rows_per_core_group_1,
-         num_rows_per_core_group_2] = tt_metal::split_work_to_cores(grid, NCHt);
+         num_rows_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_outer);
 
     auto arch = input.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
@@ -148,12 +149,12 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     if (fp32_dest_acc_en) {
         MAX_BLOCK_SIZE = 2;
     }
-    const uint32_t block_size = find_divisor_with_max_block_size(Wt, MAX_BLOCK_SIZE);
+    const uint32_t block_size = find_divisor_with_max_block_size(num_inner, MAX_BLOCK_SIZE);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    uint32_t in0_t = Wt;                                          // input
+    uint32_t in0_t = num_inner;                                          // input
     const uint32_t in1_t = 1;                                     // scaler
     const uint32_t in2_t = 1;                                     // epsilon
     const uint32_t in3_t = gamma_has_value ? 2 * block_size : 0;  // gamma
@@ -166,7 +167,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const uint32_t out2_t = rstd_has_value ? 1 : 0;  // rstd
 
     const uint32_t im0_t = 1;                                                         // E[x]
-    uint32_t im1_t = Wt;                                                              // x - E[x]
+    uint32_t im1_t = num_inner;                                                              // x - E[x]
     uint32_t im2_t = 1;                                                               // (x - E[x])^2
     const uint32_t im3_t = 1;                                                         // Sum[(x - E[x])^2]
     const uint32_t im4_t = 1;                                                         // E[(x - E[x])^2] = Var[x]
@@ -274,7 +275,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
         num_rows_per_core_group_1,
         origin_H,
         origin_W,
-        Wt,
+        num_inner,
         block_size,
         static_cast<uint32_t>(gamma_has_value),
         static_cast<uint32_t>(beta_has_value),
@@ -302,7 +303,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
             num_rows_per_core_group_2,
             origin_H,
             origin_W,
-            Wt,
+            num_inner,
             block_size,
             static_cast<uint32_t>(gamma_has_value),
             static_cast<uint32_t>(beta_has_value),
@@ -328,22 +329,17 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
         float f;
         uint32_t u;
     } scaler;
-    scaler.f = 1.0f / static_cast<float>(origin_W);  // scaler
 
-    const auto f_n = static_cast<float>(origin_N);
-    const auto f_c = static_cast<float>(origin_C);
-    const auto f_ht = static_cast<float>(origin_H) / static_cast<float>(TILE_HEIGHT);
-    const auto f_wt = static_cast<float>(origin_W) / static_cast<float>(TILE_WIDTH);
+    if (normalized_dims == 1) {
+        scaler.f = 1.0f / static_cast<float>(origin_W);
+    } else {
+        auto reduce_size = 1;
+        for (uint32_t i = input_rank - normalized_dims; i < input_rank; i++) {
+            auto size = input_shape_without_padding[i];
+            reduce_size *= size;
+        }
 
-    if (normalized_dims == 2) {
-        // HW
-        scaler.f = 1.0f / (static_cast<float>(TILE_WIDTH) * sqrt(f_ht * f_wt));
-    } else if (normalized_dims == 3) {
-        // CHW
-        scaler.f = 1.0f / (static_cast<float>(TILE_WIDTH) * sqrt(f_c * f_ht * f_wt));
-    } else if (normalized_dims == 4) {
-        // NCHW
-        scaler.f = 1.0f / (static_cast<float>(TILE_WIDTH) * sqrt(f_n * f_c * f_ht * f_wt));
+        scaler.f = 1.0f / static_cast<float>(sqrt(reduce_size));
     }
 
     union {
@@ -373,14 +369,14 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
         }
 
         const std::vector<uint32_t> reader_runtime_args{
-            input_addr, num_rows_per_core, Wt, tile_offset, scaler.u, e.u, gamma_addr, beta_addr, mask_h, mask_w};
+            input_addr, num_rows_per_core, num_inner, tile_offset, scaler.u, e.u, gamma_addr, beta_addr, mask_h, mask_w};
         SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
 
         const std::vector<uint32_t> writer_runtime_args{
-            output_addr, mean_addr, rstd_addr, num_rows_per_core, Wt, tile_offset};
+            output_addr, mean_addr, rstd_addr, num_rows_per_core, num_inner, tile_offset};
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
 
-        tile_offset += num_rows_per_core * Wt;
+        tile_offset += num_rows_per_core * num_inner;
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -451,29 +447,11 @@ void MorehLayerNorm::validate(
 
     if (gamma.has_value()) {
         check_tensor(gamma.value(), "moreh_layernorm");
-        TT_ASSERT(
-            input.get_legacy_shape()[3] == gamma.value().get_legacy_shape()[3],
-            fmt::format("{} != {}", input.get_legacy_shape()[3], gamma.value().get_legacy_shape()[3]));
-        TT_ASSERT(
-            input.get_legacy_shape().without_padding()[3] == gamma.value().get_legacy_shape().without_padding()[3],
-            fmt::format(
-                "{} != {}",
-                input.get_legacy_shape().without_padding()[3],
-                gamma.value().get_legacy_shape().without_padding()[3]));
         TT_ASSERT(input.device() == gamma.value().device());
     }
 
     if (beta.has_value()) {
         check_tensor(beta.value(), "moreh_layernorm");
-        TT_ASSERT(
-            input.get_legacy_shape()[3] == beta.value().get_legacy_shape()[3],
-            fmt::format("{} != {}", input.get_legacy_shape()[3], beta.value().get_legacy_shape()[3]));
-        TT_ASSERT(
-            input.get_legacy_shape().without_padding()[3] == beta.value().get_legacy_shape().without_padding()[3],
-            fmt::format(
-                "{} != {}",
-                input.get_legacy_shape().without_padding()[3],
-                beta.value().get_legacy_shape().without_padding()[3]));
         TT_ASSERT(input.device() == beta.value().device());
     }
 

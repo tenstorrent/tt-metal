@@ -14,7 +14,7 @@ void MAIN {
     constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
     constexpr uint32_t origin_H = get_compile_time_arg_val(1);
     constexpr uint32_t origin_W = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt = get_compile_time_arg_val(3);
+    constexpr uint32_t num_inner = get_compile_time_arg_val(3);
     constexpr uint32_t block_size = get_compile_time_arg_val(4);
     constexpr bool gamma_has_value = get_compile_time_arg_val(5) == 1;
     constexpr bool beta_has_value = get_compile_time_arg_val(6) == 1;
@@ -61,7 +61,6 @@ void MAIN {
         cb_wait_front(cb_mask_w, onetile);
     }
 
-    constexpr uint32_t NCHt = num_rows_per_core;
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t first_tile = 0;
@@ -69,16 +68,16 @@ void MAIN {
     constexpr uint32_t origin_Ht = (origin_H + TILE_HEIGHT - 1) / TILE_HEIGHT;
     constexpr uint32_t origin_Wt = (origin_W + TILE_WIDTH - 1) / TILE_WIDTH;
 
-    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+    for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; outer_idx++) {
 
         /*
          * Sum[x]
          * cb_xsum
          */
-        for (uint32_t wt = 0; wt < Wt; wt += block_size) {
+        for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
             cb_wait_front(cb_x, block_size);
             for (uint32_t j = 0; j < block_size; j++) {
-                const uint32_t w_idx = wt + j;
+                const uint32_t w_idx = inner_idx + j;
                 if (w_idx == 0) {
                     tile_regs_acquire();
                     cb_reserve_back(cb_xsum, onetile);
@@ -155,7 +154,7 @@ void MAIN {
                 }
             }  // block_size loop
             cb_pop_front(cb_x, block_size);
-        }  // Wt loop
+        }  // num_inner loop
 
         /*
          * E[x]
@@ -200,7 +199,7 @@ void MAIN {
          * x - E[x]
          * xmm
          */
-        for (uint32_t wt = 0; wt < Wt; wt += block_size) {
+        for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
             cb_wait_front(cb_x, block_size);
             cb_reserve_back(cb_xmm, block_size);
             for (uint32_t j = 0; j < block_size; j++) {
@@ -234,7 +233,7 @@ void MAIN {
                     copy_tile(cb_xmm, j, j);  // xmm
 
                     const uint32_t mask_dst = j < 15 ? j + 1 : 0;
-                    const uint32_t w_idx = wt + j;
+                    const uint32_t w_idx = inner_idx + j;
 
                     if (do_mask_h && need_to_do_mask_h(w_idx, origin_Ht, origin_Wt)) {
                         copy_tile_init_with_dt(cb_mask_h);
@@ -286,7 +285,7 @@ void MAIN {
              */
             cb_wait_front(cb_xmm2, block_size);
             for (uint32_t j = 0; j < block_size; j++) {
-                if (wt == 0 && j == 0) {
+                if (inner_idx == 0 && j == 0) {
                     tile_regs_acquire();
                     cb_reserve_back(cb_xmm2sum, onetile);
 
@@ -317,7 +316,7 @@ void MAIN {
                 }
             }  // block_size loop
             cb_pop_front(cb_xmm2, block_size);
-        }  // Wt loop
+        }  // num_inner loop
         // Do not pop cb_ex here, we need it later.
 
         /*
@@ -385,7 +384,7 @@ void MAIN {
          * cb_out
          */
         constexpr auto cb_reuse = cb_xmm;
-        for (uint32_t wt = 0; wt < Wt; wt += block_size) {
+        for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
             /*
              * x - E[x]
              * cb_reuse(==cb_xmm)
@@ -495,10 +494,10 @@ void MAIN {
                 cb_pop_front(cb_beta, block_size);
                 cb_push_back(cb_out, block_size);
             }
-        }  // Wt loop
+        }  // num_inner loop
         cb_pop_front(cb_recip_std, onetile);
         cb_pop_front(cb_ex, onetile);
-    }  // NCHt loop
+    }  // num_rows_per_core loop
     cb_pop_front(cb_scaler, onetile);
     cb_pop_front(cb_eps, onetile);
 
