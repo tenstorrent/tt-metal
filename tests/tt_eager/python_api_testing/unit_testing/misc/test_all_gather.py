@@ -6,6 +6,7 @@ import torch
 import pytest
 from loguru import logger
 import tt_lib as ttl
+import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
 import itertools
@@ -109,7 +110,7 @@ def run_all_gather_on_t3000_impl(
         tt_input_tensors.append(ttl.tensor.Tensor(t, input_dtype).to(layout).to(devices[i], mem_config))
 
     for i in range(num_iters):
-        tt_out_tensors = ttl.tensor.all_gather(tt_input_tensors, dim, num_links, output_mem_config=mem_config)
+        tt_out_tensors = ttnn.all_gather(tt_input_tensors, dim, num_links=num_links, memory_config=mem_config)
 
         for d in devices:
             ttl.device.Synchronize(d)
@@ -779,7 +780,7 @@ def test_all_gather_post_commit_sharded(
     for i, t in enumerate(input_tensors):
         tt_input_tensors.append(ttl.tensor.Tensor(t, input_dtype).to(tensor_layout).to(devices[i], input_mem_config))
 
-    tt_out_tensors = ttl.tensor.all_gather(tt_input_tensors, dim, num_links, output_mem_config=output_mem_config)
+    tt_out_tensors = ttnn.all_gather(tt_input_tensors, dim, num_links=num_links, memory_config=output_mem_config)
     for d in devices:
         ttl.device.Synchronize(d)
     torch.set_printoptions(sci_mode=False)
@@ -833,7 +834,7 @@ def test_all_gather_fp32(
     for i, t in enumerate(input_tensors):
         tt_input_tensors.append(ttl.tensor.Tensor(t, ttl.tensor.DataType.FLOAT32).to(layout).to(devices[i], mem_config))
 
-    tt_out_tensors = ttl.tensor.all_gather(tt_input_tensors, dim, num_links, output_mem_config=mem_config)
+    tt_out_tensors = ttnn.all_gather(tt_input_tensors, dim, num_links=num_links, memory_config=mem_config)
 
     for i, t in enumerate(tt_out_tensors):
         tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()

@@ -241,11 +241,11 @@ class TtFalconDecoderLayer:
                     replicated_hidden_states[i], self.model_config["BFP8_DTYPE"]
                 )
 
-        replicated_hidden_states = ttnn.experimental.tensor.all_gather(
+        replicated_hidden_states = ttnn.all_gather(
             replicated_hidden_states,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             dim=3,
-            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+            memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
 
         if self.model_config["LN_INPUT_DTYPE"] != self.model_config["BFP8_DTYPE"]:
@@ -362,11 +362,11 @@ class TtFalconDecoderLayer:
                     hidden_states[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
                 )
             )
-        replicated_hidden_states = ttnn.experimental.tensor.all_gather(
+        replicated_hidden_states = ttnn.all_gather(
             replicated_hidden_states,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             dim=3,
-            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+            memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
         for i in range(len(replicated_hidden_states)):
             replicated_hidden_states[i] = ttnn.experimental.tensor.interleaved_to_sharded(

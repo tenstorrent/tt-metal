@@ -35,6 +35,7 @@ void bind_ccl_operation(py::module& module, const ccl_operation_t& operation, co
             },
             py::arg("input_tensor"),
             py::arg("dim"),
+            py::kw_only(),
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt});
 }
