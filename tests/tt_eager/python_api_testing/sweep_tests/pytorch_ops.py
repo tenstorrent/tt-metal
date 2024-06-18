@@ -651,6 +651,10 @@ def floor(x, *args, **kwargs):
     return torch.floor(x)
 
 
+def ceil(x, *args, **kwargs):
+    return torch.ceil(x)
+
+
 def trunc(x, *args, **kwargs):
     return torch.trunc(x)
 

@@ -4,6 +4,7 @@
 import pytest
 import torch
 import random
+import numpy as np
 from functools import partial
 import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests import (
@@ -30,10 +31,6 @@ mem_configs = [
     ],
 )
 @pytest.mark.parametrize(
-    "value",
-    [-5.1, 0.0, 10.9],
-)
-@pytest.mark.parametrize(
     "dst_mem_config",
     mem_configs,
 )
@@ -42,17 +39,17 @@ class TestUnary_Rdiv_Trunc:
     def test_run_unary_rdiv_trunc(
         self,
         input_shapes,
-        value,
         dst_mem_config,
         device,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"value": value})
+        test_args.update({"value": random.uniform(-100, 100) for _ in range(5)})
         test_args.update({"output_mem_config": dst_mem_config})
         comparison_func = comparison_funcs.comp_pcc
+
         run_single_pytorch_test(
             "eltwise-unary_rdiv_trunc",
             input_shapes,

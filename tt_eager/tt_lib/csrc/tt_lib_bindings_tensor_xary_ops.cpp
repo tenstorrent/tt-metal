@@ -43,6 +43,7 @@ namespace tt::tt_metal::detail {
         );
         detail::bind_unary_op(m_tensor, "signbit", signbit, R"doc(Applies the signbit function to the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "floor", floor, R"doc(Applies floor to the elements of the input tensor ``{0}``. Support provided only for Wormhole_B0.)doc");
+        detail::bind_unary_op(m_tensor, "ceil", ceil, R"doc(Applies ceil to the elements of the input tensor ``{0}``. Support provided only for Wormhole_B0.)doc");
         detail::bind_unary_op(m_tensor, "atan", atan, R"doc(Returns a new tensor with the arctan of the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "asin", asin, R"doc(Returns a new tensor with the arcsine of the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "acos", acos, R"doc(Returns a new tensor with the arccosine of the elements of the input tensor ``{0}``.)doc");

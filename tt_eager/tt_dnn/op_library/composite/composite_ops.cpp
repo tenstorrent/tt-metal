@@ -995,8 +995,10 @@ Tensor trunc(const Tensor& input, const MemoryConfig& output_mem_config) {
 }
 
 Tensor _frac(const Tensor& input, const MemoryConfig& output_mem_config) {
+    auto arch = input.device()->arch();
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     Tensor trunc_res = trunc(input, output_mem_config);
-    Tensor result = sub(input, trunc_res, std::nullopt, output_mem_config);
+    Tensor result = ttnn::subtract(input, trunc_res, std::nullopt, output_mem_config);
     return result;
 }
 Tensor frac(const Tensor& input, const MemoryConfig& output_mem_config) {
@@ -1007,6 +1009,8 @@ Tensor _div_trunc(
     const Tensor& input_a,
     const Tensor& input_b,
     const MemoryConfig& output_mem_config) {
+    auto arch = input_a.device()->arch();
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     Tensor result = div(input_a, input_b, true);
     return trunc(result);
 }
@@ -1021,6 +1025,8 @@ Tensor _div_trunc_overload(
     const Tensor& input,
     float value,
     const MemoryConfig& output_mem_config) {
+    auto arch = input.device()->arch();
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     Tensor result = div_unary(input, value);
     return trunc(result);
 }
@@ -1035,6 +1041,8 @@ Tensor _unary_rdiv_trunc(
     float value,
     const Tensor& input,
     const MemoryConfig& output_mem_config) {
+    auto arch = input.device()->arch();
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     Tensor result = div_unary(value, input);
     return trunc(result);
 }
