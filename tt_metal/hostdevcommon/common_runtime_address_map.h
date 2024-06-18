@@ -80,40 +80,6 @@ constexpr static std::uint32_t PRINT_BUFFER_IDLE_ER = PRINT_BUFFER_START; // Idl
 constexpr static std::uint32_t RING_BUFFER_ADDR = PRINT_BUFFER_START + PRINT_BUFFER_MAX_SIZE;
 constexpr static std::uint32_t RING_BUFFER_SIZE = 128;
 
-// Breakpoint regions
-constexpr static std::uint32_t NCRISC_BREAKPOINT = PRINT_BUFFER_START;
-constexpr static std::uint32_t TRISC0_BREAKPOINT = NCRISC_BREAKPOINT + 4;
-constexpr static std::uint32_t TRISC1_BREAKPOINT = TRISC0_BREAKPOINT + 4;
-constexpr static std::uint32_t TRISC2_BREAKPOINT = TRISC1_BREAKPOINT + 4;
-constexpr static std::uint32_t BRISC_BREAKPOINT  = TRISC2_BREAKPOINT + 4;
-
-// Frame pointer addresses for breakpoint... first create macros
-// since I need them for inline assembly
-#define NCRISC_SP_MACRO (BRISC_BREAKPOINT + 4)
-#define TRISC0_SP_MACRO (NCRISC_SP_MACRO + 4)
-#define TRISC1_SP_MACRO (TRISC0_SP_MACRO + 4)
-#define TRISC2_SP_MACRO (TRISC1_SP_MACRO + 4)
-#define BRISC_SP_MACRO  (TRISC2_SP_MACRO + 4)
-
-// Brekapoint call line number macros
-#define NCRISC_BP_LNUM_MACRO (BRISC_SP_MACRO + 4)
-#define TRISC0_BP_LNUM_MACRO (NCRISC_BP_LNUM_MACRO + 4)
-#define TRISC1_BP_LNUM_MACRO (TRISC0_BP_LNUM_MACRO + 4)
-#define TRISC2_BP_LNUM_MACRO (TRISC1_BP_LNUM_MACRO + 4)
-#define BRISC_BP_LNUM_MACRO  (TRISC2_BP_LNUM_MACRO + 4)
-
-constexpr static std::uint32_t NCRISC_SP = NCRISC_SP_MACRO;
-constexpr static std::uint32_t TRISC0_SP = TRISC0_SP_MACRO;
-constexpr static std::uint32_t TRISC1_SP = TRISC1_SP_MACRO;
-constexpr static std::uint32_t TRISC2_SP = TRISC2_SP_MACRO;
-constexpr static std::uint32_t BRISC_SP  = BRISC_SP_MACRO;
-
-constexpr static std::uint32_t NCRISC_BP_LNUM = NCRISC_BP_LNUM_MACRO;
-constexpr static std::uint32_t TRISC0_BP_LNUM = TRISC0_BP_LNUM_MACRO;
-constexpr static std::uint32_t TRISC1_BP_LNUM = TRISC1_BP_LNUM_MACRO;
-constexpr static std::uint32_t TRISC2_BP_LNUM = TRISC2_BP_LNUM_MACRO;
-constexpr static std::uint32_t BRISC_BP_LNUM = BRISC_BP_LNUM_MACRO;
-
 constexpr static std::uint32_t L1_UNRESERVED_BASE = (((RING_BUFFER_ADDR + RING_BUFFER_SIZE) - 1) | (32 - 1)) + 1;
 constexpr static std::uint32_t ERISC_L1_UNRESERVED_BASE = L1_UNRESERVED_BASE; // Start of unreserved space
 
