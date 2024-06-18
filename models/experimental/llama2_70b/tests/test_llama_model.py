@@ -108,7 +108,6 @@ def run_test_LlamaModel_inference(
         n_layers,
         model_config,
         configuration,
-        batch,
         cache_path=cache_path,
     )
 
@@ -164,10 +163,11 @@ def run_test_LlamaModel_inference(
         tt_out = ttnn.from_device(tt_out)
         tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=3))
         tt_out = tt_out[..., : configuration.vocab_size]
+        if model_config["LLM_MODE"] == "decode":
+            tt_out = tt_out[..., :batch, :]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
         tt_out = tt_out.float()
         pytorch_out = pytorch_out.squeeze()  # [batch, hidden_dim]
-
         # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
         logger.info(f"Output: {output_pcc}")
@@ -207,15 +207,15 @@ def run_test_LlamaModel_inference(
     pytorch_layer_present = [
         pytorch_model.model.layers[0]
         .attention.cache_k.clone()
-        .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+        .permute(0, 2, 1, 3)[:batch, ...],  # [batch, n_kv_heads, seq, head_dim]
         pytorch_model.model.layers[0]
         .attention.cache_v.clone()
-        .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+        .permute(0, 2, 1, 3)[:batch, ...],  # [batch, n_kv_heads, seq, head_dim]
     ]
 
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past]
     tt_layer_present_all = [
-        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)
+        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)[:batch, ...]
         for lp in tt_layer_present_all
     ]
 
@@ -263,8 +263,8 @@ def run_test_LlamaModel_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len",
-    ((32, 1), (1, 128), (1, 2048), (1, 8192)),
-    ids=("decode", "prefill_128", "prefill_2k", "prefill_8k"),
+    ((32, 1), (1, 128), (1, 2048), (1, 8192), (16, 1)),
+    ids=("decode", "prefill_128", "prefill_2k", "prefill_8k", "decode_b16"),
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",
