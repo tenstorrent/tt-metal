@@ -210,7 +210,7 @@ class TtLlamaMLP_optimized(nn.Module):
         if self.emulated:
             hidden_states = tt_all_gather_torch(hidden_states, dim=-1)
         else:
-            hidden_states = tt_lib.tensor.all_gather(
+            hidden_states = ttnn.all_gather(
                 hidden_states,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
@@ -270,7 +270,7 @@ class TtLlamaMLP_optimized(nn.Module):
         if self.emulated:
             hidden_states = tt_all_gather_torch(hidden_states, dim=-1)
         else:
-            hidden_states = tt_lib.tensor.all_gather(
+            hidden_states = ttnn.all_gather(
                 hidden_states,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],

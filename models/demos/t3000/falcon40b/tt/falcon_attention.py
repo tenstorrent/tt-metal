@@ -517,7 +517,7 @@ class TtFalconAttention:
                 output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )
 
-        attn_output = ttnn.experimental.tensor.all_gather(
+        attn_output = ttnn.all_gather(
             attn_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
@@ -807,7 +807,7 @@ class TtFalconAttention:
                 attn_output[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
             )
 
-        attn_output = ttnn.experimental.tensor.all_gather(
+        attn_output = ttnn.all_gather(
             attn_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],

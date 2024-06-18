@@ -241,7 +241,7 @@ class TtFalconDecoderLayer:
                     replicated_hidden_states[i], self.model_config["BFP8_DTYPE"]
                 )
 
-        replicated_hidden_states = ttnn.experimental.tensor.all_gather(
+        replicated_hidden_states = ttnn.all_gather(
             replicated_hidden_states,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             dim=3,
@@ -362,7 +362,7 @@ class TtFalconDecoderLayer:
                     hidden_states[i], output_mem_config=self.model_config["DEFAULT_MEMCFG"]
                 )
             )
-        replicated_hidden_states = ttnn.experimental.tensor.all_gather(
+        replicated_hidden_states = ttnn.all_gather(
             replicated_hidden_states,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             dim=3,
