@@ -26,9 +26,9 @@ mem_configs = [
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        [[1, 1, 32, 32], [1, 1, 32, 32]],
-        [[1, 1, 320, 384], [1, 1, 320, 384]],
-        [[1, 3, 320, 384], [1, 3, 320, 384]],
+        [[1, 1, 32, 32]],
+        [[1, 1, 320, 384]],
+        [[1, 3, 320, 384]],
     ],
 )
 @pytest.mark.parametrize(
@@ -44,7 +44,7 @@ class TestFrac:
         device,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update({"output_mem_config": dst_mem_config})
