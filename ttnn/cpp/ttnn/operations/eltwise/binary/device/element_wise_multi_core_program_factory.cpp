@@ -4,14 +4,14 @@
 
 #include <algorithm>
 
-#include "binary_op_type.hpp"
+#include "binary_op.hpp"
 #include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
-namespace ttnn::operations::binary::element_wise_multi_core_program_factory {
+namespace ttnn::operations::binary {
 
 template <bool initialize_args>
 inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
@@ -245,14 +245,16 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         UpdateCircularBufferTotalSize(program, cb_output, num_tiles_per_core_group_1 * dst_single_tile_size);
     }
 }
-
-inline auto create(const auto& operation_attributes, const auto& tensor_args, auto& tensor_return) {
+ElementWiseMultiCore::cached_program_t ElementWiseMultiCore::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
-    auto& output = tensor_return;
+    auto& output = tensor_return_value;
     const auto& op_type = operation_attributes.binary_op_type;
 
     std::vector<UnaryWithParam> fused_activations =
@@ -378,9 +380,9 @@ inline auto create(const auto& operation_attributes, const auto& tensor_args, au
 
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        (block_sharded and not out_sharded)
-            ? "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded_blocks_interleaved_start_id.cpp"
-            : "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        (block_sharded and not out_sharded) ? "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/"
+                                              "writer_unary_sharded_blocks_interleaved_start_id.cpp"
+                                            : "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
@@ -409,44 +411,47 @@ inline auto create(const auto& operation_attributes, const auto& tensor_args, au
         src1_single_tile_size,
         dst_single_tile_size);
 
-    return device_operation::CachedProgram{
+    return {
         std::move(program),
-        binary_reader_kernel_id,
-        unary_writer_kernel_id,
-        eltwise_binary_kernel_id,
-        cb_src0,
-        cb_src1,
-        cb_output,
-        compute_with_storage_grid_size,
-        src0_single_tile_size,
-        src1_single_tile_size,
-        dst_single_tile_size};
+        ElementWiseMultiCore::cached_program_attributes_t{
+            binary_reader_kernel_id,
+            unary_writer_kernel_id,
+            eltwise_binary_kernel_id,
+            cb_src0,
+            cb_src1,
+            cb_output,
+            compute_with_storage_grid_size,
+            src0_single_tile_size,
+            src1_single_tile_size,
+            dst_single_tile_size}};
 }
 
-inline void override_runtime_arguments(
-    auto& cached_program, auto& operation_attributes, auto& tensor_args, auto& tensor_return) {
+void ElementWiseMultiCore::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
-    auto& output_tensor = tensor_return;
+    auto& output_tensor = tensor_return_value;
 
-    auto&& [binary_reader_kernel_id, unary_writer_kernel_id, eltwise_binary_kernel_id, cb_src0, cb_src1, cb_output, compute_with_storage_grid_size, src0_single_tile_size, src1_single_tile_size, dst_single_tile_size] =
-        cached_program.program_attributes;
+    const auto& program_attributes = cached_program.program_attributes;
 
     set_eltwise_binary_runtime_args<false>(
         cached_program.program,
         input_tensor_a,
         input_tensor_b,
         output_tensor,
-        binary_reader_kernel_id,
-        unary_writer_kernel_id,
-        eltwise_binary_kernel_id,
-        cb_src0,
-        cb_src1,
-        cb_output,
-        compute_with_storage_grid_size,
-        src0_single_tile_size,
-        src1_single_tile_size,
-        dst_single_tile_size);
+        program_attributes.binary_reader_kernel_id,
+        program_attributes.unary_writer_kernel_id,
+        program_attributes.eltwise_binary_kernel_id,
+        program_attributes.cb_src0,
+        program_attributes.cb_src1,
+        program_attributes.cb_output,
+        program_attributes.compute_with_storage_grid_size,
+        program_attributes.src0_single_tile_size,
+        program_attributes.src1_single_tile_size,
+        program_attributes.dst_single_tile_size);
 }
 
-}  // namespace ttnn::operations::binary::element_wise_multi_core_program_factory
+}  // namespace ttnn::operations::binary

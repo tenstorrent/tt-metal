@@ -20,22 +20,26 @@ namespace ttnn {
 
 namespace device_operation {
 
-template <typename... program_attributes_t>
+template <typename program_attributes_t>
 struct CachedProgram {
     tt::tt_metal::Program program;
     // Cached program needs to share program_attributes between create and override_runtime_arguments functions
-    std::tuple<program_attributes_t...> program_attributes;
+    program_attributes_t program_attributes;
 
-    CachedProgram(tt::tt_metal::Program&& program, program_attributes_t... program_attributes) :
-        program{std::move(program)}, program_attributes{std::tuple{program_attributes...}} {}
+    CachedProgram(tt::tt_metal::Program&& program, program_attributes_t&& program_attributes) :
+        program{std::move(program)}, program_attributes{program_attributes} {}
 };
 
 struct CachedProgramFactory {
-    tt::stl::unique_any<896, 32> cached_program;
+    static constexpr auto MAX_SIZE = 896;
+    static constexpr auto ALIGNMENT = 32;
+
+    tt::stl::unique_any<MAX_SIZE, ALIGNMENT> cached_program;
+    // program_factory_index is used to map a runtime value to a program factory type that is being used
     std::size_t program_factory_index;
 
-    template <typename... program_attributes_t>
-    CachedProgramFactory(CachedProgram<program_attributes_t...>&& cached_program, std::size_t program_factory_index) :
+    template <typename program_attributes_t>
+    CachedProgramFactory(CachedProgram<program_attributes_t>&& cached_program, std::size_t program_factory_index) :
         cached_program{std::move(cached_program)}, program_factory_index{program_factory_index} {}
 };
 
@@ -252,8 +256,7 @@ inline auto& create_or_get_program_from_cache(
     }
 }
 
-template <typename operation_t>
-    requires DeviceOperationConcept<operation_t>
+template <DeviceOperationConcept operation_t>
 typename operation_t::tensor_return_value_t run(
     uint8_t cq_id,
     const typename operation_t::operation_attributes_t& operation_attributes,
