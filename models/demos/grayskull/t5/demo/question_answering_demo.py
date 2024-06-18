@@ -247,7 +247,7 @@ def run_functional_t5_question_and_answering_inference(
     logger.info(f"inference_time: {measurements['inference_time']} s")
     logger.info(f"post_processing : {measurements['post_processing']} s")
 
-    return measurements
+    return measurements, decoded_tt_output
 
 
 def run_functional_t5_question_and_answering_inference_squadv2(
