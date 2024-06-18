@@ -340,7 +340,7 @@ class TtLlamaModel_optimized:
         # if self.emulated:
         #     xs = tt_all_gather_torch(xs, dim=-1)
         # else:
-        #     xs = tt_lib.tensor.all_gather(
+        #     xs = ttnn.all_gather(
         #         xs,
         #         dim=3,
         #         num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
@@ -456,7 +456,7 @@ class TtLlamaModel_optimized:
         # if self.emulated:
         #     xs = tt_all_gather_torch(xs, dim=-1)
         # else:
-        #     xs = tt_lib.tensor.all_gather(
+        #     xs = ttnn.all_gather(
         #         xs,
         #         dim=3,
         #         num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
