@@ -137,8 +137,9 @@ std::map<string, string> get_defines(
 
 Binary::program_factory_t Binary::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_shape_a = tensor_args.input_tensor_a.shape();
-    const auto& input_shape_b = tensor_args.input_tensor_b.shape();
+    ZoneScopedN("Binary::select_program_factory");
+    const auto& input_shape_a = tensor_args.input_tensor_a.tensor_attributes->shape;
+    const auto& input_shape_b = tensor_args.input_tensor_b.tensor_attributes->shape;
 
     auto height_a = input_shape_a[-2];
     auto width_a = input_shape_a[-1];
@@ -273,8 +274,8 @@ void Binary::validate_on_program_cache_hit(const operation_attributes_t& attribu
 
 Binary::shape_return_value_t Binary::compute_output_shapes(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    const auto input_shape_a = tensor_args.input_tensor_a.shape();
-    const auto input_shape_b = tensor_args.input_tensor_b.shape();
+    const auto input_shape_a = tensor_args.input_tensor_a.tensor_attributes->shape;
+    const auto input_shape_b = tensor_args.input_tensor_b.tensor_attributes->shape;
 
     auto rank = std::max(input_shape_a.rank(), input_shape_b.rank());
     std::vector<uint32_t> output_shape(rank, 0);
