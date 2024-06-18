@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pickle
 import argparse
 import sys
 import z3
@@ -87,7 +88,10 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", required=True, help="Output Directory")
     parser.add_argument("--seed", required=False, default=0, help="Seed for random value generation")
     parser.add_argument(
-        "--arch", required=True, choices=["grayskull", "wormhole", "wormhole_b0", "blackhole"], help="Output Directory"
+        "--arch",
+        required=True,
+        choices=["grayskull", "wormhole", "wormhole_b0", "blackhole"],
+        help="Device Architecture",
     )
 
     args = parser.parse_args(sys.argv[1:])
