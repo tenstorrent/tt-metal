@@ -109,10 +109,12 @@ std::map<string, string> get_defines(
         (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT16) ||
         (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::INT32) ||
         (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::BFLOAT16) ||
-        (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT16))){
+        (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT16) ||
+        (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::BFLOAT16) ||
+        (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::FLOAT32))){
         TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0 && "SFPU_OP_CHAIN_0 already defined");
 
-        auto in_dataformat =  std::to_string((uint32_t)datatype_to_dataformat_converter(input_dtype.value()));
+        auto in_dataformat = std::to_string((uint32_t)datatype_to_dataformat_converter(input_dtype.value()));
         auto out_dataformat = std::to_string((uint32_t)datatype_to_dataformat_converter(output_dtype.value()));
         defines.insert({"SFPU_OP_CHAIN_0",
                         fmt::format("typecast_tile_init(); typecast_tile<{0}u, {1}u>(i);", in_dataformat, out_dataformat)});

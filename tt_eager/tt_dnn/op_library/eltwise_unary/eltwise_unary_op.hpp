@@ -176,6 +176,7 @@ struct EltwiseUnary {
     const std::vector<UnaryWithParam> op_chain;
     const MemoryConfig output_mem_config;
     bool fp32_dest_acc_en;
+    bool preserve_fp32_precision;
     DataType output_dtype;
 
     void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &optional_output_tensors) const;
@@ -194,9 +195,9 @@ struct EltwiseUnary {
 };
 
 operation::ProgramWithCallbacks eltwise_unary_sharded(
-    const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en);
+    const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en, bool preserve_fp32_precision);
 operation::ProgramWithCallbacks eltwise_unary_multi_core(
-    const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en);
+    const Tensor& a, Tensor& output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en, bool preserve_fp32_precision);
 
 inline Tensor run_eltwise_unary_with_output_tensor(
     uint8_t cq_id,
@@ -206,7 +207,9 @@ inline Tensor run_eltwise_unary_with_output_tensor(
     std::optional<Tensor> output_tensor = std::nullopt) {
     TT_FATAL(ops_chain.size() > 0, "At least 1 unary op must be specified");
     DataType output_dtype = (ops_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(ops_chain[0].params[1]) : input_tensor.get_dtype();
+    bool preserve_fp32_precision = (ops_chain[0].op_type == UnaryOpType::TYPECAST) and (input_tensor.get_dtype() == DataType::FLOAT32);
     bool fp32_dest_acc_en =
+        preserve_fp32_precision or
         output_dtype == DataType::UINT32 or
         output_dtype == DataType::INT32 or
         input_tensor.get_dtype() == DataType::UINT32 or
@@ -215,12 +218,12 @@ inline Tensor run_eltwise_unary_with_output_tensor(
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     if (output_mem_config.is_sharded()) {
         operation::launch_op(
-            [ops_chain, output_mem_config, fp32_dest_acc_en, output_dtype, output_tensor, cq_id](
+            [ops_chain, output_mem_config, fp32_dest_acc_en, preserve_fp32_precision, output_dtype, output_tensor, cq_id](
                 const std::vector<Tensor>& input_tensors,
                 const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                 const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 return operation::run_without_autoformat(
-                    EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en, output_dtype}, input_tensors, {}, {output_tensor}, cq_id);
+                    EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en, preserve_fp32_precision, output_dtype}, input_tensors, {}, {output_tensor}, cq_id);
             },
             {input_tensor},
             output_tensors,
@@ -228,7 +231,7 @@ inline Tensor run_eltwise_unary_with_output_tensor(
             {output_tensor});
     } else {
         operation::launch_with_autoformat(
-            [ops_chain, output_mem_config, fp32_dest_acc_en, output_dtype, output_tensor, cq_id](
+            [ops_chain, output_mem_config, fp32_dest_acc_en, preserve_fp32_precision, output_dtype, output_tensor, cq_id](
                 const std::vector<Tensor>& input_tensors,
                 const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                 const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -237,7 +240,7 @@ inline Tensor run_eltwise_unary_with_output_tensor(
                 FormatParams input_format_params = {
                     .pad_shape = pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
                 return operation::run_with_autoformat(
-                    EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en, output_dtype},
+                    EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en, preserve_fp32_precision, output_dtype},
                     {input_tensor},
                     {input_format_params},
                     {Layout::TILE},
@@ -262,14 +265,16 @@ inline Tensor run_eltwise_unary(
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     TT_FATAL(ops_chain.size() > 0, "At least 1 unary op must be specified");
     DataType output_dtype = (ops_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(ops_chain[0].params[1]) : input_tensor.get_dtype();
+    bool preserve_fp32_precision = (ops_chain[0].op_type == UnaryOpType::TYPECAST) and (input_tensor.get_dtype() == DataType::FLOAT32);
     bool fp32_dest_acc_en =
+        preserve_fp32_precision or
         output_dtype == DataType::UINT32 or
         output_dtype == DataType::INT32 or
         input_tensor.get_dtype() == DataType::UINT32 or
         input_tensor.get_dtype() ==
             DataType::INT32;  // MT: Currently only uint32/int32 is moved to DST directly, fp32 is converted to fp16b
     return operation::run(
-               EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en, output_dtype},
+               EltwiseUnary{ops_chain, output_mem_config, fp32_dest_acc_en, preserve_fp32_precision, output_dtype},
                {input_tensor}, {}, {}, cq_id)
         .at(0);
 }
@@ -659,11 +664,15 @@ inline Tensor relu(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
+            DataType output_dtype = input_tensor.get_dtype();
+            bool preserve_fp32_precision = false;
             bool fp32_dest_acc_en =
                 input_tensor.get_dtype() == DataType::UINT32 or
                 input_tensor.get_dtype() == DataType::INT32;  // MT: Currently only uint32/int32 is moved to DST
                                                               // directly, fp32 is converted to fp16b
-            return operation::run(EltwiseUnary{{UnaryWithParam(UnaryOpType::RELU)}, output_mem_config}, {input_tensor});
+            return operation::run(
+                EltwiseUnary{{UnaryWithParam(UnaryOpType::RELU)}, output_mem_config, fp32_dest_acc_en, preserve_fp32_precision, output_dtype},
+                {input_tensor});
         },
         {input_tensor},
         output_tensors);

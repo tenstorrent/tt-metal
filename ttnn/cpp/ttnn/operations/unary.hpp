@@ -45,13 +45,15 @@ inline Tensor execute_on_worker_thread(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
     DataType output_dtype = (op_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(op_chain[0].params[1]) : input_tensor.get_dtype();
-    bool fp32_dest_acc_en = output_dtype == DataType::UINT32 or
+    bool preserve_fp32_precision = (op_chain[0].op_type == UnaryOpType::TYPECAST) and (input_tensor.get_dtype() == DataType::FLOAT32);
+    bool fp32_dest_acc_en = preserve_fp32_precision or
+                            output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or
                             input_tensor.get_dtype() == DataType::UINT32 or
                             input_tensor.get_dtype() == DataType::INT32;  // MT: Currently only uint32/int32 is moved to
                                                                           // DST directly, fp32 is converted to fp16b
     return operation::run(
-               EltwiseUnary{op_chain, memory_config.value_or(input_tensor.memory_config()), fp32_dest_acc_en, output_dtype},
+               EltwiseUnary{op_chain, memory_config.value_or(input_tensor.memory_config()), fp32_dest_acc_en, preserve_fp32_precision, output_dtype},
                {input_tensor}, {}, {optional_output_tensor})
         .at(0);
 }
