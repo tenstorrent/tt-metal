@@ -19,6 +19,50 @@
 
 namespace tt {
 
+namespace {
+bool is_hw_dim(uint32_t dim, uint32_t rank) {
+    if (rank == 1 || rank == 2) {
+        return true;
+    }
+    if (rank >= 3) {
+        if (dim >= rank - 2) {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint32_t compute_inner(Shape shape, uint32_t normalized_dims) {
+    uint32_t num_inner = 1;
+    auto rank = shape.rank();
+
+    for (uint32_t i = rank - normalized_dims; i < rank; i++) {
+        auto size = shape[i];
+        if (is_hw_dim(i, rank)) {
+            size = tt::div_up(size, TILE_WIDTH);
+        }
+        num_inner *= size;
+    }
+
+    return num_inner;
+}
+
+uint32_t compute_outer(Shape shape, uint32_t normalized_dims) {
+    uint32_t num_outer = 1;
+    auto rank = shape.rank();
+
+    for (uint32_t i = 0; i < rank - normalized_dims; i++) {
+        auto size = shape[i];
+        if (is_hw_dim(i, rank)) {
+            size = tt::div_up(size, TILE_WIDTH);
+        }
+        num_outer *= size;
+    }
+    return num_outer;
+}
+
+}  // namespace
+
 namespace operations {
 
 namespace primary {
@@ -42,52 +86,26 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto output_grad_shape = output_grad.get_legacy_shape();
+    const auto output_grad_shape_without_padding = output_grad_shape.without_padding();
+    const auto output_grad_rank = output_grad_shape.rank();
 
     const bool is_lastdim_layernorm = normalized_dims == 1;
     const bool is_groupnorm = false;
 
-    const auto output_grad_shape_without_padding = output_grad_shape.without_padding();
-
-    const auto origin_H = output_grad_shape_without_padding[2];
-    const auto origin_W = output_grad_shape_without_padding[3];
+    // const auto origin_H = output_grad_shape_without_padding[2];
+    // const auto origin_W = output_grad_shape_without_padding[3];
+    const auto origin_H = output_grad_shape_without_padding[-2];
+    const auto origin_W = output_grad_shape_without_padding[-1];
 
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && is_lastdim_layernorm;
     const uint32_t mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
 
-    auto adjusted_output_grad_shape = output_grad_shape;
-    if (normalized_dims == 2) {
-        // HW
-        // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (N, C, TILE_HEIGHT, Ht * Wt * TILE_WIDTH)
-        adjusted_output_grad_shape[2] = TILE_HEIGHT;
-        adjusted_output_grad_shape[3] = (output_grad_shape[2] / TILE_HEIGHT) * output_grad_shape[3];
-    } else if (normalized_dims == 3) {
-        // CHW
-        // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (N, 1, TILE_HEIGHT, C * Ht * Wt * TILE_WIDTH)
-        adjusted_output_grad_shape[1] = 1;
-        adjusted_output_grad_shape[2] = TILE_HEIGHT;
-        adjusted_output_grad_shape[3] =
-            output_grad_shape[1] * (output_grad_shape[2] / TILE_HEIGHT) * output_grad_shape[3];
-    } else if (normalized_dims == 4) {
-        // NCHW
-        // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (1, 1, TILE_HEIGHT, N * C * Ht * Wt * TILE_WIDTH)
-        adjusted_output_grad_shape[0] = 1;
-        adjusted_output_grad_shape[1] = 1;
-        adjusted_output_grad_shape[2] = TILE_HEIGHT;
-        adjusted_output_grad_shape[3] =
-            output_grad_shape[0] * output_grad_shape[1] * (output_grad_shape[2] / TILE_HEIGHT) * output_grad_shape[3];
-    } else {
-        TT_ASSERT(is_lastdim_layernorm);
-    }
 
-    const auto N = adjusted_output_grad_shape[0];
-    const auto C = adjusted_output_grad_shape[1];
-    const auto H = adjusted_output_grad_shape[2];
-    const auto W = adjusted_output_grad_shape[3];
+    auto num_inner = compute_inner(output_grad_shape, normalized_dims);
+    auto num_outer = compute_outer(output_grad_shape, normalized_dims);
 
-    const auto Ht = H / TILE_HEIGHT;
-    const auto Wt = W / TILE_WIDTH;  // inner_size
-
-    const auto NCHt = N * C * Ht;  // outer_size
+    auto Wt = num_inner;
+    auto NCHt = num_outer;
 
     const bool gamma_grad_has_value = gamma_grad.has_value();
     const bool beta_grad_has_value = beta_grad.has_value();
