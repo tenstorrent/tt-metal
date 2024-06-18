@@ -189,6 +189,7 @@ Pointwise Binary
    ttnn/nextafter
    ttnn/maximum
    ttnn/minimum
+   ttnn/atan2_bw
 
 Pointwise Ternary
 =================

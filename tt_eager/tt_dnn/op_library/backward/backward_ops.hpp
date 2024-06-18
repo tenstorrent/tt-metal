@@ -292,12 +292,6 @@ std::vector<Tensor> clamp_max_bw(
     float max,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> atan2_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> hypot_bw(
     const Tensor& grad,
     const Tensor& input,
