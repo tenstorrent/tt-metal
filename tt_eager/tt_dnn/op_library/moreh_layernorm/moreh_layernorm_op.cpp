@@ -18,21 +18,6 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
-
-namespace {
-bool is_hw_dim(uint32_t dim, uint32_t rank) {
-    if (rank == 1 || rank == 2) {
-        return true;
-    }
-    if (rank >= 3) {
-        if (dim >= rank - 2) {
-            return true;
-        }
-    }
-    return false;
-}
-}  // namespace
-
 namespace tt {
 
 namespace operations {
@@ -87,25 +72,8 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const bool is_lastdim_layernorm = normalized_dims == 1;
     const bool is_groupnorm = false;
 
-    // compute num_inner
-    uint32_t num_inner = 1;
-    for (uint32_t i = input_rank - normalized_dims; i < input_rank; i++) {
-        auto size = input_shape[i];
-        if (is_hw_dim(i, input_rank)) {
-            size = div_up(size, TILE_WIDTH);
-        }
-        num_inner *= size;
-    }
-
-    // compute num_outer
-    uint32_t num_outer = 1;
-    for (uint32_t i = 0; i < input_rank - normalized_dims; i++) {
-        auto size = input_shape[i];
-        if (is_hw_dim(i, input_rank)) {
-            size = div_up(size, TILE_WIDTH);
-        }
-        num_outer *= size;
-    }
+    auto num_inner = compute_inner(input_shape, normalized_dims);
+    auto num_outer = compute_outer(input_shape, normalized_dims);
 
     const auto gamma_has_value = gamma.has_value();
     const auto beta_has_value = beta.has_value();

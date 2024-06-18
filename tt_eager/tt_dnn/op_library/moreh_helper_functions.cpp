@@ -6,6 +6,7 @@
 
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "common/constants.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
@@ -248,6 +249,47 @@ void check_tensor(
         return;
     }
     check_tensor(tensor.value(), op_name, tensor_name, data_types, layout, check_dtype, check_layout);
+}
+
+bool is_hw_dim(uint32_t dim, uint32_t rank) {
+    if (rank == 1 || rank == 2) {
+        return true;
+    }
+    if (rank >= 3) {
+        if (dim >= rank - 2) {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint32_t compute_inner(Shape shape, uint32_t normalized_dims) {
+    uint32_t num_inner = 1;
+    auto rank = shape.rank();
+
+    for (uint32_t i = rank - normalized_dims; i < rank; i++) {
+        auto size = shape[i];
+        if (is_hw_dim(i, rank)) {
+            size = tt::div_up(size, constants::TILE_WIDTH);
+        }
+        num_inner *= size;
+    }
+
+    return num_inner;
+}
+
+uint32_t compute_outer(Shape shape, uint32_t normalized_dims) {
+    uint32_t num_outer = 1;
+    auto rank = shape.rank();
+
+    for (uint32_t i = 0; i < rank - normalized_dims; i++) {
+        auto size = shape[i];
+        if (is_hw_dim(i, rank)) {
+            size = tt::div_up(size, constants::TILE_WIDTH);
+        }
+        num_outer *= size;
+    }
+    return num_outer;
 }
 
 }  // namespace primary
