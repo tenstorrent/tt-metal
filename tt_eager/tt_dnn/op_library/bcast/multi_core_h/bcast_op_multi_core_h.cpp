@@ -106,7 +106,7 @@ operation::ProgramWithCallbacks bcast_multi_core_h(const Tensor &a, const Tensor
 	std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(BcastOpDim::H, bcast_math);
 	auto bcast_kernel_id = tt_metal::CreateKernel(
 		program,
-		"tt_eager/tt_dnn/op_library/bcast/kernels/compute/bcast_h_interleaved.cpp",
+		"tt_eager/tt_dnn/op_library/bcast/kernels/compute/bcast_h.cpp",
 		all_device_cores,
 		tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines}
 	);
