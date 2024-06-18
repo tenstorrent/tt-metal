@@ -97,49 +97,6 @@ template <typename... Ts>
 
 template <typename T>
     requires std::same_as<std::decay_t<T>, Tensor>
-constexpr auto visit_tensor(auto callback, T&& value) {
-    callback(value);
-}
-
-template <typename T>
-constexpr auto visit_tensor(auto callback, const std::optional<T>& value) {
-    if (value.has_value()) {
-        const auto& tensor = value.value();
-        visit_tensor(callback, tensor);
-    }
-}
-
-template <typename T>
-constexpr auto visit_tensor(auto callback, const std::vector<T>& value) {
-    for (auto& tensor : value) {
-        visit_tensor(callback, tensor);
-    }
-}
-
-template <typename T, auto N>
-constexpr auto visit_tensor(auto callback, const std::array<T, N>& value) {
-    for (auto& tensor : value) {
-        visit_tensor(callback, tensor);
-    }
-}
-
-template <typename... Ts>
-constexpr auto visit_tensor(auto callback, const std::tuple<Ts...>& value) {
-    constexpr auto num_attributes = sizeof...(Ts);
-    [&callback, &value]<size_t... Ns>(std::index_sequence<Ns...>) {
-        (visit_tensor(callback, std::get<Ns>(value)), ...);
-    }(std::make_index_sequence<num_attributes>{});
-}
-
-template <typename T>
-    requires(not std::same_as<std::decay_t<T>, Tensor>) and requires { std::decay_t<T>::attribute_names; }
-constexpr auto visit_tensor(auto callback, T&& object) {
-    constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
-    visit_tensor(callback, object.attribute_values());
-}
-
-template <typename T>
-    requires std::same_as<std::decay_t<T>, Tensor>
 constexpr auto get_first_tensor(T&& value) {
     return std::cref(value);
 }
@@ -256,13 +213,19 @@ inline auto& create_or_get_program_from_cache(
     }
 }
 
+constexpr auto check_tensor_types = [](auto&& tensor) {
+    static_assert(std::same_as<std::decay_t<decltype(tensor)>, Tensor>);
+};
+
 template <DeviceOperationConcept operation_t>
 typename operation_t::tensor_return_value_t run(
     uint8_t cq_id,
     const typename operation_t::operation_attributes_t& operation_attributes,
     const typename operation_t::tensor_args_t& tensor_args) {
     ZoneScopedN("TT_DNN_DEVICE_OP");
-    uint32_t operation_id = assign_operation_id();
+    auto operation_id = assign_operation_id();
+
+    tt::stl::reflection::visit_object_of_type<Tensor>(check_tensor_types, tensor_args);
 
     using tensor_return_value_t = typename operation_t::tensor_return_value_t;
     static_assert(not std::same_as<tensor_return_value_t, void>, "Operation cannot return type cannot be void");
@@ -274,11 +237,18 @@ typename operation_t::tensor_return_value_t run(
     auto cache_hit = program_cache.contains(program_hash);
 
     if (cache_hit) {
+        ZoneScopedN("Validate on Program Cache Hit");
         operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
     } else {
+        ZoneScopedN("Validate on Program Cache Miss");
         operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
     }
-    auto tensor_return_value = operation_t::create_output_tensors(operation_attributes, tensor_args);
+    auto tensor_return_value = [&operation_attributes, &tensor_args]() {
+        ZoneScopedN("Create Output Tensors");
+        return operation_t::create_output_tensors(operation_attributes, tensor_args);
+    }();
+
+    tt::stl::reflection::visit_object_of_type<Tensor>(check_tensor_types, tensor_return_value);
 
     auto& program = create_or_get_program_from_cache<operation_t>(
         program_cache, cache_hit, program_hash, operation_attributes, tensor_args, tensor_return_value);
@@ -292,16 +262,12 @@ typename operation_t::tensor_return_value_t run(
         auto assign_global_buffer_to_program = [&program](auto&& tensor) {
             AssignGlobalBufferToProgram(tensor.device_buffer(), program);
         };
-        visit_tensor(assign_global_buffer_to_program, tensor_args);
+        tt::stl::reflection::visit_object_of_type<Tensor>(assign_global_buffer_to_program, tensor_args);
         tt::tt_metal::EnqueueProgram(queue, program, false);
     } else {
         ZoneScopedN("LaunchProgram");
         ::detail::LaunchProgram(device, program);
     }
-
-    // Visit output tensors with the sole purpose of checking the return type to make sure that it only has Tensors
-    // TODO: come up with a better way of checking the return type
-    visit_tensor([](auto&& tensor) {}, tensor_return_value);
 
     // TODO: update this to work properly take program cache info, as well as tensors
     TracyOpTNNNDeviceV2(

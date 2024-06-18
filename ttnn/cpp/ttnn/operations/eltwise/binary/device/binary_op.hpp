@@ -190,7 +190,6 @@ struct Binary {
     using tensor_args_t = ttnn::operations::binary::tensor_args_t;
     using shape_return_value_t = ttnn::operations::binary::shape_return_value_t;
     using tensor_return_value_t = ttnn::operations::binary::tensor_return_value_t;
-
     using program_factory_t = std::variant<
         ElementWiseMultiCore,
         BroadcastWidthMultiCore,

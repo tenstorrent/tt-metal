@@ -387,6 +387,48 @@ std::ostream& operator<<(std::ostream& os, const std::set<T>& set) {
     return os;
 }
 
+template <typename to_visit_t, typename T>
+    requires std::same_as<std::decay_t<T>, to_visit_t>
+constexpr auto visit_object_of_type(auto callback, T&& value) {
+    callback(value);
+}
+
+template <typename to_visit_t, typename T>
+constexpr auto visit_object_of_type(auto callback, const std::optional<T>& value) {
+    if (value.has_value()) {
+        visit_object_of_type<to_visit_t>(callback, value.value());
+    }
+}
+
+template <typename to_visit_t, typename T>
+constexpr auto visit_object_of_type(auto callback, const std::vector<T>& value) {
+    for (auto& tensor : value) {
+        visit_object_of_type<to_visit_t>(callback, tensor);
+    }
+}
+
+template <typename to_visit_t, typename T, auto N>
+constexpr auto visit_object_of_type(auto callback, const std::array<T, N>& value) {
+    for (auto& tensor : value) {
+        visit_object_of_type<to_visit_t>(callback, tensor);
+    }
+}
+
+template <typename to_visit_t, typename... Ts>
+constexpr auto visit_object_of_type(auto callback, const std::tuple<Ts...>& value) {
+    constexpr auto num_attributes = sizeof...(Ts);
+    [&callback, &value]<size_t... Ns>(std::index_sequence<Ns...>) {
+        (visit_object_of_type<to_visit_t>(callback, std::get<Ns>(value)), ...);
+    }(std::make_index_sequence<num_attributes>{});
+}
+
+template <typename to_visit_t, typename T>
+    requires(not std::same_as<std::decay_t<T>, to_visit_t>) and requires { std::decay_t<T>::attribute_names; }
+constexpr auto visit_object_of_type(auto callback, T&& object) {
+    constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
+    visit_object_of_type<to_visit_t>(callback, object.attribute_values());
+}
+
 }  // namespace reflection
 }  // namespace stl
 }  // namespace tt
