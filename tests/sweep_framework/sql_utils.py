@@ -8,7 +8,7 @@ def column_names_to_sql_string(column_names):
         if name == "timestamp":
             return "timestamp TIMESTAMP"
         else:
-            return f"{name} TEXT"
+            return f"{name} BLOB"
 
     column_names = [name_to_string(name) for name in column_names]
     return ", ".join(column_names)
