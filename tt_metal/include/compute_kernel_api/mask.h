@@ -46,4 +46,21 @@ ALWI void mask_tile(uint32_t idst_data, uint32_t idst2_mask) {
     MATH(( llk_math_eltwise_unary_sfpu_mask<true>(idst_data) ));
 }
 
+/**
+ * Performs element-wise computation of the mask (int type) on each element of a tile (int type)
+ * in the data and mask DST register. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | dst_data_index | The index of the tile in DST REG for the data and result                   | uint32_t | Must be less than the acquired size of DST REG        | True     |
+ * | dst_mask_index | The index of the tile in DST REG for the mask                              | uint32_t | Must be less than the acquired size of DST REG        | True     |
+ */
+ALWI void int_mask_tile(uint32_t idst_data, uint32_t idst2_mask = 1) {
+    MATH(( llk_math_eltwise_unary_sfpu_int_mask<true>(idst_data, idst2_mask) ));
+}
+
 } // namespace ckernel

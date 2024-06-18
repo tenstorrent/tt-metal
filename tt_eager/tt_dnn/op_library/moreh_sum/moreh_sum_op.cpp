@@ -24,23 +24,31 @@ namespace {
 inline void check_tensor(
     const Tensor& tensor,
     const std::string& op_name,
-    DataType data_type = DataType::BFLOAT16,
+    const std::initializer_list<DataType> &data_types = {DataType::BFLOAT16},
     Layout layout = Layout::TILE) {
     TT_FATAL(tensor.get_layout() == layout, "{} only supports tiled layout.", op_name);
-    TT_FATAL(tensor.get_dtype() == data_type, "{} only supports data type {}.", op_name, data_type);
     TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to {} need to be on device!", op_name);
     TT_FATAL(tensor.buffer() != nullptr, "Operands to {} need to be allocated in buffers on device!", op_name);
+
+    bool dtype_supported = false;
+    for (const auto& data_type : data_types) {
+        if (tensor.get_dtype() == data_type) {
+            dtype_supported = true;
+            break;
+        }
+    }
+    TT_FATAL(dtype_supported, "{} only supports specific data types.", op_name);
 }
 
 inline void check_tensor(
     std::optional<Tensor> tensor,
     const std::string& op_name,
-    tt_metal::DataType data_type = DataType::BFLOAT16,
+    const std::initializer_list<DataType> &data_types = {DataType::BFLOAT16},
     Layout layout = Layout::TILE) {
     if (!tensor.has_value()) {
         return;
     }
-    check_tensor(tensor.value(), op_name, data_type, layout);
+    check_tensor(tensor.value(), op_name, data_types, layout);
 }
 
 inline void expand_to_max_dim(std::vector<uint32_t> &dim, const Shape& shape) {
@@ -171,8 +179,8 @@ void MorehSum::validate_with_output_tensors(
     const auto& input = input_tensors.at(0);
     auto& output = output_tensors.at(0);
 
-    check_tensor(input, "input");
-    check_tensor(output, "output");
+    check_tensor(input, "input", {DataType::BFLOAT16, DataType::INT32});
+    check_tensor(output, "output", {DataType::BFLOAT16, DataType::INT32});
 
     validate_input_tensor_with_dim(input, this->dim);
 
@@ -247,12 +255,22 @@ operation::ProgramWithCallbacks MorehSum::create_program(
     auto& output = outputs.at(0);
 
     const auto input_rank = input.get_legacy_shape().rank();
-    if (this->dim == input_rank - 1) {
-        return moreh_sum_w_impl(input, output, this->compute_kernel_config);
-    } else if (this->dim == input_rank - 2) {
-        return moreh_sum_h_impl(input, output, this->compute_kernel_config);
+    const auto dtype = input.dtype();
+    log_debug(LogOp, "{}:{} dtype {}", __func__, __LINE__, dtype);
+    auto call_moreh_sum_impl = [&](auto moreh_sum_w_impl, auto moreh_sum_h_impl, auto moreh_sum_nc_impl) {
+        if (this->dim == input_rank - 1) {
+            return moreh_sum_w_impl(input, output, this->compute_kernel_config);
+        } else if (this->dim == input_rank - 2) {
+            return moreh_sum_h_impl(input, output, this->compute_kernel_config);
+        } else {
+            return moreh_sum_nc_impl(input, output, dim, this->compute_kernel_config);
+        }
+    };
+
+    if (dtype == DataType::INT32) {
+        return call_moreh_sum_impl(moreh_sum_int_w_impl, moreh_sum_int_h_impl, moreh_sum_int_nc_impl);
     } else {
-        return moreh_sum_nc_impl(input, output, dim, this->compute_kernel_config);
+        return call_moreh_sum_impl(moreh_sum_w_impl, moreh_sum_h_impl, moreh_sum_nc_impl);
     }
 }
 

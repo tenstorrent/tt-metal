@@ -19,6 +19,7 @@
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/negative.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
@@ -997,6 +998,27 @@ ALWI void power_and_recip_tile_to_cb(
     cb_pop_front(cb_exp_lxmd, onetile);
     cb_push_back(cb_recip_xpow, onetile);
     REL();
+}
+
+ALWI void copy_tile_to_dst(uint32_t icb, uint32_t itile = 0, uint32_t dst = 0, bool cb_wait_and_pop = true) {
+    constexpr uint32_t onetile = 1;
+    if (cb_wait_and_pop) {
+        cb_wait_front(icb, onetile);
+    }
+    unpack_reconfig_data_format_srca(icb);
+    copy_tile_to_dst_init_short(icb);
+    copy_tile(icb, itile, dst);
+    if (cb_wait_and_pop) {
+        cb_pop_front(icb, onetile);
+    }
+}
+
+ALWI void pack_tile_from_dst(uint32_t ocb, uint32_t dst = 0) {
+    constexpr uint32_t onetile = 1;
+    cb_reserve_back(ocb, onetile);
+    pack_reconfig_data_format(ocb);
+    pack_tile(dst, ocb);
+    cb_push_back(ocb, onetile);
 }
 
 }  // namespace ckernel

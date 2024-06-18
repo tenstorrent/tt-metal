@@ -24,6 +24,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t cb_id_in0 = 0;
+    #ifdef USE_FPU
     constexpr uint32_t cb_id_in1 = 1;
 
     union {
@@ -32,6 +33,7 @@ void kernel_main() {
     } scaler;
     scaler.f = 0.0f;
     fill_cb_with_value(cb_id_in1, scaler.u);
+    #endif
 
     uint32_t l1_write_addr_in0;
     uint32_t input_tile_bytes = get_tile_size(cb_id_in0);

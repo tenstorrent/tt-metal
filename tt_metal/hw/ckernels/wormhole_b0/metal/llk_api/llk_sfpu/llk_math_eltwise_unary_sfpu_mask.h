@@ -25,4 +25,13 @@ inline void llk_math_eltwise_unary_sfpu_mask(uint dst_index, int vector_mode = (
         vector_mode);
 }
 
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_int_mask(uint dst_index, uint mask_index = 1, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::calculate_int_mask<APPROXIMATE>,
+        dst_index,
+        vector_mode,
+        mask_index);
+}
+
 }
