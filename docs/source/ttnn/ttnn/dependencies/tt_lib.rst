@@ -359,8 +359,6 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.silu
 
-.. autofunction:: tt_lib.tensor.square
-
 .. autofunction:: tt_lib.tensor.neg
 
 .. autofunction:: tt_lib.tensor.add1

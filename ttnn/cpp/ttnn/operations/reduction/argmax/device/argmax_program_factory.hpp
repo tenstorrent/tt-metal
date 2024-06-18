@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#pragma once
 
 #include <algorithm>
 
@@ -42,8 +43,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     uint32_t num_input_units = W;
     uint32_t aligned_input_unit_size = round_up_to_mul32(input_unit_size * num_input_units);
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(
-            aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
             .set_page_size(src0_cb_index, aligned_input_unit_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
@@ -62,7 +62,8 @@ operation::ProgramWithCallbacks argmax_multi_core(
     uint32_t aligned_output_unit_size = round_up_to_mul32(output_unit_size);
     tt::tt_metal::CircularBufferConfig output_cb_config = tt::tt_metal::CircularBufferConfig(num_output_units *
     aligned_output_unit_size, {{output_cb_index, output_cb_data_format}}) .set_page_size(output_cb_index,
-    aligned_output_unit_size); auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    aligned_output_unit_size); auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores,
+    output_cb_config);
     */
 
     auto src_buffer = input.buffer();
@@ -82,7 +83,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
         H,
         W,
         dim.value_or(0),
-        (uint32_t) (not dim.has_value()),
+        (uint32_t)(not dim.has_value()),
     };
 
     std::map<string, string> kernel_defines;

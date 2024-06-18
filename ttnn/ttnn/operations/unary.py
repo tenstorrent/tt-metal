@@ -88,6 +88,7 @@ def register_ttnn_cpp_unary_function(unary_function):
         # "prelu": torch_prelu, # Alias for leaky_relu. TODO(#8544): implement PReLU properly
         # Other unaries (composite operations)
         "softplus": torch.nn.functional.softplus,
+        "sigmoid_accurate": torch.sigmoid,
         "acosh": torch.acosh,
         "asinh": torch.asinh,
         "atanh": torch.atanh,
@@ -103,7 +104,6 @@ def register_ttnn_cpp_unary_function(unary_function):
         "mish": lambda _x: torch.nn.functional.mish(_x.to(torch.float)),
         "multigammaln": torch_multigammaln,
         "rad2deg": torch.rad2deg,
-        "sigmoid_accurate": torch.sigmoid,
         "sinh": torch.sinh,
         "softsign": torch.nn.functional.softsign,
         "swish": torch.nn.functional.hardswish,
@@ -174,9 +174,11 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn._ttnn.operations.unary.heaviside,
     ttnn._ttnn.operations.unary.leaky_relu,
     # ttnn._ttnn.operations.unary.prelu,  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
-    # Other unaries (composite operations)
+    # Unaries using op_chain
     ttnn._ttnn.operations.unary.log_sigmoid,
     ttnn._ttnn.operations.unary.softplus,
+    ttnn._ttnn.operations.unary.sigmoid_accurate,
+    # Other unaries (composite operations - tt_eager dependency)
     ttnn._ttnn.operations.unary.acosh,
     ttnn._ttnn.operations.unary.asinh,
     ttnn._ttnn.operations.unary.atanh,
@@ -192,7 +194,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn._ttnn.operations.unary.mish,
     ttnn._ttnn.operations.unary.multigammaln,
     ttnn._ttnn.operations.unary.rad2deg,
-    ttnn._ttnn.operations.unary.sigmoid_accurate,
     ttnn._ttnn.operations.unary.sinh,
     ttnn._ttnn.operations.unary.softsign,
     ttnn._ttnn.operations.unary.swish,

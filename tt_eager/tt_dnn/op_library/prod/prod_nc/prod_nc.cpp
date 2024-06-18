@@ -98,7 +98,7 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t) cb_id_out, (std::uint32_t) output_is_dram};
 
     const auto reader_kernel_file = "tt_eager/tt_dnn/op_library/prod/kernels/dataflow/reader_prod_nc.cpp";
-    const auto writer_kernel_file = "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+    const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 

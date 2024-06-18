@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import tt_lib
+import ttnn
 
 
 def subalpha(x, y):
@@ -1739,7 +1740,7 @@ all_unary_ops = [
         "name": "tt_lib.tensor.silu",
     },
     {
-        "op": tt_lib.tensor.square,
+        "op": ttnn.square,
         "name": "tt_lib.tensor.square",
     },
     {

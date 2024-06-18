@@ -5,6 +5,7 @@
 import torch
 import ttnn
 import tt_lib as ttl
+import ttnn
 from functools import partial
 from models.helper_funcs import Linear as tt_Linear
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, ttl_complex_2_torch_complex
@@ -2555,7 +2556,7 @@ eltwise_hardswish = make_unary_op(ttl.tensor.hardswish)
 eltwise_hardsigmoid = make_unary_op(ttl.tensor.hardsigmoid)
 eltwise_digamma = make_unary_op(ttl.tensor.digamma)
 eltwise_silu = make_unary_op(ttl.tensor.silu)
-eltwise_square = make_unary_op(ttl.tensor.square)
+eltwise_square = make_unary_op(ttnn.square)
 eltwise_ltz = make_unary_op(ttl.tensor.ltz)
 eltwise_gtz = make_unary_op(ttl.tensor.gtz)
 eltwise_lez = make_unary_op(ttl.tensor.lez)
@@ -2575,6 +2576,24 @@ transpose_nw = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=-1))
 transpose_cw = make_unary_op(partial(ttl.tensor.transpose, dim0=1, dim1=-1))
 eltwise_floor = make_unary_op(ttl.tensor.floor)
 eltwise_trunc = make_unary_op(ttl.tensor.trunc)
+
+
+@setup_host_and_device
+def eltwise_square(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    cq_id = 0
+
+    t2 = ttnn.square(t0, queue_id=cq_id)
+
+    return tt2torch_tensor(t2)
 
 
 def make_binary_op(ttl_tensor_binop):
