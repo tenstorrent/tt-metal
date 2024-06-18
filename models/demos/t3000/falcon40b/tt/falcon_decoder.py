@@ -304,11 +304,11 @@ class TtFalconDecoderLayer:
         # Note that this is only correct in inference when dropout is disabled
         for i in range(len(residual)):
             output.append(
-                ttnn.experimental.operations.primary.add(
+                ttnn.add(
                     residual[i],
                     attention_output[i],
-                    output_mem_config=self.model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"],
-                    in_place=True,
+                    memory_config=self.model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"],
+                    output_tensor=residual[i],
                 )
             )
             attention_output[i].deallocate(True)
@@ -320,11 +320,11 @@ class TtFalconDecoderLayer:
         # dropout_add
         # For inference, this is just add
         for i in range(len(output)):
-            output[i] = ttnn.experimental.operations.primary.add(
+            output[i] = ttnn.add(
                 output[i],
                 mlp_output[i],
-                output_mem_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],
-                in_place=True,
+                memory_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],
+                output_tensor=output[i],
             )
 
             mlp_output[i].deallocate(True)
@@ -421,11 +421,11 @@ class TtFalconDecoderLayer:
         # Note that this is only correct in inference when dropout is disabled
         for i in range(len(residual)):
             output.append(
-                ttnn.experimental.operations.primary.add(
+                ttnn.add(
                     residual[i],
                     attention_output[i],
-                    output_mem_config=self.model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"],
-                    in_place=True,
+                    memory_config=self.model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"],
+                    output_tensor=residual[i],
                 )
             )
             attention_output[i].deallocate(True)
@@ -437,11 +437,11 @@ class TtFalconDecoderLayer:
         # dropout_add
         # For inference, this is just add
         for i in range(len(output)):
-            output[i] = ttnn.experimental.operations.primary.add(
+            output[i] = ttnn.add(
                 output[i],
                 mlp_output[i],
-                output_mem_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],
-                in_place=True,
+                memory_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],
+                output_tensor=output[i],
             )
 
             mlp_output[i].deallocate(True)
