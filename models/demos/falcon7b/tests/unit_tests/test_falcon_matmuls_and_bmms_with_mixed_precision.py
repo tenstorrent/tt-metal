@@ -388,13 +388,13 @@ def test_falcon7b_attnention_sliced(
             ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        mm_slice = ttnn.experimental.operations.primary.add(
+        mm_slice = ttnn.add(
             mm_slice,
             attn_mask_slice,
             fused_activations=None,
-            output_mem_config=height_sharded_memory_config,
+            memory_config=height_sharded_memory_config,
             output_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
-            in_place=True,
+            output_tensor=mm_slice,
         )
 
         attn_mask_slice.deallocate()
