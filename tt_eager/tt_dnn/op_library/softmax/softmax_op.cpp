@@ -49,6 +49,8 @@ void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vect
                 for (uint32_t i = 1; i < input_tensor.get_legacy_shape().rank() - 2; i++) {
                     TT_FATAL(mask.get_legacy_shape()[i] == 1);
                 }
+                TT_FATAL(mask.get_legacy_shape()[0] == 1 or mask.get_legacy_shape()[0] == input_tensor.get_legacy_shape()[0]);
+                TT_FATAL(mask.get_legacy_shape()[1] == 1);
             }
 
             std::visit(
