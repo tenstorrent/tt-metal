@@ -62,8 +62,8 @@ def main(args):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Dump perplexity and max_seq_len to a JSON file with timestamp and max_length in the file name
-    filename = f"perplexity_{args.llama_version}_{timestamp}.json"
-    result = {"perplexity": perplexity.item(), "max_seq_len": max_length}
+    filename = f"perplexity_{args.llama_version}_{args.implementation}_{args.sample_len}_{timestamp}.json"
+    result = {"model": args.llama_version, "perplexity": perplexity.item(), "seq_len": args.sample_len}
     with open(filename, "w") as f:
         json.dump(result, f)
 
@@ -259,7 +259,7 @@ def construct_arg(**kwargs):
             8,
         ),
     ],
-    ids=["tt-70b-T3000", "meta-70b"],
+    ids=["tt-70b", "meta-70b"],
 )
 @pytest.mark.parametrize(
     "top_p, top_k, temperature",
@@ -272,8 +272,8 @@ def construct_arg(**kwargs):
 @pytest.mark.parametrize(
     "dataset, split, config, stride, sample_len, num_samples, perplexity_score",
     [
-        ("wikitext", "test", "wikitext-2-raw-v1", 128, 128, 32, 5.4),
-        ("wikitext", "test", "wikitext-2-raw-v1", 128, 2048, 32, 3.4313),
+        ("wikitext", "test", "wikitext-2-raw-v1", 128, 128, 128, 5.4),
+        ("wikitext", "test", "wikitext-2-raw-v1", 128, 2048, 128, 3.4313),
     ],
     ids=["wikitext-128", "wikitext-2k"],
 )
@@ -305,8 +305,6 @@ def test_LlamaModel_demo(
 
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
-        max_batch_size=32,
-        max_context_len=sample_len,
     )
 
     check_device_mesh(t3k_device_mesh, model_config)
