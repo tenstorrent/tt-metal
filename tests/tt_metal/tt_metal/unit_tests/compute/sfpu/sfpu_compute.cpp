@@ -87,6 +87,9 @@ bool is_close_packed_sfpu_output(const vector<uint32_t>& vec_a, const vector<uin
     } else if ((op_name == "exponential")) {
         return is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
             vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.1f, 0.1f); });
+    } else if ((op_name == "log")) {
+        return is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
+            vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.03f, 0.02f); });
     } else {
         return is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
             vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.06f, 0.006f); });
@@ -236,24 +239,19 @@ TEST_P(SingleCoreSingleDeviceSfpuParameterizedFixture, SfpuCompute) {
     size_t num_tiles = std::get<0>(GetParam());
     string sfpu_op = std::get<1>(GetParam());
 
-    if (((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "relu")) or
-        ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "log")) or (sfpu_op == "gelu")) {
-        GTEST_SKIP();
-    } else {
-        CoreRange core_range({0, 0}, {0, 0});
-        CoreRangeSet core_range_set({core_range});
-        unit_tests::compute::sfpu::SfpuConfig test_config = {
-            .num_tiles = num_tiles,
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .cores = core_range_set,
-            .sfpu_op = sfpu_op,
-            .approx_mode = false};
-        log_info("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
-        }
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+    unit_tests::compute::sfpu::SfpuConfig test_config = {
+        .num_tiles = num_tiles,
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .cores = core_range_set,
+        .sfpu_op = sfpu_op,
+        .approx_mode = false};
+    log_info("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
     }
 }
 
