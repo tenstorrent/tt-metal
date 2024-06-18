@@ -23,6 +23,7 @@
 #include "tt_numpy/functions.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace tt {
 
@@ -529,7 +530,7 @@ Tensor _asinh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
         Tensor x_abs = abs(input_a, output_mem_config);
         Tensor x_sq_p1(input_a);
         {
-            Tensor x_sq = square(input_a, output_mem_config);
+            Tensor x_sq = ttnn::square(input_a, output_mem_config);
             x_sq_p1 = add_unary(x_sq, 1.0f, output_mem_config);
         }
         ln_res =
@@ -553,7 +554,7 @@ Tensor _acosh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
             Tensor x_abs = abs(input_a, output_mem_config);
             Tensor x_sq_m1(input_a);
             {
-                Tensor x_sq = square(x_abs, output_mem_config);
+                Tensor x_sq = ttnn::square(x_abs, output_mem_config);
                 x_sq_m1 = sub_unary(x_sq, 1.0f, output_mem_config);
             }
             ln_res = log(
@@ -1308,7 +1309,7 @@ Tensor _variance_impl(
     constexpr float correction = 0.0f;
     auto shape_wh = y.get_legacy_shape();
     float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
-    Tensor sqr_y_minus_mean_y = square(y_minus_mean_y, output_mem_config);
+    Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
     Tensor sum_sqr_y_minus_mean_y =
         reduce(sqr_y_minus_mean_y, ReduceOpMath::SUM, ReduceOpDim::HW, scale, output_mem_config);
     return sum_sqr_y_minus_mean_y;  // var
@@ -1387,8 +1388,8 @@ Tensor normalize_global(const Tensor& y, const MemoryConfig& output_mem_config) 
 // TODO: can be a fused binop
 // hypot(a,b) = sqrt[ a^2 + b^2 ]
 Tensor _hypot(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    Tensor a_sq = square(input_a, output_mem_config);
-    Tensor b_sq = square(input_b, output_mem_config);
+    Tensor a_sq = ttnn::square(input_a, output_mem_config);
+    Tensor b_sq = ttnn::square(input_b, output_mem_config);
     Tensor c_sq = ttnn::add(a_sq, b_sq, std::nullopt, output_mem_config);
     a_sq.deallocate();
     b_sq.deallocate();
@@ -1432,7 +1433,7 @@ Tensor _digamma(const Tensor& input_a, const MemoryConfig& output_mem_config) {
 
     // 1/2(z)
     Tensor output = mul_unary(recip(input_a, output_mem_config), 0.5f, output_mem_config);
-    Tensor tmp = square(recip(input_a, output_mem_config), output_mem_config);
+    Tensor tmp = ttnn::square(recip(input_a, output_mem_config), output_mem_config);
     Tensor val_square = tmp;
     // (1/12) * x^2
     output = ttnn::subtract(output, mul_unary(tmp, 0.083333333f, output_mem_config), std::nullopt, output_mem_config);
