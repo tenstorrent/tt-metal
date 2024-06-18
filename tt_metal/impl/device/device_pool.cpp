@@ -126,8 +126,7 @@ void DevicePool::initialize_device(Device* dev) const {
 }
 
 void DevicePool::activate_device(chip_id_t id) {
-    TT_ASSERT(id < tt::tt_metal::GetNumAvailableDevices(), "Tried to add device id larger than available devices");
-
+    TT_ASSERT(id < tt::Cluster::instance().number_of_devices(), "Tried to add device id larger than available devices");
     const std::lock_guard<std::mutex> lock(this->lock);
     if (this->devices.size() < id + 1) {
         this->devices.resize(id + 1);
@@ -237,7 +236,7 @@ DevicePool::DevicePool(
     log_debug(tt::LogMetal, "DevicePool constructor");
     bool use_numa_node_based_thread_binding = parse_env("TT_METAL_NUMA_BASED_AFFINITY", false);
     std::vector<chip_id_t> all_device_ids;
-    for (int i = 0; i < tt::tt_metal::GetNumAvailableDevices(); i++) {
+    for (int i = 0; i < tt::Cluster::instance().number_of_devices(); i++) {
         all_device_ids.emplace_back((chip_id_t)i);
     }
     std::unordered_set<uint32_t> free_cores = {};
