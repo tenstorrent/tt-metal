@@ -111,7 +111,7 @@ class TtMoeLayer(LightweightModule):
             gate_probs_1SB_64, 32
         )  # selects 6, 5 as 8.1, 1.8
         ttl_topk_values = ttl_topk_values * self.top2_mask_11BB  # masked unwanted ones to 0
-        mask_B2 = ttnn.eq(
+        mask_B2 = ttnn.eq(  # FIXME: revert dtype when merging main https://github.com/tenstorrent/tt-metal/issues/9480
             self.expert_mask_11BB, ttl_topk_indices, dtype=ttnn.bfloat16
         )  # Each device now masks for its own expert index 1-8
         weights_1SB1 = ttnn.sum(ttl_topk_values * mask_B2, dim=3)

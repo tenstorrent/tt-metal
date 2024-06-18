@@ -29,14 +29,15 @@ from models.utility_functions import (
 def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seeds):
     pcc = 0.99
     dtype = ttnn.bfloat8_b
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=True)
+    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    key_start = "layers.0.attn."
+    key_start = "model.layers.0.attn."
     partial_state_dict = {k[len(key_start) :]: v for k, v in state_dict.items() if (k.startswith(key_start))}
 
     reference_model = MultiHeadAttention(
+        hidden_size=model_args.hidden_size,
         num_heads=model_args.num_attention_heads,
         num_key_value_heads=model_args.num_key_value_heads,
         max_position_embeddings=model_args.max_position_embeddings,
@@ -56,14 +57,16 @@ def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seed
         tt_model.device_mesh,
     )
 
-    generation_start_pos = 0
+    generation_start_pos = 0  # Ref model can only start from pos 0
     generation_length = 2
+    ref_past_key_value = None
     all_tests_pass = True
 
     for i in range(generation_length):
         pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
         tt_attention_input = pt_attention_input
         start_pos = generation_start_pos + i
+
         attention_input, attn_mask = prepare_inputs_ttnn(
             tt_attention_input,
             # tt_model.hidden_size,
@@ -85,8 +88,16 @@ def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seed
             .squeeze(2)
             .view(batch, 1, -1)
         )  # [ batch, seq, hidden_dim]
-        positions = torch.LongTensor([start_pos])
-        reference_output = reference_model(pt_attention_input, positions, mask=None)
+
+        # positions = torch.LongTensor(range(generation_start_pos, start_pos+1))
+        reference_output, _, ref_past_key_value = reference_model(
+            pt_attention_input,
+            # attention_mask=None,
+            past_key_value=ref_past_key_value,
+            # position_ids=positions,
+            use_cache=True,
+        )
+
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
         logger.info(comp_allclose(reference_output, tt_output_torch))

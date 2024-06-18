@@ -43,37 +43,32 @@ class TtTransformerBlock(LightweightModule):
                 args=args,
                 layer_num=layer_num,
                 dtypes={
-                    "w1": ttnn.bfloat4_b,
-                    "w2": ttnn.bfloat8_b,
-                    "w3": ttnn.bfloat4_b,
+                    "linear": ttnn.bfloat4_b,
+                    "linear_1": ttnn.bfloat8_b,
+                    "linear_v": ttnn.bfloat4_b,
                 },
             ),
             args=args,
             layer_num=layer_num,
             dtype=dtype,
         )
-        self.attention_norm = TtRMSNorm(
+        make_norm = lambda name: TtRMSNorm(
             device_mesh=device_mesh,
             state_dict=state_dict,
             args=args,
             dtype=ttnn.bfloat16,
             layer_num=layer_num,
-            weight_key="attention_norm",
+            weight_key=name,
         )
 
-        self.ffn_norm = TtRMSNorm(
-            device_mesh=device_mesh,
-            state_dict=state_dict,
-            args=args,
-            dtype=ttnn.bfloat16,
-            layer_num=layer_num,
-            weight_key="ffn_norm",
-        )
+        self.pre_attn_norm = make_norm("pre_attn_norm")
+        self.post_attn_norm = make_norm("post_attn_norm")
+        self.pre_moe_norm = make_norm("pre_moe_norm")
+        self.post_moe_norm = make_norm("post_moe_norm")
 
     def forward(
         self,
         xs_1SBH,
-        start_pos,
         current_pos,
         attn_masks,
         rot_mats,
@@ -83,19 +78,21 @@ class TtTransformerBlock(LightweightModule):
         B: batch dim (32)
         S: seq dim (1)
         1: unary dim
-        H: hidden dim (4096)
+        H: hidden dim (6144)
         """
-        attn_norm_1SBH = self.attention_norm(xs_1SBH)
-
-        attn_1SBH = self.attention(
-            attn_norm_1SBH,
-            start_pos,
+        hidden_1SBH = self.pre_attn_norm(xs_1SBH)
+        hidden_1SBH = self.attention(
+            hidden_1SBH,
             current_pos,
             attn_masks,
             rot_mats,
         )
-        hs_1SBH = ttnn.add(xs_1SBH, attn_1SBH)
-        ffn_norm_1SBH = self.ffn_norm(hs_1SBH)
-        ffn_1SBH = self.feed_forward(ffn_norm_1SBH)
-        out_1SBH = ttnn.add(hs_1SBH, ffn_1SBH)
-        return out_1SBH
+        hidden_1SBH = self.post_attn_norm(hidden_1SBH)
+        hidden_1SBH = ttnn.add(xs_1SBH, hidden_1SBH)
+        residual_1SBH = hidden_1SBH
+
+        hidden_1SBH = self.pre_moe_norm(hidden_1SBH)
+        hidden_1SBH = self.feed_forward(hidden_1SBH)
+        hidden_1SBH = self.post_moe_norm(hidden_1SBH)
+        hidden_1SBH = ttnn.add(residual_1SBH, hidden_1SBH)
+        return hidden_1SBH

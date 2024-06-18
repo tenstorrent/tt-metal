@@ -18,12 +18,12 @@ class TtGrokAttention(LightweightModule):
         self.model_args = args
 
         self.hidden_size = args.dim
-        self.n_heads = args.n_heads
-        self.head_dim = self.hidden_size // self.n_heads
+        self.n_heads = args.num_attention_heads
+        self.head_dim = args.head_dim
         self.max_seq_len = args.max_seq_len
         self.max_batch_size = args.max_batch_size
-        self.n_kv_heads = args.n_kv_heads
-        self.sliding_window = args.sliding_window
+        self.n_kv_heads = args.num_key_value_heads
+        self.max_attn_value = args.max_attn_value
 
         self.n_local_heads = self.n_heads // self.num_devices
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices
@@ -32,7 +32,7 @@ class TtGrokAttention(LightweightModule):
 
         self.model_config = self.model_args.get_model_config()
 
-        layer_name = f"layers.{layer_num}.attn"
+        layer_name = f"model.layers.{layer_num}.attn"
 
         if args.dummy_weights:
             cache_name = lambda _: None
@@ -101,7 +101,7 @@ class TtGrokAttention(LightweightModule):
             (
                 self.n_kv_heads,
                 self.max_batch_size,
-                self.sliding_window,
+                self.max_seq_len,
                 self.head_dim,
             )
         )
@@ -109,7 +109,7 @@ class TtGrokAttention(LightweightModule):
             (
                 self.n_kv_heads,
                 self.max_batch_size,
-                self.sliding_window,
+                self.max_seq_len,
                 self.head_dim,
             )
         )
@@ -142,13 +142,13 @@ class TtGrokAttention(LightweightModule):
     def forward(
         self,
         xs,
-        start_pos,
+        current_pos,
         attn_masks,
         rot_mats,
     ):
         """
         x: (seq_len, 1, batch, hidden_dim)
-        start_pos: the length of the KV cache. Same as current token's index.
+        current_pos: the length of the KV cache. Same as current token's index.
         attn_masks: (seq_len, batch, n_heads, cache_len+seq_len)
         rot_mats: list of rotation matrices for each device
 
@@ -158,12 +158,12 @@ class TtGrokAttention(LightweightModule):
         D : head_dim (128)
         P : padded_layer_past_len
         """
-        padded_layer_past_len = min(nearest_32(start_pos + 1), self.sliding_window)
+        padded_layer_past_len = min(nearest_32(current_pos + 1), self.max_seq_len)
 
         x_11BH = xs
         wo = self.wo
         layer_past = self.layer_past
-        rot_mat = rot_mats[start_pos]
+        rot_mat = rot_mats[current_pos]
         attn_mask_1B4P = attn_masks
         ###
         # QKV matmuls
@@ -220,8 +220,8 @@ class TtGrokAttention(LightweightModule):
         ###
         keys_1BPD = layer_past[0]
         values_1BPD = layer_past[1]
-        ttnn.kv_cache.update_cache_for_token_(keys_1BPD, k_heads_1B1D, start_pos)
-        ttnn.kv_cache.update_cache_for_token_(values_1BPD, v_heads_1B1D, start_pos)
+        ttnn.kv_cache.update_cache_for_token_(keys_1BPD, k_heads_1B1D, current_pos)
+        ttnn.kv_cache.update_cache_for_token_(values_1BPD, v_heads_1B1D, current_pos)
         self.layer_past = [keys_1BPD, values_1BPD]
         k_heads_1B1D.deallocate(True)
         v_heads_1B1D.deallocate(True)
@@ -243,22 +243,23 @@ class TtGrokAttention(LightweightModule):
         keys_1BPD.deallocate(True)
 
         # scores matmul
-
+        attn_1B4P_memconfig = self.model_config["ATTN_BATCHED_MM_OUTPUT_MEMCFG"](padded_layer_past_len)
         attn_1B4P = ttnn.experimental.operations.primary.matmul(
             q_heads_1B4D,
             keys_1BDP,
             output_dtype=ttnn.bfloat16,
             program_config=self.model_config["SCORES_BATCHED_MM_PROGCFG"](padded_layer_past_len // 32),
-            output_mem_config=self.model_config["ATTN_BATCHED_MM_OUTPUT_MEMCFG"](padded_layer_past_len),
+            output_mem_config=attn_1B4P_memconfig,
             compute_kernel_config=self.compute_kernel_attn,
         )
         q_heads_1B4D.deallocate(True)
         keys_1BDP.deallocate(True)
 
         # Softmax and scaling
-
-        # TODO: attn_weights = self.max_attn_val * F.tanh(attn_weights / self.max_attn_val)
-
+        # FIXME: ttnn.mul does not seem to respect sharding even when it is manually specified
+        # hence the interleaved_to_sharded workaround here
+        attn_1B4P = self.max_attn_value * ttnn.tanh(attn_1B4P * (1.0 / self.max_attn_value))
+        attn_1B4P = ttnn.experimental.tensor.interleaved_to_sharded(attn_1B4P, sharded_mem_config=attn_1B4P_memconfig)
         attn_1B4P = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
             attn_1B4P,
             self.scale,
@@ -285,7 +286,7 @@ class TtGrokAttention(LightweightModule):
 
         attn_output_11BH = ttnn.experimental.tensor.nlp_concat_heads_decode(
             attn_output_1B4D,
-            num_heads=4,
+            num_heads=6,
         )
         attn_output_1B4D.deallocate(True)
 

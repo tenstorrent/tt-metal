@@ -37,8 +37,9 @@ class TtModelArgs:
     output_router_logits = False
     router_aux_loss_coef = 0.001
 
-    # from Grok
+    # from Mixtral / our use
     max_batch_size = 32
+    head_dim = hidden_size // num_attention_heads
     max_seq_len = max_position_embeddings  # FIXME, just use one variable for this
     dim = hidden_size  # FIXME, just use one variable for this
     moe = True  # FIXME: unused?
@@ -237,7 +238,7 @@ class TtModelArgs:
         self.model_config["SCORES_BATCHED_MM_PROGCFG"] = cached_lambda(
             lambda p: ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
-                in0_block_w=6,
+                in0_block_w=4,
                 out_subblock_h=1,
                 out_subblock_w=1,
                 per_core_M=1,
@@ -250,9 +251,9 @@ class TtModelArgs:
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=p,
                 out_subblock_h=1,
-                out_subblock_w=3,
+                out_subblock_w=4,
                 per_core_M=1,
-                per_core_N=6,
+                per_core_N=4,
             )
         )
 
