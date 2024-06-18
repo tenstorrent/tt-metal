@@ -28,7 +28,7 @@ ExternalProject_Add(
     INSTALL_COMMAND
         cp ${TRACY_HOME}/csvexport/build/unix/csvexport-release .
     BUILD_COMMAND
-        cd ${TRACY_HOME}/csvexport/build/unix && TRACY_NO_LTO=1 make -f ${TRACY_HOME}/csvexport/build/unix/Makefile
+        cd ${TRACY_HOME}/csvexport/build/unix && CXX=g++ TRACY_NO_LTO=1 make -f ${TRACY_HOME}/csvexport/build/unix/Makefile
 )
 ExternalProject_Add(
     tracy_capture_tools
@@ -43,6 +43,6 @@ ExternalProject_Add(
     INSTALL_COMMAND
         cp ${TRACY_HOME}/capture/build/unix/capture-release .
     BUILD_COMMAND
-        cd ${TRACY_HOME}/capture/build/unix && TRACY_NO_LTO=1 make -f ${TRACY_HOME}/capture/build/unix/Makefile
+        cd ${TRACY_HOME}/capture/build/unix && CXX=g++ TRACY_NO_LTO=1 make -f ${TRACY_HOME}/capture/build/unix/Makefile
 )
 add_custom_target(tracy_tools ALL DEPENDS tracy_csv_tools tracy_capture_tools)
