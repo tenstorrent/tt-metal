@@ -135,7 +135,7 @@ std::map<string, string> get_defines(
 
 }  // namespace utils
 
-Binary::program_factory_t Binary::select_program_factory(
+std::size_t Binary::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     ZoneScopedN("Binary::select_program_factory");
     const auto& input_shape_a = tensor_args.input_tensor_a.tensor_attributes->shape;
@@ -148,14 +148,14 @@ Binary::program_factory_t Binary::select_program_factory(
     auto width_b = input_shape_b[-1];
 
     if (height_a == height_b and width_a == width_b) {
-        return ElementWiseMultiCore{};
+        return ttnn::device_operation::get_program_factory_index<ElementWiseMultiCore, Binary>();
     } else if (height_b == 1 or width_b == 1) {
         if (height_b == 1 and width_b == 1) {
-            return BroadcastHeightAndWidthMultiCore{};
+            return ttnn::device_operation::get_program_factory_index<BroadcastHeightAndWidthMultiCore, Binary>();
         } else if (height_b == 1) {
-            return BroadcastHeightMultiCore{};
+            return ttnn::device_operation::get_program_factory_index<BroadcastHeightMultiCore, Binary>();
         } else if (width_b == 1) {
-            return BroadcastWidthMultiCore{};
+            return ttnn::device_operation::get_program_factory_index<BroadcastWidthMultiCore, Binary>();
         }
     }
     TT_THROW("ttnn::operations::binary::Binary: unsupported broadcast");
@@ -219,14 +219,10 @@ void Binary::validate_on_program_cache_miss(
         }
     }
 
-    auto program_factory = select_program_factory(attributes, tensor_args);
-    std::visit(
-        [&attributes](auto&& program_factory) {
-            if constexpr (std::is_same_v<decltype(program_factory), ElementWiseMultiCore>) {
-                TT_FATAL(not attributes.activations.has_value());
-            }
-        },
-        program_factory);
+    auto program_factory_index = select_program_factory(attributes, tensor_args);
+    if (program_factory_index != ttnn::device_operation::get_program_factory_index<ElementWiseMultiCore, Binary>()) {
+        TT_FATAL(not attributes.activations.has_value());
+    }
 
     if (output_tensor.has_value()) {
         TT_FATAL(
@@ -308,8 +304,9 @@ Binary::tensor_return_value_t Binary::create_output_tensors(
             return output_tensor.value();
         }
 
-        auto program_factory = select_program_factory(operation_attributes, tensor_args);
-        if (std::holds_alternative<ElementWiseMultiCore>(program_factory)) {
+        auto program_factory_index = select_program_factory(operation_attributes, tensor_args);
+        if (program_factory_index ==
+            ttnn::device_operation::get_program_factory_index<ElementWiseMultiCore, Binary>()) {
             if (operation_attributes.memory_config.is_sharded()) {
                 ShardSpec shard_spec{CoreRangeSet({}), {0, 0}};
                 if (input_tensor_a.memory_config().is_sharded()) {
@@ -358,10 +355,10 @@ tt::stl::hash::hash_t Binary::compute_program_hash(
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
-    auto program_factory = select_program_factory(attributes, tensor_args);
+    auto program_factory_index = select_program_factory(attributes, tensor_args);
     operation::Hash hash = operation::hash_operation<Binary>(
         attributes,
-        program_factory.index(),
+        program_factory_index,
         input_tensor_a.dtype(),
         std::get<DeviceStorage>(input_tensor_a.storage()).memory_config(),
         input_tensor_b.dtype(),
