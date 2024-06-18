@@ -9,7 +9,7 @@ void kernel_main() {
     const auto mean_addr = get_arg_val<uint32_t>(1);
     const auto rstd_addr = get_arg_val<uint32_t>(2);
     const auto num_rows_per_core = get_arg_val<uint32_t>(3);
-    const auto Wt = get_arg_val<uint32_t>(4);
+    const auto num_inner = get_arg_val<uint32_t>(4);
     const auto tile_offset = get_arg_val<uint32_t>(5);
 
     constexpr bool output_is_dram = get_compile_time_arg_val(0) == 1;
@@ -46,14 +46,13 @@ void kernel_main() {
 
     uint32_t offs = 0;
     constexpr uint32_t onetile = 1;
-    const auto NCHt = num_rows_per_core;
 
-    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+    for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; outer_idx++) {
         if (mean_has_value) {
             // mean
             const auto mean_l1_read_addr = get_read_ptr(cb_id_mean);
             cb_wait_front(cb_id_mean, onetile);
-            noc_async_write_tile((offs + tile_offset) / Wt, mean_addrg, mean_l1_read_addr);
+            noc_async_write_tile((offs + tile_offset) / num_inner, mean_addrg, mean_l1_read_addr);
             noc_async_write_barrier();
             cb_pop_front(cb_id_mean, onetile);
         }  // mean_has_value
@@ -62,23 +61,23 @@ void kernel_main() {
             // rstd
             const auto rstd_l1_read_addr = get_read_ptr(cb_id_rstd);
             cb_wait_front(cb_id_rstd, onetile);
-            noc_async_write_tile((offs + tile_offset) / Wt, rstd_addrg, rstd_l1_read_addr);
+            noc_async_write_tile((offs + tile_offset) / num_inner, rstd_addrg, rstd_l1_read_addr);
             noc_async_write_barrier();
             cb_pop_front(cb_id_rstd, onetile);
         }  // rstd_has_value
 
         // output
-        for (uint32_t wt = 0; wt < Wt; wt += block_size) {
+        for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
             cb_wait_front(cb_id_output, block_size);
             auto output_l1_read_addr = get_read_ptr(cb_id_output);
             for (uint32_t r = 0; r < block_size; r++) {
-                noc_async_write_tile(offs + wt + r + tile_offset, output_addrg, output_l1_read_addr);
+                noc_async_write_tile(offs + inner_idx + r + tile_offset, output_addrg, output_l1_read_addr);
                 output_l1_read_addr += output_tile_bytes;
             }
             noc_async_write_barrier();
             cb_pop_front(cb_id_output, block_size);
-        }  // wt loop
+        }  // num_inner loop
 
-        offs += Wt;
+        offs += num_inner;
     }  // ncht loop
 }  // void kernel_main()
