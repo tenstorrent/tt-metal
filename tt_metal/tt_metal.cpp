@@ -744,7 +744,7 @@ Device *CreateDevice(
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
 
-    tt::DevicePool::initialize({device_id}, num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, true);
+    tt::DevicePool::initialize({device_id}, num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap);
     auto dev = tt::DevicePool::instance().get_active_device(device_id);
     return dev;
 }

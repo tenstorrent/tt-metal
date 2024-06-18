@@ -232,8 +232,7 @@ DevicePool::DevicePool(
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,
-    const std::vector<uint32_t>& l1_bank_remap,
-    bool skip_remote_devices) {
+    const std::vector<uint32_t>& l1_bank_remap) {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool constructor");
     bool use_numa_node_based_thread_binding = parse_env("TT_METAL_NUMA_BASED_AFFINITY", false);
