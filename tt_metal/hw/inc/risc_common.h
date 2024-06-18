@@ -148,57 +148,6 @@ void risc_init() {
 }
 #endif  // !defined(COMPILE_FOR_TRISC)
 
-inline void breakpoint_(uint32_t line) {
-    /*
-        When called, writes the stack pointer to a known location
-        in memory (unique for each core) and then hangs until the
-        user explicitly continues
-    */
-    uint32_t BREAKPOINT;
-    uint32_t LNUM;
-    volatile tt_l1_ptr uint32_t* bp;
-    volatile tt_l1_ptr uint32_t* lnum;
-
-#define MACRO_SP_AUX(SP) #SP
-#define MACRO_SP(SP) MACRO_SP_AUX(SP)
-
-// Need to use macros for inline assembly in order to create a string literal
-#if defined(COMPILE_FOR_NCRISC)
-    asm("li t0, " MACRO_SP(NCRISC_SP_MACRO));
-    BREAKPOINT = NCRISC_BREAKPOINT;
-    LNUM = NCRISC_BP_LNUM;
-#elif defined(COMPILE_FOR_BRISC)
-    asm("li t0, " MACRO_SP(BRISC_SP_MACRO));
-    BREAKPOINT = BRISC_BREAKPOINT;
-    LNUM = BRISC_BP_LNUM;
-#elif COMPILE_FOR_TRISC == 0
-    asm("li t0, " MACRO_SP(TRISC0_SP_MACRO));
-    BREAKPOINT = TRISC0_BREAKPOINT;
-    LNUM = TRISC0_BP_LNUM;
-#elif COMPILE_FOR_TRISC == 1
-    asm("li t0, " MACRO_SP(TRISC1_SP_MACRO));
-    BREAKPOINT = TRISC1_BREAKPOINT;
-    LNUM = TRISC1_BP_LNUM;
-#elif COMPILE_FOR_TRISC == 2
-    asm("li t0, " MACRO_SP(TRISC2_SP_MACRO));
-    BREAKPOINT = TRISC2_BREAKPOINT;
-    LNUM = TRISC2_BP_LNUM;
-#endif
-
-    // Write '1' to breakpoint location so that this core keeps
-    // busy looping until host releases it
-    asm("sw sp, 0(t0)");
-    bp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(BREAKPOINT);
-    bp[0] = 1;
-
-    lnum = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(LNUM);
-    lnum[0] = line;
-
-    while (bp[0] == 1);
-}
-
-#define breakpoint() breakpoint_(__LINE__);
-
 // Helper function to wait for a specified number of cycles, safe to call in erisc kernels.
 #if defined(COMPILE_FOR_ERISC)
 #include "erisc.h"
