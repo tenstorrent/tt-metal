@@ -39,3 +39,8 @@ jobs:
         timeout-minutes: 30
         run: |
           ./tests/scripts/run_profiler_regressions.sh
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U03BJ1L3LUQ # Mo Memarian  
