@@ -20,12 +20,27 @@ from models.experimental.llama2_70b.reference.llama.llama.tokenizer3 import Chat
 from models.experimental.llama2_70b.tt.llama_common import (
     setup_llama_env,
     check_device_mesh,
+    string_similarity_score,
 )
 
 
 def main(args):
     # Set random reproducible seed
     torch.manual_seed(0)
+
+    # Load ground truth if available
+    if args.ground_truth:
+        if not os.path.exists(args.ground_truth):
+            logger.info(f"Ground truth file {args.ground_truth} does not exist.")
+            args.ground_truth = None
+        else:
+            ground_truth_outputs = json.load(open(args.ground_truth, "r"))
+
+            if len(ground_truth_outputs) == 0:
+                logger.info("Ground truth outputs are empty")
+                args.ground_truth = None
+            else:
+                logger.info(f"Loaded {len(ground_truth_outputs)} ground truth outputs")
 
     generator = build_generator(args)
 
@@ -40,10 +55,22 @@ def main(args):
 
         if args.output_at_end:
             with open(
-                "models/demos/t3000/llama2_70b/demo/data/demo_user_output.txt", "w"
+                "models/demos/t3000/llama2_70b/demo/data/demo_user_output.json", "w"
             ) as f:  # Open a file for writing
-                for i, text in enumerate(all_text):
-                    f.write(f"User {i}: {text}\n")
+                output_json = json.dumps(all_text, indent=4)
+                f.write(output_json)
+
+    # Check against ground truth
+    if args.ground_truth:
+        scores = string_similarity_score(ground_truth_outputs, all_text)
+
+        match = sum(scores) == len(scores)
+        if not match:
+            incorrect_indices = [i for i, score in enumerate(scores) if score < 1]
+            logger.info(f"Output does not match ground truth at indices {incorrect_indices}")
+            assert match, "Output must match ground truth!"
+
+        logger.info("Output matches ground truth!")
 
 
 def build_generator(args):
@@ -260,6 +287,7 @@ class Args:
         top_k=1,
         temperature=1.0,
         chat=False,
+        ground_truth=None,
         # TT args
         device_mesh=None,
         n_devices=8,
@@ -280,6 +308,7 @@ class Args:
         self.top_k = top_k
         self.temperature = temperature
         self.chat = chat
+        self.ground_truth = ground_truth
         self.device_mesh = device_mesh
         self.n_devices = n_devices
         self.cache_path = cache_path
@@ -332,6 +361,11 @@ def construct_arg(**kwargs):
     ],
     ids=["greedy", "sampling"],
 )
+@pytest.mark.parametrize(
+    "ground_truth",
+    ["models/demos/t3000/llama2_70b/demo/data/demo_user_output_ground_truth.json", None],
+    ids=["check_enabled", "check_disabled"],
+)
 def test_LlamaModel_demo(
     # model args
     implementation,
@@ -350,6 +384,7 @@ def test_LlamaModel_demo(
     n_devices,
     decode_only,
     llama_version,
+    ground_truth,
     use_program_cache,
 ):
     logger.info("Running LlamaModel demo")
@@ -378,5 +413,6 @@ def test_LlamaModel_demo(
         n_devices=n_devices,
         cache_path=cache_path,
         decode_only=decode_only,
+        ground_truth=ground_truth,
     )
     main(args)

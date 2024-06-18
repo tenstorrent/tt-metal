@@ -42,6 +42,23 @@ def load_llama_state_dict(ckpt_dir, n_layers, start_layer_idx=0):
     return checkpoint
 
 
+# string similarity score in percentage of two strings based on words in the same order
+def string_similarity_score(ground_truths, predictions):
+    scores = []
+    for ground_truth, prediction in zip(ground_truths, predictions):
+        ground_truth = ground_truth.split()
+        prediction = prediction.split()
+        if len(ground_truth) == 0:
+            return 0
+        score = 0
+        for i in range(len(ground_truth)):
+            if i < len(prediction) and ground_truth[i] == prediction[i]:
+                score += 1
+        scores.append(score / len(ground_truth))
+
+    return scores
+
+
 def should_skip_model_load():
     skip_model_load = bool(os.environ.get("LLAMA_SKIP_MODEL_LOAD", 0))
     if skip_model_load:
