@@ -19,6 +19,7 @@
 #include "tt_dnn/op_library/copy/copy_op.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace tt {
 
@@ -283,7 +284,7 @@ std::vector<Tensor> _div_bw(
             output_mem_config));
         Tensor grad_b = ttnn::multiply(
             neg(grad, output_mem_config),
-            (ttnn::multiply(input, recip(square(other, output_mem_config), output_mem_config), std::nullopt, output_mem_config)),
+            (ttnn::multiply(input, recip(ttnn::square(other, output_mem_config), output_mem_config), std::nullopt, output_mem_config)),
             std::nullopt,
             output_mem_config);
         grad_tensor.emplace_back(where(
@@ -332,7 +333,7 @@ std::vector<Tensor> _rdiv_bw(
         Tensor result = where(
             nez(input),
             ttnn::multiply(neg(grad, output_mem_config),
-                (mul_unary(recip(square(input, output_mem_config)), scalar, output_mem_config)),
+                (mul_unary(recip(ttnn::square(input, output_mem_config)), scalar, output_mem_config)),
                 std::nullopt,
                 output_mem_config),
             t_nan,
@@ -379,7 +380,7 @@ std::vector<Tensor> rdiv_bw(
 std::vector<Tensor> _tanh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor tanh_res = tanh(input, output_mem_config);
-    tanh_res = square(tanh_res, output_mem_config);
+    tanh_res = ttnn::square(tanh_res, output_mem_config);
     tanh_res = rsub(tanh_res, 1.0, output_mem_config);
     Tensor result = ttnn::multiply(grad, tanh_res, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
@@ -411,7 +412,7 @@ std::vector<Tensor> _tan_bw(const Tensor& grad, const Tensor& input, const Memor
     std::vector<Tensor> grad_tensor;
     Tensor tan_result = tan(input, output_mem_config);
     Tensor result =
-        ttnn::multiply(grad, add1(square(tan_result, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+        ttnn::multiply(grad, add1(ttnn::square(tan_result, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -439,7 +440,7 @@ std::vector<Tensor> _addcdiv_bw(
     Tensor tmp = ttnn::multiply(
         mul_unary(neg(grad, output_mem_config), value, output_mem_config), tensor1, std::nullopt, output_mem_config);
     Tensor grad_b =
-        ttnn::multiply(tmp, recip(square(tensor2, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+        ttnn::multiply(tmp, recip(ttnn::square(tensor2, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(where(
         eqz(tensor2, output_mem_config),
         where(eqz(grad, output_mem_config), t_nan, neg(t_inf, output_mem_config), output_mem_config),
@@ -1287,7 +1288,7 @@ std::vector<Tensor> cos_bw(const Tensor& grad, const Tensor& input, const Memory
 
 std::vector<Tensor> _acosh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor in_rsqrt = square(input, output_mem_config);
+    Tensor in_rsqrt = ttnn::square(input, output_mem_config);
     in_rsqrt = rsqrt(sub_unary(in_rsqrt, 1.0, output_mem_config), true, output_mem_config);
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
     float t_nan = std::nanf("");
@@ -1486,7 +1487,7 @@ std::vector<Tensor> _erfinv_bw(const Tensor& grad, const Tensor& input, const Me
     Tensor result = mul_unary(
         0.5,
         ttnn::multiply(sqrt(full_like(input, M_PI, output_mem_config), output_mem_config),
-            ttnn::multiply(exp(square(erfinv(input, output_mem_config), output_mem_config), output_mem_config),
+            ttnn::multiply(exp(ttnn::square(erfinv(input, output_mem_config), output_mem_config), output_mem_config),
                 grad,
                 std::nullopt,
                 output_mem_config),
@@ -1583,7 +1584,7 @@ std::vector<Tensor> _erf_bw(const Tensor& grad, const Tensor& input, const Memor
     std::vector<Tensor> grad_tensor;
     Tensor result = mul_unary(
         M_2_SQRTPI,
-        ttnn::multiply(exp(neg(square(input, output_mem_config), output_mem_config), output_mem_config),
+        ttnn::multiply(exp(neg(ttnn::square(input, output_mem_config), output_mem_config), output_mem_config),
             grad,
             std::nullopt,
             output_mem_config),
@@ -1599,7 +1600,7 @@ std::vector<Tensor> _erfc_bw(const Tensor& grad, const Tensor& input, const Memo
     std::vector<Tensor> grad_tensor;
     Tensor result = mul_unary(
         -M_2_SQRTPI,
-        ttnn::multiply(exp(neg(square(input, output_mem_config), output_mem_config), output_mem_config),
+        ttnn::multiply(exp(neg(ttnn::square(input, output_mem_config), output_mem_config), output_mem_config),
             grad,
             std::nullopt,
             output_mem_config),
@@ -1672,7 +1673,7 @@ std::vector<Tensor> _reciprocal_bw(const Tensor& grad, const Tensor& input, cons
             ttnn::multiply(t_inf, neg(sign(grad, output_mem_config), output_mem_config), std::nullopt, output_mem_config),
             output_mem_config),
         ttnn::multiply(neg(grad, output_mem_config),
-            recip(square(input, output_mem_config), output_mem_config),
+            recip(ttnn::square(input, output_mem_config), output_mem_config),
             std::nullopt,
             output_mem_config),
         output_mem_config));
@@ -2074,7 +2075,7 @@ std::vector<Tensor> log_sigmoid_bw(const Tensor& grad, const Tensor& input, cons
 // result:  torch.square(torch.tanh(input)) * grad_data
 std::vector<Tensor> _tanhshrink_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor tanh_res = square(tanh(input, output_mem_config), output_mem_config);
+    Tensor tanh_res = ttnn::square(tanh(input, output_mem_config), output_mem_config);
     grad_tensor.emplace_back(ttnn::multiply(grad, tanh_res, std::nullopt, output_mem_config));
     return grad_tensor;
 }
@@ -2390,7 +2391,7 @@ std::vector<Tensor> _angle_bw(
         Tensor condition_zero =
             ttnn::logical_and(eqz(inp_r, output_mem_config), eqz(inp_i, output_mem_config), std::nullopt, output_mem_config);
         Tensor abs_squared = recip(
-            ttnn::add(square(inp_r, output_mem_config), square(inp_i, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::add(ttnn::square(inp_r, output_mem_config), ttnn::square(inp_i, output_mem_config), std::nullopt, output_mem_config),
             output_mem_config);
         Tensor real = where(
             condition_zero,

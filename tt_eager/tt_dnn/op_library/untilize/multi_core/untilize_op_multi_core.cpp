@@ -122,7 +122,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
         unary_reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_ct_args));
     } else {
@@ -131,7 +131,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
         unary_reader_kernel_id = CreateKernel(
             program,
-            "tt_eager/tt_dnn/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
             all_cores,
             ReaderDataMovementConfig(reader_ct_args));
     }
@@ -471,7 +471,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
 
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         all_cores,
         ReaderDataMovementConfig({src0_is_dram}));
 
@@ -690,7 +690,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
 
     unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
