@@ -13,7 +13,10 @@ import tt_lib
 
 @pytest.fixture(scope="function")
 def first_grayskull_device():
-    return tt_lib.device.CreateDevice(0)
+    device = tt_lib.device.CreateDevice(0)
+    yield device
+
+    tt_lib.device.CloseDevice(device)
 
 
 @pytest.fixture(scope="function")
