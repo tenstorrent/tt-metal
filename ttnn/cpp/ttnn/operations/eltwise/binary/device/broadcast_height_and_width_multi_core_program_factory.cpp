@@ -4,6 +4,7 @@
 
 #include <optional>
 
+#include "binary_op.hpp"
 #include "impl/buffers/buffer.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
@@ -12,9 +13,8 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/device_operation.hpp"
-#include "binary_op_type.hpp"
 
-namespace ttnn::operations::binary::broadcast_height_and_width_multi_core_program_factory {
+namespace ttnn::operations::binary {
 
 static const tt::tt_metal::BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
     switch (binary_op_type) {
@@ -25,13 +25,16 @@ static const tt::tt_metal::BcastOpMath binary_op_type_to_bcast_op_math(const Bin
     }
 }
 
-inline auto create(const auto& operation_attributes, const auto& tensor_args, auto& tensor_return) {
+BroadcastHeightAndWidthMultiCore::cached_program_t BroadcastHeightAndWidthMultiCore::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
-    auto& output = tensor_return;
+    auto& output = tensor_return_value;
     auto bcast_math = binary_op_type_to_bcast_op_math(operation_attributes.binary_op_type);
     const auto ashape = a.get_legacy_shape();
     const auto bshape = b.get_legacy_shape();
@@ -213,30 +216,41 @@ inline auto create(const auto& operation_attributes, const auto& tensor_args, au
         num_tiles_read += num_tensor_tiles_per_core;
     }
 
-    return device_operation::CachedProgram{
+    return {
         std::move(program),
-        binary_reader_kernel_id,
-        unary_writer_kernel_id,
-        bcast_kernel_id,
-        compute_with_storage_grid_size,
-        cb_src0,
-        src0_single_tile_size,
-        src1_single_tile_size,
-        dst_single_tile_size,
-        cb_output};
+        BroadcastHeightAndWidthMultiCore::cached_program_attributes_t{
+            binary_reader_kernel_id,
+            unary_writer_kernel_id,
+            bcast_kernel_id,
+            compute_with_storage_grid_size,
+            cb_src0,
+            src0_single_tile_size,
+            src1_single_tile_size,
+            dst_single_tile_size,
+            cb_output}};
 }
 
-inline void override_runtime_arguments(
-    auto& cached_program, const auto& operation_attributes, const auto& tensor_args, auto& tensor_return) {
+void BroadcastHeightAndWidthMultiCore::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
 
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
-    auto& output_tensor = tensor_return;
+    auto& output_tensor = tensor_return_value;
 
-    auto&& [binary_reader_kernel_id, unary_writer_kernel_id, bcast_kernel_id, compute_with_storage_grid_size, cb_src0, src0_single_tile_size, src1_single_tile_size, dst_single_tile_size, cb_output] =
-        cached_program.program_attributes;
+    auto& binary_reader_kernel_id = cached_program.program_attributes.binary_reader_kernel_id;
+    auto& unary_writer_kernel_id = cached_program.program_attributes.unary_writer_kernel_id;
+    auto& bcast_kernel_id = cached_program.program_attributes.bcast_kernel_id;
+    auto& compute_with_storage_grid_size = cached_program.program_attributes.compute_with_storage_grid_size;
+    auto& cb_src0 = cached_program.program_attributes.cb_src0;
+    auto& src0_single_tile_size = cached_program.program_attributes.src0_single_tile_size;
+    auto& src1_single_tile_size = cached_program.program_attributes.src1_single_tile_size;
+    auto& dst_single_tile_size = cached_program.program_attributes.dst_single_tile_size;
+    auto& cb_output = cached_program.program_attributes.cb_output;
 
     auto& program = cached_program.program;
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -349,4 +363,4 @@ inline void override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::binary::broadcast_height_and_width_multi_core_program_factory
+}  // namespace ttnn::operations::binary
