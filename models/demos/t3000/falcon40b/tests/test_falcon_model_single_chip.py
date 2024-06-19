@@ -178,8 +178,8 @@ def test_sharded_matmul_1d_in0(
         in1_t,
         bias=bias_t,
         program_config=program_config,
-        output_mem_config=output_mem_config,
-        output_dtype=activations_dtype,
+        memory_config=output_mem_config,
+        dtype=activations_dtype,
     )
     if out_sharded:
         output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
@@ -295,8 +295,8 @@ def test_sharded_matmul_1d_in0_multi_chip(
                 in0_t[i],
                 in1_t[i],
                 program_config=program_config,
-                output_mem_config=output_mem_config,
-                output_dtype=activations_dtype,
+                memory_config=output_mem_config,
+                dtype=activations_dtype,
             )
         )
 
@@ -408,8 +408,8 @@ def test_sharded_matmul_1d_in0_multi_chip(
                 in0_t[i],
                 in1_t[i],
                 program_config=program_config,
-                output_mem_config=output_mem_config,
-                output_dtype=activations_dtype,
+                memory_config=output_mem_config,
+                dtype=activations_dtype,
             )
         )
 

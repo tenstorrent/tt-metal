@@ -82,7 +82,7 @@ class TtTransformer(LightweightModule):
             self.output_weight,
             # compute_with_storage_grid_size=(8, 8),
             program_config=self.model_config["OUTPUT_MM_PROGCFG"],
-            output_mem_config=self.model_config["OUTPUT_MM_MEMCFG"],
+            memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
             compute_kernel_config=self.compute_kernel,
         )
 

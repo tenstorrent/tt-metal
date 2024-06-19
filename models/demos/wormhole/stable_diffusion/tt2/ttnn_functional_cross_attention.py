@@ -392,8 +392,8 @@ class cross_attention:
                     slice,
                     k_slice,
                     program_config=self.program_configs["tsa_qkt"],
-                    output_mem_config=self.height_sharded_memory_config,
-                    output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                    memory_config=self.height_sharded_memory_config,
+                    dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                     compute_kernel_config=self.compute_kernel_config,
                 )
                 k_slice.deallocate()
@@ -432,8 +432,8 @@ class cross_attention:
                     mm_slice,
                     v_slice,
                     program_config=self.program_configs["tsa_v"],
-                    output_mem_config=self.height_sharded_memory_config,
-                    output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                    memory_config=self.height_sharded_memory_config,
+                    dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                     compute_kernel_config=self.compute_kernel_config,
                 )
                 v_slice.deallocate()
@@ -492,8 +492,8 @@ class cross_attention:
             q_sharded,
             key,
             program_config=program_config,
-            output_mem_config=self.height_sharded_memory_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            memory_config=self.height_sharded_memory_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -585,8 +585,8 @@ class cross_attention:
             attention_scores,
             v_sharded,
             program_config=program_config,
-            output_mem_config=self.height_sharded_memory_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            memory_config=self.height_sharded_memory_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             compute_kernel_config=self.compute_kernel_config,
         )
         attention_scores = reshard_to(
@@ -660,8 +660,8 @@ class cross_attention:
             self.parameters.to_out[0].weight,
             bias=self.parameters.to_out[0].bias,
             program_config=program_config,
-            output_mem_config=output_mem_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            memory_config=output_mem_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -706,10 +706,10 @@ class cross_attention:
                 hidden_states,
                 self.parameters.qkv.weight,
                 program_config=program_config,
-                output_mem_config=self.l1_interleaved_memory_config
+                memory_config=self.l1_interleaved_memory_config
                 if interleaved_out
                 else self.block_sharded_memory_config,
-                output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                 compute_kernel_config=self.compute_kernel_config,
             )
             ttnn.deallocate(hidden_states)
@@ -740,8 +740,8 @@ class cross_attention:
                 hidden_states,
                 self.parameters.to_q.weight,
                 program_config=program_config,
-                output_mem_config=self.block_sharded_memory_config,
-                output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                memory_config=self.block_sharded_memory_config,
+                dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                 compute_kernel_config=self.compute_kernel_config,
             )
             ttnn.deallocate(hidden_states)
@@ -751,8 +751,8 @@ class cross_attention:
                 encoder_hidden_states,
                 self.parameters.kv.weight,
                 program_config=program_config,
-                output_mem_config=self.block_sharded_memory_config,
-                output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                memory_config=self.block_sharded_memory_config,
+                dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                 compute_kernel_config=self.compute_kernel_config,
             )
             end_core = (

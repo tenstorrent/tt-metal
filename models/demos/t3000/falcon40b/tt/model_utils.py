@@ -272,8 +272,8 @@ def falcon_prefill_matmul(
             in0,
             in1,
             program_config=matmul_pgmcfg,
-            output_mem_config=output_mem_config,
-            output_dtype=output_dtype,
+            memory_config=output_mem_config,
+            dtype=output_dtype,
             compute_kernel_config=compute_kernel_config,
         )
     else:
@@ -294,8 +294,8 @@ def falcon_prefill_matmul(
             in0,
             in1,
             program_config=matmul_pgmcfg,
-            output_mem_config=output_mem_config,
-            output_dtype=output_dtype,
+            memory_config=output_mem_config,
+            dtype=output_dtype,
             compute_kernel_config=compute_kernel_config,
         )
 

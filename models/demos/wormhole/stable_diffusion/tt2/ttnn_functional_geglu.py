@@ -118,10 +118,8 @@ class geglu:
             self.parameters.proj.proj_weight,
             bias=self.parameters.proj.proj_bias,
             program_config=program_config,
-            output_mem_config=self.l1_interleaved_memory_config
-            if interleaved_output
-            else self.block_sharded_memory_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            memory_config=self.l1_interleaved_memory_config if interleaved_output else self.block_sharded_memory_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             compute_kernel_config=self.compute_kernel_config,
         )
         if interleaved_output:
@@ -150,10 +148,8 @@ class geglu:
             self.parameters.proj.gate_weight,
             bias=self.parameters.proj.gate_bias,
             program_config=program_config,
-            output_mem_config=self.l1_interleaved_memory_config
-            if interleaved_output
-            else self.block_sharded_memory_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            memory_config=self.l1_interleaved_memory_config if interleaved_output else self.block_sharded_memory_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             compute_kernel_config=self.compute_kernel_config,
         )
         if interleaved_output:

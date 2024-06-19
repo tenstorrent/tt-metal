@@ -360,8 +360,8 @@ def test_falcon7b_attnention_sliced(
             slice,
             reference_key_layer_transposed,
             program_config=program_config,
-            output_mem_config=height_sharded_memory_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+            memory_config=height_sharded_memory_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
             compute_kernel_config=compute_kernel_config,
         )
 
@@ -431,8 +431,8 @@ def test_falcon7b_attnention_sliced(
             mm_slice,
             reference_value_layer,
             program_config=program_config,
-            output_mem_config=height_sharded_memory_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+            memory_config=height_sharded_memory_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
             compute_kernel_config=compute_kernel_config,
         )
 
@@ -451,7 +451,7 @@ def test_falcon7b_attnention_sliced(
     attention_output_concatenated_torch = tt2torch_tensor(attention_output_concatenated)
 
     attn_weights = ttnn.matmul(
-        reference_query_layer, reference_key_layer_transposed, output_mem_config=dram_interleaved_memory_config
+        reference_query_layer, reference_key_layer_transposed, memory_config=dram_interleaved_memory_config
     )
 
     attn_weights = ttnn.experimental.operations.primary.bcast(
@@ -657,8 +657,8 @@ def test_falcon7b_attention_softmax_sequence(
             slice,
             reference_key_layer_transposed,
             program_config=program_config,
-            output_mem_config=height_sharded_memory_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+            memory_config=height_sharded_memory_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
             compute_kernel_config=compute_kernel_config,
         )
 
@@ -702,8 +702,8 @@ def test_falcon7b_attention_softmax_sequence(
             mm_slice,
             reference_value_layer,
             program_config=program_config,
-            output_mem_config=height_sharded_memory_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+            memory_config=height_sharded_memory_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
             compute_kernel_config=compute_kernel_config,
         )
 
@@ -722,7 +722,7 @@ def test_falcon7b_attention_softmax_sequence(
     attention_output_concatenated_torch = tt2torch_tensor(attention_output_concatenated)
 
     attn_weights = ttnn.matmul(
-        reference_query_layer, reference_key_layer_transposed, output_mem_config=dram_interleaved_memory_config
+        reference_query_layer, reference_key_layer_transposed, memory_config=dram_interleaved_memory_config
     )
 
     attn_weights = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
