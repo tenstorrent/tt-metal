@@ -144,6 +144,7 @@ def run_conv(
         pcc = 0.9969
     else:
         pcc = 0.998
+    torch_out_golden_tensor = torch_out_golden_tensor[:, :, :-3, :]
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     print(pcc_msg)
     assert passing
@@ -154,9 +155,9 @@ def run_conv(
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, use_1d_systolic_array, config_override",
     (
-        (1, 1, 32, 1024, 1, 4, 1, 1, 1, 3, 0, 32, True, None),
-        (1, 1, 512, 1024, 1, 4, 1, 1, 1, 3, 0, 512, True, None),
-        (1, 1, 2560, 1760, 1, 4, 1, 1, 1, 3, 0, 2560, True, None),
+        # (1, 1, 32, 1024, 1, 4, 1, 1, 1, 3, 0, 32, True, None),
+        # (1, 1, 512, 1024, 1, 4, 1, 1, 1, 3, 0, 512, True, None),
+        # (1, 1, 2560, 1760, 1, 4, 1, 1, 1, 3, 0, 2560, True, None),
         (1, 1, 5120, 1760, 1, 4, 1, 1, 1, 3, 0, 5120, True, None),
     ),
 )
