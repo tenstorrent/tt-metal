@@ -498,8 +498,9 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         weight_tensor_ = convert_conv_weight_tensor_to_special_padding_tiled_layout(
             weight_tensor_, weight_block_h_ntiles, weight_block_w_ntiles, weights_bias_dtype);
     } else {
-        weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout(
-            weight_tensor_, weight_block_h_ntiles, weight_block_w_ntiles, weights_bias_dtype);
+        uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
+        weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout_block_sharded(
+            weight_tensor_, num_cores_c, weights_bias_dtype);
     }
     weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, const_cast<Device*>(&device), nullopt);
     if (bias_tensor.has_value()) {

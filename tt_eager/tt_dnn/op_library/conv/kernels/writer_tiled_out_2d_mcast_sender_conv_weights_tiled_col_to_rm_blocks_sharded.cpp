@@ -141,7 +141,6 @@ void kernel_main() {
     uint32_t out_block_w_start_tile_id = out_start_tile_id;
     uint32_t out_block_w_start_tile_id_w = out_start_tile_id_w;
     uint32_t weight_start_tile_id = out_start_tile_id_w;
-    uint32_t weight_inner_block_stride_h = weight_next_block_stride_h / weight_block_height_num_outer; // TODO: Pass as args
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         uint32_t out_block_h_start_tile_id = out_block_w_start_tile_id;
         uint32_t out_block_h_start_tile_id_h = out_start_tile_id_h;
@@ -150,36 +149,30 @@ void kernel_main() {
             // read weight blocks inner dim
             // read weight slice - 1 block of weights in width dim and full weight matrix height
             // read slice only once for all activation blocks
-            uint32_t weight_h_offset = 0;
+            uint32_t weight_current_block_start_tile_id = weight_start_tile_id;
             for(uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer; weight_tile_h_outer_i++) {
-                uint32_t weight_current_block_start_tile_id = weight_start_tile_id;
                 cb_reserve_back(cb_id_weight, weight_block_num_tiles);
                 uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
 
                 // mcast args
                 uint32_t weights_start_address = weight_write_l1_addr;
                 uint32_t weights_block_size_bytes = 0;
-
-                for(uint32_t block_weight_h = 0; block_weight_h < num_blocks_weight_h; block_weight_h++) { // TODO: 9
-                    uint32_t weight_row_start_tile_id = weight_current_block_start_tile_id + weight_h_offset;
+                // loop over weight block tiles along h
+                for(uint32_t block_weight_h = 0; block_weight_h < num_blocks_weight_h * weight_block_height_ntiles; block_weight_h++) { // TODO: 9
 
                     // mcast args
                     //uint32_t weights_start_address = weight_write_l1_addr;
                     //uint32_t weights_block_size_bytes = 0;
 
-                    // loop over weight block tiles along h
-                    for(uint32_t weight_tile_h_i = 0; weight_tile_h_i < weight_block_height_ntiles; ++weight_tile_h_i) { // TODO: 2
-                        uint32_t weight_tile_id = weight_row_start_tile_id;
-                        // loop over weight block tiles along w
-                        for(uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
-                            s_weight.noc_async_read_tile(weight_tile_id, weight_write_l1_addr);
-                            weight_write_l1_addr += weight_tile_nbytes;
-                            weights_block_size_bytes += weight_tile_nbytes;
-                            weight_tile_id += 1;
-                        } // for weight_block_w
-                        weight_row_start_tile_id += weight_stride_h;
-                    } // for weight_block_h
-                    weight_current_block_start_tile_id += weight_next_block_stride_h;
+                    uint32_t weight_tile_id = weight_current_block_start_tile_id;
+                    // loop over weight block tiles along w
+                    for(uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
+                        s_weight.noc_async_read_tile(weight_tile_id, weight_write_l1_addr);
+                        weight_write_l1_addr += weight_tile_nbytes;
+                        weights_block_size_bytes += weight_tile_nbytes;
+                        weight_tile_id += 1;
+                    } // for weight_block_w
+                    weight_current_block_start_tile_id += weight_stride_h;
                 }
 
                 noc_async_read_barrier();
@@ -209,7 +202,6 @@ void kernel_main() {
                 #endif
 
                 cb_push_back(cb_id_weight, weight_block_num_tiles);
-                weight_h_offset += weight_inner_block_stride_h;
             } // for weight_block_height_num_outer
 
 
