@@ -29,7 +29,11 @@ from tt_lib.utils import (
     ),
 )
 @pytest.mark.parametrize(
-    "dtype",
+    "in0_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "in1_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize(
@@ -51,7 +55,8 @@ def test_bcast(
     num_cores,
     shard_grid,
     shard_strategy,
-    dtype,
+    in0_dtype,
+    in1_dtype,
     op,
 ):
     torch.manual_seed(0)
@@ -72,7 +77,7 @@ def test_bcast(
 
     tt_input = input.reshape(1, 1, input_height, input_width)
     input_tensor = ttnn.from_torch(
-        tt_input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT, dtype=dtype
+        tt_input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT, dtype=in0_dtype
     )
     input_2d_height = input_tensor.get_legacy_shape()[2]
     input_2d_width = input_tensor.get_legacy_shape()[3]
@@ -116,7 +121,7 @@ def test_bcast(
         torch_ref_output = torch.mul(input, B_pyt)
 
     B_pyt = B_pyt.reshape(b_weights_shape)
-    tt_weight = ttnn.from_torch(B_pyt, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    tt_weight = ttnn.from_torch(B_pyt, device=device, layout=ttnn.TILE_LAYOUT, dtype=in1_dtype)
     tt_output = ttl.tensor.bcast(
         tt_input,
         tt_weight,
