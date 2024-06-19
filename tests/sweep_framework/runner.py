@@ -9,11 +9,9 @@ import pathlib
 import importlib
 import ttnn
 
-# This is hacky, need a better solution for typing ttnn types.
-import tt_lib as ttl
+from ttnn.types import *
 
-DataType = ttl.tensor.DataType
-Layout = ttl.tensor.Layout
+RESULTS_DB = pathlib.Path(__file__).parent / "results" / "results.sqlite"
 
 
 def execute_tests(test_module, test_vectors):
@@ -113,7 +111,10 @@ def run_sweeps(module_name, batch_id):
     connection.close()
 
 
+# Export test output (msg), status, exception (if applicable), git hash, timestamp, test vector, test UUID?,
 def export_test_results(results):
+    connection = sqlite3.connect(RESULTS_DB)
+    cursor = connection.cursor()
     pass
 
 
