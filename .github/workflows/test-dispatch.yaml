@@ -1,0 +1,47 @@
+name: "Custom test dispatch"
+
+on:
+  workflow_dispatch:
+    inputs:
+      architecture:
+        required: true
+        options:
+          - grayskull
+          - wormhole_b0
+      command:
+        required: true
+        type: string
+      description:
+        type: string
+        required: true
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+  test-dispatch:
+    needs: build-artifact
+    timeout-minutes: 1440
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ inputs.architecture }}
+    environment: dev
+    runs-on: ${{ inputs.architecture }}
+    name: Custom test command ${{ inputs.description }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Set up dyanmic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.runner-info.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
+      - name: Run pre/post regression tests in a loop
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          ${{ inputs.command }}
