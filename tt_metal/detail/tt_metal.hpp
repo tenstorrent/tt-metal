@@ -445,15 +445,16 @@ namespace tt::tt_metal{
                         const KernelGroup * kernel_group = program.kernels_on_core(CoreCoord(x, y), CoreType::WORKER);
                         if (kernel_group != nullptr) {
                             bool local_noc0_in_use = false; bool local_noc1_in_use = false;
-                            if (kernel_group->riscv0_id.has_value()) {
+                            if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value()) {
                                 riscv0_in_use = true;
-                                set_global_and_local_noc_usage(kernel_group->riscv0_id.value(), local_noc0_in_use, local_noc1_in_use);
+                                set_global_and_local_noc_usage(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value(), local_noc0_in_use, local_noc1_in_use);
                             }
-                            if (kernel_group->riscv1_id.has_value()) {
+                            if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
                                 riscv1_in_use = true;
-                                set_global_and_local_noc_usage(kernel_group->riscv1_id.value(), local_noc0_in_use, local_noc1_in_use);
+                                set_global_and_local_noc_usage(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value(), local_noc0_in_use, local_noc1_in_use);
                             }
-                            if (kernel_group->riscv0_id.has_value() and kernel_group->riscv1_id.has_value()) {
+                            if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and
+                                kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
                                 TT_FATAL(local_noc0_in_use and local_noc1_in_use, "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, doing so results in hangs!", CoreCoord(x, y).str());
                             }
                         }

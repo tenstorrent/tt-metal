@@ -119,7 +119,7 @@ int main() {
                 //UC FIXME: do i need this?
                 setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
                 uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
-                l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offset_brisc); // overloaded
+                l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offsets[DISPATCH_CLASS_ETH_DM0]);
                 kernel_init();
             //} else {
                 // This was not initialized in kernel_init

@@ -91,6 +91,7 @@ class Kernel : public JitBuildSettings {
     std::map<std::string, std::string> defines() const { return defines_; }
 
     virtual RISCV processor() const = 0;
+    dispatch_core_processor_classes dispatch_class() { return this->dispatch_class_; }
 
     virtual bool configure(Device *device, const CoreCoord &logical_core) const = 0;
 
@@ -131,6 +132,7 @@ class Kernel : public JitBuildSettings {
     // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381
     std::unordered_map<chip_id_t, std::vector<ll_api::memory>> binaries_;
     uint16_t binary_size16_;
+    dispatch_core_processor_classes dispatch_class_;
     std::vector<uint32_t> compile_time_args_;
     std::vector< std::vector< std::vector<uint32_t>> > core_to_runtime_args_;
     std::vector< std::vector< RuntimeArgsData> > core_to_runtime_args_data_;
@@ -149,7 +151,7 @@ class Kernel : public JitBuildSettings {
 
 class DataMovementKernel : public Kernel {
    public:
-    DataMovementKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const DataMovementConfig &config) : Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) {}
+    DataMovementKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const DataMovementConfig &config) : Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) { this->dispatch_class_ = (config.processor == DataMovementProcessor::RISCV_0) ? DISPATCH_CLASS_TENSIX_DM0 : DISPATCH_CLASS_TENSIX_DM1; }
 
     ~DataMovementKernel() {}
 
@@ -176,7 +178,7 @@ class DataMovementKernel : public Kernel {
 class EthernetKernel : public Kernel {
    public:
     EthernetKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const EthernetConfig &config) :
-        Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) {}
+        Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) { this->dispatch_class_ = DISPATCH_CLASS_ETH_DM0; }
 
     ~EthernetKernel() {}
 
@@ -202,7 +204,7 @@ class EthernetKernel : public Kernel {
 
 class ComputeKernel : public Kernel {
    public:
-    ComputeKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const ComputeConfig &config) : Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) {}
+    ComputeKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const ComputeConfig &config) : Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) { this->dispatch_class_ = DISPATCH_CLASS_TENSIX_COMPUTE; }
 
     ~ComputeKernel() {}
 

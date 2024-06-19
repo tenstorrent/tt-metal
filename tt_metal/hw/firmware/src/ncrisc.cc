@@ -95,7 +95,7 @@ int main(int argc, char *argv[]) {
         setup_cb_read_write_interfaces(0, mailboxes->launch.max_cb_index, true, true);
 
         uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
-        l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offset_ncrisc);
+        l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offsets[DISPATCH_CLASS_TENSIX_DM1]);
 
         DEBUG_STATUS("R");
         kernel_init();

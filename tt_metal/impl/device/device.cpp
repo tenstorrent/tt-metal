@@ -201,19 +201,10 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
 void Device::initialize_and_launch_firmware() {
     ZoneScoped;
 
-    launch_msg_t launch_msg = {
-        .brisc_watcher_kernel_id = 0,
-        .ncrisc_watcher_kernel_id = 0,
-        .triscs_watcher_kernel_id = 0,
-        .ncrisc_kernel_size16 = 0,
-        .mode = DISPATCH_MODE_HOST,
-        .brisc_noc_id = 0,
-        .enable_brisc = 0,
-        .enable_ncrisc = 0,
-        .enable_triscs = 0,
-        .enable_erisc = 0,
-        .run = RUN_MSG_INIT,
-    };
+    launch_msg_t launch_msg;
+    std::memset(&launch_msg, 0, sizeof(launch_msg_t));
+    launch_msg.mode = DISPATCH_MODE_HOST,
+    launch_msg.run = RUN_MSG_INIT,
 
     // Download to worker cores
     log_debug("Initializing firmware");

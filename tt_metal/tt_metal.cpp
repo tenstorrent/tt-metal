@@ -29,17 +29,11 @@ namespace {
 
 void ConfigureKernelGroup(
     const Program &program, const KernelGroup *kernel_group, Device *device, const CoreCoord &logical_core) {
-    if (kernel_group->compute_id.has_value()) {
-        detail::GetKernel(program, kernel_group->compute_id.value())->configure(device, logical_core);
-    }
-    if (kernel_group->riscv1_id.has_value()) {
-        detail::GetKernel(program, kernel_group->riscv1_id.value())->configure(device, logical_core);
-    }
-    if (kernel_group->riscv0_id.has_value()) {
-        detail::GetKernel(program, kernel_group->riscv0_id.value())->configure(device, logical_core);
-    }
-    if (kernel_group->erisc_id.has_value()) {
-        detail::GetKernel(program, kernel_group->erisc_id.value())->configure(device, logical_core);
+
+    for (auto& optional_id : kernel_group->kernel_ids) {
+        if (optional_id) {
+            detail::GetKernel(program, optional_id.value())->configure(device, logical_core);
+        }
     }
 }
 
