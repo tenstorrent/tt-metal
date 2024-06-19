@@ -138,11 +138,20 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer, std::option
     auto shard_spec = buffer.shard_spec();
     uint32_t num_pages_multiplier = 1;
     if(tensor2d_shape_page_shape_override.has_value()) {
-        shard_spec = ShardSpecBuffer(shard_spec.tensor_shard_spec, tensor2d_shape_page_shape_override.value()[1], tensor2d_shape_page_shape_override.value()[0]);
+        auto page_shape = tensor2d_shape_page_shape_override.value()[1];
+        auto tensor2d_shape = tensor2d_shape_page_shape_override.value()[0];
+        shard_spec = ShardSpecBuffer(shard_spec.tensor_shard_spec, page_shape, tensor2d_shape);
         num_pages_multiplier = buffer.shard_spec().page_shape[1] / shard_spec.page_shape[1];
+        std::cout << "TENSOR OVERRIDE HAS VALUE " << std::endl;
+    }
+    else {
+        std::cout << "No override " << std::endl;
     }
     auto row_major = shard_spec.orientation() == ShardOrientation::ROW_MAJOR;
-
+    std::cout << "Generate Buffer_page mapping " << std::endl;
+    std::cout << "num_pages_multiplier " << num_pages_multiplier << std::endl;
+    std::cout << "shard_spec.page_shape " << shard_spec.page_shape[0] << " , " << shard_spec.page_shape[1] << std::endl;
+    std::cout << "shard_spec.tensor2d_shape " << shard_spec.tensor2d_shape[0] << " , " << shard_spec.tensor2d_shape[1] << std::endl;
 
     BufferPageMapping buffer_page_mapping;
     uint32_t num_cores = buffer.num_cores();
@@ -164,13 +173,15 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer, std::option
     buffer_page_mapping.dev_page_to_host_page_mapping_ =
         std::vector<std::optional<uint32_t>>(num_dev_pages, std::nullopt);
     buffer_page_mapping.dev_page_to_core_mapping_ = std::vector<uint32_t>(num_dev_pages);
+    buffer_page_mapping.dev_page_to_local_shard_page_mapping_ = std::vector<uint32_t>(num_dev_pages);
 
     buffer_page_mapping.host_page_to_local_shard_page_mapping_ = std::vector<uint32_t>(num_host_pages);
     buffer_page_mapping.host_page_to_dev_page_mapping_ = std::vector<uint32_t>(num_host_pages);
     buffer_page_mapping.core_shard_shape_ = std::move(shard_shape);
     uint32_t dev_page_index = 0;
 
-    auto shape_in_pages = buffer.shard_spec().shape_in_pages();
+    std::array<uint32_t, 2> shape_in_pages = {shard_spec.tensor_shard_spec.shape[0] / shard_spec.page_shape[0],
+                        shard_spec.tensor_shard_spec.shape[1] / shard_spec.page_shape[1] };
     uint32_t num_host_pages_seen = 0;
     for (uint32_t core_index = 0; core_index < core_host_page_indices.size(); core_index++) {
         uint32_t valid_shard_page = 0;
@@ -179,6 +190,7 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer, std::option
         for (uint32_t shard_page_x = 0; shard_page_x < shape_in_pages[0]; shard_page_x++) {
             for (uint32_t shard_page_y = 0; shard_page_y < shape_in_pages[1]; shard_page_y++) {
                 buffer_page_mapping.dev_page_to_core_mapping_[dev_page_index] = core_index;
+                buffer_page_mapping.dev_page_to_local_shard_page_mapping_[dev_page_index] = shard_page_id;
                 if (shard_page_x < buffer_page_mapping.core_shard_shape_[core_index][0] and
                     shard_page_y < buffer_page_mapping.core_shard_shape_[core_index][1]) {
                     uint32_t host_page = core_host_page_indices[core_index][valid_shard_page];
@@ -187,14 +199,16 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer, std::option
                     buffer_page_mapping.host_page_to_local_shard_page_mapping_[host_page] = shard_page_id;
                     buffer_page_mapping.host_page_to_dev_page_mapping_[host_page] = dev_page_index;
                     valid_shard_page++;
+                    num_host_pages_seen++;
                 }
                 dev_page_index++;
                 shard_page_id++;
             }
         }
-        num_host_pages_seen += core_host_page_indices.size();
     }
-    //TT_ASSERT(num_host_pages_seen == num_host_pages);
+    std::cout << "Num host pages seen: " << num_host_pages_seen << std::endl;
+    std::cout << "Num host pages: " << num_host_pages << std::endl;
+    TT_ASSERT(num_host_pages_seen == num_host_pages);
     return buffer_page_mapping;
 }
 

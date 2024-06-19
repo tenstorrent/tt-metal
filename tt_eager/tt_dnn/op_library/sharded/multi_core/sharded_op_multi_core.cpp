@@ -599,18 +599,23 @@ inline uint32_t get_greatest_common_factor(uint32_t n1, uint32_t n2) {
    return hcf;
  }
 
-inline std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
+inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<PageStride>> > get_core_page_ranges(
     const Tensor& input, Tensor& output) {
 
     auto input_buffer = input.buffer();
     auto output_buffer = output.buffer();
     std::optional<std::array<std::array<uint32_t, 2>, 2 > > tensor2d_shape_page_shape_override = std::nullopt;
-    uint32_t page_width = TILE_WIDTH;
     auto input_shard_spec = input_buffer->shard_spec();
     auto output_shard_spec = output_buffer->shard_spec();
+    auto output_shard_shape = output_shard_spec.tensor_shard_spec.shape;
     uint32_t input_num_host_pages_multiplier = 1;
-    if(input.get_layout() == Layout::ROW_MAJOR) {
+    uint32_t page_width = TILE_WIDTH;
+    uint32_t total_size =  output_shard_spec.tensor_shard_spec.numel() / TILE_HW * page_width;
+    if(input.get_layout() == Layout::ROW_MAJOR and (input_buffer->shard_spec().page_shape[1] != output_buffer->shard_spec().page_shape[1])) {
+
+        std::cout << "In Diff width section with widths of input: " << input_buffer->shard_spec().page_shape[1]  << " and output: " << output_buffer->shard_spec().page_shape[1] << std::endl;
         page_width = get_greatest_common_factor(input_buffer->shard_spec().page_shape[1], output_buffer->shard_spec().page_shape[1]);
+        std::cout << "Page width returned is " << page_width << std::endl;
         std::array<uint32_t, 2> page_shape = {1, page_width};
 
         auto shape = input.get_legacy_shape();
@@ -620,13 +625,56 @@ inline std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_rang
             other_dims *= shape[i];
         }
         std::array<uint32_t,2> tensor2d_size = {other_dims/page_shape[0], width/page_shape[1]};
+        std::cout << "Tensor2D size is: " << tensor2d_size[0] << ", " << tensor2d_size[1] << std::endl;
         tensor2d_shape_page_shape_override = {tensor2d_size, page_shape};
         input_shard_spec = ShardSpecBuffer(input_shard_spec.tensor_shard_spec, tensor2d_shape_page_shape_override.value()[1], tensor2d_shape_page_shape_override.value()[0]);
         output_shard_spec = ShardSpecBuffer(output_shard_spec.tensor_shard_spec, tensor2d_shape_page_shape_override.value()[1], tensor2d_shape_page_shape_override.value()[0]);
         input_num_host_pages_multiplier = input_buffer->shard_spec().page_shape[1] / page_width;
+        std::cout << "Input num host pages multiplier is " << input_num_host_pages_multiplier << std::endl;
+        total_size = output_shard_shape[0] * output_shard_shape[1];
     }
+    else if (input.get_layout() == Layout::ROW_MAJOR){
+        page_width = input_buffer->shard_spec().page_shape[1];
+        total_size = output_shard_shape[0] * page_width ;
+    }
+
+    page_width *= output.element_size();
+    total_size *= output.element_size();
     auto output_buffer_page_mapping = generate_buffer_page_mapping(*output_buffer, tensor2d_shape_page_shape_override);
     auto input_buffer_page_mapping = generate_buffer_page_mapping(*input_buffer, tensor2d_shape_page_shape_override);
+
+    std::cout << "Input Mapping " << std::endl;
+    uint32_t dev_page_idx = 0;
+    for(auto _host_page : input_buffer_page_mapping.dev_page_to_host_page_mapping_) {
+        if(_host_page.has_value()) {
+            std::cout << "dev_page [" << dev_page_idx  << "]=" << _host_page.value() << std::endl;;
+        }
+        else {
+            std::cout << "dev_page [" << dev_page_idx  << "] = NULL " << std::endl;
+        }
+        dev_page_idx++;
+    }
+    uint32_t host_page_idx = 0;
+    for(auto _dev_page : input_buffer_page_mapping.host_page_to_dev_page_mapping_) {
+        std::cout << "host_page [" << host_page_idx  << "]=" << _dev_page << std::endl;
+        host_page_idx++;
+    }
+    std::cout << "Output Mapping " << std::endl;
+    dev_page_idx = 0;
+    for(auto _host_page : output_buffer_page_mapping.dev_page_to_host_page_mapping_) {
+        if(_host_page.has_value()) {
+            std::cout << "dev_page [" << dev_page_idx  << "]=" << _host_page.value() << std::endl;;
+        }
+        else {
+            std::cout << "dev_page [" << dev_page_idx  << "] = NULL " << std::endl;
+        }
+        dev_page_idx++;
+    }
+    host_page_idx = 0;
+    for(auto _dev_page : output_buffer_page_mapping.host_page_to_dev_page_mapping_) {
+        std::cout << "host_page [" << host_page_idx  << "]=" << _dev_page << std::endl;;
+        host_page_idx++;
+    }
 
     const auto& output_shard_to_host_mapping = output_buffer_page_mapping.dev_page_to_host_page_mapping_;
     const auto& input_page_to_local_page_mapping = input_buffer_page_mapping.host_page_to_local_shard_page_mapping_;
@@ -637,7 +685,9 @@ inline std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_rang
     std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page(
         output_cores.size());
 
-    for (uint32_t output_page_id = 0; output_page_id < output_buffer->num_dev_pages(); output_page_id++) {
+    uint32_t output_dev_pages = output_buffer_page_mapping.dev_page_to_host_page_mapping_.size();
+    uint32_t output_host_pages = output_buffer_page_mapping.host_page_to_dev_page_mapping_.size();
+    for (uint32_t output_page_id = 0; output_page_id < output_dev_pages; output_page_id++) {
         auto output_core_id = output_buffer_page_mapping.dev_page_to_core_mapping_[output_page_id];
         TT_ASSERT(output_core_id < output_cores.size());
         auto host_page = output_shard_to_host_mapping[output_page_id];
@@ -659,7 +709,7 @@ inline std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_rang
     auto output_core_host_page_indices = output_buffer_page_mapping.core_host_page_indices_;
     auto device = input_buffer->device();
     auto full_grid = device->compute_with_storage_grid_size();
-    CoreCoord end_core = (*output_buffer->shard_spec().grid().ranges().rbegin()).end;
+    CoreCoord end_core = output_buffer_page_mapping.all_cores_[output_buffer_page_mapping.all_cores_.size() - 1];
     uint32_t output_core_id = 0;
     for (auto output_core : output_cores) {
         ret_map.try_emplace(output_core, std::vector<PageStride>{});
@@ -787,7 +837,7 @@ inline std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_rang
                     }
 
                     TT_ASSERT(stride.core.x < full_grid.x and stride.core.y < full_grid.y);
-                    TT_ASSERT(data_stride < output_buffer->num_pages());
+                    TT_ASSERT(data_stride < output_host_pages);
                     auto stride_start = stride_it;
                     uint32_t num_strides = 1;
                     while (stride_it != end and stride_it->has_value()) {
@@ -843,9 +893,24 @@ inline std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_rang
             }
         }
         output_core_id++;
+        std::cout << "CORE " << output_core.str() << " has " << ret_map[output_core].size() << " ranges " << std::endl;
+        uint32_t range_idx = 0;
+        for(auto range : ret_map.at(output_core)) {
+            std::cout << "RANGE " << range_idx
+                << " start_core_x: " << range.start_core.x
+                << " start_core_y: " << range.start_core.y
+                << " start_data: " << range.start_data
+                << " stride_size(pages): " << range.stride_size
+                << " num_reps: " << range.num_strides
+                << " stride_core_x:  " << range.stride.core.x
+                << " stride_core_y: " << range.stride.core.y
+                << " stride_data: " << range.stride.data
+                << std::endl;
+            range_idx++;
+        }
     }
 
-    return ret_map;
+    return {total_size, page_width, ret_map};
 }
 
 enum class ReshardStridesInRange { ALL_STRIDES, FIRST_HALF, SECOND_HALF };
@@ -1025,7 +1090,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
 
 operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, Tensor& output) {
     auto device = input.device();
-    auto output_core_to_page_range_pair = get_core_page_ranges(input, output);
+    auto [total_size, page_size, output_core_to_page_range_pair] = get_core_page_ranges(input, output);
 
     tt_metal::Program program{};
 
@@ -1039,35 +1104,98 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     auto cores =
         corerange_to_cores(all_cores, std::nullopt, output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-    uint32_t total_size, page_size, unit_size;
     auto output_shard_shape = output_shard_spec.shape;
     auto data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
 
-    if (input.get_layout() == Layout::TILE) {
-        page_size = tt_metal::detail::TileSize(data_format);
-        unit_size = page_size;
-        total_size = output_shard_spec.numel() / TILE_HW * unit_size;
-    } else {
-        unit_size = output_shard_spec.shape[1] * output.element_size();
-        page_size = output.get_legacy_shape()[-1] * output.element_size();
-        total_size = output_shard_shape[0] * unit_size;
+    tt_metal::KernelHandle kernel_id_0;
+    tt_metal::KernelHandle kernel_id_1;
+
+    uint32_t max_page_size = page_size;
+
+    auto input_buffer_page_mapping = generate_buffer_page_mapping(*input.buffer());
+    std::cout << " Input Buffer Addr " << std::hex << input.buffer()->address() << std::endl;
+    std::cout << " Input Buffer Page Size " << std::dec << input.buffer()->page_size() << std::endl;
+    std::cout << " Input Buffer Total Size " << std::dec << input.buffer()->size() << std::endl;
+    std::cout << " Input Buffer Num Dev Pages " << std::dec << input.buffer()->num_dev_pages() << std::endl;
+    std::cout << " Input Buffer Num Cores " << std::dec << input.buffer()->num_cores() << std::endl;
+    std::cout << "Input Buffer Cores: " << std::endl;
+    for(auto core: input_buffer_page_mapping.all_cores_) {
+        std::cout << core.str() << std::endl;
     }
+    for (uint32_t dev_page_idx = 0; dev_page_idx < input.buffer()->num_dev_pages() ; dev_page_idx++)  {
+        auto core_idx = input_buffer_page_mapping.dev_page_to_core_mapping_[dev_page_idx];
+        std::cout << "Input Buffer Dev_page[" << dev_page_idx
+            << "] on Core " << input_buffer_page_mapping.all_cores_[core_idx].str()
+            <<  " with local page " << input_buffer_page_mapping.dev_page_to_local_shard_page_mapping_[dev_page_idx]
+            << std::endl;
+    }
+    uint32_t input_page_size = input_shard_spec.shape[1] * input.element_size();
+    uint32_t output_page_size = output_shard_spec.shape[1] * output.element_size();
 
-    tt_metal::KernelHandle kernel_id_0 = tt_metal::CreateKernel(
-        program,
-        "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
+    if (input.layout() == Layout::ROW_MAJOR and input_shard_spec.shape[1] != output_shard_spec.shape[1]) {
+        uint32_t tmp_cb_index_0 = 8;
+        uint32_t tmp_cb_index_1 = 9;
+        max_page_size = std::max(input_page_size, output_page_size);
+        uint32_t input_rows_per_page = max_page_size/input_page_size;
 
-    tt_metal::KernelHandle kernel_id_1 = tt_metal::CreateKernel(
-        program,
-        "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
-        all_cores,
-        tt_metal::WriterDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
+        uint32_t output_shard_size = output_shard_spec.shape[0] * output_shard_spec.shape[1] * output.element_size();
+        uint32_t output_rows_per_shard = div_up(div_up(output_shard_size,output_page_size),2);
+        kernel_id_0 = tt_metal::CreateKernel(
+            program,
+            "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader_stick_diff_width.cpp",
+            all_cores,
+            tt_metal::ReaderDataMovementConfig({
+                                            dst_cb_index, /*0*/
+                                            (uint32_t)grid.x, /*1*/
+                                            (uint32_t)grid.y, /*2*/
+                                            page_size, /*3*/
+                                            input_page_size, /*4*/
+                                            output_page_size, /*5*/
+                                            tmp_cb_index_0 /*6*/
+                                            }));
+
+        kernel_id_1 = tt_metal::CreateKernel(
+            program,
+            "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader_stick_diff_width.cpp",
+            all_cores,
+            tt_metal::WriterDataMovementConfig({
+                                            dst_cb_index,
+                                            (uint32_t)grid.x,
+                                            (uint32_t)grid.y,
+                                            page_size,
+                                            input_page_size,
+                                            output_page_size,
+                                            tmp_cb_index_1
+                                            }));
+        std::cout << "output shard size " << output_shard_size << " output page size " << output_page_size << " output rows per shard " << output_rows_per_shard << std::endl;
+        std::cout << "Making CBs with total size " << total_size << " and page size " << page_size << std::endl;
+        tt_metal::CircularBufferConfig cb_tmp_config_0 =
+        tt_metal::CircularBufferConfig(total_size, {{tmp_cb_index_0, data_format}})
+            .set_page_size(tmp_cb_index_0, page_size);
+        auto cb_tmp_0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp_config_0);
+
+        tt_metal::CircularBufferConfig cb_tmp_config_1 =
+        tt_metal::CircularBufferConfig(total_size, {{tmp_cb_index_1, data_format}})
+            .set_page_size(tmp_cb_index_1, page_size);
+        auto cb_tmp_1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp_config_1);
+
+    }
+    else {
+        kernel_id_0 = tt_metal::CreateKernel(
+            program,
+            "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
+            all_cores,
+            tt_metal::ReaderDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
+        kernel_id_1 = tt_metal::CreateKernel(
+            program,
+            "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
+            all_cores,
+            tt_metal::WriterDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
+    }
 
     tt_metal::CircularBufferConfig cb_dst_config =
         tt_metal::CircularBufferConfig(total_size, {{dst_cb_index, data_format}})
-            .set_page_size(dst_cb_index, unit_size)
+            .set_page_size(dst_cb_index, page_size)
             .set_globally_allocated_address(*output.buffer());
     auto cb_dst0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
 

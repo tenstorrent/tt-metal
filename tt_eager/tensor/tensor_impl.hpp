@@ -24,7 +24,7 @@ namespace tt_metal {
 
 namespace tensor_impl {
 
-std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, std::array<uint32_t, 2> shard_shape);
+std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, uint32_t width=32);
 
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================

@@ -86,12 +86,12 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
     return page_size;
 }
 
-std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, std::array<uint32_t, 2> shard_shape) {
+std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, uint32_t width) {
     // Physical limitation in FD for now
     switch (layout) {
         case Layout::ROW_MAJOR:
             // TODO: Explore valid page shapes other than 1,W
-            return {1, shard_shape[1]};
+            return {1, width};
         case Layout::TILE: return {constants::TILE_HEIGHT, constants::TILE_WIDTH};
         default: TT_THROW("Unsupported layout to write to device");
     }
@@ -875,7 +875,7 @@ Tensor to_device(
 
     std::optional<ShardSpecBuffer> shard_spec_buffer_opt = std::nullopt;
     if (memory_config.is_sharded()) {
-        auto page_shape = get_sharded_page_shape(layout, data_type, memory_config.shard_spec.value().shape);
+        auto page_shape = get_sharded_page_shape(layout, data_type, memory_config.shard_spec.value().shape[1]);
 
         auto width = shape[-1];
         auto other_dims = 1;
