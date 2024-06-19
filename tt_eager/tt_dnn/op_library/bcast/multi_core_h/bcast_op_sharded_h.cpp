@@ -41,9 +41,11 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
     TT_FATAL(out_shard_spec.num_cores() == ncores, "Output tensor should have same number of cores {} as input tensor {}", out_shard_spec.num_cores(), ncores);
 
     DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    DataFormat b_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
     DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
+    uint32_t input1_tile_size = tt::tt_metal::detail::TileSize(b_df);
     uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
 
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
@@ -87,8 +89,8 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
 
     uint32_t num_input_tiles = w_blk;
     uint32_t src1_cb_index = CB::c_in1;
-    tt_metal::CircularBufferConfig src1_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * aligned_input_tile_nbytes, {{src1_cb_index, act_df}})
-        .set_page_size(src1_cb_index, aligned_input_tile_nbytes);
+    tt_metal::CircularBufferConfig src1_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * input1_tile_size, {{src1_cb_index, b_df}})
+        .set_page_size(src1_cb_index, input1_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
     auto src0_buffer = a.buffer();
