@@ -19,6 +19,7 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     prepare_inputs_ttnn_prefill,
     prepare_rotation_mat_ttnn,
     get_rot_transformation_mat,
+    set_model_args,
 )
 from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
 from models.demos.t3000.mixtral8x7b.reference.model import TransformerBlock, precompute_freqs_cis
@@ -29,7 +30,7 @@ from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
 @pytest.mark.parametrize(
     "seq_len",
-    (128, 1024, 2048),
+    (128, 1024, 2048, 8192, 16384),
 )
 def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_seeds, seq_len):
     """
@@ -41,6 +42,7 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = set_model_args(model_args)
     batch = 1
     state_dict = model_args.load_state_dict()
     partial_state_dict = {k[9:]: v for k, v in state_dict.items() if (k.startswith("layers.0."))}

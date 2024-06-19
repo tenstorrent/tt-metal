@@ -23,6 +23,7 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     prepare_inputs_ttnn_prefill,
     prepare_rotation_mat_ttnn,
     get_rot_transformation_mat,
+    set_model_args,
 )
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.reference.model import Transformer
@@ -42,7 +43,7 @@ class Emb(torch.nn.Module):
 
 @pytest.mark.parametrize(
     "seq_len",
-    (128, 1024, 2048),
+    (128, 1024, 2048, 8192),
 )
 @pytest.mark.parametrize(
     "n_layers",
@@ -56,17 +57,17 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = set_model_args(model_args)
+
     model_args.n_layers = n_layers
     batch = 1
     state_dict = model_args.load_state_dict()
 
     tokenizer = Tokenizer(model_args.tokenizer_path)
-    prompt = "Once upon a time, in a charming countryside, there lived three little pigs named Porky, Petunia, and Percy. They were siblings and loved to play together all day long. But one day, their mother knew it was time for them to build their own homes and be independent. Remember, my little ones, their mother said, the world can be tricky, so build your houses strong and sturdy to keep you safe from harm. With hugs and kisses, the three little pigs bid farewell to their mother and set off on their journey to find the perfect spot to build their homes. Porky, being the laziest of the bunch, quickly found a pile of straw nearby and decided it was the perfect place to build his house. With little effort, he constructed a cozy straw house and declared, I'm done! Now I can relax and play all day. Petunia was a bit more hardworking. She found a bunch of sticks and twigs and began building her house. It took a bit longer, but she managed to create a charming little house. Percy, the wisest of the three, knew that hard work pays off. He searched for the sturdiest materials he could find and finally decided on bricks. He carefully stacked and cemented the bricks together, creating a strong and reliable house. One evening, as the sun was setting, a big bad wolf happened upon the three little pigs. He was hungry and had his eyes set on the tasty pigs. The wolf first came across Porky's straw house."
-    prompt = prompt * 7
+    prompt_file = "models/demos/t3000/mixtral8x7b/demo/tale-of-two-cities.txt"
+    with open(prompt_file, "r") as f:
+        prompt = f.read()
     encoded_prompts = tokenizer.encode(prompt)[:seq_len]
-    reference_model = Transformer(args=model_args)
-    reference_model.load_state_dict(state_dict)
-    reference_model.eval()
 
     # Embedding on host
     embd = Emb()
@@ -116,15 +117,20 @@ def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
-            .squeeze(1)
             .view(batch, seq_len, -1)
             .detach()
             .float()
         )
 
     # Measure PCC
-    positions = torch.LongTensor(range(seq_len))
-    ref_output = reference_model(pt_decode_input, positions, attn_mask_torch, mode="prefill").detach().float()
+    if seq_len == 8192:
+        ref_output = torch.load("models/demos/t3000/mixtral8x7b/reference/ref_output_prefil_32L_8192.pt")
+    else:
+        reference_model = Transformer(args=model_args)
+        reference_model.load_state_dict(state_dict)
+        reference_model.eval()
+        positions = torch.LongTensor(range(seq_len))
+        ref_output = reference_model(pt_decode_input, positions, attn_mask_torch, mode="prefill").detach().float()
 
     passing, pcc_message = comp_pcc(ref_output.view(batch, seq_len, -1), tt_output_torch.view(batch, seq_len, -1), pcc)
     logger.info(comp_allclose(ref_output, tt_output_torch))

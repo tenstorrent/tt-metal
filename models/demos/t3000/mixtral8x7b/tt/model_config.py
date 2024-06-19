@@ -23,7 +23,7 @@ class TtModelArgs:
     vocab_size = 32000
 
     max_batch_size = 32
-    max_seq_len = 4096
+    max_seq_len = 8192
     moe = True
     num_experts = 8
     num_experts_per_tok = 2
@@ -325,18 +325,94 @@ class TtModelArgs:
         )
 
         self.model_config[
+            "PREFILL_MLP_W1_PRG_CONFIG"
+        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=4,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=4,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=ttnn.experimental.tensor.FusibleActivation.SILU,
+            fuse_batch=False,
+        )
+
+        self.model_config[
+            "PREFILL_MLP_W3_PRG_CONFIG"
+        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=4,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=4,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+
+        self.model_config[
+            "PREFILL_MLP_W2_PRG_CONFIG"
+        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=4,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=4,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=16,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+
+        self.model_config["PREFILL_MLP_COMPUTE_CONFIG_2k"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        self.model_config["PREFILL_MLP_COMPUTE_CONFIG_8k"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+        self.model_config[
+            "WQKV_PREFILL_PROGCFG"
+        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=4,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=8,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=3,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+        self.model_config[
+            "WQKV_PREFILL_PROGCFG"
+        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=2,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=8,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=16,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+
+        self.model_config[
             "SDPA_PROGCFG"
         ] = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             q_chunk_size=128,
             k_chunk_size=128,
-        )
-
-        self.model_config["PREFILL_MLP_COMPUTE_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
         )
 
         self.model_config[

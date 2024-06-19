@@ -327,9 +327,14 @@ class TtMixtralAttention(LightweightModule):
 
     def forward_prefill(self, xs_11SH, attn_masks, rot_mats, transformation_mats, user_id: int = 0):
         assert xs_11SH.shape[2] % 128 == 0 and xs_11SH.shape[2] > 0, "Seqlen must be divisible by 128"
+        seq_len = xs_11SH.shape[-2]
         ###
         # QKV matmuls
         ###
+        xqkv_program_config = None
+        if seq_len > 8192:
+            xs_11SH = ttnn.reshape(xs_11SH, (1, 8, seq_len // 8), -1)
+            xqkv_program_config = self.model_config["WQKV_PREFILL_PROGCFG"]
         xqkv_fused = ttnn.linear(
             xs_11SH,
             self.wqkv,
@@ -337,8 +342,11 @@ class TtMixtralAttention(LightweightModule):
             memory_config=ttnn.L1_MEMORY_CONFIG,  # self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
             core_grid=self.core_grid_attention,
             compute_kernel_config=self.compute_kernel,
+            program_config=xqkv_program_config,
         )
 
+        if seq_len > 8192:
+            xqkv_fused = ttnn.reshape(xqkv_fused, (1, 1, seq_len * 8, -1))
         # split qkv into heads
         (
             q_heads_14SD_pre_rot,
@@ -409,6 +417,11 @@ class TtMixtralAttention(LightweightModule):
             output_mem_config=ttnn.L1_MEMORY_CONFIG,
         )
 
+        wo_program_config = None
+        if seq_len > 2048:
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, (1, seq_len // 2048, 2048, -1))
+            wo_program_config = self.model_config["WQKV_PREFILL_PROGCFG"]
+
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
@@ -416,8 +429,12 @@ class TtMixtralAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=wo_program_config,
         )
         attn_output_11SH.deallocate(True)
+
+        if seq_len > 2048:
+            output_11SH = ttnn.reshape(output_11SH, (1, 1, seq_len, -1))
 
         output_11BH_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1)
         output_11SH.deallocate(True)

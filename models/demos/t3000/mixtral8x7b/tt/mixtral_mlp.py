@@ -46,7 +46,8 @@ class TtMixtralMLP(LightweightModule):
         self.w2 = as_tensor("w2")
         self.w3 = as_tensor("w3")
 
-        self.prefill_mlp_config = self.model_config["PREFILL_MLP_COMPUTE_CONFIG"]
+        self.prefill_mlp_config_2k = self.model_config["PREFILL_MLP_COMPUTE_CONFIG_2k"]
+        self.prefill_mlp_config_8k = self.model_config["PREFILL_MLP_COMPUTE_CONFIG_8k"]
 
     def forward(self, x: ttnn.Tensor, mode="prefill") -> ttnn.Tensor:
         """
@@ -56,31 +57,51 @@ class TtMixtralMLP(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         if mode == "prefill":
+            seq_len = x.shape[-2]
+            if seq_len > 2048:
+                x = ttnn.reshape(x, [1, 8, seq_len // 8, self.model_args.dim])
+                compute_kernel_config = self.prefill_mlp_config_8k
+                pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG"]
+                pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"]
+                pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG"]
+            else:
+                compute_kernel_config = self.prefill_mlp_config_2k
+                pc_1 = None
+                pc_2 = None
+                pc_3 = None
+
             w1_out = ttnn.linear(
                 x,
                 self.w1,
-                compute_kernel_config=self.prefill_mlp_config,
+                compute_kernel_config=compute_kernel_config,
                 core_grid=ttnn.CoreGrid(y=8, x=8),
                 dtype=ttnn.bfloat16,
                 activation="silu",
+                program_config=pc_1,
             )
 
             w3_out = ttnn.linear(
                 x,
                 self.w3,
-                compute_kernel_config=self.prefill_mlp_config,
+                compute_kernel_config=compute_kernel_config,
                 core_grid=ttnn.CoreGrid(y=8, x=8),
                 dtype=ttnn.bfloat16,
+                program_config=pc_3,
             )
-            w2_in = ttnn.experimental.tensor.mul(w1_out, w3_out)
+            w2_in = w1_out * w3_out
 
             w2_out = ttnn.linear(
                 w2_in,
                 self.w2,
-                compute_kernel_config=self.prefill_mlp_config,
+                compute_kernel_config=compute_kernel_config,
                 core_grid=ttnn.CoreGrid(y=8, x=8),
                 dtype=ttnn.bfloat16,
+                program_config=pc_2,
             )
+
+            if seq_len > 2048:
+                w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, self.model_args.dim])
+
             return w2_out
 
         else:

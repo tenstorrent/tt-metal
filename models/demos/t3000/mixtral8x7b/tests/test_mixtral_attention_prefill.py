@@ -20,6 +20,7 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     prepare_inputs_ttnn_prefill,
     prepare_rotation_mat_ttnn,
     get_rot_transformation_mat,
+    set_model_args,
 )
 from models.demos.t3000.mixtral8x7b.reference.model import Attention, precompute_freqs_cis
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
@@ -31,13 +32,14 @@ from models.utility_functions import (
 
 @pytest.mark.parametrize(
     "seq_len",
-    (128, 1024, 2048),
+    (128, 1024, 2048, 8192, 16384),
 )
 @torch.no_grad()
 def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_seeds, seq_len):
     pcc = 0.99
     dtype = ttnn.bfloat8_b
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = set_model_args(model_args)
     state_dict = model_args.load_state_dict()
     batch = 1
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names

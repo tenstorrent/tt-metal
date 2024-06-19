@@ -302,3 +302,10 @@ def cache_attention(device_mesh, state_dict, model_args, rot_emb_matrix_list, se
         # ttnn.deallocate(tt_out[0])
 
     logger.info("Attention ops cached")
+
+
+def set_model_args(model_args, seq_len):
+    if seq_len > 8192:
+        model_args.max_seq_len = seq_len
+        model_args.max_batch_size = 32 // (seq_len // 8192)
+    return model_args
