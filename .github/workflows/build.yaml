@@ -8,27 +8,31 @@ jobs:
   build-lib:
     strategy:
       matrix:
-        type: [ Debug, RelWithDebInfo ]
+        build: [
+          {type: Debug, runs-on: ubuntu-20.04},
+          {type: RelWithDebInfo, runs-on: build}
+        ]
         arch: [grayskull, wormhole_b0, blackhole]
         os: [ubuntu-20.04]
     env:
       ARCH_NAME: ${{ matrix.arch }}
-      CONFIG: ${{ matrix.type }}
+      CONFIG: ${{ matrix.build.type }}
       # So we can get all the makefile output we want
       VERBOSE: 1
-    runs-on: ${{ matrix.os }}
-    name: cmake build ${{ matrix.type }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.build.runs-on }}
+    name: cmake build ${{ matrix.build.type }} ${{ matrix.arch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Install dependencies
+        if: ${{ matrix.build.runs-on == 'ubuntu-20.04' }}
+        uses: ./.github/actions/install-metal-deps
         with:
-          submodules: recursive
-          lfs: false
-      - uses: ./.github/actions/install-metal-deps
+          os: ${{ matrix.os }}
+      - name: Install dev dependencies
+        if: ${{ matrix.build.runs-on == 'ubuntu-20.04' }}
+        uses: ./.github/actions/install-metal-dev-deps
         with:
-          os: ubuntu-20.04
-      - uses: ./.github/actions/install-metal-dev-deps
-        with:
-          os: ubuntu-20.04
+          os: ${{ matrix.os }}
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
