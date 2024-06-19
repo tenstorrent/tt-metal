@@ -83,7 +83,7 @@ class feedforward:
         )
         if hidden_states.shape[-2] == 8192:
             hidden_states = ttnn.reallocate(hidden_states)
-        hidden_states = ttnn.experimental.operations.primary.matmul(
+        hidden_states = ttnn.matmul(
             hidden_states,
             self.parameters.net[2].weight,
             bias=self.parameters.net[2].bias,

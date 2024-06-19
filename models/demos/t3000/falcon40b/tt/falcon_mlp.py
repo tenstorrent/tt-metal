@@ -73,12 +73,12 @@ class TtFalconMLP:
             assert False
 
     def fwd_decode(self, x: List[ttnn.experimental.tensor.Tensor]) -> List[ttnn.experimental.tensor.Tensor]:
-        hidden_states = ttnn.experimental.operations.primary.matmul_1d(
+        hidden_states = ttnn.matmul(
             x,
             self.dense_h_to_4h_weights,
             program_config=self.model_config["DENSE_H_TO_4H_MM_PROGCFG"],
-            output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
-            output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
+            memory_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
+            dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
         x.deallocate(True)
@@ -95,12 +95,12 @@ class TtFalconMLP:
         hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
             hidden_states, sharded_mem_config=self.model_config["MLP_ALL_GATHER_OUTPUT_MEMCFG"]
         )
-        hidden_states = ttnn.experimental.operations.primary.matmul_1d(
+        hidden_states = ttnn.matmul(
             hidden_states,
             self.dense_4h_to_h_weights,
             program_config=self.model_config["DENSE_4H_TO_H_MM_PROGCFG"],
-            output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
-            output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
+            memory_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
+            dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
         # return TT Tensor

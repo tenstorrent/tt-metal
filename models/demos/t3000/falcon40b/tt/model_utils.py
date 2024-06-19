@@ -268,7 +268,7 @@ def falcon_prefill_matmul(
             overwrite_subblock_h=overwrite_subblock_h,
         )
         # print(f"Program config: {matmul_pgmcfg}")
-        return ttnn.experimental.operations.primary.matmul(
+        return ttnn.matmul(
             in0,
             in1,
             program_config=matmul_pgmcfg,
@@ -290,7 +290,7 @@ def falcon_prefill_matmul(
             overwrite_subblock_h=overwrite_subblock_h,
         )
         # print(f"Program config: {matmul_pgmcfg}")
-        return ttnn.experimental.operations.primary.matmul_1d(
+        return ttnn.matmul(
             in0,
             in1,
             program_config=matmul_pgmcfg,

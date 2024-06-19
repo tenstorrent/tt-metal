@@ -293,7 +293,7 @@ class TtFalconAttentionPrefill(nn.Module):
         attn_weights = []
         for i in range(self.num_devices):
             attn_weights.append(
-                ttnn.experimental.tensor.matmul(
+                ttnn.matmul(
                     query_layer[i],
                     key_layer_transposed[i],
                     output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
@@ -340,7 +340,7 @@ class TtFalconAttentionPrefill(nn.Module):
         attn_output = []
         for i in range(self.num_devices):
             attn_output.append(
-                ttnn.experimental.tensor.matmul(
+                ttnn.matmul(
                     attn_weights[i],
                     value_layer[i],
                     output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
@@ -383,7 +383,7 @@ class TtFalconAttentionPrefill(nn.Module):
         #################
         if seq_len == 2048:
             fused_query_key_value = [
-                ttnn.experimental.operations.primary.matmul(
+                ttnn.matmul(
                     hidden_states[device_id],
                     self.query_key_value_weights[device_id],
                     program_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_PROGCFG"],
@@ -483,7 +483,7 @@ class TtFalconAttentionPrefill(nn.Module):
 
             ### QKT MATMUL ###
             mm_slices = [
-                ttnn.experimental.operations.primary.matmul(
+                ttnn.matmul(
                     slices[device_id],
                     key_layer_transposed[device_id],
                     program_config=qkt_prg_cfg,
@@ -512,7 +512,7 @@ class TtFalconAttentionPrefill(nn.Module):
             ### QKTV MATMUL ###
             qktv_prg_cfg = self.model_config["QKTV_MM_OPTIMIZED_PROGCFG"](tiles_per_shard, seq_len, subblock_h)
             attn_out_slices = [
-                ttnn.experimental.operations.primary.matmul(
+                ttnn.matmul(
                     mm_slices[device_id],
                     value_layer[device_id],
                     program_config=qktv_prg_cfg,
@@ -779,7 +779,7 @@ class TtFalconAttentionDecode(nn.Module):
         if self.model_config["l1_sharded"]:
             for i, device in enumerate(self.devices):
                 attn_weights.append(
-                    ttnn.experimental.operations.primary.matmul(
+                    ttnn.matmul(
                         query_layer[i],  # [batch, 1, padded_local_heads, head_dim]
                         key_layer_transposed[i],  # [batch, 1, head_dim, padded_layer_past_len]
                         program_config=self.model_config["ATTN_BATCHED_MM_PROGCFG"](
@@ -894,7 +894,7 @@ class TtFalconAttentionDecode(nn.Module):
         if self.model_config["l1_sharded"]:
             for i in range(self.num_devices):
                 attn_output.append(
-                    ttnn.experimental.operations.primary.matmul(
+                    ttnn.matmul(
                         attn_weights[i],  # [batch, 1, padded_local_heads, padded_layer_past_len]
                         value_layer[i],  # [batch, 1, padded_layer_past_len, head_dim]
                         program_config=self.model_config["ATTN_BATCHED_MM_PROGCFG"](

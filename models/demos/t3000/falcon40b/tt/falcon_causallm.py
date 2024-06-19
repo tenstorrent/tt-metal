@@ -162,12 +162,12 @@ class TtFalconCausalLM(TtFalconModelShared):
         )
 
         # LM Head
-        lm_logits = ttnn.experimental.operations.primary.matmul_1d(
+        lm_logits = ttnn.matmul(
             hidden_states,
             self.lm_head_weights,
             program_config=self.model_config["LM_HEAD_MM_PROGCFG"],
-            output_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
-            output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
+            memory_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
+            dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
         hidden_states.deallocate(True)

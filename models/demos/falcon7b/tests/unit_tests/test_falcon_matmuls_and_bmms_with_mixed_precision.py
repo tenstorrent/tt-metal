@@ -356,7 +356,7 @@ def test_falcon7b_attnention_sliced(
             mcast_in0=False,
         )
 
-        mm_slice = ttnn.experimental.operations.primary.matmul(
+        mm_slice = ttnn.matmul(
             slice,
             reference_key_layer_transposed,
             program_config=program_config,
@@ -427,7 +427,7 @@ def test_falcon7b_attnention_sliced(
             mcast_in0=False,
         )
 
-        attn_out_slice = ttnn.experimental.operations.primary.matmul(
+        attn_out_slice = ttnn.matmul(
             mm_slice,
             reference_value_layer,
             program_config=program_config,
@@ -450,7 +450,7 @@ def test_falcon7b_attnention_sliced(
 
     attention_output_concatenated_torch = tt2torch_tensor(attention_output_concatenated)
 
-    attn_weights = ttnn.experimental.tensor.matmul(
+    attn_weights = ttnn.matmul(
         reference_query_layer, reference_key_layer_transposed, output_mem_config=dram_interleaved_memory_config
     )
 
@@ -465,7 +465,7 @@ def test_falcon7b_attnention_sliced(
     attn_weights = ttnn.experimental.operations.primary.softmax_in_place(
         attn_weights, compute_kernel_config=compute_kernel_config
     )
-    attn_output = ttnn.experimental.tensor.matmul(attn_weights, reference_value_layer)
+    attn_output = ttnn.matmul(attn_weights, reference_value_layer)
     attn_output_torch = tt2torch_tensor(attn_output)
     passing = True
 
@@ -653,7 +653,7 @@ def test_falcon7b_attention_softmax_sequence(
             mcast_in0=False,
         )
 
-        mm_slice = ttnn.experimental.operations.primary.matmul(
+        mm_slice = ttnn.matmul(
             slice,
             reference_key_layer_transposed,
             program_config=program_config,
@@ -698,7 +698,7 @@ def test_falcon7b_attention_softmax_sequence(
             mcast_in0=False,
         )
 
-        attn_out_slice = ttnn.experimental.operations.primary.matmul(
+        attn_out_slice = ttnn.matmul(
             mm_slice,
             reference_value_layer,
             program_config=program_config,
@@ -721,7 +721,7 @@ def test_falcon7b_attention_softmax_sequence(
 
     attention_output_concatenated_torch = tt2torch_tensor(attention_output_concatenated)
 
-    attn_weights = ttnn.experimental.tensor.matmul(
+    attn_weights = ttnn.matmul(
         reference_query_layer, reference_key_layer_transposed, output_mem_config=dram_interleaved_memory_config
     )
 
@@ -734,7 +734,7 @@ def test_falcon7b_attention_softmax_sequence(
         compute_kernel_config=compute_kernel_config,
     )
 
-    attn_output = ttnn.experimental.tensor.matmul(attn_weights, reference_value_layer)
+    attn_output = ttnn.matmul(attn_weights, reference_value_layer)
     attn_output_torch = tt2torch_tensor(attn_output)
     passing = True
 

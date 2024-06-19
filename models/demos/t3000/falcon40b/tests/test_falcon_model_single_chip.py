@@ -173,7 +173,7 @@ def test_sharded_matmul_1d_in0(
         fused_activation=None,
         mcast_in0=True,
     )
-    output_t = ttnn.experimental.operations.primary.matmul_1d(
+    output_t = ttnn.linear(
         in0_t,
         in1_t,
         bias=bias_t,
@@ -291,7 +291,7 @@ def test_sharded_matmul_1d_in0_multi_chip(
     for i in range(num_devices):
         logger.info(f"Running matmul on device: {i}")
         output_t.append(
-            ttnn.experimental.operations.primary.matmul_1d(
+            ttnn.matmul(
                 in0_t[i],
                 in1_t[i],
                 program_config=program_config,
@@ -404,7 +404,7 @@ def test_sharded_matmul_1d_in0_multi_chip(
     for i in range(num_devices):
         logger.info(f"Running matmul on device: {i}")
         output_t.append(
-            ttnn.experimental.operations.primary.matmul_1d(
+            ttnn.matmul(
                 in0_t[i],
                 in1_t[i],
                 program_config=program_config,

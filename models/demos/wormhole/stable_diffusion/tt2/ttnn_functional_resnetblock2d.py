@@ -527,7 +527,7 @@ class resnetBlock2D:
                     memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
                     buffer_type=ttnn.experimental.tensor.BufferType.L1,
                 )
-                temb = ttnn.experimental.operations.primary.matmul(
+                temb = ttnn.matmul(
                     temb,
                     self.parameters.time_emb_proj.weight,
                     bias=self.parameters.time_emb_proj.bias,

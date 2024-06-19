@@ -75,7 +75,7 @@ def falcon_lm_head_matmul_2d(
     out_slices = []
     for i in range(num_slices):
         out_slices.append(
-            ttnn.experimental.operations.primary.matmul(
+            ttnn.matmul(
                 hidden_states,
                 weights[i],
                 program_config=program_config,
