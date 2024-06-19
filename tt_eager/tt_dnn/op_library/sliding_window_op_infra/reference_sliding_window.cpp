@@ -4,6 +4,7 @@
 
 #include "tt_dnn/op_library/sliding_window_op_infra/reference_sliding_window.hpp"
 
+#include <cstdint>
 #include <numeric>
 #include <tuple>
 
@@ -38,11 +39,14 @@ owned_buffer::Buffer<bfloat16> ref_conv_op(
         for (int k = 0; k < output_h; k++) {
             for (int l = 0; l < output_w; l++) {
                 // Get input vector of filter size to calculate convolution.
+                auto anchor = i * (input_h * input_w) + k * stride_h * input_w + l * stride_w;
                 for (int m = 0; m < filter_h; m++) {
                     for (int n = 0; n < filter_w; n++) {
-                        auto anchor = i * (input_h * input_w) + k * stride_h * input_w + l * stride_w;
                         auto idx = anchor + m * input_w * stride_h + n * stride_w;
-                        input_window.push_back(input_padded_tensor_buf[idx].to_float());
+                        if (idx >= input_padded_tensor_buf.size())
+                            input_window.push_back(0);
+                        else
+                            input_window.push_back(input_padded_tensor_buf[idx].to_float());
                     }
                 }
                 out_golden_pyt_tensor[out_idx] = bfloat16(static_cast<float>(
@@ -67,19 +71,22 @@ owned_buffer::Buffer<bfloat16> conv_using_op_trace_metadata(
     uint32_t padded_input_w,
     uint32_t out_tensor_size) {
     auto conv_tensor_buf = owned_buffer::create<bfloat16>(out_tensor_size);
-    vector<float> inputs;
+    vector<float> input_window;
     uint32_t out_idx = 0;
     for (auto anchor : op_trace_metadata) {
         for (uint32_t h = 0; h < filter_h; h++) {
             for (uint32_t w = 0; w < filter_w; w++) {
                 auto idx = anchor + h * stride_h * padded_input_w + w * stride_w;
-                inputs.push_back(input_padded_tensor_buf[idx].to_float());
+                if (idx >= input_padded_tensor_buf.size())
+                    input_window.push_back(0);
+                else
+                    input_window.push_back(input_padded_tensor_buf[idx].to_float());
             }
         }
-        conv_tensor_buf[out_idx] =
-            bfloat16(static_cast<float>(inner_product(inputs.begin(), inputs.end(), filter_vector.begin(), 0.0)));
+        conv_tensor_buf[out_idx] = bfloat16(
+            static_cast<float>(inner_product(input_window.begin(), input_window.end(), filter_vector.begin(), 0.0)));
         out_idx++;
-        inputs.clear();
+        input_window.clear();
     }
     return conv_tensor_buf;
 }
@@ -88,8 +95,6 @@ owned_buffer::Buffer<bfloat16> conv_using_shard_boundaries(
     const owned_buffer::Buffer<bfloat16> &input_padded_tensor_buf,
     const vector<float> &filter_vector,
     const vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries,
-    uint32_t input_h,
-    uint32_t input_w,
     uint32_t stride_h,
     uint32_t stride_w,
     uint32_t padded_input_h,
@@ -100,28 +105,29 @@ owned_buffer::Buffer<bfloat16> conv_using_shard_boundaries(
     uint32_t output_w,
     uint32_t out_tensor_size) {
     auto conv_tensor_buf = owned_buffer::create<bfloat16>(out_tensor_size);
-    vector<float> inputs;
+    vector<float> input_window;
 
-    uint32_t input_hw = input_h * input_w;
     uint32_t output_hw = output_h * output_w;
     uint32_t padded_input_hw = padded_input_h * padded_input_w;
     uint32_t input_idx_strt, input_idx;
     for (auto shard_boundry : shard_boundaries) {
         auto [output_shard_start, output_shard_end] = shard_boundry.first;
-        auto [input_index_start, input_index_end] = shard_boundry.second;
         for (auto i = output_shard_start; i <= output_shard_end; i++) {
             for (auto fh = 0; fh < filter_h; fh++) {
                 for (auto fw = 0; fw < filter_w; fw++) {
                     input_idx_strt = (i / output_hw) * padded_input_hw +
-                                     ((i % output_hw) / output_h) * padded_input_w * stride_h +
+                                     ((i % output_hw) / output_w) * padded_input_w * stride_h +
                                      (i % output_w) * stride_w;
                     input_idx = input_idx_strt + fh * padded_input_w * stride_h + fw * stride_w;
-                    inputs.push_back(input_padded_tensor_buf[input_idx].to_float());
+                    if (input_idx >= input_padded_tensor_buf.size())
+                        input_window.push_back(0);
+                    else
+                        input_window.push_back(input_padded_tensor_buf[input_idx].to_float());
                 }
             }
-            conv_tensor_buf[i] =
-                bfloat16(static_cast<float>(inner_product(inputs.begin(), inputs.end(), filter_vector.begin(), 0.0)));
-            inputs.clear();
+            conv_tensor_buf[i] = bfloat16(static_cast<float>(
+                inner_product(input_window.begin(), input_window.end(), filter_vector.begin(), 0.0)));
+            input_window.clear();
         }
     }
     return conv_tensor_buf;
@@ -152,10 +158,12 @@ owned_buffer::Buffer<bfloat16> conv_using_sliding_window_op_config(
         for (auto idx : shard) {
             for (auto fh = 0; fh < filter_h; fh++) {
                 for (auto fw = 0; fw < filter_w; fw++) {
-                    input_window.push_back(input_padded_tensor_buf
-                                               [op_trace_metadata[output_shard_start] + idx +
-                                                fh * padded_input_w * stride_h + fw * stride_w]
-                                                   .to_float());
+                    auto input_idx =
+                        op_trace_metadata[output_shard_start] + idx + fh * padded_input_w * stride_h + fw * stride_w;
+                    if (input_idx >= input_padded_tensor_buf.size())
+                        input_window.push_back(0);
+                    else
+                        input_window.push_back(input_padded_tensor_buf[input_idx].to_float());
                 }
             }
             conv_tensor_buf[out_idx] = bfloat16(static_cast<float>(
@@ -180,10 +188,10 @@ vector<bool> pad_metadata_from_tensor_metadata(const vector<std::pair<bool, uint
     return ref_pad_metadata;
 }
 
-vector<uint16_t> pad_indices_from_flattened_pad_config(
+vector<uint32_t> pad_indices_from_flattened_pad_config(
     const vector<vector<uint16_t>> &flattened_pad_config,
     const vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries) {
-    vector<uint16_t> abs_indices;
+    vector<uint32_t> abs_indices;
     for (auto i = 0; i < shard_boundaries.size(); i++) {
         uint32_pair_t input_boundry = shard_boundaries[i].second;
         uint32_t padded_input_tensor_buf_idx = input_boundry.first;
@@ -198,10 +206,10 @@ vector<uint16_t> pad_indices_from_flattened_pad_config(
     return abs_indices;
 }
 
-vector<uint16_t> input_indices_from_flattened_local_config(
+vector<uint32_t> input_indices_from_flattened_local_config(
     const vector<vector<uint16_t>> &flattened_local_config,
     const vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries) {
-    vector<uint16_t> abs_indices;
+    vector<uint32_t> abs_indices;
     for (auto i = 0; i < shard_boundaries.size(); i++) {
         uint32_pair_t input_boundry = shard_boundaries[i].second;
         uint32_t padded_input_tensor_buf_idx = input_boundry.first;
@@ -217,14 +225,14 @@ vector<uint16_t> input_indices_from_flattened_local_config(
     return abs_indices;
 }
 
-vector<uint16_t> input_indices_from_flattened_remote_config(
+vector<uint32_t> input_indices_from_flattened_remote_config(
     tt::tt_metal::Device *device,
     const vector<vector<uint16_t>> &flattened_remote_config,
     const vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries,
     bool remote_read,
     bool is_block_sharded,
     bool transpose_mcast) {
-    vector<uint16_t> abs_indices;
+    vector<uint32_t> abs_indices;
     auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
         size_t num_cores_x = device->compute_with_storage_grid_size().x;
         CoreCoord core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))

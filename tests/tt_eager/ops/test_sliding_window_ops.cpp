@@ -75,7 +75,7 @@ uint32_t validate_generate_halo_kernel_config(
     uint32_t invalid_pads = 0, invalid_indices = 0;
     uint32_t failed_tests = 0;
 
-    auto find_invalids = [&](vector<uint16_t> &indices, bool val) -> int {
+    auto find_invalids = [&](vector<uint32_t> &indices, bool val) -> int {
         auto invalids = 0;
         for (auto idx : indices) {
             if (pad_metadata[idx] != val) {
@@ -192,8 +192,6 @@ uint32_t validate_generate_functions(
         input_padded_tensor_buf,
         filter_vector,
         shard_boundaries,
-        input_h,
-        input_w,
         stride_h,
         stride_w,
         padded_input_h,
@@ -248,7 +246,6 @@ struct testcase_config {
     uint32_t filter_h, filter_w;
     uint32_t stride_h, stride_w;
     uint32_t pad_h, pad_w;
-    uint32_t dilation_h, dilation_w;
     uint32_t num_cores_nhw;
     uint32_t reshard_num_cores_nhw;
     bool remote_read;
@@ -256,10 +253,110 @@ struct testcase_config {
 
 // Test cases
 vector<struct testcase_config> configs = {
-    {2, 5, 5, 3, 3, 1, 1, 1, 1, 1, 1, 2, 0, false},
-    {2, 5, 5, 3, 3, 2, 2, 1, 1, 1, 1, 1, 4, true},
-    {2, 10, 10, 7, 7, 4, 4, 3, 3, 1, 1, 4, 5, false},
-    {7, 64, 64, 13, 13, 2, 2, 6, 6, 1, 1, 5, 4, true},
+    // unique convs in rn50
+    {64, 56, 56, 1, 1, 1, 1, 0, 0, 64, 0, false},
+    {64, 56, 56, 1, 1, 2, 2, 0, 0, 64, 0, false},
+    {64, 56, 56, 3, 3, 1, 1, 1, 1, 64, 0, false},
+
+    {128, 56, 56, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {128, 28, 28, 3, 3, 1, 1, 1, 1, 64, 0, false},
+
+    {256, 28, 28, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {256, 14, 14, 3, 3, 1, 1, 1, 1, 64, 0, false},
+
+    {512, 14, 14, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {512, 7, 7, 3, 3, 1, 1, 1, 1, 64, 0, false},
+
+    {16, 115, 115, 4, 4, 1, 1, 0, 0, 64, 0, false},
+    // rn50 layer1
+    {8, 56, 56, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {16, 56, 56, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {20, 56, 56, 3, 3, 1, 1, 1, 1, 64, 0, false},
+
+    // rn50 layer2
+    {8, 56, 56, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {16, 56, 56, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {20, 56, 56, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {8, 28, 28, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {16, 28, 28, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {20, 28, 28, 3, 3, 1, 1, 1, 1, 64, 0, false},
+
+    // rn50 layer3
+    {8, 28, 28, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {16, 28, 28, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {20, 28, 28, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {8, 14, 14, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {16, 14, 14, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {20, 14, 14, 3, 3, 1, 1, 1, 1, 64, 0, false},
+
+    // rn50 layer4
+    {8, 14, 14, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {16, 14, 14, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {20, 14, 14, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {8, 7, 7, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {16, 7, 7, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {20, 7, 7, 3, 3, 1, 1, 1, 1, 64, 0, false},
+
+    // small test
+    {1, 8, 8, 3, 3, 1, 1, 1, 1, 2, 0, false},
+    {1, 16, 16, 3, 3, 1, 1, 1, 1, 4, 0, false},
+    {8, 7, 7, 3, 3, 1, 1, 1, 1, 2, 0, false},
+
+    // rn40 1x1s2 shapes
+    {20, 56, 56, 1, 1, 2, 2, 0, 0, 64, 0, false},
+    {20, 28, 28, 1, 1, 2, 2, 0, 0, 64, 0, false},
+    {20, 14, 14, 1, 1, 2, 2, 0, 0, 64, 0, false},
+
+    {8, 56, 56, 3, 3, 2, 2, 1, 1, 64, 0, false},
+
+    // sd convs with HxW=64x64 with batch size 1
+    {1, 64, 64, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {1, 64, 64, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {1, 32, 32, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {1, 32, 32, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {1, 16, 16, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {1, 16, 16, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {1, 8, 8, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    // sd convs with HxW=64x64 with batch size 2
+    {2, 64, 64, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {2, 64, 64, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {2, 32, 32, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {2, 32, 32, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {2, 16, 16, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {2, 16, 16, 3, 3, 2, 2, 1, 1, 64, 0, false},
+    {2, 8, 8, 3, 3, 1, 1, 1, 1, 64, 0, false},
+
+    {2, 64, 64, 1, 1, 1, 1, 1, 1, 64, 0, false},
+
+    // unique convs in unet
+    {1, 1056, 160, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {1, 528, 80, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {1, 264, 40, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {1, 132, 20, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {1, 66, 10, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {1, 132, 20, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {1, 264, 40, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {1, 528, 80, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {1, 1056, 160, 3, 3, 1, 1, 1, 1, 64, 0, false},
+
+    // misc tests
+    {1, 17, 17, 3, 3, 1, 1, 1, 1, 64, 0, false},
+    {1, 23, 23, 3, 3, 1, 1, 1, 1, 64, 0, false},
+
+    {1, 115, 115, 4, 4, 1, 1, 0, 0, 64, 0, false},
+
+    {20, 28, 28, 3, 3, 2, 2, 1, 1, 64, 0, false},
+
+    {8, 14, 14, 3, 3, 1, 1, 1, 1, 64, 0, false},
+
+    {1, 60, 80, 3, 3, 1, 1, 1, 1, 64, 0, false},
+
+    // tests for resharding, remote read
+    {2, 5, 5, 3, 3, 2, 2, 1, 1, 1, 4, true},
+    {3, 528, 80, 7, 7, 4, 4, 1, 1, 2, 0, true},
+    {2, 10, 10, 7, 7, 4, 4, 3, 3, 4, 5, true},
+    {7, 64, 64, 13, 13, 2, 2, 6, 6, 5, 4, true},
+
 };
 
 int main() {
@@ -278,8 +375,8 @@ int main() {
             tc.stride_w,
             tc.pad_h,
             tc.pad_w,
-            tc.dilation_h,
-            tc.dilation_w,
+            1,
+            1,
             tc.num_cores_nhw);
         Shape input_tensor_shape = {
             config.batch_size_,
@@ -316,7 +413,7 @@ int main() {
         if (failed_tests) {
             log_error(
                 tt::LogTest,
-                "Tests({}) failed for config ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                "Tests({}) failed for config ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
                 failed_tests,
                 tc.batch_size,
                 tc.input_h,
@@ -327,8 +424,6 @@ int main() {
                 tc.stride_w,
                 tc.pad_h,
                 tc.pad_w,
-                tc.dilation_h,
-                tc.dilation_w,
                 tc.num_cores_nhw,
                 tc.reshard_num_cores_nhw,
                 tc.remote_read);
