@@ -13,18 +13,21 @@ void MAIN {
     uint32_t Ht = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
     uint32_t h_blk = get_arg_val<uint32_t>(3);
+    uint32_t bN = get_arg_val<uint32_t>(4);
+    uint32_t Ht_per_b1 = get_arg_val<uint32_t>(5);
+
     init_bcast<BCAST_LLKOP, BCAST_DIM>(tt::CB::c_in0, tt::CB::c_in1, tt::CB::c_out0);
 
-    // TODO: deal with batched in1
-    for (uint32_t nc = 0; nc < NC; nc++) {
-        cb_wait_front(tt::CB::c_in0, Wt*Ht);
-        cb_reserve_back(tt::CB::c_out0, Wt*Ht);
+    cb_wait_front(tt::CB::c_in0, Wt*Ht);
+    cb_reserve_back(tt::CB::c_out0, Wt*Ht);
+    uint32_t b_offset = 0;
+    for (uint32_t bn = 0; bn < bN; bn++) {
         for (uint32_t wt = 0; wt < Wt; wt++) {
             cb_wait_front(tt::CB::c_in1, onetile);
-            for (uint32_t ht = 0; ht < Ht; ht+=h_blk) {
+            for (uint32_t ht = 0; ht < Ht_per_b1; ht+=h_blk) {
                 acquire_dst(tt::DstMode::Half);
                 for (uint32_t htr = 0; htr<h_blk; htr++) {
-                    uint32_t current_index = (ht + htr) * Wt + wt;
+                    uint32_t current_index = b_offset + (ht + htr) * Wt + wt;
                     BCAST_OP<BroadcastType::ROW>(tt::CB::c_in0, tt::CB::c_in1, current_index, 0, htr);
                     pack_tile<true>(htr, tt::CB::c_out0, current_index);
                 }
@@ -32,8 +35,9 @@ void MAIN {
             }
             cb_pop_front(tt::CB::c_in1, onetile);
         }
-        cb_pop_front(tt::CB::c_in0, Wt*Ht);
-        cb_push_back(tt::CB::c_out0, Wt*Ht);
+         b_offset += Ht_per_b1 * Wt;
     }
+    cb_pop_front(tt::CB::c_in0, Wt*Ht);
+    cb_push_back(tt::CB::c_out0, Wt*Ht);
 }
 } // NAMESPACE

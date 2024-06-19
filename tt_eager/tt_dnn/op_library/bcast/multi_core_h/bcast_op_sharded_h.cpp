@@ -120,10 +120,10 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
     for (uint32_t i = 0; i < ncores; i++){
         CoreCoord core;
         uint32_t offset = 0;
-        uint32_t Ht_per_core = 0;
+        uint32_t Ht_per_b1 = 0; // Ht per batch
         if(a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED){
             core = {i / ncores_x, i % ncores_x};
-            Ht_per_core = Wt * Ht;
+            Ht_per_b1 = Ht;
             if(shard_spec.orientation == ShardOrientation::ROW_MAJOR){
                 offset = Wt * (i / ncores_x) + Wt *  ncores_y * ((i % ncores_x) / (ncores_x/bN));
             }else{
@@ -139,7 +139,7 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
                     offset = Wt * (ncores_y * ncores_x + core.x);
                 }
             }
-            Ht_per_core = Ht / bN;
+            Ht_per_b1 = Ht / bN;
         }
         uint32_t tile_offset = Wt * ncores; //used in multi batch weight for block sharded
         tt_metal::SetRuntimeArgs(
@@ -147,13 +147,13 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
             binary_reader_kernel_id,
             core,
             {
-                b.buffer()->address(), // 0
-                Ht, // 1
-                Wt, // 2
-                offset, // 3
-                Ht_per_core, // 4
-                tile_offset, // 5
-                w_blk, // 6
+                b.buffer()->address(), // (0) src1_addr
+                Ht, // (1) Ht
+                Wt, // (2) Wt
+                offset, // (3) read offset in1
+                tile_offset, // (4) in1 offset between batches
+                w_blk, // (5) block size in w
+                bN, // (6) in1 batch size
             }
         );
 
@@ -162,10 +162,12 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
             bcast_kernel_id,
             core,
             {
-                NC, // B
-                Ht, // Hbatch  for block shardeshardedt
-                Wt,  // Wt
-                h_blk, // h block size
+                NC, // (0) B
+                Ht, // (1) Hbatch  for block shardeshardedt
+                Wt,  // (2) Wt
+                h_blk, // (3) h block size
+                bN, // (4) in1 batch size
+                Ht_per_b1, // (5) Ht per in1 batch size (bN)
             }
         );
     }
@@ -200,13 +202,14 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
         } else{
             TT_FATAL(false, "Unsupported memory layout");
         }
-        uint32_t Ht_per_core = 0, ncores_y = ncores / ncores_x;
+        uint32_t ncores_y = ncores / ncores_x;
+        uint32_t Ht_per_b1 = 0; // Ht per batch
         for (uint32_t i = 0; i < ncores; i++){
             CoreCoord core;
             uint32_t offset = 0;
             if(a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED){
                 core = {i / ncores_x, i % ncores_x};
-                Ht_per_core = Wt * Ht;
+                Ht_per_b1 = Ht;
                 if(shard_spec.orientation == ShardOrientation::ROW_MAJOR){
                     offset = Wt * (i / ncores_x) + Wt *  ncores_y * ((i % ncores_x) / (ncores_x/bN));
                 }else{
@@ -222,7 +225,7 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
                         offset = Wt * (ncores_y * ncores_x + core.x);
                     }
                 }
-                Ht_per_core = Ht / bN;
+                Ht_per_b1 = Ht / bN;
             }
             uint32_t tile_offset = Wt * ncores;
 
@@ -234,13 +237,13 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
                 binary_reader_kernel_id,
                 core,
                 {
-                    b.buffer()->address(), // 0
-                    Ht, // 1
-                    Wt, // 2
-                    offset, // 3
-                    Ht_per_core, // 4
-                    tile_offset, //5
-                    w_blk, // 6
+                    b.buffer()->address(), // (0) src1_addr
+                    Ht, // (1) Ht
+                    Wt, // (2) Wt
+                    offset, // (3) read offset in1
+                    tile_offset, // (4) in1 offset between batches
+                    w_blk, // (5) block size in w
+                    bN, // (6) in1 batch size
                 }
             );
 
@@ -249,10 +252,12 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
                 bcast_kernel_id,
                 core,
                 {
-                    NC, // B
-                    Ht, // Ht
-                    Wt,  // Wt
-                    h_blk, // h block size
+                    NC, // (0) B
+                    Ht, // (1) Hbatch  for block shardeshardedt
+                    Wt,  // (2) Wt
+                    h_blk, // (3) h block size
+                    bN, // (4) in1 batch size
+                    Ht_per_b1, // (5) Ht per in1 batch size (bN)
                 }
             );
         }
