@@ -38,7 +38,7 @@ void MAIN {
             if (do_mask_h) {
                 copy_tile_to_dst(cb_mask_h, idx0, dst1, false);
                 mask_tile_init();
-                int_mask_tile(dst0, dst1);
+                mask_tile(dst0, dst1, DataFormat::Int32);
             }
 
             sfpu_sum_int_init();
@@ -65,7 +65,7 @@ void MAIN {
                     if (ht == Ht - 1 && do_mask_h) {
                         copy_tile_to_dst(cb_mask_h, idx0, dst1, false);
                         mask_tile_init();
-                        int_mask_tile(dst0, dst1);
+                        mask_tile(dst0, dst1, DataFormat::Int32);
                     }
 
                     copy_tile_to_dst(cb_intermed0, idx0, dst1);

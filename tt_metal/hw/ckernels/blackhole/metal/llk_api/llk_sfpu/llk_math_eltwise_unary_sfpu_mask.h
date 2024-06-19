@@ -18,11 +18,11 @@ inline void llk_math_eltwise_unary_sfpu_mask_init() {
 }
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_mask(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_mask<APPROXIMATE>,
-        dst_index,
-        vector_mode);
+inline void llk_math_eltwise_unary_sfpu_mask(uint dst_index, DataFormat data_format, int vector_mode = (int)VectorMode::RC) {
+    if (data_format == DataFormat::Float16_b || data_format == DataFormat::Float16) {
+        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+            ckernel::sfpu::calculate_mask<APPROXIMATE>, dst_index, vector_mode);
+    }
 }
 
 }

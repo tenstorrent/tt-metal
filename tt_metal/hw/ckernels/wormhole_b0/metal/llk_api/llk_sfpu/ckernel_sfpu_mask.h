@@ -34,9 +34,9 @@ inline void calculate_mask()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS=8>
-inline void calculate_int_mask(uint mask_index)
+inline void calculate_int_mask()
 {
-    const int mask_idx = mask_index * 32;
+    const int mask_idx = 32;
     #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
