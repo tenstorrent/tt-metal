@@ -718,6 +718,15 @@ inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<
         auto it = input_cores_with_pages.begin();
         const auto end = input_cores_with_pages.end();
 
+        uint32_t index = 0;
+        std::cout << "Printing Mappings for core " << output_core.str() << std::endl;
+        for (auto it: input_cores_with_pages) {
+            std::cout << "Output page " << index
+            << " maps to Core: " << it->first.str()
+            << " and page: " << it->second << std::endl;
+            index++;
+        }
+
         while (it != end) {
             // hit padding, will see how many consecutive pages has padding to make a padded range
             if (!it->has_value()) {
@@ -1140,6 +1149,16 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
 
         uint32_t output_shard_size = output_shard_spec.shape[0] * output_shard_spec.shape[1] * output.element_size();
         uint32_t output_rows_per_shard = div_up(div_up(output_shard_size,output_page_size),2);
+        uint32_t input_page_allignment = 0;
+        uint32_t output_page_allignment = 0;
+
+        if((input_page_size % 32 != 0) and (page_size % 32 != 0)) {
+            input_page_allignment = page_size % 32;
+        }
+
+        if((output_page_size % 32 != 0) and (page_size % 32 != 0)) {
+            output_page_allignment = page_size % 32;
+        }
         kernel_id_0 = tt_metal::CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader_stick_diff_width.cpp",
@@ -1151,7 +1170,9 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
                                             page_size, /*3*/
                                             input_page_size, /*4*/
                                             output_page_size, /*5*/
-                                            tmp_cb_index_0 /*6*/
+                                            input_page_allignment, /*6*/
+                                            output_page_allignment, /*7*/
+                                            tmp_cb_index_0 /*8*/
                                             }));
 
         kernel_id_1 = tt_metal::CreateKernel(
@@ -1165,6 +1186,8 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
                                             page_size,
                                             input_page_size,
                                             output_page_size,
+                                            input_page_allignment, /*6*/
+                                            output_page_allignment, /*7*/
                                             tmp_cb_index_1
                                             }));
         std::cout << "output shard size " << output_shard_size << " output page size " << output_page_size << " output rows per shard " << output_rows_per_shard << std::endl;

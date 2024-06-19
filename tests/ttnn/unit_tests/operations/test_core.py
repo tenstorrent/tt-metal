@@ -309,7 +309,7 @@ from enum import Enum
         #            (64, 32),
         #        ),
         (
-            4,
+            2,
             16,
             ttnn.ROW_MAJOR_LAYOUT,
             dict(
@@ -334,8 +334,37 @@ from enum import Enum
                 strategy=ttnn.ShardStrategy.BLOCK,
                 orientation=ttnn.ShardOrientation.COL_MAJOR,
             ),
-            (8, 4),
-            (16, 4),
+            (8, 2),
+            (16, 2),
+        ),
+        (
+            2,
+            16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 0)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.COL_MAJOR,
+            ),
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.COL_MAJOR,
+            ),
+            (16, 2),
+            (8, 2),
         ),
     ],
 )
