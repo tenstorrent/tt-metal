@@ -42,12 +42,12 @@ ALWI void pack_tile_with_dt(uint32_t ifrom_dst, uint32_t icb)
     pack_tile(ifrom_dst, icb);
 }
 
-ALWI void copy_tile_init_with_dt(uint32_t icb)
+ALWI void copy_tile_init_with_dt(uint32_t icb, uint32_t transpose = 0)
 {
     #if defined FP32_DEST_ACC_EN
         unpack_reconfig_data_format_srca(icb);
     #endif
-    copy_tile_to_dst_init_short(icb);
+    copy_tile_to_dst_init_short(icb, transpose);
 }
 
 ALWI void add_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
