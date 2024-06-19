@@ -496,7 +496,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = detail::GetKernel(program, kernel_id);
 
-        uint32_t processor_idx = static_cast<typename std::underlying_type<tt::RISCV>::type>(kernel->processor());
+        uint32_t processor_idx = kernel->processor();
 
         if (!kernel->cores_with_runtime_args().empty()) {
             unique_processors.insert(processor_idx);
