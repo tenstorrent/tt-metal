@@ -663,6 +663,59 @@ tt::stl::reflection::Attributes SSM1DSumReduce::attributes() const {
     };
 }
 
+void SSMPrefixScan::validate(const std::vector<Tensor>& input_tensors) const {
+    TT_FATAL(input_tensors.size() == 2, "Expected 2 input tensors");
+
+    const auto& a = input_tensors.at(0);
+    const auto& bx = input_tensors.at(1);
+
+    TT_FATAL(a.dtype() == bx.dtype(), "Expected input tensors to have the same data type");
+
+    TT_FATAL(a.layout() == Layout::TILE && bx.layout() == Layout::TILE, "Expected input tensors to be tile layout");
+
+    TT_FATAL(a.get_legacy_shape() == bx.get_legacy_shape(), "Expected input tensors to have the same shape");
+
+    const auto& shape = a.get_legacy_shape();
+    TT_FATAL(shape.rank() == 4, "Expected input tensors to be rank 4");
+    TT_FATAL(shape[0] == 1 && shape[1] == 1, "Dimension 0 and 1 should be size 1");
+    TT_FATAL(shape[2] >= TILE_HEIGHT && shape[2] % TILE_HEIGHT == 0, "Sequence length should be a multiple of 32");
+
+    TT_FATAL(a.is_sharded() && bx.is_sharded(), "Expected input tensors to be sharded");
+    TT_FATAL(a.shard_spec().has_value() && bx.shard_spec().has_value(), "Expected input tensors to be sharded");
+    TT_FATAL(
+        a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
+        "Expected A tensor to be row major orientation");
+    TT_FATAL(
+        bx.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
+        "Expected Bx tensor to be row major orientation");
+}
+
+std::vector<Shape> SSMPrefixScan::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    const auto& a = input_tensors.at(0);
+    return {a.get_legacy_shape()};
+}
+
+std::vector<Tensor> SSMPrefixScan::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    return operation::generic_create_output_tensors(
+        *this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
+}
+
+operation::ProgramWithCallbacks SSMPrefixScan::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    const auto& a = input_tensors.at(0);
+    const auto& bx = input_tensors.at(1);
+    auto& output = output_tensors.at(0);
+    auto device_compute_with_storage_grid_size = a.device()->compute_with_storage_grid_size();
+    return multi_core_ssm_prefix_scan(a, bx, output, math_fidelity, device_compute_with_storage_grid_size);
+}
+
+tt::stl::reflection::Attributes SSMPrefixScan::attributes() const {
+    return {
+        {"output_mem_config", this->output_mem_config},
+        {"output_dtype", this->output_dtype},
+    };
+}
+
 }  // namespace transformers
 }  // namespace primary
 }  // namespace operations
