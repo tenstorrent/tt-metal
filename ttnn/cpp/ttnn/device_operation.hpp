@@ -69,7 +69,13 @@ concept DeviceOperationConcept = requires {
                       decltype(operation_t::create_output_tensors(operation_attributes, tensor_args)),
                       tensor_return_value_t>);
 
-        const auto program_factory_index = operation_t::select_program_factory(operation_attributes, tensor_args);
+        const auto program_factory = operation_t::select_program_factory(operation_attributes, tensor_args);
+        std::visit(
+            [](auto&& program_factory) {
+                using program_factory_t = std::decay_t<decltype(program_factory)>;
+                static_assert(ProgramFactoryConcept<program_factory_t>);
+            },
+            program_factory);
     };
 };
 
@@ -81,6 +87,13 @@ concept DeviceOperationWithCustomProgramCacheConcept = DeviceOperationConcept<op
         operation_t::compute_program_hash(operation_attributes, tensor_args);
     };
 };
+
+template <typename... Ts>
+[[nodiscard]] std::variant<Ts...> constexpr map_index_to_variant(std::size_t i, std::variant<Ts...>) {
+    assert(i < sizeof...(Ts));
+    static constexpr std::variant<Ts...> table[] = { Ts{ }... };
+    return table[i];
+}
 
 template <typename T>
     requires std::same_as<std::decay_t<T>, Tensor>
@@ -123,24 +136,6 @@ constexpr auto get_first_tensor(T&& object) {
     return get_first_tensor(object.attribute_values());
 }
 
-template <class T, class Tuple>
-struct ProgramFactoryIndex;
-
-template <class T, class... Types>
-struct ProgramFactoryIndex<T, std::tuple<T, Types...>> {
-    static const std::size_t value = 0;
-};
-
-template <class T, class U, class... Types>
-struct ProgramFactoryIndex<T, std::tuple<U, Types...>> {
-    static const std::size_t value = 1 + ProgramFactoryIndex<T, std::tuple<Types...>>::value;
-};
-
-template <typename program_factory_t, typename operation_t>
-constexpr auto get_program_factory_index() {
-    return ProgramFactoryIndex<program_factory_t, typename operation_t::program_factory_options_t>::value;
-}
-
 inline const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
 
 template <typename operation_t>
@@ -157,18 +152,8 @@ inline auto compute_program_hash(
     }
 }
 
-template <typename operation_t, std::size_t ProgramFactoryIndex = 0>
-auto& visit_program_factory_at_index(std::size_t program_factory_index, auto&& callback) {
-    if (program_factory_index == ProgramFactoryIndex) {
-        return callback(std::get<ProgramFactoryIndex>(typename operation_t::program_factory_options_t{}));
-    } else if constexpr (ProgramFactoryIndex + 1 < std::tuple_size_v<typename operation_t::program_factory_options_t>) {
-        return visit_program_factory_at_index<operation_t, ProgramFactoryIndex + 1>(program_factory_index, callback);
-    }
-    std::abort();
-}
-
 template <typename operation_t>
-inline tt::tt_metal::Program& create_or_get_program_from_cache(
+inline auto& create_or_get_program_from_cache(
     auto& program_cache,
     auto cache_hit,
     auto program_hash,
@@ -177,49 +162,54 @@ inline tt::tt_metal::Program& create_or_get_program_from_cache(
     typename operation_t::tensor_return_value_t& tensor_return_value) {
     if (not cache_hit) {
         ZoneScopedN("Program Cache Miss");
-        auto program_factory_index = operation_t::select_program_factory(operation_attributes, tensor_args);
+        auto program_factory = operation_t::select_program_factory(operation_attributes, tensor_args);
 
-        auto create_program = [&program_cache,
-                               &program_hash,
-                               &operation_attributes,
-                               &tensor_args,
-                               &tensor_return_value,
-                               program_factory_index](auto&& program_factory) -> tt::tt_metal::Program& {
-            using program_factory_t = std::decay_t<decltype(program_factory)>;
-            using cached_program_t =
-                decltype(program_factory_t::create(operation_attributes, tensor_args, tensor_return_value));
-            program_cache.insert(
-                program_hash,
-                CachedProgramFactory{
-                    program_factory_t::create(operation_attributes, tensor_args, tensor_return_value),
-                    program_factory_index});
-            auto& cached_program_factory = program_cache.template get<CachedProgramFactory>(program_hash);
-            auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
-            return cached_program.program;
-        };
-
-        return visit_program_factory_at_index<operation_t>(program_factory_index, create_program);
+        auto& program = std::visit(
+            [&program_cache,
+             &program_hash,
+             &operation_attributes,
+             &tensor_args,
+             &tensor_return_value,
+             program_factory_index = program_factory.index()](auto&& program_factory) -> auto& {
+                using program_factory_t = std::decay_t<decltype(program_factory)>;
+                using cached_program_t =
+                    decltype(program_factory_t::create(operation_attributes, tensor_args, tensor_return_value));
+                program_cache.insert(
+                    program_hash,
+                    CachedProgramFactory{
+                        program_factory_t::create(operation_attributes, tensor_args, tensor_return_value),
+                        program_factory_index});
+                auto& cached_program_factory = program_cache.template get<CachedProgramFactory>(program_hash);
+                auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
+                return cached_program.program;
+            },
+            program_factory);
+        return program;
     } else {
         ZoneScopedN("Program Cache Hit");
         auto& cached_program_factory = program_cache.template get<CachedProgramFactory>(program_hash);
         auto program_factory_index = cached_program_factory.program_factory_index;
 
-        auto override_runtime_arguments = [&cached_program_factory,
-                                           &operation_attributes,
-                                           &tensor_args,
-                                           &tensor_return_value](auto&& program_factory) -> tt::tt_metal::Program& {
-            using program_factory_t = std::decay_t<decltype(program_factory)>;
-            using cached_program_t =
-                decltype(program_factory_t::create(operation_attributes, tensor_args, tensor_return_value));
-            auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
+        using program_factory_variant_t =
+            decltype(operation_t::select_program_factory(operation_attributes, tensor_args));
+        auto program_factory = map_index_to_variant(program_factory_index, program_factory_variant_t{});
 
-            program_factory_t::override_runtime_arguments(
-                cached_program, operation_attributes, tensor_args, tensor_return_value);
+        auto& program = std::visit(
+            [&cached_program_factory, &operation_attributes, &tensor_args, &tensor_return_value](
+                auto&& program_factory) -> auto& {
+                using program_factory_t = std::decay_t<decltype(program_factory)>;
 
-            return cached_program.program;
-        };
+                using cached_program_t =
+                    decltype(program_factory_t::create(operation_attributes, tensor_args, tensor_return_value));
+                auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
 
-        return visit_program_factory_at_index<operation_t>(program_factory_index, override_runtime_arguments);
+                program_factory_t::override_runtime_arguments(
+                    cached_program, operation_attributes, tensor_args, tensor_return_value);
+
+                return cached_program.program;
+            },
+            program_factory);
+        return program;
     }
 }
 
