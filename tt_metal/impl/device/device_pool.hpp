@@ -39,7 +39,8 @@ class DevicePool {
          _inst->num_hw_cqs = num_hw_cqs;
          _inst->l1_bank_remap = l1_bank_remap;
 
-         bool skip = true;
+         // Never skip for TG Cluster
+         bool skip = not tt::Cluster::instance().is_galaxy_cluster();
          for (const auto& device_id : device_ids) {
             const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
             skip &= (device_id == mmio_device_id);
