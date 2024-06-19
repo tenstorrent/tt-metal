@@ -24,8 +24,8 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 pair<uint32_t, uint32_t> compute_opt_depthwise_conv_output_face_shape(uint32_t conv_activation_h, uint32_t conv_activation_w, uint32_t filter_h, uint32_t filter_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w, uint32_t padding_for_32B_alignment) {
-    uint32_t conv_output_h = ((conv_activation_h - filter_h + (2 * pad_h)) / stride_h) + 1;
-    uint32_t conv_output_w = ((conv_activation_w - filter_w + (2 * pad_w) - padding_for_32B_alignment) / stride_w) + 1;
+    uint32_t conv_output_h = ((conv_activation_h - filter_h + (1 * pad_h)) / stride_h) + 1;
+    uint32_t conv_output_w = ((conv_activation_w - filter_w + (1 * pad_w) - padding_for_32B_alignment) / stride_w) + 1;
     return {conv_output_h, conv_output_w};
 }
 pair<vector<uint32_t>, vector<uint32_t>> compute_opt_depthwise_conv_activation_as_mm_shape(Shape conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t padding_for_32B_alignment) {
@@ -221,8 +221,8 @@ operation::OpPerformanceModel OptimizedDepthwiseConv::create_op_performance_mode
     const int tensix_mul_adds_per_cycle_lofi = (arch == ARCH::WORMHOLE_B0) ? 4096 : 2048;
 
     // Calculate output dimensions: relevant for window/stride based OPs (conv, maxpool, downsample)
-    int output_height = std::floor((conv_activation_h - filter_h + 2 * pad_h) / stride_h + 1);
-    int output_width = std::floor((conv_activation_w - filter_w + 2 * pad_w) / stride_w + 1);
+    int output_height = std::floor((conv_activation_h - filter_h + 1 * pad_h) / stride_h + 1);
+    int output_width = std::floor((conv_activation_w - filter_w + 1 * pad_w) / stride_w + 1);
 
     // Calculate number of mul/add operations
     // TODO: add bias modeling

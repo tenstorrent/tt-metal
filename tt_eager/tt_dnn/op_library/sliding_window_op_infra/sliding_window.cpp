@@ -8,8 +8,8 @@
 namespace tt::tt_metal::sliding_window {
 
     std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
-        uint32_t padded_input_h = config.input_hw_.first + 2 * config.pad_hw_.first;
-        uint32_t padded_input_w = config.input_hw_.second + 2 * config.pad_hw_.second;
+        uint32_t padded_input_h = config.input_hw_.first + 1 * config.pad_hw_.first;
+        uint32_t padded_input_w = config.input_hw_.second + 1 * config.pad_hw_.second;
         std::vector<bool> pad_metadata(config.batch_size_ * padded_input_h * padded_input_w, false);
 
         for (uint32_t b = 0; b < config.batch_size_; ++b) {
@@ -28,8 +28,8 @@ namespace tt::tt_metal::sliding_window {
     std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config) {
         Shape output_shape = config.get_output_shape();
         uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
-        uint32_t padded_input_h = config.input_hw_.first + 2 * config.pad_hw_.first;
-        uint32_t padded_input_w = config.input_hw_.second + 2 * config.pad_hw_.second;
+        uint32_t padded_input_h = config.input_hw_.first + 1 * config.pad_hw_.first;
+        uint32_t padded_input_w = config.input_hw_.second + 1 * config.pad_hw_.second;
 
         std::vector<uint32_t> op_trace_metadata(output_nhw, 0);
         for (uint32_t b = 0; b < output_shape[0]; ++b) {
@@ -47,7 +47,7 @@ namespace tt::tt_metal::sliding_window {
         std::vector<std::pair<uint32_pair_t, uint32_pair_t>> shard_boundaries;
         uint32_t num_cores = config.num_cores_nhw_;
         uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile_);
-        uint32_t padded_input_w = config.input_hw_.second + 2 * config.pad_hw_.second;
+        uint32_t padded_input_w = config.input_hw_.second + 1 * config.pad_hw_.second;
         uint32_t max_index = op_trace_metadata.size();
         uint32_t halo_with_pad_len = (config.window_hw_.first - 1) * padded_input_w + config.window_hw_.second - 1;
         uint32_t output_index_start = 0;
@@ -193,7 +193,7 @@ namespace tt::tt_metal::sliding_window {
             // find max length
             size_t max_len = 0;
             for (auto& data : config) {
-                max_len = std::max(max_len, 2 * data.size());   // each data is 2 * data.size()
+                max_len = std::max(max_len, 1 * data.size());   // each data is 1 * data.size()
             }
             std::vector<std::vector<uint16_t>> flattened_config;
             for (auto& data : config) {

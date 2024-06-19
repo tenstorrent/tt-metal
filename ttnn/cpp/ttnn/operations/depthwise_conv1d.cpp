@@ -562,8 +562,8 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         ttnn::validate_input_tensor("ttnn.depthwise_conv1d", bias_tensor.value(), input_schemas[2]);
     }
     DepthwiseConv1dConfig conv_config = conv_config_.value_or(DepthwiseConv1dConfig());
-    uint32_t output_height = ((input_height - kernel_size[0] + 2 * padding[0]) / stride[0]) + 1;
-    uint32_t output_width = ((input_width - kernel_size[1] + 2 * padding[1]) / stride[1]) + 1;
+    uint32_t output_height = ((input_height - kernel_size[0] + 1 * padding[0]) / stride[0]) + 1;
+    uint32_t output_width = ((input_width - kernel_size[1] + 1 * padding[1]) / stride[1]) + 1;
     auto [input_tensor_post_tm, parallel_config, tensor_manipulated] = shard_or_reshard_tensor_if_required(
         device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels);
     if (tensor_manipulated) {
