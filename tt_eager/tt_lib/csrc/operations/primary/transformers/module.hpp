@@ -58,6 +58,16 @@ void py_module(py::module& m_transformers) {
         Performs a custom reduction along dim 3 which is used in the SSM block of the Mamba architecture. Performs the following PyTorch equivalent (where latent_size = 32):
             x = torch.sum(x.reshape(1, 1, shape[2], shape[3] // latent_size, latent_size), dim=-1).reshape(1, 1, shape[2], shape[3] // latent_size)
     )doc");
+    m_transformers.def(
+        "ssm_prefix_scan",
+        &ssm_prefix_scan,
+        py::arg().noconvert(),
+        py::arg().noconvert(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("output_dtype").noconvert() = std::nullopt,
+        py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
+        R"doc(
+        Performs a prefix scan to produce the SSM hidden states across an entire sequence. All input and output tensors are expected to be shape [1, 1, L, 2EN] where E = 2560 and N = 32. L can be any multiple of 32.)doc");
 
     py::class_<SoftmaxProgramConfig>(m_transformers, "SoftmaxProgramConfig").def(py::init<>());
 
