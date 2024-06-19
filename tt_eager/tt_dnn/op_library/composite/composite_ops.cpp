@@ -4,6 +4,7 @@
 
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 
+#include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/concat/concat_op.hpp"
 #include "tt_dnn/op_library/copy/copy_op.hpp"
@@ -15,6 +16,7 @@
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
+#include "tt_eager/tensor/tensor_impl.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_eager/tt_dnn/op_library/unpad/unpad_op.hpp"
@@ -1602,8 +1604,19 @@ Tensor _outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config) {
     if (!skip_reshape_b) {
         b_slim = reshape(b, 1, 1, 1, b.volume(), output_mem_config);
     }
+    a_slim = ttnn::to_layout(a_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
+    b_slim = ttnn::to_layout(b_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
+    Device* device = AutoFormat::GetDefaultDevice();
+    if (device != nullptr) {
+        if (a_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+            a_slim = AutoFormat::move_tensor_to_device(a_slim, device);
+        }
+        if (b_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+            b_slim = AutoFormat::move_tensor_to_device(b_slim, device);
+        }
+    }
 
-    return tt::operations::primary::matmul(a_slim, b_slim, std::nullopt, std::nullopt, output_mem_config, std::nullopt /*output_dtype*/, std::nullopt /*compute_kernel_config*/, false /*untilize_out*/, std::nullopt /*user_core_coord*/, std::nullopt /*fused_activation*/, std::nullopt /*input_b_is_batched*/, true /*needs_autoformat*/);
+    return tt::operations::primary::matmul(a_slim, b_slim, std::nullopt, std::nullopt, output_mem_config);
 }
 Tensor outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _outer)(a, b, output_mem_config);
