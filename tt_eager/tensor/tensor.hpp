@@ -31,7 +31,6 @@ struct Tensor {
         ttnn::Shape shape;
         DataType dtype;
         Layout layout;
-        std::mutex populated_mutex;
         uint32_t num_shards_to_be_populated = 0;
         uint32_t main_thread_ref_count = 0;
         std::atomic<uint32_t> num_sibling_workers_sharing_tensor = 0;
