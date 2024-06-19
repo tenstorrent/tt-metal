@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <optional>
+#include <variant>
 
 #include "tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
@@ -189,13 +190,13 @@ struct Binary {
     using tensor_args_t = ttnn::operations::binary::tensor_args_t;
     using shape_return_value_t = ttnn::operations::binary::shape_return_value_t;
     using tensor_return_value_t = ttnn::operations::binary::tensor_return_value_t;
-    using program_factory_options_t = std::tuple<
+    using program_factory_t = std::variant<
         ElementWiseMultiCore,
         BroadcastWidthMultiCore,
         BroadcastHeightMultiCore,
         BroadcastHeightAndWidthMultiCore>;
 
-    static std::size_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
