@@ -80,7 +80,7 @@ void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
             DeviceZoneScopedMainN("ERISC-FW");
             DEBUG_STATUS("R");
             uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
-            l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offset_brisc); // overloaded
+            l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offsets[DISPATCH_CLASS_ETH_DM0]);
             kernel_init();
         } else {
             internal_::risc_context_switch();
