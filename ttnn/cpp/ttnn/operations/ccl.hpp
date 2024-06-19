@@ -25,6 +25,20 @@ struct ExecuteAllGather {
     }
 
     template <typename... Args>
+    static auto input_tensors_to_validate(const std::vector<ttnn::Tensor>& input_tensors, Args&&... args) {
+        return std::forward_as_tuple(input_tensor);
+    }
+
+    static ttnn::Tensor execute_on_main_thread(
+        const std::vector<ttnn::Tensor>& input_tensors,
+        const uint32_t dim,
+        const uint32_t num_links = 1,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
+        return tt::operations::ccl::all_gather(input_tensors, dim, num_links, memory_config);
+    }
+
+
+    template <typename... Args>
     static auto input_tensors_to_validate(const ttnn::Tensor& input_tensor, Args&&... args) {
         return std::forward_as_tuple(input_tensor);
     }

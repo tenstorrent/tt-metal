@@ -147,12 +147,13 @@ namespace operations {
 namespace ccl {
 
 Tensor all_gather(
-    const Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config) {
+    const std::vector<Tensor>& input_tensors, const uint32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config) {
 
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
+    TT_FATAL(!input_tensors.empty(), "all_gather requires at least 1 input tensor");
 
-    auto devices = input_tensor.get_workers();
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    auto devices = input_tensors.at(0).get_workers();
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensors.at(0)}))};
     operation::launch_op(
         [dim, num_links, memory_config, devices](
             const std::vector<Tensor>& input_tensors,
@@ -180,7 +181,7 @@ Tensor all_gather(
                     dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config())},
                 {input_tensor});
         },
-        {input_tensor},
+        input_tensors,
         output_tensors);
     return output_tensors.at(0);
 }

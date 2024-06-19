@@ -37,7 +37,22 @@ void bind_ccl_operation(py::module& module, const ccl_operation_t& operation, co
             py::arg("dim"),
             py::kw_only(),
             py::arg("num_links") = 1,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt
+        },
+        ttnn::pybind_overload_t{
+            [](const ccl_operation_t& self,
+               const std::vector<ttnn::Tensor>& input_tensors,
+               const uint32_t dim,
+               const uint32_t num_links,
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
+                return self(input_tensors, dim, num_links, memory_config);
+            },
+            py::arg("input_tensors"),
+            py::arg("dim"),
+            py::kw_only(),
+            py::arg("num_links") = 1,
+            py::arg("memory_config") = std::nullopt
+        });
 }
 
 }  // namespace detail
@@ -47,12 +62,12 @@ void py_module(py::module& module) {
     detail::bind_ccl_operation(
         module,
         ttnn::all_gather,
-        R"doc(all_gather(input_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(all_gather(input: Union[ttnn.Tensor, List[ttnn.Tensor]], dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): multi-device tensor
+            * :attr:`input` (Union[ttnn.Tensor, List[ttnn.Tensor]]): multi-device tensor or a list of tensors
             * :attr:`dim` (int)
 
         Keyword Args:
