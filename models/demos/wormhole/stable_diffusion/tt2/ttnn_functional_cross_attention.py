@@ -655,7 +655,7 @@ class cross_attention:
                 fused_activation=None,
             )
 
-        hidden_states = ttnn.matmul(
+        hidden_states = ttnn.linear(
             hidden_states,
             self.parameters.to_out[0].weight,
             bias=self.parameters.to_out[0].bias,

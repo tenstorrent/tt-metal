@@ -113,7 +113,7 @@ class geglu:
             transpose_mcast=False,
             fused_activation=None,
         )
-        proj = ttnn.matmul(
+        proj = ttnn.linear(
             hidden_states,
             self.parameters.proj.proj_weight,
             bias=self.parameters.proj.proj_bias,
@@ -143,7 +143,7 @@ class geglu:
             transpose_mcast=False,
             fused_activation=[ttnn.experimental.tensor.FusibleActivation.GELU, True],
         )
-        gate = ttnn.matmul(
+        gate = ttnn.linear(
             hidden_states,
             self.parameters.proj.gate_weight,
             bias=self.parameters.proj.gate_bias,
