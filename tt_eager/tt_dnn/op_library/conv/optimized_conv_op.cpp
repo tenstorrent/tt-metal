@@ -392,6 +392,7 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             uint32_t total_active_num_cores = total_active_num_cores_per_weight_slice * num_weight_slices_width;
             log_debug(LogOp, "Total active num cores: {}", total_active_num_cores);
             CoreRangeSet shard_grid = num_cores_to_corerange_set_block(total_active_num_cores, this->parallelization_config.grid_size, num_weight_slices_width);
+            // CoreRangeSet shard_grid = num_cores_to_corerange_set(total_active_num_cores, this->parallelization_config.grid_size);
             log_debug(LogOp, "shard_grid: {}", shard_grid.str());
             std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, this->parallelization_config.per_core_out_matrix_width_ntiles * TILE_WIDTH};
             auto shard_spec = ShardSpec{shard_grid, shard_shape, this->output_mem_config.shard_spec.value().orientation};
