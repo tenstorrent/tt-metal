@@ -81,6 +81,7 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/softmax/multi_core/softmax_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/softmax/softmax_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sdpa/multi_core/sdpa_op_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sdpa/multi_core/sdpa_decode_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sdpa/sdpa_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_helper_functions.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_adam/moreh_adam.cpp
