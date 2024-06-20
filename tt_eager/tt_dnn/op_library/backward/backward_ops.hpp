@@ -162,12 +162,6 @@ std::vector<Tensor> min_bw(
     const Tensor& other,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> embedding_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& weight,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 // bw = grad(1 - tanh(x) ** 2)
 std::vector<Tensor> tanh_bw(
     const Tensor& grad,
