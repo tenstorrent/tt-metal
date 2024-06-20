@@ -5,29 +5,6 @@
 #include "dataflow_api.h"
 #include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
-void get_noc_offset_no_align(uint32_t h, uint32_t w, uint32_t element_size, uint32_t &noc_offset) {
-    noc_offset = 0;
-
-    // compute h, w in tile
-    h = h - (h / TILE_HEIGHT) * TILE_HEIGHT;
-    w = w - (w / TILE_WIDTH) * TILE_WIDTH;
-
-    const bool is_even_face = (w < FACE_HEIGHT);
-    const bool is_odd_face = !is_even_face;
-
-    const uint32_t face_width_bytes = FACE_WIDTH * element_size;
-
-    if (h < FACE_WIDTH && is_even_face)
-        noc_offset += h * face_width_bytes + w * element_size;  // face 0
-    else if (h < FACE_WIDTH && is_odd_face)
-        noc_offset += (FACE_HEIGHT + h) * face_width_bytes + (w - FACE_WIDTH) * element_size;  // face 1
-    else if (h >= FACE_WIDTH && is_even_face)
-        noc_offset += (FACE_HEIGHT + h) * face_width_bytes + w * element_size;  // face 2
-    else if (h >= FACE_WIDTH && is_odd_face)
-        noc_offset += (2 * FACE_HEIGHT + h) * face_width_bytes + (w - FACE_WIDTH) * element_size;  // face 3
-}
-
-
 template <typename T>
 void write_mean_rstd(uint32_t cb_id, uint32_t tile_offset, uint32_t num_inner, uint32_t normalized_dims, uint32_t outer_idx, uint32_t output_height, uint32_t output_width, uint32_t Ht, uint32_t Wt, T addrg)
 {
