@@ -468,13 +468,13 @@ class TtFalconAttention:
 
     def scaled_dot_product_attention(self, q_slices, key_layer_transposed, attn_mask_slices, value_layer, q_len):
         # Q * KˆT
-        attn_weights = ttnn.experimental.operations.primary.matmul(
+        attn_weights = ttnn.matmul(
             q_slices,
             key_layer_transposed,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
-            output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
             program_config=self.model_config["ATTENTION_MM_PROGCFG"],
-            output_dtype=self.model_config["ATTENTION_DTYPE"],
+            dtype=self.model_config["ATTENTION_DTYPE"],
         )
         # Softmax
         attn_weights = scale_causal_mask_hw_dims_softmax_in_place(
@@ -484,13 +484,13 @@ class TtFalconAttention:
             program_config=self.model_config["SOFTMAX_PROGCFG"],
         )
         # Attention score * V
-        attn_output_slice = ttnn.experimental.operations.primary.matmul(
+        attn_output_slice = ttnn.matmul(
             attn_weights,
             value_layer,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
-            output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
             program_config=self.model_config["ATTENTION_MM_2_PROGCFG"],
-            output_dtype=self.model_config["ATTENTION_OUT_DTYPE"],
+            dtype=self.model_config["ATTENTION_OUT_DTYPE"],
         )
         attn_weights.deallocate(True)
 
@@ -536,12 +536,12 @@ class TtFalconAttention:
         #################
         ### FUSED QKV ###
         #################
-        fused_query_key_value = ttnn.experimental.operations.primary.matmul_1d(
+        fused_query_key_value = ttnn.matmul(
             hidden_states,
             self.query_key_value_weights,
             program_config=self.model_config["QKV_MM_PROGCFG"],
-            output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-            output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+            memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+            dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
 
@@ -704,12 +704,12 @@ class TtFalconAttention:
             attn_output,
             sharded_mem_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
         )
-        attn_output = ttnn.experimental.operations.primary.matmul_1d(
+        attn_output = ttnn.matmul(
             attn_output,
             self.dense_weights,
             program_config=self.model_config["SELFOUT_MM_PROGCFG"],
-            output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
-            output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
+            memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
+            dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
 

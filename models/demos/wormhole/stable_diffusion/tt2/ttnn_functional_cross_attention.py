@@ -388,12 +388,12 @@ class cross_attention:
                     output_mem_config=self.l1_interleaved_memory_config,
                 )
 
-                mm_slice = ttnn.experimental.operations.primary.matmul(
+                mm_slice = ttnn.matmul(
                     slice,
                     k_slice,
                     program_config=self.program_configs["tsa_qkt"],
-                    output_mem_config=self.height_sharded_memory_config,
-                    output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                    memory_config=self.height_sharded_memory_config,
+                    dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                     compute_kernel_config=self.compute_kernel_config,
                 )
                 k_slice.deallocate()
@@ -428,12 +428,12 @@ class cross_attention:
                     (j, i, self.seq_len - 1, self.key_len - 1),
                     output_mem_config=self.l1_interleaved_memory_config,
                 )
-                mm_slice = ttnn.experimental.operations.primary.matmul(
+                mm_slice = ttnn.matmul(
                     mm_slice,
                     v_slice,
                     program_config=self.program_configs["tsa_v"],
-                    output_mem_config=self.height_sharded_memory_config,
-                    output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                    memory_config=self.height_sharded_memory_config,
+                    dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                     compute_kernel_config=self.compute_kernel_config,
                 )
                 v_slice.deallocate()
@@ -488,12 +488,12 @@ class cross_attention:
             per_core_N=key_len // 32,
         )
         attention_scores = dealloc_input(
-            ttnn.experimental.operations.primary.matmul,
+            ttnn.matmul,
             q_sharded,
             key,
             program_config=program_config,
-            output_mem_config=self.height_sharded_memory_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            memory_config=self.height_sharded_memory_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -581,12 +581,12 @@ class cross_attention:
             per_core_M=num_heads * seq_len // num_cores // 32,
             per_core_N=inner // 32,
         )
-        attention_scores = ttnn.experimental.operations.primary.matmul(
+        attention_scores = ttnn.matmul(
             attention_scores,
             v_sharded,
             program_config=program_config,
-            output_mem_config=self.height_sharded_memory_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            memory_config=self.height_sharded_memory_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             compute_kernel_config=self.compute_kernel_config,
         )
         attention_scores = reshard_to(
@@ -655,13 +655,13 @@ class cross_attention:
                 fused_activation=None,
             )
 
-        hidden_states = ttnn.experimental.operations.primary.matmul(
+        hidden_states = ttnn.linear(
             hidden_states,
             self.parameters.to_out[0].weight,
             bias=self.parameters.to_out[0].bias,
             program_config=program_config,
-            output_mem_config=output_mem_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            memory_config=output_mem_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -702,14 +702,14 @@ class cross_attention:
             program_config = self.program_configs["qkv"]
             # TODO: Output sharded once https://github.com/tenstorrent/tt-metal/issues/6775 is fixed
             interleaved_out = self.seq_len == 4096 or self.seq_len == 1024
-            qkv_out = ttnn.experimental.operations.primary.matmul(
+            qkv_out = ttnn.matmul(
                 hidden_states,
                 self.parameters.qkv.weight,
                 program_config=program_config,
-                output_mem_config=self.l1_interleaved_memory_config
+                memory_config=self.l1_interleaved_memory_config
                 if interleaved_out
                 else self.block_sharded_memory_config,
-                output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                 compute_kernel_config=self.compute_kernel_config,
             )
             ttnn.deallocate(hidden_states)
@@ -736,23 +736,23 @@ class cross_attention:
                 hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
 
             program_config = self.program_configs["q"]
-            q_proj = ttnn.experimental.operations.primary.matmul(
+            q_proj = ttnn.matmul(
                 hidden_states,
                 self.parameters.to_q.weight,
                 program_config=program_config,
-                output_mem_config=self.block_sharded_memory_config,
-                output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                memory_config=self.block_sharded_memory_config,
+                dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                 compute_kernel_config=self.compute_kernel_config,
             )
             ttnn.deallocate(hidden_states)
 
             program_config = self.program_configs["kv"]
-            kv_proj = ttnn.experimental.operations.primary.matmul(
+            kv_proj = ttnn.matmul(
                 encoder_hidden_states,
                 self.parameters.kv.weight,
                 program_config=program_config,
-                output_mem_config=self.block_sharded_memory_config,
-                output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                memory_config=self.block_sharded_memory_config,
+                dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
                 compute_kernel_config=self.compute_kernel_config,
             )
             end_core = (

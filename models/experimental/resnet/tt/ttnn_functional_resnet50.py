@@ -69,13 +69,13 @@ def ResnetLinear(
     bias = bias.reshape(1, 1, bias_shape[-2], bias_shape[-1])
 
     def linear_(act):
-        output = ttnn.experimental.operations.primary.matmul_1d(
+        output = ttnn.linear(
             act,
             weight,
             bias=bias,
             program_config=matmul_config,
-            output_mem_config=output_mem_config,
-            output_dtype=model_config["ACTIVATIONS_DTYPE"],
+            memory_config=output_mem_config,
+            dtype=model_config["ACTIVATIONS_DTYPE"],
             compute_kernel_config=compute_kernel_config,
         )
         return output
