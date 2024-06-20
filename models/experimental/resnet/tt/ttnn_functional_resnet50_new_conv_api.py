@@ -154,7 +154,7 @@ class resnet50Bottleneck:
         height_sharding=None,
     ):
         if self.downsample:
-            print("Running downsample")
+            logger.debug(f"Running downsample")
             ds_out, _, _, self.ds_conv_weight_tensor, self.ds_conv_bias_tensor = ttnn.conv2d(
                 input_tensor=x,
                 weight_tensor=self.ds_conv_weight_tensor,
@@ -222,7 +222,7 @@ class resnet50Bottleneck:
             x = ttnn.reallocate(x_resharded)
 
         # conv1 is 1x1 conv
-        print("Running conv1")
+        logger.debug(f"Running conv1")
         module_input_height = input_height
         out, input_height, input_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
             input_tensor=x,
@@ -288,7 +288,7 @@ class resnet50Bottleneck:
             )
 
         reallocate_halo_output = batch_size == 20
-        print("Running conv2")
+        logger.debug(f"Running conv2")
         out, input_height, input_width, self.conv2_weight_tensor, self.conv2_bias_tensor = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv2_weight_tensor,
@@ -329,7 +329,7 @@ class resnet50Bottleneck:
             out = ttnn.reallocate(out)
 
         # conv3 is 1x1 conv
-        print("Running conv3")
+        logger.debug(f"Running conv3")
         out, _, _, self.conv3_weight_tensor, self.conv3_bias_tensor = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv3_weight_tensor,
@@ -566,7 +566,7 @@ class resnet50:
 
     def __call__(self, input_tensor, device, batch_size, ops_parallel_config) -> ttnn.Tensor:
         return self.run(
-            input_tensor, device, batch_size, ops_parallel_config, self.conv_op_cache if ops_parallel_config else {}
+            input_tensor, device, batch_size, ops_parallel_config, {} if not ops_parallel_config else self.conv_op_cache
         )
 
     # def first_run(self, input_tensor, device, batch_size, ops_parallel_config) -> ttnn.Tensor:
