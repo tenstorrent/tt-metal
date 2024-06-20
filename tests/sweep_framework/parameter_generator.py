@@ -2,10 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pickle
 import argparse
 import sys
-import z3
 import importlib
 import pathlib
 import sqlite3
@@ -15,6 +13,7 @@ import shortuuid
 from architecture import str_to_arch
 from permutations import *
 from sql_utils import *
+from pymongo import MongoClient
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
@@ -37,29 +36,43 @@ def validate_vectors(vectors) -> None:
 def export_test_vectors(vectors):
     vectors = list(vectors)
     # Perhaps we export with some sort of readable id, which can be passed to a runner to run specific sets of input vectors. (export seed as well for reproducability)
-    connection = sqlite3.connect(str(OUTPUT_DIR) + "/vectors.sqlite")
-    cursor = connection.cursor()
+    # connection = sqlite3.connect(str(OUTPUT_DIR) + "/vectors.sqlite")
+    # cursor = connection.cursor()
+    client = MongoClient("mongodb://localhost:27017")
+    db = client.test_vectors
 
     parameter_names = get_parameter_names(vectors[0])
     batch_id = str(shortuuid.uuid())
     # TODO: Duplicate batch check?
-    column_names = ["sweep_name", "timestamp", "batch_id"] + parameter_names
+    # column_names = ["sweep_name", "timestamp", "batch_id"] + parameter_names
 
     table_name = MODULE_NAME + "_test_vectors"
-    table = f"CREATE TABLE IF NOT EXISTS {table_name} ({column_names_to_sql_string(column_names)})"
-    cursor.execute(table)
+
+    collection = db[table_name]
+
+    # table = f"CREATE TABLE IF NOT EXISTS {table_name} ({column_names_to_sql_string(column_names)})"
+    # cursor.execute(table)
 
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     for vector in vectors:
-        row = [MODULE_NAME, current_time, batch_id] + list(get_parameter_values(parameter_names, vector))
-        row = [str(value) for value in row]
-        row_placeholders = ", ".join(["?"] * len(row))
-        command = f"INSERT INTO {table_name} VALUES ({row_placeholders})"
-        cursor.execute(command, row)
+        vector["sweep_name"] = MODULE_NAME
+        vector["timestamp"] = current_time
+        vector["batch_id"] = batch_id
+        for elem in vector:
+            vector[elem] = str(vector[elem])
 
-    connection.commit()
-    connection.close()
+    collection.insert_many(vectors)
+
+    # for vector in vectors:
+    #     row = [MODULE_NAME, current_time, batch_id] + list(get_parameter_values(parameter_names, vector))
+    #     row = [str(value) for value in row]
+    #     row_placeholders = ", ".join(["?"] * len(row))
+    #     command = f"INSERT INTO {table_name} VALUES ({row_placeholders})"
+    #     cursor.execute(command, row)
+
+    # connection.commit()
+    # connection.close()
 
 
 # Generate one or more sets of test vectors depending on module_name
