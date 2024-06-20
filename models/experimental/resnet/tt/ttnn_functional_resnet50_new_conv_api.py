@@ -376,10 +376,20 @@ class resnet50Bottleneck:
 
         if eltwise_binary_out_in_place:
             # underscore version is in_place = True
-            out = ttnn.add_(out, ds_out, activations=["relu"], memory_config=ttnn.get_memory_config(out))
+            # out = ttnn.add_(out, ds_out, activations=["relu"], memory_config=ttnn.get_memory_config(out))
+            out = ttnn.add_(
+                out,
+                ds_out,
+                activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
+                memory_config=ttnn.get_memory_config(out),
+            )
         else:
             out = ttnn.add(
-                out, ds_out, activations=["relu"], memory_config=ttnn.L1_MEMORY_CONFIG
+                # out, ds_out, activations=["relu"], memory_config=ttnn.L1_MEMORY_CONFIG
+                out,
+                ds_out,
+                activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )  ## TODO: check why not out mem config???
         ttnn.deallocate(ds_out)
         if batch_size == 20 and (is_wormhole_b0() or (module_input_height == 56 and self.conv1_input_channels == 64)):
