@@ -25,14 +25,9 @@ namespace ttnn::operations::binary_backward {
 
 // using namespace tt::tt_metal;
 enum class BinaryBackwardOpType {
-    ATAN2_BW
+    ATAN2_BW,
+    EMBEDDING_BW
 };
-
-// std::vector<Tensor> atan2_bw(
-//     const Tensor& grad,
-//     const Tensor& input,
-//     const Tensor& other,
-//     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 
 }  // namespace ttnn::operations::binary

@@ -114,4 +114,15 @@ def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwarg
 
 atan2_bw = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary_backward.atan2_bw)
 
+
+def _golden_function(grad_tensor, input_tensor, weight_tensor, *args, **kwargs):
+    import torch
+
+    return
+
+
+embedding_bw = ttnn.register_operation(golden_function=_golden_function)(
+    ttnn._ttnn.operations.binary_backward.embedding_bw
+)
+
 __all__ = []
