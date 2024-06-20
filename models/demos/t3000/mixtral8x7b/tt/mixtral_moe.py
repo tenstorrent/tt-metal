@@ -87,13 +87,13 @@ class TtMoeLayer(LightweightModule):
         input_i_1SBH = inputs
         expert_i_HH = self.experts
         # get logits for the experts
-        gate_logits_1SB8 = ttnn.experimental.operations.primary.matmul(
+        gate_logits_1SB8 = ttnn.matmul(
             input_i_1SBH,
             self.gates_H8,
             program_config=self.model_config["GATE_MM_OUTPUT_PROGCFG"],
-            output_mem_config=self.model_config["GATE_MM_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["GATE_MM_OUTPUT_MEMCFG"],
             compute_kernel_config=self.compute_kernel,
-            output_dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat16,
         )
         # get weights for top-2 experts
         gate_logits_1SB8 = ttnn.add(gate_logits_1SB8, self.top8_mask_11B_64)
@@ -109,5 +109,5 @@ class TtMoeLayer(LightweightModule):
         # all gather
         output_11BH_gathered = ttnn.all_gather(results_11BH, dim=2, num_links=1)
         # sum on each device
-        output_11BH_gathered = ttnn.experimental.operations.primary.matmul(self.reduce_mask, output_11BH_gathered)
+        output_11BH_gathered = ttnn.matmul(self.reduce_mask, output_11BH_gathered)
         return output_11BH_gathered
