@@ -70,7 +70,7 @@ def run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn_fun
 
     torch_output_tensor = torch_function(torch_input_tensor, torch_other_tensor)
 
-    output_tensor = ttnn_function(grad_tensor, input_tensor, other_tensor)
+    output_tensor = ttnn_function(grad_tensor, input_tensor, other_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
     torch_input_tensor.retain_grad()
     torch_other_tensor.retain_grad()
@@ -90,7 +90,7 @@ def run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn_fun
 @pytest.mark.parametrize("grad_val", [-1, 0, 1])
 @pytest.mark.parametrize("other_val", [-1, 1])
 def test_atan2(device, h, w, in_val, grad_val, other_val):
-    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.experimental.tensor.atan2_bw, torch.atan2)
+    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.atan2_bw, torch.atan2)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -100,4 +100,4 @@ def test_atan2(device, h, w, in_val, grad_val, other_val):
 @pytest.mark.parametrize("other_val", [0])
 @skip_for_wormhole_b0("Skipped due to hardware restriction in storing nan")
 def test_atan2_zero(device, h, w, in_val, grad_val, other_val):
-    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.experimental.tensor.atan2_bw, torch.atan2)
+    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.atan2_bw, torch.atan2)

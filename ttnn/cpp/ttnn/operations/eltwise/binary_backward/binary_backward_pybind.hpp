@@ -19,37 +19,41 @@ namespace binary_backward {
 
 namespace detail {
 
-void bind_global_backward(py::module& module) {
+template <typename binary_backward_operation_t>
+void bind_global_backward(py::module& module, const binary_backward_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-R"doc({0}(input_tensor: ttnn.Tensor, dtype: ttnn.DataType, *, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor : Optional[ttnn.Tensor] = None, queue_id : Optional[int]) -> ttnn.Tensor
+R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor
 
-Applies {0} to :attr:`input_tensor`.
+{2}
 
 Args:
-    * :attr:`input_tensor` (ttnn.Tensor): input tensors must be on device, in ROW MAJOR or TILE layout
-    * :attr:`dtype` (Optional[ttnn.DataType]): data type must be one of the following types BFLOAT16,BFLOAT8_B,BFLOAT4_B,UINT32,INT32 and UINT16.
-    *
-Keyword Args:
-    * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-    * :attr:`output_tensor` (Optional[ttnn.Tensor]): Preallocated tensor to store the output.
+    * :attr:`grad_tensor`
+    * :attr:`input_tensor_a`
+    * :attr:`input_tensor_b`
 
-Returns:
-    ttnn.Tensor: The tensor with the updated data type. Output tensor will be on device, in same layout, and have the given data type.
+Keyword args:
+    * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+    * :attr:`dtype` (Optional[ttnn.DataType]): data type for the output tensor
+    * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+    * :attr:`queue_id` (Optional[uint8]): command queue id
 
-Example::
+Example:
 
-    >>> tensor = ttnn.typecast(torch.randn((10, 3, 32, 32), dtype=ttnn.bfloat16), ttnn.uint16)
+    >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+    >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+    >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+    >>> output = {1}(grad_tensor, tensor1, tensor2)
 )doc",
-        ttnn::atan2_bw.name());
+        operation.name(),
+        operation.python_fully_qualified_name(),
+        description);
 
-
-    using BackwardType = decltype(ttnn::atan2_bw);
     bind_registered_operation(
         module,
-        ttnn::atan2_bw,
+        operation,
         doc,
         ttnn::pybind_overload_t{
-            [](const BackwardType& self,
+            [](const binary_backward_operation_t& self,
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor_a,
                const ttnn::Tensor& input_tensor_b,
@@ -64,7 +68,22 @@ Example::
 
 }  // namespace detail
 
-void py_module(py::module& module) { detail::bind_global_backward(module); }
+
+void py_module(py::module& module) {
+    detail::bind_global_backward(
+        module,
+        ttnn::atan2_bw,
+        R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
+
+        .. math:: \mathrm{{ input\_tensor\_a }}_i + \mathrm{{ input\_tensor\_b }}_i)doc");
+
+    detail::bind_global_backward(
+        module,
+        ttnn::embedding_bw,
+        R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
+
+        .. math:: \mathrm{{ input\_tensor\_a }}_i + \mathrm{{ input\_tensor\_b }}_i)doc");
+}
 
 }  // namespace copy
 }  // namespace operations

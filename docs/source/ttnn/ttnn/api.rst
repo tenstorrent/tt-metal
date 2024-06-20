@@ -190,6 +190,7 @@ Pointwise Binary
    ttnn/maximum
    ttnn/minimum
    ttnn/atan2_bw
+   ttnn/embedding_bw
 
 Pointwise Ternary
 =================
