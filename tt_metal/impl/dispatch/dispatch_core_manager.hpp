@@ -342,6 +342,13 @@ class dispatch_core_manager {
         return this->dispatch_core_type_by_device[device_id];
     }
 
+    void add_dispatch_core_to_device(chip_id_t device_id, const CoreCoord& core) {
+        auto& dispatch_cores = available_dispatch_cores_by_device.at(device_id);
+        if (std::find(dispatch_cores.begin(), dispatch_cores.end(), core) == dispatch_cores.end()) {
+            dispatch_cores.push_back(core);
+        }
+    }
+
    private:
     /// @brief dispatch_core_manager constructor initializes a list of cores per device that are designated for any dispatch functionality
     ///         This list contains dispatch cores that have not been assigned to a particular dispatch function

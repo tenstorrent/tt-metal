@@ -27,7 +27,8 @@ enum CQPrefetchCmdId : uint8_t {
     CQ_PREFETCH_CMD_EXEC_BUF_END = 7,         // finish executing commands from a buffer (return), payload like relay_inline
     CQ_PREFETCH_CMD_STALL = 8,                // drain pipe through dispatcher
     CQ_PREFETCH_CMD_DEBUG = 9,                // log waypoint data to watcher, checksum
-    CQ_PREFETCH_CMD_TERMINATE = 10,           // quit
+    CQ_PREFETCH_CMD_WAIT_FOR_EVENT = 10,      // wait_for_event: stall until dispatcher signals event completion
+    CQ_PREFETCH_CMD_TERMINATE = 11,           // quit
 };
 
 // Dispatcher CMD ID enums
@@ -45,7 +46,8 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_DEBUG = 10,             // log waypoint data to watcher, checksum
     CQ_DISPATCH_CMD_DELAY = 11,             // insert delay (for testing)
     CQ_DISPATCH_CMD_EXEC_BUF_END = 12,      // dispatch_d notify prefetch_h that exec_buf has completed
-    CQ_DISPATCH_CMD_TERMINATE = 13,         // quit
+    CQ_DISPATCH_CMD_REMOTE_WRITE = 13,      // dispatch_d issues write to address on L-Chip through dispatch_h
+    CQ_DISPATCH_CMD_TERMINATE = 14,         // quit
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -110,6 +112,13 @@ struct CQPrefetchRelayInlineCmd {
     uint32_t stride;          // explicit stride saves a few insns on device
 } __attribute__((packed));
 
+struct CQPrefetchWaitForEventCmd {
+    uint8_t pad1;
+    uint16_t pad2;
+    uint32_t sync_event;
+    uint32_t sync_event_addr;
+} __attribute__((packed));
+
 struct CQPrefetchExecBufCmd {
     uint8_t pad1;
     uint16_t pad2;
@@ -126,6 +135,7 @@ struct CQPrefetchCmd {
         CQPrefetchRelayPagedPackedCmd relay_paged_packed;
         CQPrefetchRelayInlineCmd relay_inline;
         CQPrefetchExecBufCmd exec_buf;
+        CQPrefetchWaitForEventCmd event_wait;
         CQGenericDebugCmd debug;
     } __attribute__((packed));
 };
@@ -164,6 +174,7 @@ struct CQDispatchWritePagedCmd {
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE      = 0x00;
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST     = 0x01;
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE = 0x02;
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_RELAY = 0x03;
 
 struct CQDispatchWritePackedCmd {
     uint8_t flags;            // see above
@@ -225,6 +236,17 @@ struct CQDispatchDelayCmd {
     uint32_t delay;
 } __attribute__((packed));
 
+// When dispatch_d gets this command, it will be
+// forwarded to dispatch_h, which will write data
+// to local noc_xy_addr at offset addr. The data
+// is currently a uint32_t field, which is inlined in
+// the command.
+struct CQDispatchRemoteWriteCmd {
+    uint32_t data;
+    uint32_t noc_xy_addr;
+    uint32_t addr;
+} __attribute__((packed));
+
 struct CQDispatchCmd {
     CQDispatchBaseCmd base;
 
@@ -234,6 +256,7 @@ struct CQDispatchCmd {
         CQDispatchWritePagedCmd write_paged;
         CQDispatchWritePackedCmd write_packed;
         CQDispatchWritePackedLargeCmd write_packed_large;
+        CQDispatchRemoteWriteCmd write_from_remote;
         CQDispatchWaitCmd wait;
         CQGenericDebugCmd debug;
         CQDispatchDelayCmd delay;

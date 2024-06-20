@@ -1226,6 +1226,10 @@ void EnqueueRecordEventCommand::process() {
             sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + dispatch_constants::EVENT_PADDED_SIZE,
             PCIE_ALIGNMENT);  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST + event ID
 
+    if (not device->is_mmio_capable()) {
+        cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE * num_hw_cqs; // CQ_DISPATCH_REMOTE_WRITE (number of writes = number of prefetch_h cores on this CQ)
+    }
+
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
@@ -1265,6 +1269,14 @@ void EnqueueRecordEventCommand::process() {
         event_payloads,
         packed_write_max_unicast_sub_cmds);
 
+    if (not device->is_mmio_capable()) {
+        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+            tt_cxy_pair prefetch_location = dispatch_core_manager::get(num_hw_cqs).prefetcher_core(this->device->id(), channel, cq_id);
+            CoreCoord prefetch_physical_core = get_physical_core_coordinate(prefetch_location, core_type);
+            command_sequence.add_dispatch_write_remote(this->event_id, this->device->get_noc_unicast_encoding(this->noc_index, prefetch_physical_core), address);
+        }
+    }
+
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_host<true>(
         flush_prefetch, dispatch_constants::EVENT_PADDED_SIZE, event_payload.data());
@@ -1294,16 +1306,19 @@ EnqueueWaitForEventCommand::EnqueueWaitForEventCommand(
 }
 
 void EnqueueWaitForEventCommand::process() {
-    uint32_t cmd_sequence_sizeB = CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
+    uint32_t cmd_sequence_sizeB = CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT or CQ_PREFETCH_CMD_WAIT_FOR_EVENT
 
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-
     uint32_t last_completed_event_address =
-        sync_event.cq_id == 0 ? CQ0_COMPLETION_LAST_EVENT : CQ1_COMPLETION_LAST_EVENT;
-    command_sequence.add_dispatch_wait(false, last_completed_event_address, sync_event.event_id, this->clear_count);
-
+            sync_event.cq_id == 0 ? CQ0_COMPLETION_LAST_EVENT : CQ1_COMPLETION_LAST_EVENT;
+    if (this->device->is_mmio_capable()) {
+        command_sequence.add_dispatch_wait(false, last_completed_event_address, sync_event.event_id, this->clear_count);
+    }
+    else {
+        command_sequence.add_prefetch_wait_for_event(sync_event.event_id, last_completed_event_address);
+    }
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
 
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
@@ -1921,8 +1936,6 @@ void HWCommandQueue::enqueue_wait_for_event(std::shared_ptr<Event> sync_event, b
     if (clear_count) {
         this->manager.reset_event_id(this->id);
     }
-    std::shared_ptr<Event> event = std::make_shared<Event>();
-    this->enqueue_record_event(event);
 }
 
 void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {

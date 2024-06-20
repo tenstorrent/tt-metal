@@ -13,7 +13,7 @@ namespace ttnn {
 
 namespace multi_device {
 
-DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size)
+DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues)
     : device_grid(device_grid)
 {
     auto [num_rows, num_cols] = device_grid;
@@ -48,12 +48,12 @@ DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_id
                 }
             }
         }
-        managed_devices = tt::tt_metal::detail::CreateDevices(galaxy_device_ids, 1, l1_small_size, trace_region_size);
+        managed_devices = tt::tt_metal::detail::CreateDevices(galaxy_device_ids, num_command_queues, l1_small_size, trace_region_size);
         for (int i = 0; i < num_requested_devices; i++) {
             mesh_devices.emplace_back(device_ids[i], managed_devices.at(galaxy_device_ids[i]));
         }
     } else {
-        managed_devices = tt::tt_metal::detail::CreateDevices(device_ids, 1, l1_small_size, trace_region_size);
+        managed_devices = tt::tt_metal::detail::CreateDevices(device_ids, num_command_queues, l1_small_size, trace_region_size);
         for (int i = 0; i < num_requested_devices; i++) {
             mesh_devices.emplace_back(device_ids[i], managed_devices.at(device_ids[i]));
         }

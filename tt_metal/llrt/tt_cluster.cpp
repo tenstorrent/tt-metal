@@ -268,7 +268,10 @@ void Cluster::open_driver(
             skip_driver_allocs,
             clean_system_resources,
             perform_harvesting);
-
+        if (this->arch_ == tt::ARCH::WORMHOLE_B0 and not this->is_galaxy_cluster()) {
+            // Give UMD Limited access to eth cores 8 and 9 for Non-Galaxy Wormhole Clusters
+            device_driver->configure_active_ethernet_cores_for_mmio_device(mmio_device_id, {});
+        }
         device_driver->set_driver_host_address_params(host_address_params);
         device_driver->set_driver_eth_interface_params(eth_interface_params);
 
@@ -808,12 +811,19 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
 std::unordered_set<CoreCoord> Cluster::get_inactive_ethernet_cores(chip_id_t chip_id) const {
     std::unordered_set<CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
     std::unordered_set<CoreCoord> inactive_ethernet_cores;
+    std::unordered_set<int> channels_to_skip = {};
+    // UMD routing FW uses these cores for base routing
+    // channel 15 is used by syseng tools.
+    if (this->is_galaxy_cluster()) {
+        // TODO: This may need to change, if we need additional eth cores for dispatch on Galaxy
+        channels_to_skip = {0, 1, 2, 3, 15};
+    }
+    else {
+        channels_to_skip = {8, 9, 15};
+    }
     for (const auto &[eth_core, chan] : get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
-        // TODO: UMD routing FW uses these cores for base routing
-        // channel 15 is used by syseng tools.
-        if (this->cluster_desc_->is_chip_mmio_capable(chip_id) and (chan <= 3 or chan == 15)) {
+        if (this->cluster_desc_->is_chip_mmio_capable(chip_id) and (channels_to_skip.find(chan) != channels_to_skip.end())) {
             continue;
-            ;
         }
         if (active_ethernet_cores.find(eth_core) == active_ethernet_cores.end()) {
             inactive_ethernet_cores.insert(eth_core);

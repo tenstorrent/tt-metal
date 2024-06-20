@@ -56,14 +56,14 @@ TEST_F(CommandQueueFixture, TestEventsDataMovementWrittenToCompletionQueueInOrde
             for (size_t i = 0; i < num_buffers; i++) {
                 uint32_t host_addr = last_read_address + i*completion_queue_page_size + completion_queue_event_offset;
                 tt::Cluster::instance().read_sysmem(&event, 4, host_addr, mmio_device_id, channel);
-                EXPECT_EQ(event, expected_event_id++);
+                EXPECT_EQ(event, ++expected_event_id); // Event ids start at 1
             }
         } else if (data_movement_mode == DataMovementMode::READ) {
             for (size_t i = 0; i < num_buffers; i++) {
                 // Extra entry in the completion queue is from the buffer read data.
                 uint32_t host_addr = completion_queue_base + (2*i + 1)*completion_queue_page_size + completion_queue_event_offset;
                 tt::Cluster::instance().read_sysmem(&event, 4, host_addr, mmio_device_id, channel);
-                EXPECT_EQ(event, expected_event_id++);
+                EXPECT_EQ(event, ++expected_event_id); // Event ids start at 1
                 last_read_address = host_addr - completion_queue_event_offset + completion_queue_page_size;
             }
         }
@@ -82,7 +82,7 @@ TEST_F(CommandQueueFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
     for (size_t i = 0; i < num_events; i++) {
         auto event = std::make_shared<Event>(); // type is std::shared_ptr<Event>
         EnqueueRecordEvent(this->device_->command_queue(), event);
-        EXPECT_EQ(event->event_id, cmds_issued_per_cq);
+        EXPECT_EQ(event->event_id, cmds_issued_per_cq + 1); // Event ids start at 1
         EXPECT_EQ(event->cq_id, this->device_->command_queue().id());
         cmds_issued_per_cq++;
     }
@@ -261,8 +261,8 @@ TEST_F(CommandQueueFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
     const size_t num_buffers = 2;
     const uint32_t page_size = 2048;
     vector<uint32_t> page(page_size / sizeof(uint32_t));
-    uint32_t cmds_issued_per_cq = 0;
-    const uint32_t num_cmds_per_cq = 3; // Record, Write, Wait
+    uint32_t events_issued_per_cq = 0;
+    const uint32_t num_events_per_cq = 2; // Record and blocking write
     uint32_t expected_event_id = 0;
 
     auto start = std::chrono::system_clock::now();
@@ -277,7 +277,7 @@ TEST_F(CommandQueueFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
         auto event = std::make_shared<Event>(); // type is std::shared_ptr<Event>
         EnqueueRecordEvent(this->device_->command_queue(), event);
         EXPECT_EQ(event->cq_id, this->device_->command_queue().id());
-        EXPECT_EQ(event->event_id, cmds_issued_per_cq);
+        EXPECT_EQ(event->event_id, events_issued_per_cq + 1); // Event ids start at 1
 
         std::shared_ptr<Buffer> buf = std::make_shared<Buffer>(this->device_, page_size, page_size, BufferType::DRAM);
         EnqueueWriteBuffer(this->device_->command_queue(), buf, page, true);
@@ -286,16 +286,16 @@ TEST_F(CommandQueueFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
         if (i % 10 == 0) {
             EventSynchronize(event);
         }
-        cmds_issued_per_cq += num_cmds_per_cq;
+        events_issued_per_cq += num_events_per_cq;
     }
     Finish(this->device_->command_queue());
 
     // Read completion queue and ensure we see expected event IDs
     uint32_t event_id;
-    for (size_t i = 0; i < num_buffers * num_cmds_per_cq; i++) {
+    for (size_t i = 0; i < num_buffers * num_events_per_cq; i++) {
         uint32_t host_addr = completion_queue_base + i * completion_queue_page_size + completion_queue_event_offset;
         tt::Cluster::instance().read_sysmem(&event_id, 4, host_addr, mmio_device_id, channel);
-        EXPECT_EQ(event_id, expected_event_id++);
+        EXPECT_EQ(event_id, ++expected_event_id);
     }
 
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
