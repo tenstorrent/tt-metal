@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from enum import Enum
 import torch
 from loguru import logger
 import numpy as np
@@ -47,6 +48,59 @@ def get_inputs_on_device(llm_mode, tt_FalconCausalLM, model_input, kv_cache_len,
     return tt_input_ids, tt_attention_mask
 
 
+class DeviceSetup(Enum):
+    GRAYSKULL = 0
+    WORMHOLE_B0 = 1
+    T3000 = 2
+
+
+# CONFIG_TO_PCC[arch][model_config_str][seq_len] = (output_pcc, k_cache_pcc, v_cache_pcc)
+PREFILL_CONFIG_TO_PCC = {
+    DeviceSetup.GRAYSKULL: {
+        "BFLOAT16-DRAM": {
+            128: (0.85, 0.97, 0.86),
+            256: (0.90, 0.97, 0.87),
+        },
+        "BFLOAT16-L1": {
+            128: (0.85, 0.97, 0.86),
+            256: (0.90, 0.97, 0.87),
+        },
+    },
+    DeviceSetup.WORMHOLE_B0: {
+        "BFLOAT16-DRAM": {
+            128: (0.97, 0.99, 0.97),
+            256: (0.99, 0.99, 0.97),
+            1024: (0.99, 0.99, 0.98),
+            2048: (0.99, 0.99, 0.98),
+        }
+    },
+    DeviceSetup.T3000: {
+        "BFLOAT16-DRAM": {
+            128: (0.98, 0.99, 0.97),
+            256: (0.99, 0.99, 0.97),
+            1024: (0.99, 0.99, 0.98),
+            2048: (0.99, 0.99, 0.98),
+        }
+    },
+}
+
+# CONFIG_TO_PCC[arch][model_config_str][kv_cache_len] = (output_pcc, k_cache_pcc, v_cache_pcc)
+DECODE_CONFIG_TO_PCC = {
+    DeviceSetup.GRAYSKULL: {
+        "BFLOAT16-DRAM": {128: (0.63, 0.80, 0.84), 1024: (0.56, 0.86, 0.88), 2047: (0.55, 0.91, 0.89)},
+        "BFLOAT16-L1": {128: (0.63, 0.80, 0.84), 1024: (0.56, 0.86, 0.88), 2047: (0.55, 0.91, 0.89)},
+    },
+    DeviceSetup.WORMHOLE_B0: {
+        "BFLOAT16-DRAM": {128: (0.91, 0.92, 0.93), 1024: (0.86, 0.92, 0.92), 2047: (0.88, 0.93, 0.93)},
+        "BFLOAT16-L1": {128: (0.91, 0.92, 0.93), 1024: (0.86, 0.92, 0.92), 2047: (0.88, 0.93, 0.93)},
+        "BFLOAT16-L1_SHARDED": {128: (0.92, 0.95, 0.95), 1024: (0.87, 0.94, 0.94), 2047: (0.88, 0.92, 0.93)},
+    },
+    DeviceSetup.T3000: {
+        "BFLOAT16-L1_SHARDED": {128: (0.89, 0.94, 0.94), 1024: (0.86, 0.90, 0.91), 2047: (0.77, 0.69, 0.72)}
+    },
+}
+
+
 def run_test_FalconCausalLM_end_to_end(
     devices,
     model_version,
@@ -60,12 +114,14 @@ def run_test_FalconCausalLM_end_to_end(
     model_config_str,
     tt_cache_path,
     model_location_generator,
-    expected_inference_time,
-    async_mode=False,
     e2e_perf=False,
+    expected_inference_time=None,
     device_perf=False,
+    async_mode=False,
 ):
     assert not (e2e_perf and device_perf), "Cannot run both e2e and device perf test at the same time"
+    if e2e_perf:
+        assert expected_inference_time is not None, "Expected inference time is required for e2e perf test"
 
     # Clear global profiler state before starting measurements
     if e2e_perf:

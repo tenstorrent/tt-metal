@@ -4,7 +4,12 @@
 
 import pytest
 
-from models.demos.falcon7b.tests.run_falcon_end_to_end import run_test_FalconCausalLM_end_to_end
+from models.demos.falcon7b.tests.run_falcon_end_to_end import (
+    DECODE_CONFIG_TO_PCC,
+    PREFILL_CONFIG_TO_PCC,
+    DeviceSetup,
+    run_test_FalconCausalLM_end_to_end,
+)
 from models.demos.falcon7b.tt.model_config import get_model_config
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.utility_functions import disable_compilation_reports, disable_persistent_kernel_cache
@@ -16,11 +21,11 @@ from models.utility_functions import disable_compilation_reports, disable_persis
     ids=["falcon_7b"],
 )
 @pytest.mark.parametrize(
-    "llm_mode, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc, expected_inference_time",
+    "llm_mode, num_layers, batch, seq_len, kv_cache_len, model_config_str",
     (
-        ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.97, 0.99, 0.97, 0.1),
-        ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.98, 0.5),
-        ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.99, 0.99, 0.98, 1.1),
+        ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM"),
+        ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM"),
+        ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM"),
     ),
     ids=[
         "prefill_seq128_bfloat16-dram",
@@ -34,11 +39,7 @@ def test_device_perf_wh_bare_metal(
     batch,
     seq_len,
     kv_cache_len,
-    expected_inference_time,
     num_layers,
-    expected_output_pcc,
-    expected_k_cache_pcc,
-    expected_v_cache_pcc,
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
@@ -51,6 +52,15 @@ def test_device_perf_wh_bare_metal(
 
     disable_persistent_kernel_cache()
     disable_compilation_reports()
+
+    if llm_mode == "prefill":
+        expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[
+            DeviceSetup.WORMHOLE_B0
+        ][model_config_str][seq_len]
+    else:
+        expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = DECODE_CONFIG_TO_PCC[DeviceSetup.WORMHOLE_B0][
+            model_config_str
+        ][kv_cache_len]
 
     run_test_FalconCausalLM_end_to_end(
         [device],
@@ -65,7 +75,6 @@ def test_device_perf_wh_bare_metal(
         model_config_str,
         tt_cache_path,
         model_location_generator,
-        expected_inference_time,
         device_perf=True,
     )
 
