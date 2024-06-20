@@ -77,6 +77,10 @@ struct dispatch_constants {
 
     uint32_t prefetch_d_buffer_pages() const { return prefetch_d_buffer_pages_; }
 
+    uint32_t mux_buffer_size(uint8_t num_hw_cqs = 1) const { return prefetch_d_buffer_size_ / num_hw_cqs; }
+
+    uint32_t mux_buffer_pages(uint8_t num_hw_cqs = 1) const { return prefetch_d_buffer_pages_ / num_hw_cqs; }
+
    private:
     dispatch_constants(const CoreType &core_type) {
         TT_ASSERT(core_type == CoreType::WORKER or core_type == CoreType::ETH);
@@ -392,7 +396,7 @@ class SystemMemoryManager {
 
     uint32_t get_next_event(const uint8_t cq_id) {
         cq_to_event_locks[cq_id].lock();
-        uint32_t next_event = this->cq_to_event[cq_id]++;
+        uint32_t next_event = ++this->cq_to_event[cq_id]; // Event ids start at 1
         cq_to_event_locks[cq_id].unlock();
         return next_event;
     }

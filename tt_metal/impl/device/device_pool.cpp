@@ -146,6 +146,7 @@ void DevicePool::activate_device(chip_id_t id) {
         int core_assigned_to_device = this->device_to_core_map.at(id);
         auto dev =
             new Device(id, this->num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap, false, core_assigned_to_device);
+            dev->update_dispatch_cores_for_multi_cq_eth_dispatch();
         if (!this->firmware_built_keys.contains(dev->build_key())) {
             dev->build_firmware();
             this->firmware_built_keys.insert(dev->build_key());
@@ -190,10 +191,6 @@ void DevicePool::add_devices_to_pool(std::vector<chip_id_t> device_ids) {
             const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
             for (const auto& mmio_controlled_device_id :
                  tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
-                if (num_hw_cqs > 1 and mmio_device_id != mmio_controlled_device_id) {
-                    // Don't support multi cqs on R chip yet
-                    continue;
-                }
                 if (not this->is_device_active(mmio_controlled_device_id)) {
                     this->activate_device(mmio_controlled_device_id);
                 }

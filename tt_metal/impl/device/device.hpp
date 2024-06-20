@@ -305,6 +305,7 @@ class Device {
                 or get_worker_mode() == WorkExecutorMode::SYNCHRONOUS;
     }
    uint32_t trace_buffers_size = 0;
+   void update_dispatch_cores_for_multi_cq_eth_dispatch();
    private:
     std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
 };

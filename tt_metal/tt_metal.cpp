@@ -168,13 +168,17 @@ std::map<chip_id_t, Device *> CreateDevices(
     const size_t trace_region_size,
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
+    bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
+    if (is_galaxy) {
+        TT_FATAL(num_hw_cqs < 2, "Multiple Command Queues are not Currently Supported on Galaxy Systems");
+    }
     tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size);
     std::vector<Device *> devices = tt::DevicePool::instance().get_all_active_devices();
     std::map<chip_id_t, Device *> ret_devices;
     //Only include the mmio device in the active devices set returned to the caller if we are not running
     //on a Galaxy cluster.
     //On Galaxy, gateway (mmio devices) cannot run compute workloads.
-    bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
+
     for (Device * dev: devices) {
         if (is_galaxy and dev->is_mmio_capable()) {
             continue;
