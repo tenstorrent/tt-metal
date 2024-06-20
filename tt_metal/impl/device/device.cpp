@@ -1651,7 +1651,7 @@ bool Device::close() {
         }
         hw_command_queue->terminate();
     }
-
+    this->work_executor.reset();
     tt_metal::detail::DumpDeviceProfileResults(this, true);
 
     this->trace_buffer_pool_.clear();
@@ -1802,7 +1802,6 @@ bool Device::close() {
     this->sw_command_queues_.clear();
     this->hw_command_queues_.clear();
     this->sysmem_manager_.reset();
-    this->work_executor.reset();
     this->allocator_.reset();
 
     this->initialized_ = false;
