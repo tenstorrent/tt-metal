@@ -13,6 +13,7 @@ jobs:
   produce-data:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Output (safe) pipeline values
         run: |
           echo "pipeline_id (id / run #): ${{ github.run_id }}/${{ github.run_attempt }}"
