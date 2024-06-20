@@ -24,7 +24,7 @@ void MAIN {
     constexpr uint32_t is_top_row                     = get_compile_time_arg_val(0);
     constexpr uint32_t do_gamma                       = get_compile_time_arg_val(1);
     constexpr uint32_t do_beta                        = get_compile_time_arg_val(2);
-    constexpr uint32_t num_blocks                     = get_compile_time_arg_val(3);
+    constexpr uint32_t num_blocks_first_stage                     = get_compile_time_arg_val(3);
     constexpr uint32_t block_w                        = get_compile_time_arg_val(5);
     constexpr uint32_t block_h_const                  = get_compile_time_arg_val(4);
     volatile uint32_t block_h_volatile                = get_compile_time_arg_val(4);
@@ -33,9 +33,26 @@ void MAIN {
     constexpr uint32_t num_subblocks_w                = get_compile_time_arg_val(7);
     const bool is_allgather_worker                    = get_compile_time_arg_val(8) == 1;
     constexpr uint32_t num_tiles_per_block            = get_compile_time_arg_val(9);
-    constexpr bool FLOAT32_DTYPE                    = get_compile_time_arg_val(10) == 1;
+    constexpr bool FLOAT32_DTYPE                      = get_compile_time_arg_val(10) == 1;
+    constexpr uint32_t num_blocks_second_stage        = get_compile_time_arg_val(11);
 
-    const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(0) : 0;
+    const uint32_t num_tiles_per_allgather_worker           = is_allgather_worker ? get_arg_val<uint32_t>(0) : 0;
+    const bool use_two_stage_reduce                         = is_allgather_worker ? get_arg_val<uint32_t>(1) == 1 : false;
+    const bool is_second_stage_reader                       = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
+
+    uint32_t num_blocks_reduce;
+    if (is_second_stage_reader) {
+        num_blocks_reduce = num_blocks_first_stage + num_blocks_second_stage - 1;
+    } else {
+        num_blocks_reduce = num_blocks_first_stage;
+    }
+
+    bool enable_sqrt;
+    if (use_two_stage_reduce and not is_second_stage_reader) {
+        enable_sqrt = false;
+    } else {
+        enable_sqrt = true;
+    }
 
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t scaler0 = 0;
@@ -153,7 +170,7 @@ void MAIN {
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
             cb_wait_front(cb_scaler_global, 1);
             tile_regs_acquire();
-            for (uint32_t w = 0; w < num_blocks; w++) {
+            for (uint32_t w = 0; w < num_blocks_reduce; w++) {
                 cb_wait_front(cb_ex_external, 1);
                 reduce_tile(cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
                 cb_pop_front(cb_ex_external, 1);
@@ -238,6 +255,9 @@ void MAIN {
     cb_wait_front(cb_xmm2, num_tiles_per_block);
 
     // Var(x)
+    #ifdef RMSNORM
+    cb_wait_front(cb_scaler, 1);
+    #endif
     cb_reserve_back(cb_ex_partial2, block_h);
     reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
     index_h_offset = 0;
@@ -265,7 +285,7 @@ void MAIN {
             cb_wait_front(cb_scaler_global, 1);
 
             tile_regs_acquire();
-            for (uint32_t w = 0; w < num_blocks; w++) {
+            for (uint32_t w = 0; w < num_blocks_reduce; w++) {
                 cb_wait_front(cb_ex_external2, 1);
                 reduce_tile(cb_ex_external2, cb_scaler_global, 0, scaler0, dst0);
                 cb_pop_front(cb_ex_external2, 1);
@@ -278,28 +298,29 @@ void MAIN {
         reduce_revert_delta();
         cb_push_back(cb_ex2, num_tiles_per_allgather_worker);
 
-        for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
-            // 1/[sqrt(Var + eps)],
-            cb_wait_front(cb_ex2, 1);
-            cb_reserve_back(cb_ex2pe, 1);
-            tile_regs_acquire();
-            add_tiles_init();
-            add_tiles(cb_ex2, cb_eps, i, 0, dst0);
-            tile_regs_wait();
-            // sqrt(Var + eps)
-            sqrt_tile_init();
-            sqrt_tile(dst0);
-            tile_regs_wait();
-            // 1/[sqrt(Var + eps)]
-            recip_tile_init();
-            recip_tile(dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe);
-            cb_push_back(cb_ex2pe, 1);
-            tile_regs_release();
+        if (enable_sqrt) {
+            for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
+                // 1/[sqrt(Var + eps)],
+                cb_wait_front(cb_ex2, 1);
+                cb_reserve_back(cb_ex2pe, 1);
+                tile_regs_acquire();
+                add_tiles_init();
+                add_tiles(cb_ex2, cb_eps, i, 0, dst0);
+                tile_regs_wait();
+                // sqrt(Var + eps)
+                sqrt_tile_init();
+                sqrt_tile(dst0);
+                tile_regs_wait();
+                // 1/[sqrt(Var + eps)]
+                recip_tile_init();
+                recip_tile(dst0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(dst0, cb_ex2pe);
+                cb_push_back(cb_ex2pe, 1);
+                tile_regs_release();
+            }
         }
-
     }
 
 
