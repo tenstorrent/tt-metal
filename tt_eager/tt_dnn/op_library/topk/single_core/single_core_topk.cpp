@@ -93,7 +93,7 @@ operation::ProgramWithCallbacks single_core_topk_interleaved(const Tensor &input
                                                         Wt};
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/topk/kernels/dataflow/reader_create_index_tensor.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -116,7 +116,7 @@ operation::ProgramWithCallbacks single_core_topk_interleaved(const Tensor &input
                                                         k};
     tt_metal::KernelHandle binary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/topk/kernels/dataflow/writer_binary_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_binary_interleaved.cpp",
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -146,7 +146,7 @@ operation::ProgramWithCallbacks single_core_topk_interleaved(const Tensor &input
                                         };
     tt_metal::KernelHandle topk_compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/topk/kernels/compute/topk.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_args}
     );

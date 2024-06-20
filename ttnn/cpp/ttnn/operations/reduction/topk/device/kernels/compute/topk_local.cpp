@@ -25,8 +25,12 @@ void MAIN {
     constexpr uint32_t Ht = get_compile_time_arg_val(6);
     constexpr uint32_t Wt = get_compile_time_arg_val(7);
     constexpr uint32_t K = get_compile_time_arg_val(8);
-    constexpr uint32_t logk = get_compile_time_arg_val(9);
-    constexpr uint32_t logWt = get_compile_time_arg_val(10);
+    constexpr uint32_t Kt = get_compile_time_arg_val(9);
+    constexpr uint32_t logk = get_compile_time_arg_val(10);
+    constexpr uint32_t logWt = get_compile_time_arg_val(11);
+    constexpr bool ascending = false;
+
+    uint32_t direction_init = get_arg_val<uint32_t>(0);
 
     // dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
@@ -34,20 +38,21 @@ void MAIN {
     constexpr uint32_t index_dest_start = 2;
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
-    // init pack, compute and unpack
 
+    // init pack, compute and unpack
     ckernel::topk_tile_init();
     transpose_wh_init(input_cb_index, input_transposed_cb_index);
 
+
     for(uint32_t ht = 0; ht < Ht; ++ht) {
-        bool ascending = false;
         cb_reserve_back(input_transposed_cb_index, Wt);
         cb_reserve_back(index_transposed_cb_index, Wt);
 
         // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
         for (uint32_t wt = 0; wt < Wt; wt+=2) {
+
             acquire_dst(tt::DstMode::Half);
-            // local sort into k groups
+            // transpose tiles and then local sort into k groups
             cb_wait_front(input_cb_index, 2);
             cb_wait_front(index_cb_index, 2);
 
@@ -88,12 +93,12 @@ void MAIN {
         // logWt iteration we compare 0th and Wt/2 tile
         // single buffer as we can pack tiles back in-place
         for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
-            bool a = false;
+            bool direction = direction_init;
             cb_wait_front(input_transposed_cb_index, Wt);
             cb_wait_front(index_transposed_cb_index, Wt);
-
-            for (uint32_t left_ind = 0; left_ind < Wt - (1 << m_iter); left_ind += 2 << m_iter) {
-                uint32_t right_ind = left_ind + (1 << m_iter);
+            uint32_t stride = 1 << m_iter;
+            for (uint32_t left_ind = 0; left_ind < Wt - stride; left_ind += 2 << m_iter) {
+                uint32_t right_ind = left_ind + stride;
                 acquire_dst(tt::DstMode::Half);
 
                 copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
@@ -108,7 +113,7 @@ void MAIN {
                 // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
                 ckernel::topk_merge(0, m_iter, K);
                 // sort within the larger 32 values
-                ckernel::topk_rebuild(0, (uint32_t) a, m_iter, K, logk, true);
+                ckernel::topk_rebuild(0, (uint32_t) direction, m_iter, K, logk, true);
 
 
                 // pack value tiles in-place in the single-buffered cb_intermed0, we only need the upper 32 values for topk, which was in input_dest_start
@@ -119,7 +124,7 @@ void MAIN {
                 pack_reconfig_data_format(index_transposed_cb_index);
                 pack_tile<true>(index_dest_start, index_transposed_cb_index, left_ind);
                 release_dst(tt::DstMode::Half);
-                a = !a;
+                direction = !direction;
             }
             cb_reserve_back(input_transposed_cb_index, Wt);
             cb_reserve_back(index_transposed_cb_index, Wt);
@@ -131,17 +136,15 @@ void MAIN {
             cb_push_back(index_transposed_cb_index, Wt);
         }
 
-        constexpr uint32_t Kt =  K % TILE_WIDTH == 0 ? K/TILE_WIDTH : K/TILE_WIDTH + 1;
-
-        // transpose value tiles and pack into output buffer
+        // copy local chunk's topk value tiles into output buffer to send off to the gather core to get the final topk values
         unpack_reconfig_data_format_srca(input_transposed_cb_index);
-        transpose_wh_init_short(input_transposed_cb_index);
+        copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
         pack_reconfig_data_format(input_transposed_cb_index);
         cb_wait_front(input_transposed_cb_index, Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
             acquire_dst(tt::DstMode::Half);
             cb_reserve_back(values_cb_index, 1);
-            transpose_wh_tile(input_transposed_cb_index, i, 0);
+            copy_tile(input_transposed_cb_index, i, 0);
             pack_tile(0, values_cb_index);
             cb_push_back(values_cb_index, 1);
             release_dst(tt::DstMode::Half);
@@ -149,15 +152,15 @@ void MAIN {
         cb_wait_front(input_transposed_cb_index, Wt);
         cb_pop_front(input_transposed_cb_index, Wt);
 
-        // transpose index tiles and pack into output buffer
+        // copy local chunk's topk index tiles into output buffer to send off to the gather core to get the final topk indices
         unpack_reconfig_data_format_srca(index_transposed_cb_index);
-        transpose_wh_init_short(index_transposed_cb_index);
+        copy_tile_to_dst_init_short_with_dt(input_transposed_cb_index, index_transposed_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
         cb_wait_front(index_transposed_cb_index, Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
             acquire_dst(tt::DstMode::Half);
             cb_reserve_back(output_ind_cb_index, 1);
-            transpose_wh_tile(index_transposed_cb_index, i, 0);
+            copy_tile(index_transposed_cb_index, i, 0);
             pack_tile(0, output_ind_cb_index);
             cb_push_back(output_ind_cb_index, 1);
             release_dst(tt::DstMode::Half);
