@@ -81,7 +81,6 @@ def run_test_FalconAttention_inference(
         assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
 
         attention_input = (torch.rand(batch, q_len, configuration.hidden_size) * 2) - 1
-        attention_mask_bool = torch.ones(batch, 1, q_len, kv_len, dtype=bool).triu(diagonal=1)
         layer_past = None
 
         tt_attention_input_host = torch2tt_tensor(
@@ -91,26 +90,25 @@ def run_test_FalconAttention_inference(
         for device in devices:
             tt_attention_input.append(tt_attention_input_host.to(device, model_config["ATTN_INPUT_MEMCFG"]))
 
-        attention_mask_bool_chunks = torch.chunk(
-            (attention_mask_bool * -100000).expand(-1, len(devices), -1, -1),
-            len(devices),
-            1,
-        )
-        tt_attention_mask = []
-        attention_mask_memconfig = model_config["ATTN_MASK_MEMCFG"]
-        if attention_mask_memconfig.is_sharded():
-            attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-            attn_mask_shard_shape[-1] = kv_len
-            attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
+        attention_mask_bool = torch.ones(batch, 1, seq_len, seq_len, dtype=bool)
+        attention_mask_bool = attention_mask_bool.triu(diagonal=1)
+        attention_mask = (attention_mask_bool * -1e5).expand(1, 1, -1, -1)
 
+        tt_attention_mask = [
+            torch2tt_tensor(
+                attention_mask,
+                devices[i],
+                tt_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
+                tt_memory_config=model_config["DEFAULT_MEMCFG"],
+                tt_dtype=model_config["BFLOAT16_DTYPE"],  # subsequent tilize op expects bfloat16 inputs
+            )
+            for i in range(len(devices))
+        ]
         for i in range(len(devices)):
-            tt_attention_mask.append(
-                torch2tt_tensor(
-                    attention_mask_bool_chunks[i],
-                    devices[i],
-                    tt_memory_config=attention_mask_memconfig,
-                    tt_dtype=model_config["ATTN_MASK_DTYPE"],
-                )
+            tt_attention_mask[i] = ttnn.experimental.tensor.tilize(
+                tt_attention_mask[i],
+                output_mem_config=model_config["DRAM_MEMCFG"],
+                output_dtype=model_config["ATTN_MASK_DTYPE"],
             )
 
         tt_k_cache_host = torch.zeros(batch, configuration.num_kv_heads, max_position_embeddings, head_dim)

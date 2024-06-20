@@ -174,26 +174,14 @@ class TtFalconModelShared:
 
             attention_mask_bool = torch.ones(batch_size, 1, sequence_size, sequence_size, dtype=bool)
             attention_mask_bool = attention_mask_bool.triu(diagonal=1)
+            attention_mask = (attention_mask_bool * -1e5).expand(1, 1, -1, -1)
 
-            attention_mask_bool_chunks = torch.chunk(
-                (attention_mask_bool * -1e5).expand(-1, len(self.devices), -1, -1),
-                len(self.devices),
-                1,
-            )
-            tt_attention_mask = []
-            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
-            if attention_mask_memconfig.is_sharded():
-                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-                attn_mask_shard_shape[-1] = sequence_size
-                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
-
-            # Push attention mask to device in row major order and then tilize on device (faster than tilizing on CPU)
             tt_attention_mask = [
                 torch2tt_tensor(
-                    attention_mask_bool_chunks[i],
+                    attention_mask,
                     self.devices[i],
                     tt_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
-                    tt_memory_config=attention_mask_memconfig,
+                    tt_memory_config=self.model_config["DEFAULT_MEMCFG"],
                     tt_dtype=self.model_config["BFLOAT16_DTYPE"],  # subsequent tilize op expects bfloat16 inputs
                 )
                 for i in range(len(self.devices))
@@ -201,9 +189,10 @@ class TtFalconModelShared:
             for i in range(self.num_devices):
                 tt_attention_mask[i] = ttnn.experimental.tensor.tilize(
                     tt_attention_mask[i],
-                    output_mem_config=attention_mask_memconfig,
+                    output_mem_config=self.model_config["DRAM_MEMCFG"],
                     output_dtype=self.model_config["ATTN_MASK_DTYPE"],
                 )
+
             # Genereate ln output tensors for prefill if not existing
             do_generate_ln_tensors = (
                 sequence_size > self.model_config["layernorm_params"]["slice_size"]
@@ -267,9 +256,6 @@ class TtFalconModelShared:
 
         else:
             raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
-
-        for layer in self.layers:
-            layer.preprocessing(llm_mode, batch_size, sequence_size)
 
         return tt_inputs, tt_attention_mask
 
