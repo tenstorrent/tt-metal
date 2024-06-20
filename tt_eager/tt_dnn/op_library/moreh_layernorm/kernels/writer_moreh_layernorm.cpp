@@ -29,10 +29,11 @@ void get_noc_offset_no_align(uint32_t h, uint32_t w, uint32_t element_size, uint
 
 
 template <typename T>
-void write_mean_rstd(uint32_t cb_id, uint32_t cb_tile_bytes, uint32_t tile_offset, uint32_t num_inner, uint32_t normalized_dim, uint32_t outer_idx, uint32_t output_height, uint32_t output_width, uint32_t Ht, uint32_t Wt, T addrg)
+void write_mean_rstd(uint32_t cb_id, uint32_t tile_offset, uint32_t num_inner, uint32_t normalized_dims, uint32_t outer_idx, uint32_t output_height, uint32_t output_width, uint32_t Ht, uint32_t Wt, T addrg)
 {
     constexpr uint32_t onetile = 1;
 
+    const uint32_t cb_tile_bytes = get_tile_size(cb_id);
     const auto cb_dtype_bytes = cb_tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
 
     cb_wait_front(cb_id, onetile);
@@ -42,7 +43,7 @@ void write_mean_rstd(uint32_t cb_id, uint32_t cb_tile_bytes, uint32_t tile_offse
 
     uint32_t output_tile_offset = tile_offset / num_inner;
 
-    if (normalized_dim == 1) {
+    if (normalized_dims == 1) {
         for (uint32_t src_h = 0; src_h < 2; src_h++) {
             auto output_tile_idx = output_tile_offset + outer_idx;
 
@@ -106,7 +107,7 @@ void kernel_main() {
     const auto tile_offset = get_arg_val<uint32_t>(5);
     const auto mean_rstd_height = get_arg_val<uint32_t>(6);
     const auto mean_rstd_width = get_arg_val<uint32_t>(7);
-    const auto normalized_dim = get_arg_val<uint32_t>(8);
+    const auto normalized_dims = get_arg_val<uint32_t>(8);
 
     constexpr bool output_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool mean_is_dram = get_compile_time_arg_val(1) == 1;
@@ -148,11 +149,11 @@ void kernel_main() {
 
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; outer_idx++) {
         if (mean_has_value) {
-            write_mean_rstd(cb_id_mean, mean_tile_bytes, tile_offset, num_inner, normalized_dim, outer_idx, mean_rstd_height, mean_rstd_width, Ht, Wt, mean_addrg);
+            write_mean_rstd(cb_id_mean, tile_offset, num_inner, normalized_dims, outer_idx, mean_rstd_height, mean_rstd_width, Ht, Wt, mean_addrg);
         }
 
         if (rstd_has_value) {
-            write_mean_rstd(cb_id_rstd, mean_tile_bytes, tile_offset, num_inner, normalized_dim, outer_idx, mean_rstd_height, mean_rstd_width, Ht, Wt, rstd_addrg);
+            write_mean_rstd(cb_id_rstd, tile_offset, num_inner, normalized_dims, outer_idx, mean_rstd_height, mean_rstd_width, Ht, Wt, rstd_addrg);
         }
 
         // output
@@ -168,5 +169,5 @@ void kernel_main() {
         }  // num_inner loop
 
         offs += num_inner;
-    }  // ncht loop
+    }  // num_rows_per_core loop
 }  // void kernel_main()
