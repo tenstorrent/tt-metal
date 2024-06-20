@@ -5,6 +5,7 @@
 import pytest
 import torch
 import torch.nn.functional as F
+import copy
 
 import tt_lib as ttl
 from models.utility_functions import comp_allclose
@@ -25,7 +26,15 @@ def to_cpu(npu_tensor, shape, *, cpu_layout=ttl.tensor.Layout.ROW_MAJOR):
         return None
     if not isinstance(shape, (list, tuple)):
         shape = tuple(shape)
-    cpu_tensor = npu_tensor.cpu().to(cpu_layout).unpad_from_tile(shape).to_torch()
+
+    unpad_shape = copy.copy(shape)
+    if shape == []:
+        unpad_shape = [1, 1]
+    if len(shape) == 1:
+        unpad_shape = [1] + shape
+
+    cpu_tensor = npu_tensor.cpu().to(cpu_layout).unpad_from_tile(unpad_shape).to_torch().reshape(shape)
+
     return cpu_tensor
 
 
@@ -45,6 +54,9 @@ def to_npu(
     if len(cpu_tensor.shape) == 1:
         cpu_tensor = cpu_tensor.reshape([1, len(cpu_tensor)])
 
+    if len(cpu_tensor.shape) == 0:
+        cpu_tensor = cpu_tensor.reshape([1, 1])
+
     npu_tensor = ttl.tensor.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
     return npu_tensor
 
@@ -54,8 +66,10 @@ def torch_layernorm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None
     mean_rstd_dims = tuple(range(-normalized_dims, 0))
 
     mean = input.clone().mean(dim=mean_rstd_dims, keepdim=True)
-    var = ((input.clone() - mean) ** 2).mean(dim=mean_rstd_dims, keepdim=True)
+    var = ((input.clone() - mean) ** 2).mean(dim=mean_rstd_dims)
     rstd = (var + eps).rsqrt()
+
+    mean = torch.squeeze(mean, mean_rstd_dims)
 
     output = F.layer_norm(input, normalized_shape, weight=gamma, bias=beta, eps=eps)
 
@@ -90,13 +104,17 @@ def tt_layernorm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None, d
     input_shape = list(input.shape)
 
     # mean_rstd_shape
-    mean_rstd_shape = input_shape[:-normalized_dims] + [1] * normalized_dims
+    mean_rstd_shape = input_shape[:-normalized_dims]
 
     # dtype
     cpu_dtype = torch.bfloat16
 
     # input
     npu_input = to_npu(input, device)
+
+    # output
+    output = torch.empty_like(input)
+    npu_output = to_npu(output, device)
 
     # gamma
     npu_gamma = to_npu(gamma, device)
@@ -113,12 +131,13 @@ def tt_layernorm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None, d
     npu_rstd = to_npu(cpu_rstd, device)
 
     # Forward
-    npu_output = ttl.operations.primary.moreh_layernorm(
+    npu_output, npu_mean, npu_rstd = ttl.operations.primary.moreh_layernorm(
         npu_input,
         normalized_dims,
         eps,
         npu_gamma,
         npu_beta,
+        output=npu_output,
         mean=npu_mean,
         rstd=npu_rstd,
         compute_kernel_config=compute_kernel_config,
@@ -355,9 +374,10 @@ def run_moreh_layernorm_backward(
     [
         ([1, 20], 1),  # test 2d
         ([10, 20], 2),  # test 2d
-        ([3, TILE_HEIGHT * 4, TILE_WIDTH * 5], 1),  # test 3d
-        ([2, 3, 2 * TILE_HEIGHT, 2 * TILE_WIDTH], 4),  # test 4d
+        ([3, TILE_HEIGHT * 1, TILE_WIDTH * 5], 1),  # test 3d
+        ([3, 3, 4 * TILE_HEIGHT, 5 * TILE_WIDTH], 4),  # test 4d
         ([5, 2, 3, 4, 2 * TILE_HEIGHT + 13, 3 * TILE_WIDTH + 13], 4),  # test 6d
+        ([2, TILE_HEIGHT + 13, 200 * TILE_WIDTH * 2 + 15], 1),  # test 6d
     ],
 )
 def test_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, device):

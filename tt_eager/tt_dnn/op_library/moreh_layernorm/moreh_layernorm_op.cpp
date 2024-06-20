@@ -83,6 +83,16 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const auto origin_H = input_shape_without_padding[-2];
     const auto origin_W = input_shape_without_padding[-1];
 
+    auto mean_rstd_height = 0;
+    auto mean_rstd_width = 0;
+
+    if (mean_has_value) {
+        const auto mean_rstd_shape = mean.value().get_legacy_shape();
+        const auto mean_rstd_shape_without_padding = mean_rstd_shape.without_padding();
+        mean_rstd_height = mean_rstd_shape_without_padding[-2];
+        mean_rstd_width = mean_rstd_shape_without_padding[-1];
+    }
+
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && !is_lastdim_layernorm;
     const auto mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
 
@@ -341,7 +351,9 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
         SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
 
         const std::vector<uint32_t> writer_runtime_args{
-            output_addr, mean_addr, rstd_addr, num_rows_per_core, num_inner, tile_offset};
+            output_addr, mean_addr, rstd_addr, num_rows_per_core, num_inner, tile_offset,
+            mean_rstd_height, mean_rstd_width, normalized_dims
+            };
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
 
         tile_offset += num_rows_per_core * num_inner;
@@ -395,18 +407,17 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     return {std::move(program), override_runtime_args_callback};
 }
 
-void MorehLayerNorm::validate(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+void MorehLayerNorm::validate_with_output_tensors(
+        const std::vector<Tensor> &input_tensors,
+        const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+        const std::vector<std::optional<Tensor>> &output_tensors) const {
     TT_ASSERT(
-        input_tensors.size() == 1 and optional_input_tensors.size() <= 4, "Must have between 1 to 5 input tensors");
+        input_tensors.size() == 1 and optional_input_tensors.size() <= 5, "Must have between 1 to 6 input tensors");
 
     const auto& input = input_tensors.at(0);
 
     const auto& gamma = optional_input_tensors.at(0);
     const auto& beta = optional_input_tensors.at(1);
-    const auto& mean = optional_input_tensors.at(2);
-    const auto& rstd = optional_input_tensors.at(3);
 
     check_tensor(input, "moreh_layernorm");
 
@@ -423,6 +434,9 @@ void MorehLayerNorm::validate(
         TT_ASSERT(input.device() == beta.value().device());
     }
 
+    auto& mean = output_tensors.at(1);
+    auto& rstd = output_tensors.at(2);
+
     if (mean.has_value()) {
         check_tensor(mean.value(), "moreh_layernorm");
     }
@@ -433,14 +447,75 @@ void MorehLayerNorm::validate(
 }
 
 std::vector<Shape> MorehLayerNorm::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.get_legacy_shape()};
+    auto input = input_tensors.at(0);
+
+    // compute mean_rstd_shape
+    Shape input_shape = input.get_legacy_shape();
+    auto input_shape_without_padding = input_shape.without_padding();
+    auto input_rank = input_shape.rank();
+    auto output_rank = input_rank - normalized_dims;
+
+    std::vector<uint32_t> output_size_vec;
+    auto dimensions_pads = std::vector<Padding::PadDimension>();
+
+    // special case handling
+    if (output_rank == 1) {
+        output_size_vec.push_back(32);
+        dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 31});
+    }
+
+    for (uint32_t dim = 0 ; dim < output_rank; dim++) {
+        auto input_shape_without_padding_size = input_shape_without_padding[dim];
+        if (is_hw_dim(dim, output_rank)) {
+            output_size_vec.push_back(round_up_to_mul32(input_shape_without_padding_size));
+
+            auto padding_back = output_size_vec[dim] - input_shape_without_padding_size;
+            dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = padding_back});
+        } else {
+            output_size_vec.push_back(input_shape_without_padding_size);
+            dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 0});
+        }
+    }
+
+    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
+    auto mean_rstd_output_shape = Shape(output_size_vec, padding);
+
+    return {input_shape, mean_rstd_output_shape, mean_rstd_output_shape};
 }
 
-std::vector<Tensor> MorehLayerNorm::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
+std::vector<Tensor> MorehLayerNorm::create_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    const auto& output_shapes = this->compute_output_shapes(input_tensors);
+    auto input = input_tensors.at(0);
+    auto dtype = input.get_dtype();
+    Layout layout{Layout::TILE};
+    auto device = input.device();
+
+    std::vector<Tensor> result;
+    result.reserve(3);
+
+    if (output_tensors.at(0).has_value()) {
+        result.push_back(output_tensors.at(0).value());
+    } else {
+        TT_FATAL(false, "Create an optional tensor is not supported yet. fix this after the 9552 issue is addressed.");
+        result.push_back(create_device_tensor(output_shapes.at(0), dtype, layout, device, this->output_mem_config));
+    }
+
+    if (output_tensors.at(1).has_value()) {
+        result.push_back(output_tensors.at(1).value());
+    } else {
+        TT_FATAL(false, "Create an optional tensor is not supported yet. fix this after the 9552 issue is addressed.");
+        result.push_back(create_device_tensor(output_shapes.at(1), dtype, layout, device, this->output_mem_config));
+    }
+
+    if (output_tensors.at(2).has_value()) {
+        result.push_back(output_tensors.at(2).value());
+    } else {
+        TT_FATAL(false, "Create an optional tensor is not supported yet. fix this after the 9552 issue is addressed.");
+        result.push_back(create_device_tensor(output_shapes.at(2), dtype, layout, device, this->output_mem_config));
+    }
+
+    return result;
 }
 
 operation::ProgramWithCallbacks MorehLayerNorm::create_program(
@@ -451,27 +526,36 @@ operation::ProgramWithCallbacks MorehLayerNorm::create_program(
 
     const auto& gamma = optional_input_tensors.at(0);
     const auto& beta = optional_input_tensors.at(1);
-    auto& mean = optional_input_tensors.at(2);
-    auto& rstd = optional_input_tensors.at(3);
 
     auto& output = output_tensors.at(0);
+    auto& mean = output_tensors.at(1);
+    auto& rstd = output_tensors.at(2);
 
     return moreh_layernorm_impl(
         input, this->normalized_dims, this->eps, output, gamma, beta, mean, rstd, this->compute_kernel_config);
 }
 
-Tensor moreh_layernorm(
+std::vector<std::optional<Tensor>> moreh_layernorm(
     const Tensor& input,
     uint32_t normalized_dims,
     float eps,
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> beta,
+    const std::optional<const Tensor> output,
     const std::optional<const Tensor> mean,
     const std::optional<const Tensor> rstd,
     const MemoryConfig& output_mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({input}, {gamma, beta, mean, rstd}))};
+        Tensor(operation::get_workers_for_op_output({input}, {gamma, beta}))};
+
+    if (mean.has_value()) {
+        output_tensors.push_back(Tensor(operation::get_workers_for_op_output({input}, {gamma, beta})));
+    }
+
+    if (rstd.has_value()) {
+        output_tensors.push_back(Tensor(operation::get_workers_for_op_output({input}, {gamma, beta})));
+    }
 
     auto device = input.device();
     auto compute_kernel_config_val =
@@ -494,9 +578,26 @@ Tensor moreh_layernorm(
         },
         {input},
         output_tensors,
-        {gamma, beta, mean, rstd});
+        {gamma, beta},
+        {output, mean, rstd});
 
-    return output_tensors.at(0);
+    std::vector<std::optional<Tensor>> result;
+    result.reserve(3);
+    result.push_back(output_tensors.at(0));
+
+    if (mean.has_value()) {
+        result.push_back(output_tensors.at(1));
+    } else {
+        result.push_back(std::nullopt);
+    }
+
+    if (rstd.has_value()) {
+        result.push_back(output_tensors.at(2));
+    } else {
+        result.push_back(std::nullopt);
+    }
+
+    return result;
 }
 
 }  // namespace primary
@@ -505,18 +606,19 @@ Tensor moreh_layernorm(
 
 namespace tt_metal {
 
-Tensor moreh_layernorm(
+std::vector<std::optional<Tensor>> moreh_layernorm(
     const Tensor& input,
     uint32_t normalized_dims,
     float eps,
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> beta,
+    const std::optional<const Tensor> output,
     const std::optional<const Tensor> mean,
     const std::optional<const Tensor> rstd,
     const MemoryConfig& output_mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({input}, {gamma, beta, mean, rstd}))};
+        Tensor(operation::get_workers_for_op_output({input}, {gamma, beta}))};
 
     auto device = input.device();
 
@@ -540,9 +642,25 @@ Tensor moreh_layernorm(
         },
         {input},
         output_tensors,
-        {gamma, beta, mean, rstd});
+        {gamma, beta},
+        {output, mean, rstd});
 
-    return output_tensors.at(0);
+    std::vector<std::optional<Tensor>> result;
+    result.reserve(3);
+    result.push_back(output_tensors.at(0));
+    if (mean.has_value()) {
+        result.push_back(output_tensors.at(1));
+    } else {
+        result.push_back(std::nullopt);
+    }
+
+    if (rstd.has_value()) {
+        result.push_back(output_tensors.at(2));
+    } else {
+        result.push_back(std::nullopt);
+    }
+
+    return result;
 }
 
 }  // namespace tt_metal
