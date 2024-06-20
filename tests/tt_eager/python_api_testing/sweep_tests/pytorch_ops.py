@@ -566,6 +566,12 @@ def fmod(x, y, *args, **kwargs):
     return result
 
 
+def unary_fmod(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.fmod(x, value)
+    return result
+
+
 def unary_ne(x, *args, **kwargs):
     value = kwargs.pop("scalar")
     result = torch.ne(x, value)

@@ -84,7 +84,8 @@ enum class UnaryOpType {
     RIGHT_SHIFT,
     FLOOR,
     LEFT_SHIFT,
-    REMAINDER
+    REMAINDER,
+    FMOD
 };
 
 template <typename T>
@@ -116,7 +117,8 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::BITWISE_NOT:
         case UnaryOpType::RIGHT_SHIFT:
         case UnaryOpType::LEFT_SHIFT:
-        case UnaryOpType::REMAINDER: return true;
+        case UnaryOpType::REMAINDER:
+        case UnaryOpType::FMOD: return true;
         default: return false;
     }
     return false;
@@ -424,6 +426,7 @@ constexpr auto bitwise_not = make_eltwise_unary_with_param<UnaryOpType::BITWISE_
 constexpr auto right_shift = make_eltwise_unary_with_param<UnaryOpType::RIGHT_SHIFT>{};
 constexpr auto left_shift = make_eltwise_unary_with_param<UnaryOpType::LEFT_SHIFT>{};
 constexpr auto unary_remainder = make_eltwise_unary_with_param<UnaryOpType::REMAINDER>{};
+constexpr auto unary_fmod = make_eltwise_unary_with_param<UnaryOpType::FMOD>{};
 constexpr auto unary_ne = make_eltwise_unary_with_param<UnaryOpType::UNARY_NE>{};
 constexpr auto rsub = make_eltwise_unary_with_param<UnaryOpType::RSUB>{};
 constexpr auto silu = make_eltwise_unary<UnaryOpType::SILU>{};
