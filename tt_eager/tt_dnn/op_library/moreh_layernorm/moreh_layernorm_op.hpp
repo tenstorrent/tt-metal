@@ -27,11 +27,13 @@ struct MorehLayerNorm {
     MemoryConfig output_mem_config;
     const DeviceComputeKernelConfig compute_kernel_config;
 
-    void validate(
+    void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors,
-        const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
+        const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+        const std::vector<std::optional<Tensor>> &output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
@@ -55,12 +57,13 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const std::optional<const Tensor> rstd,
     const DeviceComputeKernelConfig compute_kernel_config);
 
-Tensor moreh_layernorm(
+std::vector<std::optional<Tensor>> moreh_layernorm(
     const Tensor &input,
     uint32_t normalized_dims,
     float eps,
     const std::optional<const Tensor> gamma = std::nullopt,
     const std::optional<const Tensor> beta = std::nullopt,
+    const std::optional<const Tensor> output = std::nullopt,
     const std::optional<const Tensor> mean = std::nullopt,
     const std::optional<const Tensor> rstd = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
@@ -72,12 +75,13 @@ Tensor moreh_layernorm(
 
 namespace tt_metal {
 
-Tensor moreh_layernorm(
+std::vector<std::optional<Tensor>> moreh_layernorm(
     const Tensor &input,
     uint32_t normalized_dims,
     float eps,
     const std::optional<const Tensor> gamma = std::nullopt,
     const std::optional<const Tensor> beta = std::nullopt,
+    const std::optional<const Tensor> output = std::nullopt,
     const std::optional<const Tensor> mean = std::nullopt,
     const std::optional<const Tensor> rstd = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,

@@ -187,7 +187,7 @@ void MAIN {
             tile_regs_acquire();
             cb_reserve_back(cb_mean, onetile);
 
-            copy_tile_init_with_dt(cb_ex);
+            copy_tile_init_with_dt(cb_ex, is_lastdim_layernorm);
             copy_tile(cb_ex, first_tile, dst0);
             tile_regs_commit();
 
@@ -346,7 +346,7 @@ void MAIN {
             tile_regs_acquire();
             cb_reserve_back(cb_rstd, onetile);
 
-            copy_tile_init_with_dt(cb_recip_std);
+            copy_tile_init_with_dt(cb_recip_std, is_lastdim_layernorm);
             copy_tile(cb_recip_std, first_tile, dst0);
             tile_regs_commit();
 
