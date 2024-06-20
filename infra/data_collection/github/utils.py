@@ -45,7 +45,7 @@ def create_csv(filename, fieldnames, rows):
         writer.writeheader()
 
         for row in rows:
-            assert_all_keys_exist(fieldnames, row)
+            assert_all_fieldnames_exist(fieldnames, row)
             writer.writerow(row)
 
     logger.info(f"Finished writing to file {filename}")
@@ -139,7 +139,17 @@ def get_job_row_from_github_job(github_job):
 
     name = github_job["name"]
 
-    assert github_job["status"] == "completed", f"{github_job_id}"
+    assert github_job["status"] == "completed", f"{github_job_id} is not completed"
+
+    logger.warning(
+        "Using labels to heuristically look for card type, but we should be using future arch- label instead"
+    )
+    if "grayskull" in labels:
+        host_card_type = "grayskull"
+    elif "wormhole_b0" in labels:
+        host_card_type = "wormhole_b0"
+    else:
+        host_card_type = "unknown"
 
     job_submission_ts = github_job["created_at"]
 
@@ -168,7 +178,6 @@ def get_job_row_from_github_job(github_job):
         "job_start_ts": job_start_ts,
         "job_end_ts": job_end_ts,
         "job_success": job_success,
-        "all_test_success": all_test_success,
         "is_build_job": is_build_job,
         "job_matrix_config": job_matrix_config,
         "docker_image": docker_image,
@@ -199,11 +208,14 @@ def create_csvs_for_data_analysis(
 
     job_rows = get_job_rows_from_github_info(github_pipeline_json, github_jobs_json)
 
+    github_pipeline_id = pipeline_row["github_pipeline_id"]
+    github_pipeline_start_ts = pipeline_row["pipeline_start_ts"]
+
     if not github_pipeline_csv_filename:
-        github_pipeline_csv_filename = "pipeline_<github_pipeline_id>_<pipeline_start_ts>.csv"
+        github_pipeline_csv_filename = f"pipeline_{github_pipeline_id}_{github_pipeline_start_ts}.csv"
 
     if not github_jobs_csv_filename:
-        github_jobs_csv_filename = "job_<github_pipeline_id>_<pipeline_start_ts>.csv"
+        github_jobs_csv_filename = f"job_{github_pipeline_id}_{github_pipeline_start_ts}.csv"
 
-    create_csv(github_pipeline_csv_filename, [pipeline_row])
-    create_csv(github_jobs_csv_filename, job_rows)
+    create_csv(github_pipeline_csv_filename, PIPELINE_CSV_FIELDS, [pipeline_row])
+    create_csv(github_jobs_csv_filename, JOB_CSV_FIELDS, job_rows)

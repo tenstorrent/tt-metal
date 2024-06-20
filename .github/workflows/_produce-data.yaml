@@ -29,16 +29,17 @@ jobs:
           echo "docker_image: ${{ job.container.image }}"
           echo "build duration is post-process"
       - name: Output auxiliary values (workflow dispatch)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          ALL_PC_TEST_ID: 9470068019
         run: |
-          echo "[Info] Workflow run"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.run_id }}
           echo "[Info] Workflow run attempt"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }} > workflow.json
+          gh api /repos/tenstorrent/tt-metal/actions/runs/$ALL_PC_TEST_ID/attempts/1
+          gh api /repos/tenstorrent/tt-metal/actions/runs/$ALL_PC_TEST_ID/attempts/1 > workflow.json
           echo "[Info] Workflow run attempt jobs"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs > workflow_jobs.json
+          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/$ALL_PC_TEST_ID/attempts/1/jobs
+          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/$ALL_PC_TEST_ID/attempts/1/jobs > workflow_jobs.json
       - name: Output auxiliary values (workflow_run completed)
         if: ${{ github.event_name == 'workflow_run' }}
         env:
@@ -47,7 +48,7 @@ jobs:
           echo "[Info] Workflow run attempt"
           gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.event.workflow_run.id }}/attempts/${{ github.event.workflow_run.run_attempt }} > workflow.json
           echo "[Info] Workflow run attempt jobs"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ github.event.workflow_run.id }}/attempts/${{ github.event.workflow_run.run_attempt }}/jobs > workflow_jobs.json
+          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/${{ github.event.workflow_run.id }}/attempts/${{ github.event.workflow_run.run_attempt }}/jobs > workflow_jobs.json
       - name: Output github context values to file
         run: |
           echo '${{ toJSON(github) }}' > github_context.json
