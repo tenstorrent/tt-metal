@@ -22,7 +22,7 @@ static const tt::tt_metal::BcastOpMath binary_op_type_to_bcast_op_math(const Bin
     }
 }
 
-BroadcastWidthMultiCore::cached_program_t BroadcastWidthMultiCore::create(
+Binary::BroadcastWidthMultiCore::cached_program_t Binary::BroadcastWidthMultiCore::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -196,10 +196,10 @@ BroadcastWidthMultiCore::cached_program_t BroadcastWidthMultiCore::create(
 
     return {
         std::move(program),
-        BroadcastWidthMultiCore::cached_program_attributes_t{binary_reader_kernel_id, unary_writer_kernel_id, bcast_kernel_id, compute_with_storage_grid_size}};
+        {binary_reader_kernel_id, unary_writer_kernel_id, bcast_kernel_id, compute_with_storage_grid_size}};
 }
 
-void BroadcastWidthMultiCore::override_runtime_arguments(
+void Binary::BroadcastWidthMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
