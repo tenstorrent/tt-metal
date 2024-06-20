@@ -27,6 +27,10 @@ jobs:
           echo "orchestrator: github (Static)"
           echo "docker_image: ${{ job.container.image }}"
           echo "build duration is post-process"
+      - name: Output github context values to file
+        run: |
+          echo '${{ toJSON(github) }}' > github_context.json
+          cat github_context.json
       - name: Output auxiliary values
         env:
           GH_TOKEN: ${{ github.token }}
