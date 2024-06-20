@@ -246,7 +246,7 @@ void ScaledDotProductAttentionDecode::validate(
         TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to softmax must be tilized");
         TT_FATAL(
             input_tensor.get_dtype() == DataType::BFLOAT16 ||
-            input_tensor.get_dtype() == DataType::BFLOAT8_B);
+            input_tensor.get_dtype() == DataType::BFLOAT8_B || input_tensor.get_dtype() == DataType::BFLOAT4_B);
 
     }
 
@@ -254,7 +254,7 @@ void ScaledDotProductAttentionDecode::validate(
     TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
     TT_FATAL(input_tensors.at(0).device() == mask.device());
     TT_FATAL(mask.get_layout() == Layout::TILE);
-    TT_FATAL(mask.get_dtype() == DataType::BFLOAT16 || mask.get_dtype() == DataType::BFLOAT8_B);
+    TT_FATAL(mask.get_dtype() == DataType::BFLOAT16 || mask.get_dtype() == DataType::BFLOAT8_B || mask.get_dtype() == DataType::BFLOAT4_B);
 
     TT_FATAL(mask.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
 
@@ -263,11 +263,11 @@ void ScaledDotProductAttentionDecode::validate(
     const auto v_shape = input_tensors.at(2).get_legacy_shape();
     const auto mask_shape = mask.get_legacy_shape();
 
-    // assert all dataformats are the same
-    TT_FATAL(
-        input_tensors.at(0).get_dtype() == input_tensors.at(1).get_dtype() &&
-        input_tensors.at(0).get_dtype() == input_tensors.at(2).get_dtype() &&
-        input_tensors.at(0).get_dtype() == mask.get_dtype());
+    // // assert all dataformats are the same
+    // TT_FATAL(
+    //     input_tensors.at(0).get_dtype() == input_tensors.at(1).get_dtype() &&
+    //     input_tensors.at(0).get_dtype() == input_tensors.at(2).get_dtype() &&
+    //     input_tensors.at(0).get_dtype() == mask.get_dtype());
 
 
     // Input 0 must be sharded by height. All other inputs must be in DRAM.
