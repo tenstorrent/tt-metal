@@ -16,6 +16,8 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 
+#include "debug/dprint.h"  // required in all kernels using DPRINT
+
 namespace NAMESPACE {
 void max_block_inplace(uint32_t in0, uint32_t in1, uint32_t num_tiles) {
     // inputs come in full, outputs go out full
@@ -428,7 +430,6 @@ void MAIN {
     constexpr uint32_t cb_cur_sum = tt::CB::c_intermed5;
     constexpr uint32_t cb_prev_sum = tt::CB::c_intermed6;
     constexpr uint32_t cb_exp_max_diff = tt::CB::c_intermed7;
-    constexpr uint32_t cb_prev_max_2 = tt::CB::c_out4;
     constexpr uint32_t cb_prev_sum_2 = tt::CB::c_out5;
     constexpr uint32_t cb_exp_max_diff_2 = tt::CB::c_out6;
     constexpr uint32_t cb_out_accumulate_im_2 = tt::CB::c_out7;
@@ -436,6 +437,7 @@ void MAIN {
     constexpr uint32_t cb_out_o = tt::CB::c_out0;
     constexpr uint32_t cb_out_m = tt::CB::c_out1;
     constexpr uint32_t cb_out_l = tt::CB::c_out2;
+    constexpr uint32_t cb_out_final = tt::CB::c_out4;
 
     mm_init();
     cb_wait_front(cb_q_in, q_chunk_tiles);
@@ -566,12 +568,15 @@ void MAIN {
 
                 // DPRINT << "[C] Reduce Iter" << ENDL();
 
-                cb_wait_front(cb_q_in, q_chunk_tiles);  //o_2
+                cb_wait_front(cb_out_o, q_chunk_tiles);  //o_2
                 cb_wait_front(cb_m_in, Sq_chunk_t);  //m_2
                 cb_wait_front(cb_l_in, Sq_chunk_t);  //l_2
 
-                copy_block(cb_q_in, cb_out_accumulate_im_2, q_chunk_tiles);
+                // unpack_reconfig_data_format(cb_q_in, cb_q_in); // DEBUG
+                // pack_reconfig_data_format(cb_out_accumulate_im_2);
+                copy_block(cb_out_o, cb_out_accumulate_im_2, q_chunk_tiles);
                 // copy_block(cb_m_in, cb_prev_max_2, Sq_chunk_t);
+                // pack_reconfig_data_format(cb_prev_sum_2);
                 copy_block(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
 
                 // // DEBUG ONLY: remove these
@@ -619,15 +624,39 @@ void MAIN {
                 /// O_1 = torch.matmul(torch.eye(padded_num_heads) * torch.exp(m_2 - m), O_2)
                 // unpack_reconfig_data_format(cb_out_accumulate_im_2, cb_exp_max_diff_2); // DEBUG
                 // pack_reconfig_data_format(cb_out_accumulate_im_2);
+                // UNPACK(TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK));
+                // UNPACK(TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK));
+                // unpack_reconfig_data_format_srca(cb_out_accumulate_im_2); // DEBUG
+                // UNPACK(TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG));
+                // // MATH(llk_math_reconfig_data_format_srca(cb_out_accumulate_im_2));
+                // // unpack_reconfig_data_format_srcb(cb_exp_max_diff_2); // DEBUG
+                // // UNPACK(tensix_sync());
+                // UNPACK(TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK));
+
+                // UNPACK(DPRINT << "cb_id " << cb_out_accumulate_im_2 << ": { "
+                // << "page_size: " << cb_interface[cb_out_accumulate_im_2].fifo_page_size << ", "
+                // << " }");
+                // UNPACK(DPRINT << "cb_id " << cb_prev_sum_2 << ": { "
+                // << "page_size: " << cb_interface[cb_prev_sum_2].fifo_page_size << ", "
+                // << " }");
+                // UNPACK(DPRINT << "cb_id " << cb_out_accumulate_im << ": { "
+                // << "page_size: " << cb_interface[cb_out_accumulate_im].fifo_page_size << ", "
+                // << " }");
+
                 mul_block_bcast_cols_inplace(cb_out_accumulate_im_2, cb_exp_max_diff_2, Sq_chunk_t, DHt);
+                // DPRINT << "[C] R ckpt 3.1" << ENDL();
                 /// O_2 = torch.matmul(torch.eye(padded_num_heads) * torch.exp(m_1 - m), O_1)
                 // unpack_reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff); // DEBUG
                 // pack_reconfig_data_format(cb_out_accumulate_im);
                 mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, DHt);
+                // DPRINT << "[C] R ckpt 3.2" << ENDL();
                 /// O = O_1 + O_2
                 // unpack_reconfig_data_format(cb_out_accumulate_im, cb_out_accumulate_im_2);
+                // pack_reconfig_data_format(cb_out_accumulate_im);
                 add_block_inplace(cb_out_accumulate_im, cb_out_accumulate_im_2, q_chunk_tiles);
 
+                // unpack_reconfig_data_format(cb_cur_max, cb_cur_max); // DEBUG
+                // pack_reconfig_data_format(cb_cur_max);
                 // DPRINT << "[C] R ckpt 4" << ENDL();
 
                 // copy tiles
@@ -658,8 +687,8 @@ void MAIN {
         unpack_reconfig_data_format(cb_out_accumulate_im, cb_cur_sum); // DEBUG
         pack_reconfig_data_format(cb_out_accumulate_im);
         mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, DHt);
-        pack_reconfig_data_format(cb_out_o);
-        copy_block(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
+        pack_reconfig_data_format(cb_out_final);
+        copy_block(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
 
         // free up cb_prev_max after K chunks
         cb_pop_front(cb_prev_max, Sq_chunk_t);
