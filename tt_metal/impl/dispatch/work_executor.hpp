@@ -116,6 +116,7 @@ class WorkExecutor {
         if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS) {
             stop_worker();
         }
+        this->work_executor_mode = WorkExecutorMode::SYNCHRONOUS;
     }
 
     inline void run_worker() {

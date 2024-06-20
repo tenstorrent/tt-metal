@@ -211,7 +211,12 @@ void DeviceModule(py::module &m_device) {
         | last_dump        | Last dump before process dies    | bool                  |             | No       |
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
-    m_device.def("DeallocateBuffers", &detail::DeallocateBuffers, R"doc(
+    m_device.def("DeallocateBuffers",
+    [] (Device* device) {
+        device->push_work([device] () mutable {
+            device->deallocate_buffers();
+        });
+    }, R"doc(
         Deallocate all buffers associated with Device handle
     )doc");
     m_device.def("BeginTraceCapture",
