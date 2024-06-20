@@ -36,9 +36,9 @@ void kernel_main() {
     constexpr uint32_t num_tiles_to_wait = (out_chunk_tiles+2*PNHt)*num_cores_to_wait;
 
     constexpr bool is_dram = true;
-    constexpr uint32_t cb_out = tt::CB::c_out0;
+    constexpr uint32_t cb_out = tt::CB::c_out4;
     constexpr uint32_t cb_intermed_out = tt::CB::c_out3;  // this cb holds the output intermediates from other worker cores
-    constexpr uint32_t cb_q_in = tt::CB::c_in0;
+    constexpr uint32_t cb_out_o = tt::CB::c_out0;
     constexpr uint32_t cb_m_in = tt::CB::c_in6;
     constexpr uint32_t cb_l_in = tt::CB::c_in7;
 
@@ -86,16 +86,16 @@ void kernel_main() {
         for(uint32_t block = 0; block < num_cores_per_batch; ++block) {
 
             // DPRINT << "[Writer Reducer] Iteration " << block << ENDL();
-            cb_reserve_back(cb_q_in, out_chunk_tiles);
+            cb_reserve_back(cb_out_o, out_chunk_tiles);
             cb_reserve_back(cb_m_in, PNHt);
             cb_reserve_back(cb_l_in, PNHt);
             // DPRINT << "[Writer Reducer] Reserved space in cb for Q, M, L" << ENDL();
 
-            uint32_t q_write_ptr = get_read_ptr(cb_q_in);
+            uint32_t q_write_ptr = get_read_ptr(cb_out_o);
             noc_async_read(intermed_l1_read_addr, q_write_ptr, q_read_size);
             intermed_l1_read_addr+=q_read_size;
             noc_async_read_barrier();
-            cb_push_back(cb_q_in, out_chunk_tiles);
+            cb_push_back(cb_out_o, out_chunk_tiles);
             // DPRINT << "[Writer Reducer] pushed Q" << ENDL();
 
             uint32_t m_write_ptr = get_read_ptr(cb_m_in);
