@@ -100,7 +100,7 @@ ParallelConfig determine_parallel_config(
     auto calculate_grid = [&](uint32_t num_cores_nhw) {
         if (height_sharding) {
             uint32_t cores_x_1 = num_cores_nhw >= device_grid_size[0] ? device_grid_size[0] : num_cores_nhw;
-            uint32_t cores_y_1 = (uint32_t)(num_cores_nhw / device_grid_size[0]);
+            uint32_t cores_y_1 = num_cores_nhw > device_grid_size[0] ? (uint32_t)(num_cores_nhw / device_grid_size[0]) : 1;
             TT_ASSERT(cores_y_1 <= device_grid_size[1], "Internal Error: Incorrect num_cores_nhw");
             CoreRange core_range1 = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x_1 - 1, cores_y_1 - 1}));
             CoreRangeSet grid = CoreRangeSet({core_range1});
