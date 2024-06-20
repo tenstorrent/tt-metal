@@ -30,7 +30,7 @@ def test_perf_2cqs_bare_metal(
 
 @skip_for_wormhole_b0(reason_str="Not tested on single WH")
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2, "trace_region_size": 1327104}], indirect=True
+    "device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2, "trace_region_size": 1332224}], indirect=True
 )
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
