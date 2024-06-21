@@ -352,6 +352,7 @@ static uint32_t process_relay_inline_cmd(uint32_t cmd_ptr,
 // This is used to assemble dispatcher commands when data comes out of band, eg, reading from DRAM
 // That means this command is stateful, incorrect use will be...bad
 // NOTE: this routine assumes we're sending a command header and that is LESS THAN A PAGE
+template<bool cmddat_wrap_enable>
 static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr,
                                                  uint32_t& dispatch_data_ptr) {
 
@@ -363,6 +364,14 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr,
     cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1);
     if (dispatch_data_ptr == downstream_cb_end) {
         dispatch_data_ptr = downstream_cb_base;
+    }
+    uint32_t remaining = cmddat_q_end - data_ptr;
+    if (cmddat_wrap_enable && length > remaining) {
+        // wrap cmddat
+        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
+        dispatch_data_ptr += remaining;
+        length -= remaining;
+        data_ptr = cmddat_q_base;
     }
     noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
     dispatch_data_ptr += length;
@@ -729,17 +738,29 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length) {
     cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
 }
 
+template<bool cmddat_wrap_enable>
 uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr,
                                         uint32_t& downstream__data_ptr) {
 
     volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
     uint32_t total_length = cmd->relay_paged_packed.total_length;
-    uint32_t count = cmd->relay_paged_packed.count * sizeof(CQPrefetchRelayPagedPackedSubCmd) / sizeof(uint32_t);
+    uint32_t sub_cmds_length = cmd->relay_paged_packed.count * sizeof(CQPrefetchRelayPagedPackedSubCmd);
     uint32_t stride = cmd->relay_paged_packed.stride;
     ASSERT(total_length > 0);
     DPRINT << "paged_packed: " << total_length << " " << cmd->relay_paged_packed.stride << ENDL();
 
-    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>((volatile uint32_t tt_l1_ptr *)(cmd_ptr + sizeof(CQPrefetchCmd)), count, l1_cache);
+    uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
+    uint32_t remaining = cmddat_q_end - data_ptr;
+    uint32_t * l1_cache_pos = l1_cache;
+    if (cmddat_wrap_enable && sub_cmds_length > remaining) {
+        // wrap cmddat
+        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>((volatile uint32_t tt_l1_ptr *)(data_ptr), remaining / sizeof(uint32_t), l1_cache_pos);
+        sub_cmds_length -= remaining;
+        data_ptr = cmddat_q_base;
+        l1_cache_pos += remaining / sizeof(uint32_t);
+    }
+
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>((volatile uint32_t tt_l1_ptr *)(data_ptr), sub_cmds_length / sizeof(uint32_t), l1_cache_pos);
 
     process_relay_paged_packed_sub_cmds(total_length);
     return stride;
@@ -1062,7 +1083,7 @@ bool process_cmd(uint32_t& cmd_ptr,
         if (exec_buf) {
             stride = process_exec_buf_relay_paged_packed_cmd(cmd_ptr, downstream_data_ptr);
         } else {
-            stride = process_relay_paged_packed_cmd(cmd_ptr, downstream_data_ptr);
+            stride = process_relay_paged_packed_cmd<cmddat_wrap_enable>(cmd_ptr, downstream_data_ptr);
         }
         break;
 
@@ -1080,7 +1101,7 @@ bool process_cmd(uint32_t& cmd_ptr,
         if (exec_buf) {
             stride = process_exec_buf_relay_inline_noflush_cmd(cmd_ptr, downstream_data_ptr);
         } else {
-            stride = process_relay_inline_noflush_cmd(cmd_ptr, downstream_data_ptr);
+            stride = process_relay_inline_noflush_cmd<cmddat_wrap_enable>(cmd_ptr, downstream_data_ptr);
         }
         break;
 
