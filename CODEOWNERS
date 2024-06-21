@@ -135,7 +135,7 @@ ttnn/CMakeLists.txt @tt-rkim
 tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu
 
 # models
-models/ @boris-drazic
+/models/ @boris-drazic
 models/conv_on_device_utils*.py @tt-nshanker
 models/bert_large_performant @tt-aho @TT-BrianLiu
 models/metal_BERT_large_11 @tt-aho @TT-BrianLiu
