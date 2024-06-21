@@ -11,6 +11,10 @@ on:
   workflow_run:
     workflows:
       - "All post-commit tests"
+      - "(T3K) T3000 demo tests"
+      - "(T3K) T3000 model perf tests"
+      - "(Single-card) Model perf tests"
+      - "(Single-card) Device perf tests"
     types:
       - completed
 
