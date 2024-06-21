@@ -828,26 +828,46 @@ Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const MemoryConfi
 
 // addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2
 Tensor _addcmul(
+    uint8_t queue_id,
     const Tensor& input_a,
     const Tensor& input_b,
     const Tensor& input_c,
     float value,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+
     Tensor t_value = mk_tiled_scalar(value);
-    Tensor t_mul = ttnn::multiply(input_b, input_c, std::nullopt, output_mem_config);
-    Tensor t_factor = bcast(t_mul, t_value, BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
-    t_mul.deallocate();
-    t_value.deallocate();
-    Tensor result = ttnn::add(input_a, t_factor, std::nullopt, output_mem_config);
-    return result;
+    Tensor t_mul = ttnn::multiply(queue_id, input_b, input_c, std::nullopt, output_mem_config);
+    Tensor t_factor = bcast(queue_id, t_mul, t_value, BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
+    if (output_tensor.has_value()) {
+        ttnn::add(queue_id, input_a, output_tensor.value(), std::nullopt,  std::nullopt, output_tensor);
+    }
+    else{
+        output_tensor = ttnn::add(queue_id, input_a, t_factor, std::nullopt, output_mem_config);
+    }
+    return output_tensor.value();
 }
+
 Tensor addcmul(
     const Tensor& input_a,
     const Tensor& input_b,
     const Tensor& input_c,
     float value,
-    const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _addcmul)(input_a, input_b, input_c, value, output_mem_config);
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    uint8_t default_queue_id = 0;
+    return operation::decorate_as_composite(__func__, _addcmul)(default_queue_id, input_a, input_b, input_c, value, output_mem_config, output_tensor);
+}
+
+Tensor addcmul(
+    uint8_t queue_id,
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& input_c,
+    float value,
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    return operation::decorate_as_composite(__func__, _addcmul)(queue_id, input_a, input_b, input_c, value, output_mem_config, output_tensor);
 }
 
 // addcdiv(input,tensor1,tensor2,value)=input+value×tensor1/tensor2

@@ -888,8 +888,8 @@ def mac(x, y, z, *args, **kwargs):
     return x * y + z
 
 
-def addcmul(x, y, z, *args, scalar, **kwargs):
-    result = torch.addcmul(x, y, z, value=scalar)
+def addcmul(x, y, z, *args, value, **kwargs):
+    result = torch.addcmul(x, y, z, value=value)
     return result
 
 

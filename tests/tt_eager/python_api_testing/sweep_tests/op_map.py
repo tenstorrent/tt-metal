@@ -468,6 +468,10 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_addcmul,
         "pytorch_op": pytorch_ops.addcmul,
     },
+    "eltwise-addcmul-optional": {
+        "tt_op": tt_lib_ops.eltwise_addcmul_optional,
+        "pytorch_op": pytorch_ops.addcmul,
+    },
     "eltwise-celu": {
         "tt_op": tt_lib_ops.eltwise_celu,
         "pytorch_op": pytorch_ops.celu,

@@ -527,7 +527,7 @@ def eltwise_addcmul(
     y,
     z,
     *args,
-    scalar,
+    value,
     device,
     dtype,
     layout,
@@ -538,7 +538,37 @@ def eltwise_addcmul(
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
-    t3 = ttl.tensor.addcmul(t0, t1, t2, scalar, output_mem_config=output_mem_config)
+    t3 = ttl.tensor.addcmul(t0, t1, t2, value, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t3)
+
+
+@setup_host_and_device
+def eltwise_addcmul_optional(
+    w,
+    x,
+    y,
+    z,
+    *args,
+    value,
+    device,
+    dtype,
+    layout,
+    queue_id,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(w, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(x, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_tt_tensor(y, device, layout[2], input_mem_config[2], dtype[2])
+    t3 = setup_tt_tensor(z, device, layout[3], input_mem_config[3], dtype[3])
+    cq_id = 0
+
+    if queue_id:
+        ttl.tensor.addcmul(t0, t1, t2, value, output_mem_config=output_mem_config, queue_id=cq_id)
+    else:
+        ttl.tensor.addcmul(t0, t1, t2, value, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t3)
 
