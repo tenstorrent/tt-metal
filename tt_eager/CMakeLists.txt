@@ -11,7 +11,7 @@ set(TT_EAGER_OBJECTS
 
 # Defaults to a shared lib, static lib for production python wheel
 add_library(tt_eager ${TT_EAGER_OBJECTS})
-target_link_libraries(tt_eager PUBLIC compiler_flags linker_flags tt_metal ttnn_lib)     # linker_flags = -rdynamic if tracy enabled
+target_link_libraries(tt_eager PUBLIC compiler_flags linker_flags tt_metal ttnn_lib Boost::container)     # linker_flags = -rdynamic if tracy enabled
 target_include_directories(tt_eager PUBLIC
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}
@@ -21,7 +21,7 @@ target_include_directories(tt_eager PUBLIC
 )
 
 set_target_properties(tt_eager PROPERTIES
-    INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib"
+    INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib:${PROJECT_BINARY_DIR}/_deps/boost_container-build/"
 )
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_lib)
