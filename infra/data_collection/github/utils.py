@@ -115,11 +115,16 @@ def return_first_string_starts_with(starting_string, strings):
 def get_job_row_from_github_job(github_job):
     github_job_id = github_job["id"]
 
+    logger.info(f"Processing github job with ID {github_job_id}")
+
     host_name = github_job["runner_name"]
 
     labels = github_job["labels"]
 
-    if "GitHub Actions " in host_name:
+    if not host_name:
+        logger.debug("Detected null host_name, so will return null host_location")
+        host_location = None
+    elif "GitHub Actions " in host_name:
         host_location = "github"
     else:
         host_location = "tt_cloud"
