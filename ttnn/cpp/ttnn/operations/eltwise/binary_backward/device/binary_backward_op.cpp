@@ -16,8 +16,7 @@
 namespace ttnn::operations::binary_backward {
 
 namespace utils {
-//}
-// using namespace tt::tt_metal;
+
 
 std::vector<Tensor> _atan2_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {

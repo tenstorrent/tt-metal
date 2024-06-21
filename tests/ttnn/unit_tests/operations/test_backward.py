@@ -70,7 +70,7 @@ def run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn_fun
 
     torch_output_tensor = torch_function(torch_input_tensor, torch_other_tensor)
 
-    output_tensor = ttnn_function(grad_tensor, input_tensor, other_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn_function(grad_tensor, input_tensor, other_tensor)
 
     torch_input_tensor.retain_grad()
     torch_other_tensor.retain_grad()
