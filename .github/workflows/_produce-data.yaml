@@ -3,9 +3,18 @@ name: "[internal] Produce data for external analysis"
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      test_workflow_run_id:
+        description: "Unique GitHub workflow run ID to use for data"
+        default: 9605916313
+        type: number
   workflow_run:
     workflows:
       - "All post-commit tests"
+      - "(T3K) T3000 demo tests"
+      - "(T3K) T3000 model perf tests"
+      - "(Single-card) Model perf tests"
+      - "(Single-card) Device perf tests"
     types:
       - completed
 
@@ -32,14 +41,13 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          ALL_PC_TEST_ID: 9470068019
         run: |
           echo "[Info] Workflow run attempt"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/$ALL_PC_TEST_ID/attempts/1
-          gh api /repos/tenstorrent/tt-metal/actions/runs/$ALL_PC_TEST_ID/attempts/1 > workflow.json
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1 > workflow.json
           echo "[Info] Workflow run attempt jobs"
-          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/$ALL_PC_TEST_ID/attempts/1/jobs
-          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/$ALL_PC_TEST_ID/attempts/1/jobs > workflow_jobs.json
+          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1/jobs
+          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1/jobs > workflow_jobs.json
       - name: Output auxiliary values (workflow_run completed)
         if: ${{ github.event_name == 'workflow_run' }}
         env:
@@ -52,7 +60,6 @@ jobs:
       - name: Output github context values to file
         run: |
           echo '${{ toJSON(github) }}' > github_context.json
-          cat github_context.json
       - name: Create CSVs and show
         env:
           PYTHONPATH: ${{ github.workspace }}
@@ -61,3 +68,14 @@ jobs:
         run: ls -hal
       - name: Show CSVs output
         run: cat *.csv
+      - name: Upload context data, even on failure
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: context-data
+          path: |
+            if-no-files-found: warn
+            path: |
+              workflow.json
+              workflow_jobs.json
+              github_context.json
