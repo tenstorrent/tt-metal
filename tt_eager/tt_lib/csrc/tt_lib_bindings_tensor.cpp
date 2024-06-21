@@ -233,6 +233,10 @@ void TensorModule(py::module& m_tensor) {
             Load memory config to file
         )doc");
 
+    auto py_owned_buffer_for_uint8_t =
+        py::class_<owned_buffer::Buffer<uint8_t>>(m_tensor, "owned_buffer_for_uint8_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<owned_buffer::Buffer<uint8_t>, uint8_t>(py_owned_buffer_for_uint8_t);
+
     auto py_owned_buffer_for_uint16_t =
         py::class_<owned_buffer::Buffer<uint16_t>>(m_tensor, "owned_buffer_for_uint16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<owned_buffer::Buffer<uint16_t>, uint16_t>(py_owned_buffer_for_uint16_t);
@@ -300,6 +304,11 @@ void TensorModule(py::module& m_tensor) {
     auto py_owned_buffer_for_bfloat16_t =
         py::class_<owned_buffer::Buffer<bfloat16>>(m_tensor, "owned_buffer_for_bfloat16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<owned_buffer::Buffer<bfloat16>, bfloat16>(py_owned_buffer_for_bfloat16_t);
+
+    auto py_borrowed_buffer_for_uint8_t = py::class_<borrowed_buffer::Buffer<std::uint8_t>>(
+        m_tensor, "borrowed_buffer_for_uint8_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<borrowed_buffer::Buffer<std::uint8_t>, std::uint8_t>(
+        py_borrowed_buffer_for_uint8_t);
 
     auto py_borrowed_buffer_for_uint16_t = py::class_<borrowed_buffer::Buffer<std::uint16_t>>(
         m_tensor, "borrowed_buffer_for_uint16_t", py::buffer_protocol());
