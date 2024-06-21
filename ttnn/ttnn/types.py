@@ -9,6 +9,7 @@ import tt_lib as ttl
 import ttnn
 
 DataType = ttl.tensor.DataType
+uint8 = DataType.UINT8
 uint16 = DataType.UINT16
 int32 = DataType.INT32
 uint32 = DataType.UINT32
