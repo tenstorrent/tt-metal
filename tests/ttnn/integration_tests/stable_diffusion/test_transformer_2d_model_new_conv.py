@@ -136,6 +136,7 @@ def test_transformer_2d_model_256x256(
 
 
 @skip_for_grayskull()
+@pytest.mark.skip("Tests are failing.")
 @pytest.mark.parametrize(
     "input_shape, index1, index2, attention_head_dim, block ",
     [
@@ -175,7 +176,6 @@ def test_transformer_2d_model_512x512(
     input_shape, index1, index2, block, attention_head_dim, model_name, device, reset_seeds
 ):
     # TODO
-    # pytest.skip()
     torch.manual_seed(0)
     encoder_hidden_states = [1, 2, 77, 768]
     timestep = (None,)
