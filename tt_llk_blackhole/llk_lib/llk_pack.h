@@ -289,7 +289,7 @@ inline void _llk_pack_init_(const std::uint32_t pack_dst_format, const std::uint
 
     _llk_pack_configure_addrmod_<untilize, tilize>();
 
-    _llk_pack_mop_config_<untilize, zero_output, FaceLayout, write_tile_header>(
+    _llk_pack_mop_config_<untilize, zero_output, FaceLayout, write_tile_header, tilize>(
         pack_dst_format,
         face_r_dim,
         tile_c_dim,
@@ -322,8 +322,6 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
     mop_run(1, 1);
 
     TT_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); //reset z counters
-
-    TT_LOG("Done tile pack");
 }
 
 #include "llk_pack_untilize.h"
