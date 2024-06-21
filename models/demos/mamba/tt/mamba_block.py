@@ -11,6 +11,7 @@ from typing import Callable
 from models.demos.mamba.reference.args import ModelArgs
 from models.demos.mamba.tt.mamba_one_step_ssm import TtMambaSSM
 from models.demos.mamba.tt.types import ModelMode
+from models.demos.mamba.tt.mamba_conv import MambaConv
 
 
 class TtMambaBlock(torch.nn.Module):
@@ -80,16 +81,26 @@ class TtMambaBlock(torch.nn.Module):
                     )
                 )
         elif self.mode == ModelMode.PREFILL:
-            self.torch_depthwise_conv1d = torch.nn.Conv1d(
-                in_channels=self.args.d_inner,
-                out_channels=self.args.d_inner,
-                kernel_size=4,
-                padding=3,
-                groups=self.args.d_inner,
-                bias=True,
-            )
-            self.torch_depthwise_conv1d.weight.data = load_fn(conv1d_weight_name, return_as_torch=True)
-            self.torch_depthwise_conv1d.bias.data = load_fn(conv1d_bias_name, return_as_torch=True)
+            pytorch = False
+            if pytorch:
+                self.torch_depthwise_conv1d = torch.nn.Conv1d(
+                    in_channels=self.args.d_inner,
+                    out_channels=self.args.d_inner,
+                    kernel_size=4,
+                    padding=3,
+                    groups=self.args.d_inner,
+                    bias=True,
+                )
+                self.torch_depthwise_conv1d.weight.data = load_fn(conv1d_weight_name, return_as_torch=True)
+                self.torch_depthwise_conv1d.bias.data = load_fn(conv1d_bias_name, return_as_torch=True)
+            else:
+                self.tt_depthwise_conv1d = MambaConv(self.device, self.args, load_fn, conv1d_weight_name)
+
+                self.conv1d_bias = load_fn(
+                    conv1d_bias_name,
+                    lambda x: x.repeat(self.args.seq_len * self.batch_size, 1),
+                    postfix=f"{args.seq_len*self.batch_size}",
+                )
 
         self.tt_ssm = TtMambaSSM(self.args, self.device, configs, load_fn)
 
@@ -102,16 +113,25 @@ class TtMambaBlock(torch.nn.Module):
     def forward(self, x):
         assert len(x.shape) == 4, "Mamba block expects inputs to be rank 4"
 
-        residual_connection = x  # b, e=d_model
+        residual = ttnn.linear(
+            x,
+            self.mlp_proj_weights,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+            use_1d_systolic_array=True,
+            dtype=self.configs["dtype"]["activations"],
+            activation="silu",
+        )
 
         x_ssm = ttnn.linear(
             x,
             self.ssm_in_proj_weights,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             use_1d_systolic_array=True,
-            dtype=self.configs["dtype"]["activations"],
+            dtype=ttnn.bfloat16,
         )
+        ttnn.deallocate(x)
 
         if self.mode == ModelMode.DECODE:
             # shift the states leftward
@@ -168,38 +188,45 @@ class TtMambaBlock(torch.nn.Module):
             ttnn.deallocate(conv1d_bias)
 
         elif self.mode == ModelMode.PREFILL:
-            x_ssm_torch = ttnn.to_torch(x_ssm)
-            ttnn.deallocate(x_ssm)
-            x_ssm_torch = x_ssm_torch.squeeze(0).squeeze(0).permute(1, 0).unsqueeze(0)
-            conv_out_with_bias = self.torch_depthwise_conv1d(x_ssm_torch)
-            x_ssm_torch.data = torch.tensor([])
-            # omit the padding at the end
-            conv_out_with_bias = conv_out_with_bias[:, :, :-3]
-            conv_out_with_bias = conv_out_with_bias.squeeze(0).permute(1, 0).unsqueeze(0).unsqueeze(0)
-            conv_out_with_bias = ttnn.from_torch(
-                conv_out_with_bias,
-                device=self.device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                dtype=self.configs["dtype"]["activations"],
-            )
+            pytorch = False
+            if pytorch:
+                x_ssm_torch = ttnn.to_torch(x_ssm).float()
+                ttnn.deallocate(x_ssm)
+                x_ssm_torch = x_ssm_torch.squeeze(0).squeeze(0).permute(1, 0).unsqueeze(0)
+                conv_out_with_bias = self.torch_depthwise_conv1d(x_ssm_torch)
+                x_ssm_torch.data = torch.tensor([])
+                # omit the padding at the end
+                conv_out_with_bias = conv_out_with_bias[:, :, :-3]
+                conv_out_with_bias = conv_out_with_bias.squeeze(0).permute(1, 0).unsqueeze(0).unsqueeze(0)
+                conv_out_with_bias = ttnn.from_torch(
+                    conv_out_with_bias,
+                    device=self.device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    dtype=self.configs["dtype"]["activations"],
+                )
+            else:
+                # x_ssm_host = ttnn.from_device(x_ssm)
+                # ttnn.deallocate(x_ssm)
+                # x_ssm_host = ttnn.to_layout(x_ssm_host, ttnn.ROW_MAJOR_LAYOUT)
+                conv_out_without_bias = self.tt_depthwise_conv1d(x_ssm)
+                ttnn.deallocate(x_ssm)
+                conv_out_without_bias = ttnn.to_memory_config(
+                    conv_out_without_bias, memory_config=ttnn.L1_MEMORY_CONFIG
+                )
+                conv_out_with_bias = ttnn.add(
+                    conv_out_without_bias,
+                    self.conv1d_bias,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    dtype=self.configs["dtype"]["activations"],
+                )
+                ttnn.deallocate(conv_out_without_bias)
 
         conv_out_with_bias_l1 = ttnn.to_memory_config(conv_out_with_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
         conv_out_after_silu = ttnn.silu(conv_out_with_bias_l1, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(conv_out_with_bias_l1)
 
         ssm_output = self.tt_ssm(conv_out_after_silu)
-
-        residual = ttnn.linear(
-            residual_connection,
-            self.mlp_proj_weights,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-            use_1d_systolic_array=True,
-            dtype=self.configs["dtype"]["activations"],
-            activation="silu",
-        )
-        ttnn.deallocate(residual_connection)
 
         out = ttnn.mul(
             ssm_output,

@@ -99,6 +99,7 @@ class PytorchMambaBlockPrefill(torch.nn.Module):
         return result
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "model_version, seqlen, pcc",
     (

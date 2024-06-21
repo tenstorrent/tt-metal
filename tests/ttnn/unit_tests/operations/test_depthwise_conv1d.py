@@ -52,8 +52,8 @@ def run_conv(
 ):
     has_bias = False
     assert has_bias == False, "Bias is not supported in this test"
-    assert (
-        input_width == 1 and filter_width == 1
+    assert (input_width == 1 and filter_width == 1) or (
+        input_height == 1 and filter_height == 1
     ), "Input and kernel width must be 1, only 1D convolutions are supported in this test"
     assert (
         groups == input_channels
@@ -95,7 +95,9 @@ def run_conv(
             torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
         )
 
+    torch_input_tensor = torch_input_tensor.permute(0, 2, 1, 3)
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+    tt_input_tensor_on_device = ttnn.to_device(tt_input_tensor, device)
 
     conv_config = ttnn.DepthwiseConv1dConfig(
         dtype=weights_dtype,
@@ -110,7 +112,7 @@ def run_conv(
         print("Setting Act Block H to ", conv_config.act_block_h_override)
 
     [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.depthwise_conv1d(
-        input_tensor=tt_input_tensor,
+        input_tensor=tt_input_tensor_on_device,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
         out_channels=output_channels,
@@ -144,7 +146,10 @@ def run_conv(
         pcc = 0.9969
     else:
         pcc = 0.998
-    torch_out_golden_tensor = torch_out_golden_tensor[:, :, :-3, :]
+    if filter_width == 1:
+        torch_out_golden_tensor = torch_out_golden_tensor[:, :, :-3, :]
+    elif filter_height == 1:
+        torch_out_golden_tensor = torch_out_golden_tensor[:, :, :, :-3]
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     print(pcc_msg)
     assert passing
@@ -155,9 +160,9 @@ def run_conv(
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, use_1d_systolic_array, config_override",
     (
-        # (1, 1, 32, 1024, 1, 4, 1, 1, 1, 3, 0, 32, True, None),
-        # (1, 1, 512, 1024, 1, 4, 1, 1, 1, 3, 0, 512, True, None),
-        # (1, 1, 2560, 1760, 1, 4, 1, 1, 1, 3, 0, 2560, True, None),
+        (1, 1, 32, 32, 1, 4, 1, 1, 1, 3, 0, 32, True, None),
+        (1, 1, 512, 1024, 1, 4, 1, 1, 1, 3, 0, 512, True, None),
+        (1, 1, 2560, 1760, 1, 4, 1, 1, 1, 3, 0, 2560, True, None),
         (1, 1, 5120, 1760, 1, 4, 1, 1, 1, 3, 0, 5120, True, None),
     ),
 )
