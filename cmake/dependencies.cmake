@@ -9,6 +9,7 @@ include(${PROJECT_SOURCE_DIR}/cmake/fetch_boost.cmake)
 
 fetch_boost_library(interprocess)
 fetch_boost_library(smart_ptr)
+fetch_boost_library(container)
 
 ############################################################################################################################
 # yaml-cpp
