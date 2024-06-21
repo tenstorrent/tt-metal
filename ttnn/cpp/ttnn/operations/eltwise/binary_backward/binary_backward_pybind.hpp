@@ -57,13 +57,14 @@ Example:
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor_a,
                const ttnn::Tensor& input_tensor_b,
-               const ttnn::MemoryConfig& memory_config) -> std::vector<Tensor> {
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<Tensor> {
                 return self(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
-            py::arg("memory_config")});
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace detail

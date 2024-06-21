@@ -57,11 +57,12 @@ struct ExecuteBinaryBackward {
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
-        const MemoryConfig &memory_config) {
+        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
 
         auto op_type = utils::get_function(binary_backward_op_type);
 
-        return tt::tt_metal::operation::decorate_as_composite(__func__, op_type)(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, memory_config);
+        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
+        return tt::tt_metal::operation::decorate_as_composite(__func__, op_type)(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config);
         }
 
     static inline std::vector<Tensor> create_async_output_tensors(
