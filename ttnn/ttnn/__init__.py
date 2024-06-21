@@ -452,10 +452,7 @@ from ttnn.operations.binary import (
     divide,
 )
 
-from ttnn.operations.binary_backward import (
-    atan2_bw,
-    embedding_bw,
-)
+from ttnn.operations.binary_backward import atan2_bw, embedding_bw, addalpha_bw
 
 from ttnn.operations.ternary import (
     addcdiv,
