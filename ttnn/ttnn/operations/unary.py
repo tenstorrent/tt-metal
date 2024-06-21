@@ -229,7 +229,7 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, param):
             operation_name,
             input_tensor,
             ranks=(2, 3, 4),
-            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32, ttnn.uint32, ttnn.int32, ttnn.uint16),
+            dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32, ttnn.uint32, ttnn.int32, ttnn.uint8, ttnn.uint16),
             layouts=(ttnn.TILE_LAYOUT,),
             can_be_on_device=True,
             can_be_on_cpu=False,
