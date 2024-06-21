@@ -133,6 +133,17 @@ void kernel_main() {
             // read data from other cores - reduce first stage
             uint32_t l1_read_addr_ex_par = get_read_ptr(cb_partial);
             l1_read_addr_ex_par += all_to_all_tile_offset_bytes;
+            // read data from other cores - second stage reduce
+            uint32_t l1_read_addr_ex = 0;
+            uint32_t block_index_stride = 0;
+            if constexpr(use_two_stage_reduce) {
+                l1_read_addr_ex = get_read_ptr(cb_reduce_first_stage);
+                if constexpr(row_major) {
+                    block_index_stride = num_x;
+                } else {
+                    block_index_stride = num_y;
+                }
+            }
             for (uint32_t i = 0; i < num_tiles_to_read; i++) {
                 cb_reserve_back(cb_external, num_blocks_first_stage);
                 uint32_t l1_write_addr_external = get_write_ptr(cb_external);
@@ -144,27 +155,16 @@ void kernel_main() {
                 l1_read_addr_ex_par += single_tile_size_bytes;
                 noc_async_read_barrier();
                 cb_push_back(cb_external, num_blocks_first_stage);
-            }
 
-            // read data from other cores - reduce first stage
-            if constexpr(use_two_stage_reduce) {
-                if (is_second_stage_reader) { // gather data from a column of cores (if row major)
+                // read data from other cores - reduce first stage
+                if constexpr(use_two_stage_reduce) {
+                    if (is_second_stage_reader) { // gather data from a column of cores (if row major)
+                        if (i == 0) {
+                            noc_semaphore_wait(reduce_second_stage_semaphore_addr_ptr, num_blocks_second_stage-1);
+                            noc_semaphore_set(reduce_second_stage_semaphore_addr_ptr, 0);
+                        }
 
-                    noc_semaphore_wait(reduce_second_stage_semaphore_addr_ptr, num_blocks_second_stage-1);
-                    noc_semaphore_set(reduce_second_stage_semaphore_addr_ptr, 0);
-
-                    uint32_t block_index_stride;
-                    if constexpr(row_major) {
-                        block_index_stride = num_x;
-                    } else {
-                        block_index_stride = num_y;
-                    }
-
-                    // read data from other cores - second stage reduce
-                    uint32_t l1_read_addr_ex = get_read_ptr(cb_reduce_first_stage);
-                    for (uint32_t i = 0; i < num_tiles_per_worker; ++i) {
-                        cb_reserve_back(cb_external, num_blocks_second_stage - 1);
-                        uint32_t l1_write_addr_external = get_write_ptr(cb_external);
+                        // read data from other cores - second stage reduce
                         for(uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
                             uint64_t noc_addr_ex = remote_noc_addrs_second_stage[block + 1] | l1_read_addr_ex;
                             noc_async_read_one_packet(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
@@ -174,7 +174,12 @@ void kernel_main() {
                         noc_async_read_barrier();
                         cb_push_back(cb_external, num_blocks_second_stage - 1);
                     }
+                }
+            }
 
+            // read data from other cores - reduce first stage
+            if constexpr(use_two_stage_reduce) {
+                if (is_second_stage_reader) { // gather data from a column of cores (if row major)
                     // sync with the mcast sender
                     cb_wait_front(cb_ex, num_tiles_to_read);
                     noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
