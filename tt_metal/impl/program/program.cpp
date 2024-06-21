@@ -810,8 +810,21 @@ void Program::compile(Device *device) {
     std::vector<std::shared_future<void>> events;
     DprintServerSetProfilerState(profile_kernel);
 
+    auto valid_kernel_placement = [](std::shared_ptr<Kernel> kernel, const std::vector<CoreCoord> &logical_non_programmable_cores) {
+        for (const CoreCoord &non_programmable_core : logical_non_programmable_cores) {
+            if (kernel->is_on_logical_core(non_programmable_core)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
     for (auto &[core_type, kernels] : kernels_) {
         for (auto &[id, kernel] : kernels) {
+            TT_ASSERT(core_type == CoreType::Eth or valid_kernel_placement(kernel, tt::get_logical_storage_cores(device->id(), device->num_hw_cqs())),
+                "Illegal kernel placement for {}! Kernels cannot be assigned to storage only cores.", kernel->name());
+            TT_ASSERT(core_type == CoreType::Eth or std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr or valid_kernel_placement(kernel, tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs())),
+                "Illegal kernel placement for {}! Kernels cannot be assigned to cores reserved for dispatch.", kernel->name());
             launch_build_step(
                 [kernel, device, this] {
                     JitBuildOptions build_options(device->build_env());
