@@ -15,27 +15,6 @@ namespace tt {
 
 namespace tt_metal {
 
-std::vector<std::optional<Tensor>> addalpha_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    float alpha,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
-
-std::vector<std::optional<Tensor>> addalpha_bw(
-    uint8_t queue_id,
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    float alpha,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
-
 std::vector<Tensor> addcmul_bw(
     const Tensor& grad,
     const Tensor& input,

@@ -8,7 +8,6 @@
 #include "device/binary_backward_op.cpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"
-#include "tt_eager/tt_dnn/op_library/run_operation.hpp"
 
 namespace ttnn {
 
@@ -48,6 +47,14 @@ struct ExecuteBinaryBackward {
                 false}};
     }
 
+    static inline std::vector<Tensor> create_async_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+        const auto& input_tensor = input_tensors.at(0);
+        return {Tensor(operation::get_workers_for_op_output({input_tensor})),
+                                            Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    }
+
+    //Type 1: 2 inputs, 1 grad tensor
     template <typename... Args>
     static auto input_tensors_to_validate(const Tensor &grad_tensor, const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
         return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b);
@@ -59,25 +66,65 @@ struct ExecuteBinaryBackward {
         const Tensor &input_tensor_b_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
 
-        auto op_type = utils::get_function(binary_backward_op_type);
-
+        auto op_type = utils::get_function_type1(binary_backward_op_type);
         auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
-        return tt::tt_metal::operation::decorate_as_composite(__func__, op_type)(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config);
+        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config);
         }
 
-    static inline std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {Tensor(operation::get_workers_for_op_output({input_tensor})),
-                                            Tensor(operation::get_workers_for_op_output({input_tensor}))};
+
+    //Type 2 : Q_ID, type1 args, optional output tensor for inputs based on are_required_outputs value
+    template <typename... Args>
+    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor &grad_tensor, const Tensor &input_tensor_a, const Tensor &input_tensor_b, float alpha, Args &&...args) {
+        return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b);
     }
+
+    static std::vector<ttnn::Tensor> execute_on_worker_thread(
+        uint8_t queue_id,
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        float alpha,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
+        std::optional<Tensor> optional_input_a_grad = std::nullopt,
+        std::optional<Tensor> optional_input_b_grad = std::nullopt) {
+
+        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
+        auto op_type = utils::get_function_type2(binary_backward_op_type);
+        return op_type(queue_id, grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, output_memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
+    }
+
+    //Type 3 : type1 args, optional output tensor for inputs based on are_required_outputs value
+    template <typename... Args>
+    static auto input_tensors_to_validate(const Tensor &grad_tensor, const Tensor &input_tensor_a, const Tensor &input_tensor_b, float alpha, Args &&...args) {
+        return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b);
+    }
+
+    static std::vector<ttnn::Tensor> execute_on_worker_thread(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        float alpha,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
+        std::optional<Tensor> optional_input_a_grad = std::nullopt,
+        std::optional<Tensor> optional_input_b_grad = std::nullopt) {
+
+        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
+        auto op_type = utils::get_function_type2_wo_qid(binary_backward_op_type);
+        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, output_memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
+    }
+
 };
 
 }  // operations::binary
 
+//type 1
 constexpr auto atan2_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::ATAN2_BW>>("ttnn::atan2_bw");
-
 constexpr auto embedding_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::EMBEDDING_BW>>("ttnn::embedding_bw");
+
+//type 2
+constexpr auto addalpha_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::ADDALPHA_BW>>("ttnn::addalpha_bw");
 
 
 }  // namespace ttnn
