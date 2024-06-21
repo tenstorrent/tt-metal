@@ -581,6 +581,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         }
         num_blocks_second_stage = num_cores_all_to_all_second_stage;
     }
+    // change CB external size
+    if (use_two_stage_reduce) {
+        ex_external_CB_size = (num_blocks_first_stage + num_blocks_second_stage - 1) * single_tile_size;
+    }
     uint32_t num_none_all_to_all_workers = num_blocks - num_cores_all_to_all;
     if (num_rows_per_all_to_all_worker_last == 0)
         num_rows_per_all_to_all_worker_last = num_rows_per_all_to_all_worker;

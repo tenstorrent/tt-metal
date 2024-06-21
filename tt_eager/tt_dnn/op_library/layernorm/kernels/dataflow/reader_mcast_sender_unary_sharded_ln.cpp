@@ -104,7 +104,20 @@ void kernel_main() {
 
         // read data from other cores - first stage reduce
         uint32_t l1_read_addr_ex_par = get_read_ptr(cb_partial);
+        // read data from other cores - second stage reduce
+        uint32_t l1_read_addr_ex = 0;
+        uint32_t block_index_stride = 0;
+        if constexpr(use_two_stage_reduce) {
+            l1_read_addr_ex = get_read_ptr(cb_reduce_first_stage);
+            if constexpr(row_major) {
+                block_index_stride = num_x;
+            } else {
+                block_index_stride = num_y;
+            }
+        }
+        // read from both stage
         for (uint32_t i = 0; i < num_tiles_per_worker; ++i) {
+            // first stage
             cb_reserve_back(cb_external, num_blocks_first_stage);
             uint32_t l1_write_addr_external = get_write_ptr(cb_external);
             for(uint32_t block = 0; block < num_blocks_first_stage; ++block) {
@@ -115,27 +128,15 @@ void kernel_main() {
             l1_read_addr_ex_par += single_tile_size_bytes;
             noc_async_read_barrier();
             cb_push_back(cb_external, num_blocks_first_stage);
-        }
 
-        // sync with second-stage all-to-all workers
-        if constexpr(use_two_stage_reduce) {
+            // sync with second-stage all-to-all workers
+            if constexpr(use_two_stage_reduce) {
+                if (i == 0) {
+                    noc_semaphore_wait(reduce_second_stage_semaphore_addr_ptr, num_blocks_second_stage-1);
+                    noc_semaphore_set(reduce_second_stage_semaphore_addr_ptr, 0);
+                }
 
-            noc_semaphore_wait(reduce_second_stage_semaphore_addr_ptr, num_blocks_second_stage-1);
-            noc_semaphore_set(reduce_second_stage_semaphore_addr_ptr, 0);
-
-            uint32_t block_index_stride;
-            if constexpr(row_major) {
-                block_index_stride = num_x;
-            } else {
-                block_index_stride = num_y;
-            }
-
-            // read data from other cores - second stage reduce
-            uint32_t l1_read_addr_ex = get_read_ptr(cb_reduce_first_stage);
-            for (uint32_t i = 0; i < num_tiles_per_worker; ++i) {
                 uint32_t curr_block_index = block_index_stride;
-                cb_reserve_back(cb_external, num_blocks_second_stage - 1);
-                uint32_t l1_write_addr_external = get_write_ptr(cb_external);
                 for(uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
                     uint64_t noc_addr_ex = remote_noc_addrs[curr_block_index] | l1_read_addr_ex;
                     noc_async_read_one_packet(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
@@ -148,7 +149,7 @@ void kernel_main() {
             }
         }
 
-        uint32_t l1_read_addr_ex = get_read_ptr(cb_ex);
+        l1_read_addr_ex = get_read_ptr(cb_ex);
         uint32_t l1_write_addr_ex_global = get_write_ptr(cb_ex_global);
         cb_wait_front(cb_ex, num_tiles_per_worker);
 
