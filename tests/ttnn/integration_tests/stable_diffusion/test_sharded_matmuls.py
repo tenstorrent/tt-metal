@@ -1699,7 +1699,7 @@ def test_matmul(
         assert fused_activation is None
 
     if program_config_type == "MatmulMultiCoreReuseMultiCastProgramConfig":
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
@@ -1710,7 +1710,7 @@ def test_matmul(
             fused_activation=fused_activation,
         )
     elif program_config_type == "MatmulMultiCoreReuseMultiCast1DProgramConfig":
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
@@ -1740,13 +1740,13 @@ def test_matmul(
             kernel_config=compute_kernel_config,
         )
     else:
-        out = ttnn.experimental.operations.primary.matmul(
+        out = ttnn.linear(
             in_0,
             in_1,
             bias=in_2 if bias else None,
             program_config=program_config,
-            output_mem_config=output_mem_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B
+            memory_config=output_mem_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B
             if output_dtype == "BFLOAT8_B"
             else ttnn.experimental.tensor.DataType.BFLOAT16,
             compute_kernel_config=compute_kernel_config,

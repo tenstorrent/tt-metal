@@ -24,7 +24,7 @@ parameters = {
         (
             (1,),
             (5 * 128, 7 * 64, 7 * 96),
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(7, 5),
                 in0_block_w=1,  # Modified by in0_block_w test parameter
                 out_subblock_h=1,
@@ -48,7 +48,7 @@ parameters = {
         (
             (1,),
             (5 * 128, 7 * 64, 7 * 96),
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(5, 7),
                 in0_block_w=1,  # Modified by in0_block_w test parameter
                 out_subblock_h=1,
@@ -73,7 +73,7 @@ parameters = {
         (
             (1,),
             (5 * 128, 4 * 64, 7 * 96),
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(7, 5),
                 in0_block_w=1,  # Modified by in0_block_w test parameter
                 out_subblock_h=1,
@@ -97,7 +97,7 @@ parameters = {
         (
             (1,),
             (5 * 128, 4 * 64, 7 * 96),
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(5, 7),
                 in0_block_w=1,  # Modified by in0_block_w test parameter
                 out_subblock_h=1,
@@ -122,7 +122,7 @@ parameters = {
         (
             (1,),
             (5 * 128, 7 * 64, 4 * 96),
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(7, 5),
                 in0_block_w=1,  # Modified by in0_block_w test parameter
                 out_subblock_h=1,
@@ -146,7 +146,7 @@ parameters = {
         (
             (1,),
             (5 * 128, 7 * 64, 4 * 96),
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(5, 7),
                 in0_block_w=1,  # Modified by in0_block_w test parameter
                 out_subblock_h=1,
