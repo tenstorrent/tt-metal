@@ -37,8 +37,8 @@ void kernel_main() {
         return;
     }
     const uint32_t sender_id                                      = get_arg_val<uint32_t>(1);
-    volatile tt_l1_ptr uint32_t * in0_mcast_sender_noc_x          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(2));
-    volatile tt_l1_ptr uint32_t * in0_mcast_sender_noc_y          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(2 + num_storage_cores));
+    tt_l1_ptr uint32_t * in0_mcast_sender_noc_x          = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
+    tt_l1_ptr uint32_t * in0_mcast_sender_noc_y          = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + num_storage_cores));
 
     const uint32_t sender_block_id = sender_id * num_blocks_per_shard;
 

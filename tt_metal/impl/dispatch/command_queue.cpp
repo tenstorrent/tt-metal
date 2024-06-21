@@ -419,13 +419,13 @@ void generate_dispatch_write_packed(
 void EnqueueProgramCommand::assemble_runtime_args_commands() {
     // Maps to enum class RISCV, tt_backend_api_types.h
     thread_local static const std::vector<uint32_t> unique_processor_to_l1_arg_base_addr = {
-        BRISC_L1_ARG_BASE,
-        NCRISC_L1_ARG_BASE,
+        L1_KERNEL_CONFIG_BASE,
+        L1_KERNEL_CONFIG_BASE + max_runtime_args * sizeof(uint32_t),
         0,
         0,
         0,
-        eth_l1_mem::address_map::ERISC_L1_ARG_BASE,
-        TRISC_L1_ARG_BASE,
+        eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE,
+        L1_KERNEL_CONFIG_BASE + 2 * max_runtime_args * sizeof(uint32_t),
     };
     CoreType dispatch_core_type =
         dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());
@@ -486,7 +486,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
         if (common_rt_args.size() > 0) {
             common_kernels.insert(kernel_id);
             uint32_t common_args_addr =
-                unique_processor_to_l1_arg_base_addr[processor_idx] + kernel->get_common_runtime_args_offset();
+                unique_processor_to_l1_arg_base_addr[processor_idx] + kernel->get_common_runtime_args_index() * sizeof(uint32_t);
             common_processor_to_l1_arg_base_addr[kernel_id] = common_args_addr;
             common_rt_data_and_sizes[kernel_id].emplace_back(
                 common_rt_args.data(), common_rt_args.size() * sizeof(uint32_t));

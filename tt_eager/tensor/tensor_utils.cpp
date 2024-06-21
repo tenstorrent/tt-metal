@@ -176,14 +176,7 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
     TT_ASSERT(
         conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
         "Convolution weights should be in row major layout for conversion to tilized layout.");
-    const static std::map<
-        DataType,
-        std::function<Tensor(const Tensor&, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype)>>
-        to_w_tile_layout_map = {
-            {DataType::BFLOAT16, &to_weight_tile_layout<bfloat16>},
-            {DataType::FLOAT32, &to_weight_tile_layout<float>},
-            {DataType::UINT32, &to_weight_tile_layout<uint32_t>},
-        };
+
     if (output_dtype.has_value()) {
         if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
             TT_ASSERT(conv_weight_tensor.get_dtype() == DataType::FLOAT32);
@@ -191,8 +184,19 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
             TT_ASSERT(conv_weight_tensor.get_dtype() == conv_weight_tensor.get_dtype());
         }
     }
-    return to_w_tile_layout_map.at(conv_weight_tensor.get_dtype())(
-        conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
+
+    switch (conv_weight_tensor.get_dtype()) {
+        case DataType::BFLOAT16:
+            return to_weight_tile_layout<bfloat16>(
+                conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
+        case DataType::FLOAT32:
+            return to_weight_tile_layout<float>(
+                conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
+        case DataType::UINT32:
+            return to_weight_tile_layout<uint32_t>(
+                conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
+        default: TT_THROW("Unsupported data type");
+    }
 }
 
 // Converts convolution weights to tilized 2d matrix layout.
@@ -202,13 +206,7 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
     TT_ASSERT(
         conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
         "Convolution weights should be in row major layout for conversion to tilized layout.");
-    const static std::map<
-        DataType,
-        std::function<Tensor(const Tensor&, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype)>>
-        to_w_tile_layout_map = {
-            {DataType::BFLOAT16, &to_weight_special_padding_tile_layout<bfloat16>},
-            {DataType::FLOAT32, &to_weight_special_padding_tile_layout<float>},
-            {DataType::UINT32, &to_weight_special_padding_tile_layout<uint32_t>}};
+
     if (output_dtype.has_value()) {
         if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
             TT_ASSERT(conv_weight_tensor.get_dtype() == DataType::FLOAT32);
@@ -216,8 +214,19 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
             TT_ASSERT(conv_weight_tensor.get_dtype() == conv_weight_tensor.get_dtype());
         }
     }
-    return to_w_tile_layout_map.at(conv_weight_tensor.get_dtype())(
-        conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
+
+    switch (conv_weight_tensor.get_dtype()) {
+        case DataType::BFLOAT16:
+            return to_weight_special_padding_tile_layout<bfloat16>(
+                conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
+        case DataType::FLOAT32:
+            return to_weight_special_padding_tile_layout<float>(
+                conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
+        case DataType::UINT32:
+            return to_weight_special_padding_tile_layout<uint32_t>(
+                conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
+        default: TT_THROW("Unsupported data type");
+    }
 }
 
 /*

@@ -22,14 +22,11 @@ from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model_config_entries
 from models.utility_functions import (
     disable_compilation_reports,
-    disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     profiler,
     torch2tt_tensor,
-    tt2torch_tensor,
     tt_tensors_to_torch_tensors,
     nearest_32,
-    get_devices_for_t3000,
 )
 
 END_OF_TEXT = 11
@@ -87,7 +84,7 @@ def preprocess_and_validate_inputs(input_prompts, tokenizer, max_seq_len, perf_m
 
 # TODO: Remove once we have prefill on device
 def initialize_and_fill_kv_cache(
-    pytorch_FalconCausalLM, model_config, configuration, prefill_ids, num_layers, batch_size, max_seq_len, devices
+    pytorch_FalconCausalLM, model_config, configuration, prefill_ids, num_layers, batch_size, max_seq_len, device_mesh
 ):
     logger.info("Generating kv cache on host")
 
@@ -110,30 +107,23 @@ def initialize_and_fill_kv_cache(
         tt_v_cache_host = torch.zeros(batch_size, configuration.num_kv_heads, max_seq_len, head_dim)
         tt_k_cache_host[:num_users, :, :kv_cache_len, :] = k_cache
         tt_v_cache_host[:num_users, :, :kv_cache_len, :] = v_cache
-        tt_k_cache_host = torch.chunk(tt_k_cache_host, len(devices), 1)
-        tt_v_cache_host = torch.chunk(tt_v_cache_host, len(devices), 1)
 
-        tt_k_cache = []
-        tt_v_cache = []
-        for j in range(len(devices)):
-            tt_k_cache.append(
-                torch2tt_tensor(
-                    tt_k_cache_host[j],
-                    devices[j],
-                    ttnn.experimental.tensor.Layout.TILE,
-                    model_config["KV_CACHE_MEMCFG"],
-                    model_config["KV_CACHE_DTYPE"],
-                )
-            )
-            tt_v_cache.append(
-                torch2tt_tensor(
-                    tt_v_cache_host[j],
-                    devices[j],
-                    ttnn.experimental.tensor.Layout.TILE,
-                    model_config["KV_CACHE_MEMCFG"],
-                    model_config["KV_CACHE_DTYPE"],
-                )
-            )
+        tt_k_cache = ttnn.as_tensor(
+            tensor=tt_k_cache_host,
+            dtype=model_config["KV_CACHE_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            memory_config=model_config["KV_CACHE_MEMCFG"],
+            mesh_mapper=ttnn.ShardTensorToMesh(device_mesh, dim=1),
+        )
+        tt_v_cache = ttnn.as_tensor(
+            tensor=tt_v_cache_host,
+            dtype=model_config["KV_CACHE_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            memory_config=model_config["KV_CACHE_MEMCFG"],
+            mesh_mapper=ttnn.ShardTensorToMesh(device_mesh, dim=1),
+        )
         kv_cache += ((tt_k_cache, tt_v_cache),)
 
     return pytorch_out, kv_cache
@@ -183,7 +173,7 @@ def run_falcon_demo_kv(
     max_seq_len,
     model_location_generator,
     get_tt_cache_path,
-    devices,
+    device_mesh,
     prefill_on_host,
     perf_mode=False,
     greedy_sampling=False,
@@ -194,6 +184,7 @@ def run_falcon_demo_kv(
         logger.info("Running in performance measurement mode (invalid outputs)!")
 
     configuration = FalconConfig(**model_config_entries)
+    devices = device_mesh.get_devices()
 
     profiler.start(f"loading_inputs")
     if len(user_input) == 1:
@@ -236,7 +227,7 @@ def run_falcon_demo_kv(
     base_url = ""
     use_global_cos_sin_cache = True
     tt_FalconCausalLM_singlelayer = TtFalconCausalLM(
-        devices,
+        device_mesh,
         state_dict,
         base_url,
         1,
@@ -339,7 +330,7 @@ def run_falcon_demo_kv(
     logger.info("Moving weights (all layers) to device; might take some time...")
     profiler.start(f"moving_to_device")
     tt_FalconCausalLM = TtFalconCausalLM(
-        devices,
+        device_mesh,
         state_dict,
         base_url,
         num_layers,
@@ -375,7 +366,7 @@ def run_falcon_demo_kv(
             num_layers,
             batch_size,
             max_seq_len,
-            devices,
+            device_mesh,
         )
         profiler.end(f"initializing_KV_cache_on_host")
 
@@ -415,7 +406,13 @@ def run_falcon_demo_kv(
             del tt_prefill_inputs
             del tt_prefill_attention_mask
 
-            logits = torch.cat([logits_torch.squeeze(1) for logits_torch in tt_tensors_to_torch_tensors(tt_logits)], -1)
+            # untilize data first
+            if tt_logits.get_layout() == ttnn.TILE_LAYOUT:
+                tt_logits = ttnn.experimental.tensor.untilize(tt_logits, use_multicore=False)
+
+            logits = ttnn.to_torch(
+                tt_logits, device=device_mesh, mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=-1)
+            ).squeeze(1)
             del tt_logits
 
             user_output_ids = post_processor(logits=logits, index=num_input_tokens - 1)
@@ -472,7 +469,15 @@ def run_falcon_demo_kv(
         if tt_decode_attention_mask is not None:
             del tt_decode_attention_mask
 
-        logits = torch.cat([logits_torch.squeeze(1) for logits_torch in tt_tensors_to_torch_tensors(tt_logits)], -1)
+        if tt_logits.get_layout() == ttnn.TILE_LAYOUT:
+            if tt_logits.memory_config().is_sharded():
+                tt_logits = ttnn.experimental.tensor.sharded_to_interleaved(tt_logits)
+
+            tt_logits = ttnn.experimental.tensor.untilize(tt_logits, use_multicore=False)
+
+        logits = ttnn.to_torch(
+            tt_logits, device=device_mesh, mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=-1)
+        ).squeeze(1)
 
         del tt_logits
 
@@ -564,12 +569,9 @@ def test_demo(
     user_input,
     model_location_generator,
     get_tt_cache_path,
-    all_devices,
+    t3k_device_mesh,
     use_program_cache,
 ):
-    num_devices = 8
-    devices = get_devices_for_t3000(all_devices, num_devices)
-
     # disable_persistent_kernel_cache()
     disable_compilation_reports()
 
@@ -583,7 +585,7 @@ def test_demo(
         max_seq_len=max_seq_len,
         model_location_generator=model_location_generator,
         get_tt_cache_path=get_tt_cache_path,
-        devices=devices,
+        device_mesh=t3k_device_mesh,
         prefill_on_host=False,
         perf_mode=perf_mode,
         greedy_sampling=greedy_sampling,

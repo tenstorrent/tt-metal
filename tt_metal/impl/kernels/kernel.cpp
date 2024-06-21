@@ -4,10 +4,9 @@
 
 #include "tt_metal/impl/kernels/kernel.hpp"
 
-#include <fmt/ranges.h>
+#include <fmt/core.h>
 
 #include <set>
-#include <unordered_set>
 
 #include "jit_build/build.hpp"
 #include "llrt/llrt.hpp"
@@ -34,6 +33,7 @@ Kernel::Kernel(
     core_with_max_runtime_args_({0, 0}),
     compile_time_args_(compile_args),
     defines_(defines) {
+
     size_t max_x = 0, max_y = 0;
     for (auto core_range : this->core_range_set_.ranges()) {
         auto start = core_range.start;
@@ -190,57 +190,18 @@ std::vector<uint32_t> &Kernel::common_runtime_args() { return this->common_runti
 
 RuntimeArgsData &Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
-std::pair<uint64_t, uint64_t> DataMovementKernel::get_runtime_args_range() const {
-    std::pair<uint64_t, uint64_t> arg_base_to_result_base;
-    switch (this->config_.processor) {
-        case DataMovementProcessor::RISCV_0: {
-            arg_base_to_result_base = {BRISC_L1_ARG_BASE, BRISC_L1_RESULT_BASE};
-        } break;
-        case DataMovementProcessor::RISCV_1: {
-            arg_base_to_result_base = {NCRISC_L1_ARG_BASE, NCRISC_L1_RESULT_BASE};
-        } break;
-        default: arg_base_to_result_base = {BRISC_L1_ARG_BASE, BRISC_L1_RESULT_BASE}; break;
-    }
-    return arg_base_to_result_base;
-}
-
-std::pair<uint64_t, uint64_t> EthernetKernel::get_runtime_args_range() const {
-    std::pair<uint64_t, uint64_t> arg_base_to_result_base;
-    if (this->config_.eth_mode == Eth::IDLE) {
-        arg_base_to_result_base = {IDLE_ERISC_L1_ARG_BASE, IDLE_ERISC_L1_RESULT_BASE};
-    } else {
-        arg_base_to_result_base = {
-            eth_l1_mem::address_map::ERISC_L1_ARG_BASE, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE};
-    }
-    return arg_base_to_result_base;
-}
-
-std::pair<uint64_t, uint64_t> ComputeKernel::get_runtime_args_range() const {
-    std::pair<uint64_t, uint64_t> arg_base_to_result_base = {TRISC_L1_ARG_BASE, TRISC_L1_ARG_BASE + 1024};
-    return arg_base_to_result_base;
-}
-
 // Ensure that unique and common runtime args do not overflow reserved region in L1.
 void Kernel::validate_runtime_args_size(
     size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord &logical_core) {
     // Common RT args starting address must be 16B aligned, so account for that here via padding
     uint32_t num_unique_rt_args_padded = align(num_unique_rt_args, L1_ALIGNMENT / sizeof(uint32_t));
-    uint32_t total_rt_args_size = (num_unique_rt_args_padded + num_common_rt_args) * sizeof(uint32_t);
-    auto [l1_arg_base, result_base] = this->get_runtime_args_range();
+    uint32_t total_rt_args = (num_unique_rt_args_padded + num_common_rt_args);
+    uint32_t max_rt_args = is_idle_eth() ? idle_eth_max_runtime_args : max_runtime_args;
 
-    if (l1_arg_base + total_rt_args_size > result_base) {
-        log_warning(
-            tt::LogMetal,
-            "Too many runtime args. unique: {} common: {} on {}",
-            num_unique_rt_args,
-            num_common_rt_args,
-            this->processor());
-        TT_THROW(
-            std::to_string(total_rt_args_size) + " Bytes unique+common runtime args targeting kernel " + this->name() +
-            " on " + logical_core.str() +
-            " are too large.\
- Cannot be written as they will run into memory region reserved for result. Max allowable size is " +
-            std::to_string(result_base - l1_arg_base) + " Bytes");
+    if (total_rt_args > max_rt_args) {
+        log_warning(tt::LogMetal, "Too many runtime args, unique: {} common: {} on {}", num_unique_rt_args, num_common_rt_args, this->processor());
+        TT_THROW(std::to_string(total_rt_args) + " unique+common runtime args targeting kernel " +  this->name() + " on " + logical_core.str() +
+            " are too large. Max allowable is " + std::to_string(max_runtime_args) + " (including up to 3 padding args)");
     }
 }
 
@@ -290,7 +251,11 @@ void Kernel::set_common_runtime_args(const std::vector<uint32_t> &common_runtime
     this->common_runtime_args_data_ = RuntimeArgsData{set_rt_args.data(), set_rt_args.size()};
 }
 
-void DataMovementKernel::set_build_options(JitBuildOptions &build_options) const {
+bool Kernel::is_idle_eth() {
+    return std::holds_alternative<EthernetConfig>(this->config()) && std::get<EthernetConfig>(this->config()).eth_mode == Eth::IDLE;
+}
+
+void DataMovementKernel::set_build_options(JitBuildOptions& build_options) const {
     ZoneScoped;
     switch (this->config_.processor) {
         case DataMovementProcessor::RISCV_0: {
@@ -342,23 +307,24 @@ void ComputeKernel::generate_binaries(Device *device, JitBuildOptions &build_opt
 }
 
 // Calculate 16B aligned offset to reach common runtime args from core with most unique runtime args.
-uint32_t Kernel::get_common_runtime_args_offset() {
+uint32_t Kernel::get_common_runtime_args_index() {
     uint32_t max_unique_rt_args = 0;
     for (const auto &logical_core : this->cores_with_runtime_args()) {
-        auto rt_args = this->runtime_args(logical_core);
+        auto& rt_args = this->runtime_args(logical_core);
         max_unique_rt_args = rt_args.size() > max_unique_rt_args ? rt_args.size() : max_unique_rt_args;
     }
 
-    uint32_t common_rt_args_offset = align(max_unique_rt_args * sizeof(uint32_t), L1_ALIGNMENT);
-    return common_rt_args_offset;
+    uint32_t common_rt_args_index = align(max_unique_rt_args, L1_ALIGNMENT / sizeof(uint32_t));
+    return common_rt_args_index;
 }
 
 // Validate that all cores have same number of unique-runtime-args, and then calculate and set
 // define for offset to reach common-runtime-args per core.
-void Kernel::set_common_runtime_args_offset() {
-    auto offset = get_common_runtime_args_offset();
-    log_trace(tt::LogMetal, "Setting COMMON_RT_ARGS_OFFSET: {} for kernel: {}", offset, this->name());
-    this->defines_["COMMON_RT_ARGS_OFFSET"] = std::to_string(offset);
+
+void Kernel::set_common_runtime_args_index() {
+    auto offset = get_common_runtime_args_index();
+    log_trace(tt::LogMetal, "Setting COMMON_RT_ARGS_INDEX: {} for kernel: {}", offset, this->name());
+    this->defines_["COMMON_RT_ARGS_INDEX"] = std::to_string(offset);
 }
 
 void Kernel::set_binaries(uint32_t build_key, std::vector<ll_api::memory> &&binaries) {

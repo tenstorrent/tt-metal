@@ -1330,7 +1330,7 @@ void configure_for_single_chip(Device *device,
                                CoreCoord& phys_dispatch_relay_mux_core,
                                CoreCoord& phys_dispatch_relay_demux_core,
                                uint32_t& packetized_path_test_results_addr,
-                               uint32_t& packetized_path_test_results_size) {
+                               uint32_t packetized_path_test_results_size) {
 
     const CoreType dispatch_core_type = CoreType::WORKER;
     uint32_t dispatch_buffer_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages() * dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
@@ -1357,11 +1357,10 @@ void configure_for_single_chip(Device *device,
     phys_dispatch_relay_demux_core = device->worker_core_from_logical_core(dispatch_relay_demux_core);
 
     // Packetized components will write their status + a few debug values here:
-    packetized_path_test_results_addr = BRISC_L1_RESULT_BASE;
-    packetized_path_test_results_size = 1024;
+    packetized_path_test_results_addr = L1_UNRESERVED_BASE;
 
     // Want different buffers on each core, instead use big buffer and self-manage it
-    uint32_t l1_unreserved_base_aligned = align(DISPATCH_L1_UNRESERVED_BASE, (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was not aligned, lately.
+    uint32_t l1_unreserved_base_aligned = align(L1_UNRESERVED_BASE + packetized_path_test_results_size, (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was not aligned, lately.
     TT_ASSERT((l1_buf_base_g & ((1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) == 0);
 
     uint32_t dispatch_buffer_base = l1_buf_base_g;
@@ -1901,7 +1900,7 @@ void configure_for_multi_chip(Device *device,
                               CoreCoord& phys_dispatch_relay_mux_core,
                               CoreCoord& phys_dispatch_relay_demux_core,
                               uint32_t& packetized_path_test_results_addr,
-                              uint32_t& packetized_path_test_results_size) {
+                              uint32_t packetized_path_test_results_size) {
 
     const CoreType dispatch_core_type = CoreType::WORKER;
     uint32_t dispatch_buffer_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages() * dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
@@ -1934,15 +1933,14 @@ void configure_for_multi_chip(Device *device,
     log_info(LogTest, "Right Tunneler = {}", r_tunneler_logical_core.str());
 
     // Packetized components will write their status + a few debug values here:
-    packetized_path_test_results_addr = BRISC_L1_RESULT_BASE;
-    packetized_path_test_results_size = 1024;
+    packetized_path_test_results_addr = L1_UNRESERVED_BASE;
     uint32_t tunneler_queue_start_addr = 0x19000;
     uint32_t tunneler_queue_size_bytes = 0x10000;
     uint32_t tunneler_test_results_addr = 0x39000;
     uint32_t tunneler_test_results_size = 0x7000;
 
     // Want different buffers on each core, instead use big buffer and self-manage it
-    uint32_t l1_unreserved_base_aligned = align(DISPATCH_L1_UNRESERVED_BASE, (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was aligned, lately.
+    uint32_t l1_unreserved_base_aligned = align(L1_UNRESERVED_BASE + packetized_path_test_results_size, (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was aligned, lately.
     l1_buf_base_g = l1_unreserved_base_aligned + (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE); // Reserve a page.
     TT_ASSERT((l1_buf_base_g & ((1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) == 0);
 
@@ -2622,7 +2620,8 @@ int main(int argc, char **argv) {
         tt_metal::Program program_r = tt_metal::CreateProgram();
 
         void* host_hugepage_base;
-        uint32_t l1_unreserved_base_aligned = align(DISPATCH_L1_UNRESERVED_BASE, (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was not aligned, lately.
+        uint32_t packetized_path_test_results_size = 1024;
+        uint32_t l1_unreserved_base_aligned = align(L1_UNRESERVED_BASE + packetized_path_test_results_size, (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was not aligned, lately.
         l1_buf_base_g = l1_unreserved_base_aligned + (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE); // Reserve a page.
         uint32_t prefetch_q_base = l1_buf_base_g;
         uint32_t prefetch_q_rd_ptr_addr = l1_unreserved_base_aligned;
@@ -2631,7 +2630,6 @@ int main(int argc, char **argv) {
         CoreCoord phys_dispatch_relay_mux_core;
         CoreCoord phys_dispatch_relay_demux_core;
         uint32_t packetized_path_test_results_addr;
-        uint32_t packetized_path_test_results_size;
         if (test_device_id_g == 0) {
             configure_for_single_chip(device, program,
                                       host_hugepage_base,

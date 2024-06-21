@@ -27,6 +27,7 @@ set(TT_EAGER_TESTS_OPS
     ops/test_tilize_op_channels_last
     ops/test_tilize_zero_padding_channels_last
     ops/test_sfpu
+    ops/test_sliding_window_ops
     ops/test_fold_op
 )
 

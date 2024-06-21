@@ -15,7 +15,10 @@ set(TTNN_SRCS
 
 add_library(ttnn_lib OBJECT ${TTNN_SRCS})
 target_compile_options(ttnn_lib PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
-target_link_libraries(ttnn_lib PUBLIC compiler_flags metal_header_directories metal_common_libs)
+target_link_libraries(ttnn_lib
+    PUBLIC compiler_flags metal_header_directories metal_common_libs
+    PRIVATE reflect::reflect
+)
 target_include_directories(ttnn_lib PUBLIC
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}
@@ -27,6 +30,12 @@ target_include_directories(ttnn_lib PUBLIC
 )
 target_precompile_headers(ttnn_lib PRIVATE
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/magic_enum/magic_enum.hpp
+    <functional>
+    <map>
+    <memory>
+    <unordered_map>
+    <variant>
+    <vector>
 )
 
 # TODO: should be using pybind11_add_module, but right now it introduces many build problems

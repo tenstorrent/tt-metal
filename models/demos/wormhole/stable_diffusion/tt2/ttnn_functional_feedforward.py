@@ -83,15 +83,13 @@ class feedforward:
         )
         if hidden_states.shape[-2] == 8192:
             hidden_states = ttnn.reallocate(hidden_states)
-        hidden_states = ttnn.experimental.operations.primary.matmul(
+        hidden_states = ttnn.linear(
             hidden_states,
             self.parameters.net[2].weight,
             bias=self.parameters.net[2].bias,
             program_config=program_config,
-            output_mem_config=self.l1_interleaved_memory_config
-            if interleaved_output
-            else self.block_sharded_memory_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            memory_config=self.l1_interleaved_memory_config if interleaved_output else self.block_sharded_memory_config,
+            dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             compute_kernel_config=self.compute_kernel_config,
         )
         if interleaved_output:

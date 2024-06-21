@@ -13,9 +13,9 @@
 
 void kernel_main() {
 
-    volatile tt_l1_ptr std::uint32_t* arg_a = (volatile tt_l1_ptr uint32_t*)(L1_ARG_BASE);
-    volatile tt_l1_ptr std::uint32_t* arg_b = (volatile tt_l1_ptr uint32_t*)(L1_ARG_BASE + 4);
-    volatile tt_l1_ptr std::uint32_t* result = (volatile tt_l1_ptr uint32_t*)(L1_RESULT_BASE);
+    tt_l1_ptr std::uint32_t* arg_a = (tt_l1_ptr uint32_t*)get_arg_addr(0);
+    tt_l1_ptr std::uint32_t* arg_b = (tt_l1_ptr uint32_t*)get_arg_addr(1);
+    volatile tt_l1_ptr std::uint32_t* result = (tt_l1_ptr uint32_t*)(L1_UNRESERVED_BASE);
 
     //Sample print statement
     // DPRINT << 123;

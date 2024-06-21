@@ -123,6 +123,7 @@ KernelGroup::KernelGroup(
     std::optional<KernelHandle> ncrisc_id,
     std::optional<KernelHandle> trisc_id,
     std::optional<KernelHandle> erisc_id,
+    bool erisc_is_idle,
     int last_cb_index,
     const CoreRangeSet &new_ranges) :
     core_ranges({}) {
@@ -136,6 +137,18 @@ KernelGroup::KernelGroup(
     // The code below sets the brisc_noc_id for use by the device firmware
     // Use 0 if neither brisc nor trisc specify a noc
     this->launch_msg.brisc_noc_id = 0;
+    if (erisc_id) {
+        this->launch_msg.kernel_config_base =
+            erisc_is_idle ? IDLE_ERISC_L1_KERNEL_CONFIG_BASE : eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
+        this->launch_msg.rta_offset_brisc = 0;
+        this->launch_msg.rta_offset_ncrisc = 0;
+        this->launch_msg.rta_offset_trisc = 0;
+    } else {
+        this->launch_msg.kernel_config_base = L1_KERNEL_CONFIG_BASE;
+        this->launch_msg.rta_offset_brisc = 0;
+        this->launch_msg.rta_offset_ncrisc = max_runtime_args * sizeof(uint32_t);
+        this->launch_msg.rta_offset_trisc = 2 * max_runtime_args * sizeof(uint32_t);
+    }
     if (brisc_id) {
         // Use brisc's noc if brisc specifies a noc
         this->launch_msg.enable_brisc = true;
@@ -234,6 +247,8 @@ struct KernelGroupIntHasher {
 
 void Program::update_kernel_groups(const CoreType &core_type) {
     if (core_to_kernel_group_index_table_[core_type].size() == 0) {
+        bool erisc_is_idle = false;
+
         // Get the extent of the kernels in x, y
         CoreCoord base = {std::numeric_limits<decltype(base.x)>::max(), std::numeric_limits<decltype(base.y)>::max()};
         grid_extent_[core_type] = {0, 0};
@@ -248,6 +263,7 @@ void Program::update_kernel_groups(const CoreType &core_type) {
                 if (core.y < base.y)
                     base.y = core.y;
             }
+            erisc_is_idle = kernel->is_idle_eth();
         }
         grid_extent_[core_type].x++;
         grid_extent_[core_type].y++;
@@ -311,6 +327,7 @@ void Program::update_kernel_groups(const CoreType &core_type) {
                 kg_to_cores.first.ncrisc_id,
                 kg_to_cores.first.trisc_id,
                 kg_to_cores.first.erisc_id,
+                erisc_is_idle,
                 last_cb_index,
                 kg_to_cores.second));
             index++;
@@ -798,7 +815,7 @@ void Program::compile(Device *device) {
             launch_build_step(
                 [kernel, device, this] {
                     JitBuildOptions build_options(device->build_env());
-                    kernel->set_common_runtime_args_offset();
+                    kernel->set_common_runtime_args_index();
                     kernel->set_build_options(build_options);
                     this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
 

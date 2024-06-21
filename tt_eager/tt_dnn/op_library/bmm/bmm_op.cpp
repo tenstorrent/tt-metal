@@ -9,13 +9,11 @@
 #include <optional>
 #include <numeric>
 
-#include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_values.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/types.hpp"
 
 using namespace tt::constants;
@@ -1043,8 +1041,8 @@ void Matmul::validate(
 
                         TT_FATAL(div_up(M, per_core_M) == input_tensor_a.shard_spec().value().grid.num_cores());
                         TT_FATAL(per_core_M == (shard_shape[0] / TILE_HEIGHT));
-                        TT_FATAL(K == program_config.in0_block_w);
-                        TT_FATAL(program_config.in0_block_w == (shard_shape[1] / TILE_WIDTH));
+                        TT_FATAL(K % program_config.in0_block_w == 0);
+                        TT_FATAL(K == (shard_shape[1] / TILE_WIDTH));
                     }
                     if (this->output_mem_config.is_sharded()) {
                         TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
@@ -1111,6 +1109,7 @@ void Matmul::validate(
                         }
 
                     } else if (tensor_a_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+                        TT_FATAL(!program_config.transpose_mcast);
                         TT_FATAL(K == program_config.in0_block_w);
                         TT_FATAL(program_config.in0_block_w == (shard_shape[1] / TILE_WIDTH));
                         TT_FATAL(
@@ -1123,10 +1122,11 @@ void Matmul::validate(
                 }
 
                 if (input_tensor_b.memory_config().is_sharded()) {
+                    TT_FATAL(!program_config.transpose_mcast);
                     auto tensor_b_memory_layout = input_tensor_b.memory_config().memory_layout;
                     TT_FATAL(tensor_b_memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
                     if (input_tensor_b.buffer()->buffer_type() != tt_metal::BufferType::DRAM) {
-                        TT_FATAL(program_config.per_core_N == (input_tensor_b.shard_spec().value().shape[0] / TILE_WIDTH));
+                        TT_FATAL(program_config.per_core_N == (input_tensor_b.shard_spec().value().shape[1] / TILE_WIDTH));
                     }
                     TT_FATAL(
                         input_tensor_b.shard_spec()->grid.bounding_box().start.y ==

@@ -329,6 +329,7 @@ def test_t5_stack_decoder(device, model_name, batch_size, sequence_size):
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
 def test_t5_for_conditional_generation(device, model_name, batch_size, sequence_size):
+    pytest.skip("Issue 9555: seeing PCC issues if running this in same process as encoder/decoder")
     torch.manual_seed(0)
 
     config = transformers.T5Config.from_pretrained(model_name)

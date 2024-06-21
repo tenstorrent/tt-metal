@@ -22,8 +22,8 @@ void kernel_main() {
 
     constexpr uint32_t num_x                         = get_compile_time_arg_val(7);
     constexpr uint32_t num_y                         = get_compile_time_arg_val(8);
-    volatile tt_l1_ptr uint32_t * in0_mcast_noc_x          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(2));
-    volatile tt_l1_ptr uint32_t * in0_mcast_noc_y          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(2 + num_x));
+    tt_l1_ptr uint32_t * in0_mcast_noc_x          = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
+    tt_l1_ptr uint32_t * in0_mcast_noc_y          = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + num_x));
 
     // Q
     uint32_t qkv_x = 0;

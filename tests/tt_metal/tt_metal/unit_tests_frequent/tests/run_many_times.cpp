@@ -80,11 +80,11 @@ void RunTest(Device *device) {
         CoreCoord core = core_range.start;
         std::vector<uint32_t> brisc_result;
         tt_metal::detail::ReadFromDeviceL1(
-            device, core, BRISC_L1_RESULT_BASE, sizeof(uint32_t), brisc_result
+            device, core, L1_UNRESERVED_BASE, sizeof(uint32_t), brisc_result
         );
         std::vector<uint32_t> ncrisc_result;
         tt_metal::detail::ReadFromDeviceL1(
-            device, core, NCRISC_L1_RESULT_BASE, sizeof(uint32_t), ncrisc_result
+            device, core, L1_UNRESERVED_BASE, sizeof(uint32_t), ncrisc_result
         );
         uint32_t expected_result = get_first_arg(device, core, 1) + get_second_arg(device, core, 1);
         if (expected_result != brisc_result[0])

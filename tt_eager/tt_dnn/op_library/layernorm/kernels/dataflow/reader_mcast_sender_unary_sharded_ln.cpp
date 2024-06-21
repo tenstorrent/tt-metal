@@ -30,8 +30,8 @@ void kernel_main() {
     const uint32_t start_x                              = get_arg_val<uint32_t>(4);
     const uint32_t start_y                              = get_arg_val<uint32_t>(5);
 
-    volatile tt_l1_ptr uint32_t * in0_remote_noc_x          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(6));
-    volatile tt_l1_ptr uint32_t * in0_remote_noc_y          = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(6 + num_x));
+    tt_l1_ptr uint32_t * in0_remote_noc_x          = (tt_l1_ptr uint32_t*)(get_arg_addr(6));
+    tt_l1_ptr uint32_t * in0_remote_noc_y          = (tt_l1_ptr uint32_t*)(get_arg_addr(6 + num_x));
 
     constexpr uint32_t cb_ex_partial = tt::CB::dataflow0;
     constexpr uint32_t cb_ex = tt::CB::dataflow1;

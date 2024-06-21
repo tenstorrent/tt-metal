@@ -4,10 +4,6 @@
 
 #include "tt_dnn/op_library/copy/copy_op.hpp"
 
-#include "tt_metal/host_api.hpp"
-
-#include "third_party/magic_enum/magic_enum.hpp"
-
 
 namespace tt {
 

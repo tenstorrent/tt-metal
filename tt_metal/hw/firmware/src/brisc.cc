@@ -64,6 +64,8 @@ uint32_t atomic_ret_val __attribute__((section("l1_data"))) __attribute__((used)
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
+uint32_t tt_l1_ptr *l1_arg_base __attribute__((used));
+
 #define MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
 
 #if defined(PROFILE_KERNEL)
@@ -380,6 +382,8 @@ int main() {
 
             // Run the BRISC kernel
             DEBUG_STATUS("R");
+            uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
+            l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offset_brisc);
             if (mailboxes->launch.enable_brisc) {
                 setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
                 kernel_init();

@@ -77,12 +77,12 @@ class TtTransformer(LightweightModule):
         attn_masks.deallocate(True)
 
         x_norm = self.norm(x)
-        outputs = ttnn.experimental.operations.primary.matmul(
+        outputs = ttnn.matmul(
             x_norm,
             self.output_weight,
             # compute_with_storage_grid_size=(8, 8),
             program_config=self.model_config["OUTPUT_MM_PROGCFG"],
-            output_mem_config=self.model_config["OUTPUT_MM_MEMCFG"],
+            memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
             compute_kernel_config=self.compute_kernel,
         )
 

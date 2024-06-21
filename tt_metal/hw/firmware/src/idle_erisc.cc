@@ -37,6 +37,8 @@ uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t atomic_ret_val __attribute__ ((section ("l1_data"))) __attribute__((used));
 
+uint32_t tt_l1_ptr *l1_arg_base __attribute__((used));
+
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
 
@@ -116,6 +118,8 @@ int main() {
             //if (mailboxes->launch.enable_brisc) {
                 //UC FIXME: do i need this?
                 setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
+                uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
+                l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offset_brisc); // overloaded
                 kernel_init();
             //} else {
                 // This was not initialized in kernel_init

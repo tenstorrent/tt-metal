@@ -27,29 +27,13 @@
 #define TILE_WORD_16_BIT ((32 * 32 * 2 + 32) >> 4)
 #define TILE_WORD_32_BIT ((32 * 32 * 4 + 32) >> 4)
 
-#ifdef COMPILE_FOR_BRISC
-constexpr std::uint32_t L1_ARG_BASE = BRISC_L1_ARG_BASE;
-constexpr std::uint32_t L1_RESULT_BASE = BRISC_L1_RESULT_BASE;
-#elif defined(COMPILE_FOR_NCRISC)
-constexpr std::uint32_t L1_ARG_BASE = NCRISC_L1_ARG_BASE;
-constexpr std::uint32_t L1_RESULT_BASE = NCRISC_L1_RESULT_BASE;
-#elif defined(COMPILE_FOR_TRISC)
-constexpr std::uint32_t L1_ARG_BASE = TRISC_L1_ARG_BASE;
-constexpr std::uint32_t L1_RESULT_BASE = TRISC_L1_ARG_BASE + 1024;
-#elif defined(COMPILE_FOR_ERISC)
-constexpr std::uint32_t L1_ARG_BASE = eth_l1_mem::address_map::ERISC_L1_ARG_BASE;
-constexpr std::uint32_t L1_RESULT_BASE = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
-#elif defined(COMPILE_FOR_IDLE_ERISC)
-constexpr std::uint32_t L1_ARG_BASE = IDLE_ERISC_L1_ARG_BASE;
-constexpr std::uint32_t L1_RESULT_BASE = IDLE_ERISC_L1_RESULT_BASE;
-#endif
-
 const uint32_t STREAM_RESTART_CHECK_MASK = (0x1 << 3) - 1;
 
 const uint32_t MAX_TILES_PER_PHASE = 2048;
 
 extern uint8_t my_x[NUM_NOCS];
 extern uint8_t my_y[NUM_NOCS];
+extern uint32_t *l1_arg_base;
 
 inline void WRITE_REG(uint32_t addr, uint32_t val) {
     volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)addr;
@@ -163,57 +147,6 @@ void risc_init() {
     }
 }
 #endif  // !defined(COMPILE_FOR_TRISC)
-
-inline void breakpoint_(uint32_t line) {
-    /*
-        When called, writes the stack pointer to a known location
-        in memory (unique for each core) and then hangs until the
-        user explicitly continues
-    */
-    uint32_t BREAKPOINT;
-    uint32_t LNUM;
-    volatile tt_l1_ptr uint32_t* bp;
-    volatile tt_l1_ptr uint32_t* lnum;
-
-#define MACRO_SP_AUX(SP) #SP
-#define MACRO_SP(SP) MACRO_SP_AUX(SP)
-
-// Need to use macros for inline assembly in order to create a string literal
-#if defined(COMPILE_FOR_NCRISC)
-    asm("li t0, " MACRO_SP(NCRISC_SP_MACRO));
-    BREAKPOINT = NCRISC_BREAKPOINT;
-    LNUM = NCRISC_BP_LNUM;
-#elif defined(COMPILE_FOR_BRISC)
-    asm("li t0, " MACRO_SP(BRISC_SP_MACRO));
-    BREAKPOINT = BRISC_BREAKPOINT;
-    LNUM = BRISC_BP_LNUM;
-#elif COMPILE_FOR_TRISC == 0
-    asm("li t0, " MACRO_SP(TRISC0_SP_MACRO));
-    BREAKPOINT = TRISC0_BREAKPOINT;
-    LNUM = TRISC0_BP_LNUM;
-#elif COMPILE_FOR_TRISC == 1
-    asm("li t0, " MACRO_SP(TRISC1_SP_MACRO));
-    BREAKPOINT = TRISC1_BREAKPOINT;
-    LNUM = TRISC1_BP_LNUM;
-#elif COMPILE_FOR_TRISC == 2
-    asm("li t0, " MACRO_SP(TRISC2_SP_MACRO));
-    BREAKPOINT = TRISC2_BREAKPOINT;
-    LNUM = TRISC2_BP_LNUM;
-#endif
-
-    // Write '1' to breakpoint location so that this core keeps
-    // busy looping until host releases it
-    asm("sw sp, 0(t0)");
-    bp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(BREAKPOINT);
-    bp[0] = 1;
-
-    lnum = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(LNUM);
-    lnum[0] = line;
-
-    while (bp[0] == 1);
-}
-
-#define breakpoint() breakpoint_(__LINE__);
 
 // Helper function to wait for a specified number of cycles, safe to call in erisc kernels.
 #if defined(COMPILE_FOR_ERISC)

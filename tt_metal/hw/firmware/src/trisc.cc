@@ -25,6 +25,8 @@ namespace kernel_profiler {
 }
 #endif
 
+tt_l1_ptr uint32_t *l1_arg_base __attribute__((used));
+
 namespace ckernel {
 
 enum class ttRiscCores : std::uint32_t { Unpack = 0, Math = 1, Pack = 2, Brisc = 3, Nrisc = 4 };
@@ -104,6 +106,9 @@ int main(int argc, char *argv[]) {
 #if !defined(UCK_CHLKC_MATH)
         setup_cb_read_write_interfaces(0, mailboxes->launch.max_cb_index, cb_init_read, cb_init_write);
 #endif
+
+        uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
+        l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offset_trisc);
 
         DEBUG_STATUS("R");
         kernel_init();

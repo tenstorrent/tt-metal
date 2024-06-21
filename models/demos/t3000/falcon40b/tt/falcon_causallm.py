@@ -6,9 +6,8 @@ import torch
 from typing import Optional, Tuple
 
 import ttnn
-
+from ttnn import ShardTensorToMesh
 from models.demos.t3000.falcon40b.tt.falcon_model import TtFalconModelShared
-from models.utility_functions import torch2tt_tensor
 
 from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
 
@@ -16,7 +15,7 @@ from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, d
 class TtFalconCausalLM(TtFalconModelShared):
     def __init__(
         self,
-        devices,
+        device_mesh,
         state_dict,
         base_url,
         num_layers,
@@ -29,7 +28,7 @@ class TtFalconCausalLM(TtFalconModelShared):
         assert base_url == "", "base_url should be empty at the root of the model!"
 
         super().__init__(
-            devices=devices,
+            device_mesh=device_mesh,
             state_dict=state_dict,
             base_url=f"transformer",
             num_layers=num_layers,
@@ -40,35 +39,24 @@ class TtFalconCausalLM(TtFalconModelShared):
             use_global_cos_sin_cache=use_global_cos_sin_cache,
         )
         self.model_config = model_config
-
+        self.device_mesh = device_mesh
         lm_head_str = f"lm_head.weight"
-        num_devices = len(devices)
-        self.lm_head_weights = []
-        for i in range(num_devices):
-            lm_head_path = (
-                tt_cache_path
-                / f"{lm_head_str}_{i}_{num_devices}_{self.model_config['LM_HEAD_MM_WEIGHTS_DTYPE'].name}.bin"
-            )
-            if (lm_head_path).exists():
-                self.lm_head_weights.append(
-                    ttnn.experimental.tensor.load_tensor(str(lm_head_path)).to(
-                        devices[i], self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"]
-                    )
-                )
-            else:
-                lm_head_weights_host = torch2tt_tensor(
-                    torch.transpose(torch.chunk(self.state_dict[f"lm_head.weight"], num_devices)[i], -2, -1),
-                    None,
-                    tt_memory_config=self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"],
-                    tt_dtype=self.model_config["LM_HEAD_MM_WEIGHTS_DTYPE"],
-                )
-                self.lm_head_weights.append(
-                    lm_head_weights_host.to(devices[i], self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"])
-                )
-                ttnn.experimental.tensor.dump_tensor(
-                    str(lm_head_path),
-                    lm_head_weights_host,
-                )
+
+        lm_head_path = tt_cache_path / f"{lm_head_str}_{self.model_config['LM_HEAD_MM_WEIGHTS_DTYPE'].name}"
+
+        self.lm_head_weights = ttnn.as_tensor(
+            tensor=self.state_dict[f"lm_head.weight"],
+            dtype=self.model_config["LM_HEAD_MM_WEIGHTS_DTYPE"],
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            memory_config=self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"],
+            mesh_mapper=ShardTensorToMesh(device_mesh, dim=3),
+            cache_file_name=lm_head_path,
+            preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
+        )
+        self.perf_e2e_test_tile_tensor = ttnn.from_torch(
+            torch.zeros((1, 1, 32, 32)), device=device_mesh.get_devices()[0]
+        )
 
     def __call__(
         self,
@@ -123,36 +111,33 @@ class TtFalconCausalLM(TtFalconModelShared):
             use_cache=use_cache,
         )
 
-        need_low_l1_workaround = hidden_states[0].shape[2] > 1024
+        need_low_l1_workaround = hidden_states.shape[2] > 1024
 
         # Workaround for non deterministic output/hang; issue: 7066
         overwrite_subblock_h = 1
-        overwrite_subblock_w = 1 if hidden_states[0].shape[2] < 512 else 4
+        overwrite_subblock_w = 1 if hidden_states.shape[2] < 512 else 4
 
         should_deallocate_ln_tensors = determine_tensor_deallocation(
-            self.model_config["layernorm_params"]["slice_size"], hidden_states[0].get_legacy_shape()[2]
+            self.model_config["layernorm_params"]["slice_size"], hidden_states.get_legacy_shape()[2]
         )
         # LM Head
-        lm_logits = []
-        for i in range(len(hidden_states)):
-            lm_logits.append(
-                falcon_prefill_matmul(
-                    hidden_states[i],
-                    self.lm_head_weights[i],
-                    self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"]
-                    if need_low_l1_workaround
-                    else self.model_config[
-                        "COMPUTE_KERNEL_CONFIG"
-                    ],  # FP16 accumulation format leads to lower PCC! But can't fit 2k S otherwise atm
-                    output_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
-                    overwrite_per_core_k=1,  # TODO: can we increase this?
-                    overwrite_subblock_w=overwrite_subblock_w,
-                    overwrite_subblock_h=overwrite_subblock_h,
-                )
-            )
-            if should_deallocate_ln_tensors:
-                hidden_states[i].deallocate(True)
+        lm_logits = falcon_prefill_matmul(
+            hidden_states,
+            self.lm_head_weights,
+            self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"]
+            if need_low_l1_workaround
+            else self.model_config[
+                "COMPUTE_KERNEL_CONFIG"
+            ],  # FP16 accumulation format leads to lower PCC! But can't fit 2k S otherwise atm
+            output_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
+            output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
+            overwrite_per_core_k=1,  # TODO: can we increase this?
+            overwrite_subblock_w=overwrite_subblock_w,
+            overwrite_subblock_h=overwrite_subblock_h,
+        )
+
+        if should_deallocate_ln_tensors:
+            hidden_states.deallocate(True)
 
         return lm_logits, presents
 
@@ -177,18 +162,14 @@ class TtFalconCausalLM(TtFalconModelShared):
         )
 
         # LM Head
-        lm_logits = []
-        for i in range(len(hidden_states)):
-            lm_logits.append(
-                ttnn.experimental.operations.primary.matmul_1d(
-                    hidden_states[i],
-                    self.lm_head_weights[i],
-                    program_config=self.model_config["LM_HEAD_MM_PROGCFG"],
-                    output_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
-                    compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-                )
-            )
-            hidden_states[i].deallocate(True)
+        lm_logits = ttnn.matmul(
+            hidden_states,
+            self.lm_head_weights,
+            program_config=self.model_config["LM_HEAD_MM_PROGCFG"],
+            memory_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
+            dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+        )
+        hidden_states.deallocate(True)
 
         return lm_logits, presents
