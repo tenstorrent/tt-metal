@@ -652,27 +652,86 @@ std::vector<Tensor> min_bw(
     return operation::decorate_as_composite(__func__, _min_bw)(grad, input, other, output_mem_config);
 }
 
-std::vector<Tensor> _fill_zero_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor result = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
+std::vector<std::optional<Tensor>> _fill_zero_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> result;
+    if (are_required_outputs.at(0)) {
+        if(input_grad.has_value()){
+            zeros_like(queue_id, grad, output_mem_config, input_grad);
+        } else {
+            input_grad = zeros_like(queue_id, grad, output_mem_config);
+        }
+        result.emplace_back(input_grad);
+    } else {
+        result.emplace_back(std::nullopt);
+    }
+    return std::move(result);
+    }
+
+std::vector<std::optional<Tensor>> fill_zero_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad) {
+    return operation::decorate_as_composite(__func__, _fill_zero_bw)(
+        queue_id, grad, output_mem_config, are_required_outputs, input_grad);
 }
-std::vector<Tensor> fill_zero_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _fill_zero_bw)(grad, output_mem_config);
+std::vector<std::optional<Tensor>> fill_zero_bw(
+    const Tensor& grad,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad) {
+        uint8_t default_queue_id = 0;
+    return operation::decorate_as_composite(__func__, _fill_zero_bw)(
+        default_queue_id, grad, output_mem_config, are_required_outputs, input_grad);
 }
 
-std::vector<Tensor> _fill_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor val = grad;
-    val = global_sum(val, output_mem_config);
-    Tensor result = zeros_like(grad, output_mem_config);
-    result = bcast(result, val, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
+std::vector<std::optional<Tensor>> _fill_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> result;
+    if (are_required_outputs.at(0)) {
+        Tensor val = grad;
+        val = global_sum(val, output_mem_config);
+
+        if(input_grad.has_value()){
+            zeros_like(queue_id, grad, output_mem_config, input_grad);
+            bcast(queue_id, input_grad.value(), val, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config, input_grad);
+        } else {
+            input_grad = bcast(queue_id, zeros_like(queue_id, grad, output_mem_config), val, BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
+        }
+        result.emplace_back(input_grad);
+    } else {
+        result.emplace_back(std::nullopt);
+    }
+    return std::move(result);
+    }
+std::vector<std::optional<Tensor>> fill_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad) {
+    return operation::decorate_as_composite(__func__, _fill_bw)(
+        queue_id, grad, output_mem_config, are_required_outputs, input_grad);
 }
-std::vector<Tensor> fill_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _fill_bw)(grad, output_mem_config);
+std::vector<std::optional<Tensor>> fill_bw(
+    const Tensor& grad,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+        uint8_t default_queue_id = 0;
+    return operation::decorate_as_composite(__func__, _fill_bw)(
+        default_queue_id, grad, output_mem_config, are_required_outputs, input_grad);
 }
 
 std::vector<Tensor> _embedding_bw(
