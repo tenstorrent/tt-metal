@@ -118,7 +118,29 @@ atan2_bw = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.
 def _golden_function(grad_tensor, input_tensor, weight_tensor, *args, **kwargs):
     import torch
 
-    return
+    batch_size = input_tensor.shape[0]
+    no_of_embeddings = input_tensor.shape[1] * input_tensor.shape[2]
+    embedding_dim = input_tensor.shape[3]
+
+    input_shape = [batch_size, 1, 1, no_of_embeddings]
+    input_index = torch.reshape(torch.arange(0, batch_size * no_of_embeddings), shape=input_shape)
+    weights_shape = [batch_size, 1, no_of_embeddings, embedding_dim]
+    weights = torch.randn(weights_shape, requires_grad=True)
+    grad_shape = [1, 1, batch_size * no_of_embeddings, embedding_dim]
+    grad_data = torch.randn(grad_shape, requires_grad=True)
+
+    weights.retain_grad()
+
+    pyt_y = torch.nn.functional.embedding(
+        input_index.reshape((batch_size, no_of_embeddings)),
+        weights.reshape((batch_size * no_of_embeddings, embedding_dim)),
+    ).reshape((1, 1, batch_size * no_of_embeddings, embedding_dim))
+
+    pyt_y.backward(gradient=grad_data)
+
+    golden_output_tensor_a = weights.grad
+
+    return golden_output_tensor_a
 
 
 embedding_bw = ttnn.register_operation(golden_function=_golden_function)(
