@@ -3,6 +3,11 @@ name: "[internal] Produce data for external analysis"
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      test_workflow_run_id:
+        description: "Unique GitHub workflow run ID to use for data"
+        default: 9605916313
+        type: number
   workflow_run:
     workflows:
       - "All post-commit tests"
@@ -32,14 +37,13 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          ALL_PC_TEST_ID: 9605916313
         run: |
           echo "[Info] Workflow run attempt"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/$ALL_PC_TEST_ID/attempts/1
-          gh api /repos/tenstorrent/tt-metal/actions/runs/$ALL_PC_TEST_ID/attempts/1 > workflow.json
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1 > workflow.json
           echo "[Info] Workflow run attempt jobs"
-          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/$ALL_PC_TEST_ID/attempts/1/jobs
-          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/$ALL_PC_TEST_ID/attempts/1/jobs > workflow_jobs.json
+          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1/jobs
+          gh api --paginate /repos/tenstorrent/tt-metal/actions/runs/${{ inputs.test_workflow_run_id }}/attempts/1/jobs > workflow_jobs.json
       - name: Output auxiliary values (workflow_run completed)
         if: ${{ github.event_name == 'workflow_run' }}
         env:
