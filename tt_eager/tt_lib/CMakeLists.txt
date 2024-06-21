@@ -13,7 +13,7 @@ set(TT_LIB_SRCS
 # TODO: should be using pybind11_add_module, but right now it introduces many build problems
 # pybinds will always be built as a shared library
 add_library(tt_lib SHARED ${TT_LIB_SRCS})
-target_link_libraries(tt_lib PUBLIC compiler_flags linker_flags tt_eager tt_metal pch_pybinds)  # linker_flags = -rdynamic if tracy enabled
+target_link_libraries(tt_lib PUBLIC compiler_flags linker_flags tt_eager tt_metal pch_pybinds Boost::container)  # linker_flags = -rdynamic if tracy enabled
 target_include_directories(tt_lib PUBLIC
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}
@@ -37,7 +37,7 @@ set_target_properties(tt_lib PROPERTIES
     PREFIX ""
     SUFFIX ".so"
     BUILD_RPATH "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/tt_eager"
-    INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib"
+    INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/_deps/boost_container-build/"
     CXX_VISIBILITY_PRESET "default"
     ADDITIONAL_CLEAN_FILES "${PROJECT_SOURCE_DIR}/tt_eager/tt_lib/_C.so;${PROJECT_SOURCE_DIR}/tt_eager/metal_libs.egg-info"
 )
