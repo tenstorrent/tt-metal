@@ -52,7 +52,6 @@ jobs:
       - name: Output github context values to file
         run: |
           printf "%s\n" "${{ toJSON(github) }}" > github_context.json
-          cat github_context.json
       - name: Create CSVs and show
         env:
           PYTHONPATH: ${{ github.workspace }}
@@ -61,3 +60,20 @@ jobs:
         run: ls -hal
       - name: Show CSVs output
         run: cat *.csv
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cicd-data
+          path: |
+            *.csv
+      - name: Upload context data, even on failure
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: context-data
+          path: |
+            if-no-files-found: warn
+            path: |
+              workflow.json
+              workflow_jobs.json
+              github_context.json
