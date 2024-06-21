@@ -24,7 +24,7 @@ namespace tt {
 
 namespace tt_metal {
 
-std::vector<std::optional<Tensor>> _addalpha_bw(
+std::vector<std::optional<Tensor>> _add_bw(
     uint8_t queue_id,
     const Tensor& grad,
     const Tensor& input,
@@ -59,32 +59,6 @@ std::vector<std::optional<Tensor>> _addalpha_bw(
 
     return std::move(result);
 }
-std::vector<std::optional<Tensor>> addalpha_bw(
-    uint8_t queue_id,
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    float alpha,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    return operation::decorate_as_composite(__func__, _addalpha_bw)(
-        queue_id, grad, input, other, alpha, output_mem_config, are_required_outputs, input_grad, other_grad);
-}
-std::vector<std::optional<Tensor>> addalpha_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    float alpha,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-        uint8_t default_queue_id = 0;
-    return operation::decorate_as_composite(__func__, _addalpha_bw)(
-        default_queue_id, grad, input, other, alpha, output_mem_config, are_required_outputs, input_grad, other_grad);
-}
 
 std::vector<std::optional<Tensor>> add_bw(
     const Tensor& grad,
@@ -95,7 +69,7 @@ std::vector<std::optional<Tensor>> add_bw(
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     uint8_t default_queue_id = 0;
-    return operation::decorate_as_composite(__func__, _addalpha_bw)(
+    return operation::decorate_as_composite(__func__, _add_bw)(
         default_queue_id, grad, input, other, 1, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 std::vector<std::optional<Tensor>> add_bw(
@@ -107,7 +81,7 @@ std::vector<std::optional<Tensor>> add_bw(
     const std::vector<bool>& are_required_outputs,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-    return operation::decorate_as_composite(__func__, _addalpha_bw)(
+    return operation::decorate_as_composite(__func__, _add_bw)(
         queue_id, grad, input, other, 1, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 

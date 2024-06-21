@@ -55,16 +55,87 @@ std::vector<Tensor> _embedding_bw(
     return grad_tensor;
 }
 
-std::function<std::vector<Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function(BinaryBackwardOpType OpType){
+//TODO: std::vector<std::optional<Tensor>> _addalpha_bw(
+std::vector<ttnn::Tensor> _addalpha_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    float alpha,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    std::vector<Tensor> result;
+
+    if (are_required_outputs.at(0)) {
+        if(input_grad.has_value()){
+            assign(queue_id, grad, input_grad.value());
+        } else {
+            input_grad = grad;
+        }
+        result.emplace_back(std::move(input_grad.value()));
+    } else {
+        result.emplace_back();
+    }
+    if (are_required_outputs.at(1)) {
+        if(other_grad.has_value()){
+            ttnn::multiply(queue_id, grad, ttnn::operations::creation::full_like(grad, alpha, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config), std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, other_grad);
+        } else {
+            other_grad = mul_unary(queue_id, grad, alpha, output_mem_config);
+        }
+        result.emplace_back(std::move(other_grad.value()));
+    } else {
+        result.emplace_back();
+    }
+    return std::move(result);
+
+}
+
+//TODO: std::vector<std::optional<Tensor>> _addalpha_bw_overload(
+std::vector<Tensor> _addalpha_bw_overload(
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    float alpha,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+        uint8_t default_queue_id = 0;
+    return _addalpha_bw(default_queue_id, grad, input, other, alpha, output_mem_config, are_required_outputs, input_grad, other_grad);
+}
+
+std::function<std::vector<Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ATAN2_BW:
             return _atan2_bw;
         case BinaryBackwardOpType::EMBEDDING_BW:
             return _embedding_bw;
-        default: TT_ASSERT(false && "Undefined op type");
+        default:
+            TT_ASSERT(false && "Undefined op type");
+            return 0;
+    }
+}
+std::function<std::vector<ttnn::Tensor>(uint8_t , const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type2(BinaryBackwardOpType OpType){
+    switch (OpType) {
+        case BinaryBackwardOpType::ADDALPHA_BW:
+            return _addalpha_bw;
+        default:
+            TT_ASSERT(false && "Undefined op type");
+            return 0;
     }
 }
 
+std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type2_wo_qid(BinaryBackwardOpType OpType){
+    switch (OpType) {
+        case BinaryBackwardOpType::ADDALPHA_BW:
+            return _addalpha_bw_overload;
+        default:
+            TT_ASSERT(false && "Undefined op type");
+            return 0;
+    }
+}
 }
 
 
