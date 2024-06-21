@@ -84,6 +84,8 @@
 
 #define MEM_IERISC_INIT_LOCAL_L1_BASE (MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE)
 
+#define MEM_MAP_END (MEM_NCRISC_INIT_IRAM_L1_BASE + MEM_NCRISC_FIRMWARE_SIZE)
+
 /////////////
 // Stack info
 // Increasing the stack size comes at the expense of less local memory for globals
