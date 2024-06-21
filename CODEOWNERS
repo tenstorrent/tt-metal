@@ -128,11 +128,11 @@ tt_eager/tensor/ @arakhmati @eyonland @cfjchu @xanderchin
 **/tt_eager/tt_lib/fallback_ops @tt-aho
 
 # TTNN
-ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu
+ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt
 ttnn/setup.py @tt-rkim
 ttnn/module.mk @tt-rkim
-ttnn/CMakeLists.txt @tt-rkim
-tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu
+ttnn/CMakeLists.txt @tt-rkim @ayerofieiev-tt
+tests/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt
 
 # models
 /models/ @boris-drazic
@@ -157,8 +157,8 @@ models/experimental/
 models/perf/ @boris-drazic @tt-rkim
 
 # docs
-docs/source/ttnn/dependencies/tt_lib.rst @eyonland @arakhmati @cfjchu @xanderchin
-docs/source/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin
+docs/source/ttnn/dependencies/tt_lib.rst @eyonland @arakhmati @cfjchu @xanderchin @ayerofieiev-tt
+docs/source/ttnn/ @eyonland @arakhmati @cfjchu @xanderchin @ayerofieiev-tt
 # docs/source/apis/host_apis/ @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/host_apis2.rst @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/kernel_apis/ @davorchap @pgkeller @tt-rkim
