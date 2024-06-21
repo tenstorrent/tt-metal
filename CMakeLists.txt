@@ -105,7 +105,7 @@ set(CMAKE_INSTALL_DATAROOTDIR "${PROJECT_BINARY_DIR}/tmp/share")
 ############################################################################################################################
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(metal_common_libs INTERFACE
-    dl z pthread atomic c++ c++abi hwloc numa # system libraries, hwloc has no cmake support, find_package won't find it
+    dl z pthread atomic c++ c++abi hwloc numa Boost::container # system libraries, hwloc has no cmake support, find_package won't find it
 )
 
 # Note on flags:

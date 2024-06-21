@@ -45,6 +45,6 @@ target_compile_options(tt_metal PUBLIC -Wno-int-to-pointer-cast)
 add_dependencies(tt_metal hw_toolchain)
 
 set_target_properties(tt_metal PROPERTIES
-    INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib"
+    INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/_deps/boost_container-build/"
     ADDITIONAL_CLEAN_FILES "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/obj"
 )
