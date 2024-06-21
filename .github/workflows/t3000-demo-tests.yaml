@@ -1,4 +1,4 @@
-name: "[T3K] T3000 demo tests"
+name: "(T3K) T3000 demo tests"
 
 on:
   workflow_dispatch:
