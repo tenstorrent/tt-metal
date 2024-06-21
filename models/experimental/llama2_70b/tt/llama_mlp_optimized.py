@@ -8,13 +8,7 @@ import torch
 from torch import nn
 import ttnn.experimental as tt_lib
 import ttnn
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
-from models.experimental.llama2_70b.tt.llama_common import (
-    tt_all_gather_torch,
-    get_weight_cache_path,
-    get_weight_cache_path_ttnn,
-)
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+from ttnn import ShardTensorToMesh
 
 
 class TtLlamaMLP_optimized:
@@ -106,31 +100,6 @@ class TtLlamaMLP_optimized:
         )
         self.w3 = ttnn.to_device(w3_ttnn, self.device_mesh)
 
-    def prepare_inputs(self, x):
-        x_multichip = ttnn.from_torch(
-            x,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=self.model_config["LN_MLP_OUTPUT_DTYPE"],
-            device=self.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
-        )
-
-        if self.model_config["LLM_MODE"] == "decode":
-            x_multichip = ttnn.to_memory_config(
-                x_multichip,
-                ttnn.create_sharded_memory_config(
-                    shape=(32, 8192 // 32),
-                    core_grid=ttnn.CoreGrid(y=4, x=8),
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                ),
-            )
-        elif self.model_config["LLM_MODE"] == "prefill":
-            x_multichip = ttnn.to_memory_config(x_multichip, self.model_config["DRAM_MEMCFG"])
-
-        return x_multichip
-
     def __call__(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
         if self.model_config["LLM_MODE"] == "decode":
@@ -144,8 +113,8 @@ class TtLlamaMLP_optimized:
     def prefill_forward(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
         # Prefill Reshape fix
         _, _, seq_len, _ = x.shape
-        max_seq_len = 1024  # Must be same as in model_config.py
-        batch_dim = 1 if seq_len < max_seq_len else seq_len // max_seq_len  # Find the division factor
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
         x = ttnn.reshape(x, (1, batch_dim, seq_len // batch_dim, self.hidden_size))
 
         w1_out = tt_lib.operations.primary.matmul(
@@ -192,8 +161,6 @@ class TtLlamaMLP_optimized:
 
     def decode_forward(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
         hidden_states = []
-        w1_outs = []
-        w3_outs = []
 
         w1_out = tt_lib.operations.primary.matmul_1d(
             x,
@@ -221,10 +188,6 @@ class TtLlamaMLP_optimized:
         w1_out.deallocate(True)
         w3_out.deallocate(True)
 
-        # hidden_states = tt_lib.tensor.sharded_to_interleaved(
-        #     hidden_states, output_mem_config=self.model_config["L1_MEMCFG"]
-        # )
-
         hidden_states = ttnn.all_gather(
             hidden_states,
             dim=3,
@@ -232,10 +195,6 @@ class TtLlamaMLP_optimized:
             # memory_config=self.model_config["L1_MEMCFG"],
             memory_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"],
         )
-
-        # hidden_states = tt_lib.tensor.interleaved_to_sharded(
-        #     hidden_states, sharded_mem_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"]
-        # )
 
         hidden_states = tt_lib.operations.primary.matmul_1d(
             hidden_states,

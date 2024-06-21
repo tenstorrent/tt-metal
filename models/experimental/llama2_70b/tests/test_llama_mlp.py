@@ -5,21 +5,15 @@
 import pytest
 from loguru import logger
 import torch
-from torch import nn
-import tt_lib
 import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
 from models.experimental.llama2_70b.reference.llama.llama import Llama
 from models.experimental.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
-from models.experimental.llama2_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
-from models.experimental.llama2_70b.tt.model_config import (
-    get_model_config,
-)
-
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
+from models.utility_functions import skip_for_grayskull
 from models.experimental.llama2_70b.tt.llama_common import (
-    get_llama_path,
+    setup_llama_env,
+    check_device_mesh,
     MAX_SEQ_LEN,
     BASE_URL,
     UNIT_TEST_N_LAYER,
@@ -43,19 +37,44 @@ class PytorchLlamaMLPModel(torch.nn.Module):
         return result
 
 
+def tt_llama_mlp_prepare_inputs(llama_mlp_model, x):
+    x_multichip = ttnn.from_torch(
+        x,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=llama_mlp_model.device_mesh,
+        mesh_mapper=ReplicateTensorToMesh(llama_mlp_model.device_mesh),
+    )
+
+    if llama_mlp_model.model_config["LLM_MODE"] == "decode":
+        x_multichip = ttnn.to_memory_config(
+            x_multichip,
+            ttnn.create_sharded_memory_config(
+                shape=(32, 8192 // 32),
+                core_grid=ttnn.CoreGrid(y=4, x=8),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            ),
+        )
+    elif llama_mlp_model.model_config["LLM_MODE"] == "prefill":
+        x_multichip = ttnn.to_memory_config(x_multichip, llama_mlp_model.model_config["DRAM_MEMCFG"])
+
+    return x_multichip
+
+
 def run_test_LlamaMLP_inference(
     t3k_device_mesh,
     batch,
     seq_len,
     pcc,
     model_config,
-    n_devices,
-    emulated=False,
+    llama_version,
+    ckpt_dir,
+    tokenizer_path,
+    cache_path,
 ):
     # Prepare paths and devices
-    t3k_device_mesh, ckpt_dir, tokenizer_path, cache_path = get_llama_path(
-        t3k_device_mesh, model_config, n_devices, emulated
-    )
     skip_model_load = should_skip_model_load()
 
     # Prepare configs
@@ -96,11 +115,10 @@ def run_test_LlamaMLP_inference(
         UNIT_TEST_LAYER_NUM,
         configuration.dim,
         model_config,
-        emulated=emulated,
         cache_path=cache_path,
     )
 
-    tt_mlp_input = tt_LlamaMLP_model.prepare_inputs(tt_inp)
+    tt_mlp_input = tt_llama_mlp_prepare_inputs(tt_LlamaMLP_model, tt_inp)
 
     tt_out = tt_LlamaMLP_model(tt_mlp_input)
     tt_out = ttnn.from_device(tt_out)
@@ -110,53 +128,73 @@ def run_test_LlamaMLP_inference(
     logger.info(f"PCC value: {output_pcc}")
 
     if does_pass:
-        logger.info("Llama MLP output Passed!")
+        logger.info(f"{llama_version} MLP output Passed!")
     else:
-        logger.warning("Llama MLP output Failed!")
+        logger.warning(f"{llama_version}  MLP output Failed!")
         gc.collect()
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "n_devices, emulated",
+    "llama_version",
     (
-        (8, False),
-        (8, True),
-    ),
-    ids=(
-        "8chip-T3000",
-        "8chip-emulated",
+        ("llama2"),
+        ("llama3"),
     ),
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    ((32, 1, 0.9998), (1, 128, 0.998), (1, 2048, 0.998)),
+    ((32, 1, 0.9995), (1, 128, 0.998), (1, 2048, 0.998)),
     ids=("decode", "prefill_128", "prefill_2k"),
+)
+@pytest.mark.parametrize(
+    "max_batch_size, max_context_len",
+    (
+        # (32, 2048),
+        (16, 8192),
+    ),
+    ids=(
+        # "short_context",
+        "long_context",
+    ),
 )
 def test_LlamaMLP_inference(
     batch,
     seq_len,
     pcc,
-    n_devices,
     t3k_device_mesh,
-    emulated,
+    max_batch_size,
+    max_context_len,
+    llama_version,
+    use_program_cache,
 ):
-    model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
+    if batch > max_batch_size:
+        pytest.skip(f"Decode with {batch} users is not supported with large context")
 
-    if t3k_device_mesh.get_num_devices() < n_devices and not emulated:
-        pytest.skip(f"Requires at {n_devices} devices to run")
+    if batch == 1 and seq_len > max_context_len:
+        pytest.skip(f"Prefill with {seq_len=} is not supported with short context")
 
-    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
-    if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
-        pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
+    if llama_version == "llama2" and seq_len > 2048:
+        pytest.skip(f"Llama2 with {seq_len=} is not supported (max 2048)")
 
+    model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
+        llama_version=llama_version,
+        batch=batch,
+        seq_len=seq_len,
+        max_batch_size=max_batch_size,
+        max_context_len=max_context_len,
+    )
+
+    check_device_mesh(t3k_device_mesh, model_config)
     run_test_LlamaMLP_inference(
         t3k_device_mesh,
         batch,
         seq_len,
         pcc,
         model_config,
-        n_devices,
-        emulated,
+        llama_version,
+        ckpt_dir,
+        tokenizer_path,
+        cache_path,
     )

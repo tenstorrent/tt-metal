@@ -119,75 +119,57 @@ KernelGroup::KernelGroup() : core_ranges({}) {}
 
 KernelGroup::KernelGroup(
     const Program &program,
-    std::optional<KernelHandle> brisc_id,
-    std::optional<KernelHandle> ncrisc_id,
-    std::optional<KernelHandle> trisc_id,
-    std::optional<KernelHandle> erisc_id,
+    CoreType core_type,
+    std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX_PROC> kernel_ids,
     bool erisc_is_idle,
     int last_cb_index,
     const CoreRangeSet &new_ranges) :
     core_ranges({}) {
-    this->core_ranges = this->core_ranges.merge(new_ranges);
 
-    this->riscv0_id = brisc_id;
-    this->riscv1_id = ncrisc_id;
-    this->compute_id = trisc_id;
-    this->erisc_id = erisc_id;
+    this->core_type = core_type;
+    this->core_ranges = this->core_ranges.merge(new_ranges);
+    this->kernel_ids = kernel_ids;
+
+    std::memset(&this->launch_msg, 0, sizeof(launch_msg_t));
 
     // The code below sets the brisc_noc_id for use by the device firmware
-    // Use 0 if neither brisc nor trisc specify a noc
-    this->launch_msg.brisc_noc_id = 0;
-    if (erisc_id) {
+    // Use 0 if neither brisc nor ncrisc specify a noc
+    if (core_type == CoreType::WORKER) {
+        // Dynamic address map
+        this->launch_msg.kernel_config_base = L1_KERNEL_CONFIG_BASE;
+        this->launch_msg.rta_offsets[DISPATCH_CLASS_TENSIX_DM0] = 0;
+        this->launch_msg.rta_offsets[DISPATCH_CLASS_TENSIX_DM1] = max_runtime_args * sizeof(uint32_t);
+        this->launch_msg.rta_offsets[DISPATCH_CLASS_TENSIX_COMPUTE] = 2 * max_runtime_args * sizeof(uint32_t);
+
+        for (int class_id = 0; class_id < DISPATCH_CLASS_MAX_PROC; class_id++) {
+            auto& optional_id = kernel_ids[class_id];
+            if (optional_id) {
+                const auto kernel = program.get_kernel(optional_id.value());
+                this->launch_msg.watcher_kernel_ids[class_id] = kernel->get_watcher_kernel_id();
+                this->launch_msg.enables[class_id] = true;
+
+                if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
+                    // Use brisc's noc if brisc specifies a noc
+                    this->launch_msg.enables[DISPATCH_CLASS_TENSIX_DM0] = true;
+                } else if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
+                    // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
+                    // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
+                    this->launch_msg.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
+                    this->launch_msg.ncrisc_kernel_size16 = kernel->get_binary_size16();
+                }
+            }
+        }
+    } else {
+        // Dynamic address map
         this->launch_msg.kernel_config_base =
             erisc_is_idle ? IDLE_ERISC_L1_KERNEL_CONFIG_BASE : eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
-        this->launch_msg.rta_offset_brisc = 0;
-        this->launch_msg.rta_offset_ncrisc = 0;
-        this->launch_msg.rta_offset_trisc = 0;
-    } else {
-        this->launch_msg.kernel_config_base = L1_KERNEL_CONFIG_BASE;
-        this->launch_msg.rta_offset_brisc = 0;
-        this->launch_msg.rta_offset_ncrisc = max_runtime_args * sizeof(uint32_t);
-        this->launch_msg.rta_offset_trisc = 2 * max_runtime_args * sizeof(uint32_t);
-    }
-    if (brisc_id) {
-        // Use brisc's noc if brisc specifies a noc
-        this->launch_msg.enable_brisc = true;
-        this->launch_msg.brisc_noc_id =
-            std::get<DataMovementConfig>(program.get_kernel(brisc_id.value())->config()).noc;
-        this->launch_msg.brisc_watcher_kernel_id = program.get_kernel(brisc_id.value())->get_watcher_kernel_id();
-    } else {
-        this->launch_msg.brisc_watcher_kernel_id = 0;
-        this->launch_msg.enable_brisc = false;
-    }
+        this->launch_msg.rta_offsets[DISPATCH_CLASS_ETH_DM0] = 0;
 
-    if (ncrisc_id) {
-        const auto kernel = program.get_kernel(ncrisc_id.value());
-        // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
-        // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
-        this->launch_msg.enable_ncrisc = true;
-        this->launch_msg.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
-        this->launch_msg.ncrisc_kernel_size16 = kernel->get_binary_size16();
-        this->launch_msg.ncrisc_watcher_kernel_id = kernel->get_watcher_kernel_id();
-    } else {
-        this->launch_msg.ncrisc_watcher_kernel_id = 0;
-        this->launch_msg.enable_ncrisc = false;
-        this->launch_msg.ncrisc_kernel_size16 = 0;
-    }
-
-    if (trisc_id) {
-        this->launch_msg.enable_triscs = true;
-        this->launch_msg.triscs_watcher_kernel_id = program.get_kernel(trisc_id.value())->get_watcher_kernel_id();
-    } else {
-        this->launch_msg.triscs_watcher_kernel_id = 0;
-        this->launch_msg.enable_triscs = false;
-    }
-
-    if (erisc_id) {
-        this->launch_msg.enable_erisc = true;
+        TT_ASSERT(kernel_ids[DISPATCH_CLASS_ETH_DM0].has_value());
+        this->launch_msg.enables[DISPATCH_CLASS_ETH_DM0] = true;
         // Ethernet cores use the brisc kernel id field
-        this->launch_msg.brisc_watcher_kernel_id = program.get_kernel(erisc_id.value())->get_watcher_kernel_id();
-    } else {
-        this->launch_msg.enable_erisc = false;
+        const auto kernel = program.get_kernel(kernel_ids[DISPATCH_CLASS_ETH_DM0].value());
+        this->launch_msg.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0] = kernel->get_watcher_kernel_id();
     }
 
     this->launch_msg.max_cb_index = last_cb_index + 1;
@@ -195,11 +177,7 @@ KernelGroup::KernelGroup(
 }
 
 CoreType KernelGroup::get_core_type() const {
-    if (this->erisc_id.has_value()) {
-        return CoreType::ETH;
-    } else {
-        return CoreType::WORKER;
-    }
+    return core_type;
 };
 
 std::vector<KernelGroup> &Program::get_kernel_groups(const CoreType &core_type) {
@@ -217,31 +195,30 @@ KernelGroup *Program::kernels_on_core(const CoreCoord &core, const CoreType &cor
 
 struct KernelGroupInt {
     bool valid;
-    std::optional<KernelHandle> trisc_id = std::nullopt;
-    std::optional<KernelHandle> brisc_id = std::nullopt;
-    std::optional<KernelHandle> ncrisc_id = std::nullopt;
-    std::optional<KernelHandle> erisc_id = std::nullopt;
+    std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX_PROC> kernel_ids;
 
     bool operator==(const KernelGroupInt &b) const;
-    void update(RISCV riscv_processor, size_t kernel_idx) {
-        switch (riscv_processor) {
-            case RISCV::BRISC: this->brisc_id = static_cast<KernelHandle>(kernel_idx); break;
-            case RISCV::NCRISC: this->ncrisc_id = static_cast<KernelHandle>(kernel_idx); break;
-            case RISCV::COMPUTE: this->trisc_id = static_cast<KernelHandle>(kernel_idx); break;
-            case RISCV::ERISC: this->erisc_id = static_cast<KernelHandle>(kernel_idx); break;
-            default: TT_ASSERT(false, "Unsupported kernel processor!");
-        }
+    void update(dispatch_core_processor_classes proc_class, size_t kernel_idx) {
+        this->kernel_ids[proc_class] = static_cast<KernelHandle>(kernel_idx);
     }
 };
 
 bool KernelGroupInt::operator==(const KernelGroupInt &b) const {
-    return trisc_id == b.trisc_id && brisc_id == b.brisc_id && ncrisc_id == b.ncrisc_id && erisc_id == b.erisc_id;
+    for (int class_id = 0; class_id < DISPATCH_CLASS_MAX_PROC; class_id++) {
+        if (this->kernel_ids[class_id] != b.kernel_ids[class_id]) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 struct KernelGroupIntHasher {
     std::size_t operator()(const KernelGroupInt &x) const {
-        return static_cast<size_t>(x.erisc_id.value_or(0)) | static_cast<size_t>(x.trisc_id.value_or(0)) |
-               static_cast<size_t>(x.brisc_id.value_or(0)) << 16 | static_cast<size_t>(x.ncrisc_id.value_or(0)) << 32;
+        return
+            static_cast<size_t>(x.kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value_or(0)) << 0 |
+            static_cast<size_t>(x.kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value_or(0)) << 16 |
+            static_cast<size_t>(x.kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value_or(0)) << 32;
     }
 };
 
@@ -275,7 +252,7 @@ void Program::update_kernel_groups(const CoreType &core_type) {
             for (auto core : kernel->logical_cores()) {
                 int core_index = core.y * grid_extent_[core_type].x + core.x;
                 grid[core_index].valid = true;
-                grid[core_index].update(kernel->processor(), id);
+                grid[core_index].update(kernel->dispatch_class(), id);
             }
         }
 
@@ -323,10 +300,8 @@ void Program::update_kernel_groups(const CoreType &core_type) {
 
             kernel_groups_[core_type].push_back(KernelGroup(
                 *this,
-                kg_to_cores.first.brisc_id,
-                kg_to_cores.first.ncrisc_id,
-                kg_to_cores.first.trisc_id,
-                kg_to_cores.first.erisc_id,
+                core_type,
+                kg_to_cores.first.kernel_ids,
                 erisc_is_idle,
                 last_cb_index,
                 kg_to_cores.second));
@@ -662,12 +637,11 @@ void Program::populate_dispatch_data(Device *device) {
         // which use multiple core ranges
         bool linked = dst_noc_multicast_info.size() == 1;
         vector<KernelHandle> kernel_ids;
-        if (kernel_group.riscv0_id)
-            kernel_ids.push_back(kernel_group.riscv0_id.value());
-        if (kernel_group.riscv1_id)
-            kernel_ids.push_back(kernel_group.riscv1_id.value());
-        if (kernel_group.compute_id)
-            kernel_ids.push_back(kernel_group.compute_id.value());
+        for (auto& optional_id : kernel_group.kernel_ids) {
+            if (optional_id) {
+                kernel_ids.push_back(optional_id.value());
+            }
+        }
         for (size_t i = 0; i < kernel_ids.size(); i++) {
             KernelHandle kernel_id = kernel_ids[i];
             vector<RISCV> sub_kernels;
@@ -729,8 +703,9 @@ void Program::populate_dispatch_data(Device *device) {
             extract_dst_noc_unicast_info(kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
 
         vector<KernelHandle> kernel_ids;
-        if (kernel_group.erisc_id)
-            kernel_ids.push_back(kernel_group.erisc_id.value());
+        if (kernel_group.core_type == CoreType::ETH && kernel_group.kernel_ids[DISPATCH_CLASS_ETH_DM0]) {
+            kernel_ids.push_back(kernel_group.kernel_ids[DISPATCH_CLASS_ETH_DM0].value());
+        }
         for (size_t i = 0; i < kernel_ids.size(); i++) {
             KernelHandle kernel_id = kernel_ids[i];
             vector<RISCV> sub_kernels;

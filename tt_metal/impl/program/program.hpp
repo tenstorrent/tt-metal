@@ -33,20 +33,16 @@ namespace detail{
 }
 
 struct KernelGroup {
+    CoreType core_type;
     CoreRangeSet core_ranges;
-    std::optional<KernelHandle> compute_id = std::nullopt;
-    std::optional<KernelHandle> riscv0_id = std::nullopt;
-    std::optional<KernelHandle> riscv1_id = std::nullopt;
-    std::optional<KernelHandle> erisc_id = std::nullopt;
+    std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX_PROC> kernel_ids;
     launch_msg_t launch_msg;
 
     KernelGroup();
     KernelGroup(
         const Program &program,
-        std::optional<KernelHandle> brisc_id,
-        std::optional<KernelHandle> ncrisc_id,
-        std::optional<KernelHandle> trisc_id,
-        std::optional<KernelHandle> erisc_id,
+        CoreType core_type,
+        std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX_PROC> kernel_ids,
         bool erisc_is_idle,
         int last_cb_index,
         const CoreRangeSet &new_ranges);
