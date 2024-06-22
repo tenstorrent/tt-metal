@@ -156,8 +156,8 @@ def test_ttnn_experimental_operations_primary_matmul_1d(
             input_tensor_b,
             bias=bias,
             program_config=program_config,
-            output_mem_config=output_memory_config,
-            output_dtype=input_a_dtype,
+            memory_config=output_memory_config,
+            dtype=input_a_dtype,
         )
         if output_is_sharded:
             output_tensor = ttnn.experimental.tensor.sharded_to_interleaved(output_tensor, interleaved_memory_config)
