@@ -43,7 +43,7 @@ if not ttnn.CONFIG.enable_fast_runtime_mode:
                 raise RuntimeError(f"{activation} is not supported as activation function")
         return ret
 
-    attach_golden(ttnn.linear, _golden_function_matmul)
+    attach_golden(ttnn.experimental.operations.linear, _golden_function_matmul)
 
     def _golden_function(
         input_tensor,
