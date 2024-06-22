@@ -862,7 +862,8 @@ void paged_read_into_cmddat_q(uint32_t read_ptr) {
 
 // processes the relay_inline cmd from an exec_buf
 // ie, reads the data from dram and relays it on
-static uint32_t process_relay_inline_exec_buf_cmd(uint32_t& cmd_ptr,
+// Separate implementation that fetches more data from exec buf when cmd has been split
+static uint32_t process_exec_buf_relay_inline_cmd(uint32_t& cmd_ptr,
                                                   uint32_t& downstream_data_ptr) {
 
     volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
@@ -906,6 +907,84 @@ static uint32_t process_relay_inline_exec_buf_cmd(uint32_t& cmd_ptr,
     noc_async_writes_flushed();
     cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages);
 
+    return stride;
+}
+
+// This version of inline sends inline data to the dispatcher but doesn't flush the page to the dispatcher
+// This is used to assemble dispatcher commands when data comes out of band, eg, reading from DRAM
+// That means this command is stateful, incorrect use will be...bad
+// NOTE: this routine assumes we're sending a command header and that is LESS THAN A PAGE
+// Separate implementation that fetches more data from exec buf when cmd has been split
+static uint32_t process_exec_buf_relay_inline_noflush_cmd(uint32_t& cmd_ptr,
+                                                 uint32_t& dispatch_data_ptr) {
+
+    volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
+
+    uint32_t length = cmd->relay_inline.length;
+    uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
+
+    uint32_t stride = cmd->relay_inline.stride;;
+
+    cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1);
+    if (dispatch_data_ptr == downstream_cb_end) {
+        dispatch_data_ptr = downstream_cb_base;
+    }
+    uint32_t remaining_stride = exec_buf_state.length;
+    uint32_t remaining = exec_buf_state.length - sizeof(CQPrefetchCmd);
+    while (length > remaining) {
+        // wrap cmddat
+        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
+        dispatch_data_ptr += remaining;
+        length -= remaining;
+        stride -= remaining_stride;
+        exec_buf_state.length = 0;
+        data_ptr = cmddat_q_base;
+        cmd_ptr = cmddat_q_base;
+
+        // fetch more
+        noc_async_writes_flushed(); // XXXXX no no no no
+        paged_read_into_cmddat_q(cmd_ptr);
+        noc_async_read_barrier(); // XXXXX no no no no
+        remaining = exec_buf_state.length;
+        remaining_stride = exec_buf_state.length;
+    }
+    noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
+    dispatch_data_ptr += length;
+
+    return stride;
+}
+
+// Separate implementation that fetches more data from exec buf when cmd has been split
+static uint32_t process_exec_buf_relay_paged_packed_cmd(uint32_t& cmd_ptr,
+                                                 uint32_t& downstream__data_ptr) {
+
+    volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
+    uint32_t total_length = cmd->relay_paged_packed.total_length;
+    uint32_t sub_cmds_length = cmd->relay_paged_packed.count * sizeof(CQPrefetchRelayPagedPackedSubCmd);
+    uint32_t stride = cmd->relay_paged_packed.stride;
+    ASSERT(total_length > 0);
+    DPRINT << "paged_packed: " << total_length << " " << cmd->relay_paged_packed.stride << ENDL();
+
+    uint32_t remaining_stride = exec_buf_state.length;
+    uint32_t remaining = (exec_buf_state.length - sizeof(CQPrefetchCmd));
+    volatile uint32_t tt_l1_ptr * l1_ptr = (volatile uint32_t tt_l1_ptr *)(cmd_ptr + sizeof(CQPrefetchCmd));
+    uint32_t * l1_cache_pos = l1_cache;
+    while (sub_cmds_length > remaining) {
+        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(l1_ptr, remaining / sizeof(uint32_t), l1_cache_pos);
+        l1_cache_pos += remaining / sizeof(uint32_t);
+        sub_cmds_length -= remaining;
+        stride -= remaining_stride;
+        exec_buf_state.length = 0;
+        cmd_ptr = cmddat_q_base;
+        l1_ptr = (volatile uint32_t tt_l1_ptr *)(cmd_ptr);
+        paged_read_into_cmddat_q(cmd_ptr);
+        noc_async_read_barrier(); // XXXXX no no no no
+        remaining = exec_buf_state.length;
+        remaining_stride = exec_buf_state.length;
+    }
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(l1_ptr, sub_cmds_length / sizeof(uint32_t), l1_cache_pos);
+
+    process_relay_paged_packed_sub_cmds(total_length);
     return stride;
 }
 
@@ -980,13 +1059,17 @@ bool process_cmd(uint32_t& cmd_ptr,
 
     case CQ_PREFETCH_CMD_RELAY_PAGED_PACKED:
         DPRINT << "relay paged packed" << ENDL();
-        stride = process_relay_paged_packed_cmd(cmd_ptr, downstream_data_ptr);
+        if (exec_buf) {
+            stride = process_exec_buf_relay_paged_packed_cmd(cmd_ptr, downstream_data_ptr);
+        } else {
+            stride = process_relay_paged_packed_cmd(cmd_ptr, downstream_data_ptr);
+        }
         break;
 
     case CQ_PREFETCH_CMD_RELAY_INLINE:
         DPRINT << "relay inline" << ENDL();
         if (exec_buf) {
-            stride = process_relay_inline_exec_buf_cmd(cmd_ptr, downstream_data_ptr);
+            stride = process_exec_buf_relay_inline_cmd(cmd_ptr, downstream_data_ptr);
         } else {
             stride = process_relay_inline_cmd<cmddat_wrap_enable>(cmd_ptr, downstream_data_ptr);
         }
@@ -994,7 +1077,11 @@ bool process_cmd(uint32_t& cmd_ptr,
 
     case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
         DPRINT << "inline no flush" << ENDL();
-        stride = process_relay_inline_noflush_cmd(cmd_ptr, downstream_data_ptr);
+        if (exec_buf) {
+            stride = process_exec_buf_relay_inline_noflush_cmd(cmd_ptr, downstream_data_ptr);
+        } else {
+            stride = process_relay_inline_noflush_cmd(cmd_ptr, downstream_data_ptr);
+        }
         break;
 
     case CQ_PREFETCH_CMD_EXEC_BUF:
@@ -1010,7 +1097,7 @@ bool process_cmd(uint32_t& cmd_ptr,
     case CQ_PREFETCH_CMD_EXEC_BUF_END:
         DPRINT << "exec buf end: " << cmd_ptr << ENDL();
         ASSERT(exec_buf);
-        stride = process_relay_inline_exec_buf_cmd(cmd_ptr, downstream_data_ptr);
+        stride = process_exec_buf_relay_inline_cmd(cmd_ptr, downstream_data_ptr);
         done = true;
         break;
 
