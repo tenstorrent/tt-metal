@@ -8,6 +8,16 @@ from typing import Optional, Tuple
 import ttnn
 
 MatmulProgramConfig = ttnn.experimental.operations.primary.MatmulProgramConfig
+MatmulMultiCoreReuseProgramConfig = ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig
+MatmulMultiCoreReuseMultiCastProgramConfig = (
+    ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig
+)
+MatmulMultiCoreReuseMultiCast1DProgramConfig = (
+    ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig
+)
+MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig = (
+    ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
+)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):

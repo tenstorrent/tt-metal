@@ -43,7 +43,7 @@ def test_ttnn_experimental_operations_primary_matmul(device, m_size, k_size, n_s
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, device=device, layout=ttnn.TILE_LAYOUT)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, device=device, layout=ttnn.TILE_LAYOUT)
-    output_tensor = ttnn.experimental.operations.primary.matmul(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b)
 
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -102,7 +102,7 @@ def test_ttnn_experimental_operations_primary_matmul_1d(
 
     output_memory_config = sharded_memory_config if output_is_sharded else interleaved_memory_config
 
-    program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(12, 9),
         in0_block_w=k_size // 32,
         out_subblock_h=8 // (n_size // 32),
@@ -151,13 +151,13 @@ def test_ttnn_experimental_operations_primary_matmul_1d(
                 ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             )
 
-        output_tensor = ttnn.experimental.operations.primary.matmul_1d(
+        output_tensor = ttnn.linear(
             input_tensor_a,
             input_tensor_b,
             bias=bias,
             program_config=program_config,
-            output_mem_config=output_memory_config,
-            output_dtype=input_a_dtype,
+            memory_config=output_memory_config,
+            dtype=input_a_dtype,
         )
         if output_is_sharded:
             output_tensor = ttnn.experimental.tensor.sharded_to_interleaved(output_tensor, interleaved_memory_config)
@@ -215,7 +215,7 @@ def test_ttnn_experimental_operations_primary_matmul_dram_sharded(device, m_size
         memory_config=in1_mem_config,
     )
 
-    program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=32,
         per_core_M=1,
         per_core_N=4,

@@ -28,7 +28,7 @@ parameters = {
         (
             (1,),
             (64, 32 * 96, 32 * 96),
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=1,
                 out_subblock_h=1,
@@ -54,7 +54,7 @@ parameters = {
         (
             (1,),
             (64, 28 * 96, 35 * 96),
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 5),
                 in0_block_w=1,
                 out_subblock_h=1,
@@ -80,7 +80,7 @@ parameters = {
         (
             (1,),
             (64, 35 * 96, 28 * 96),
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 5),
                 in0_block_w=1,
                 out_subblock_h=1,
@@ -106,7 +106,7 @@ parameters = {
         (
             (1,),
             (64, 28 * 96, 30 * 96),
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=1,
                 out_subblock_h=1,
@@ -132,7 +132,7 @@ parameters = {
         (
             (1,),
             (64, 30 * 96, 28 * 96),
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=1,
                 out_subblock_h=1,
@@ -161,7 +161,7 @@ parameters = {
         (
             (1,),
             (64, 96, 128),
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(1, 1),
                 in0_block_w=1,
                 out_subblock_h=1,
@@ -187,7 +187,7 @@ parameters = {
         (
             (1,),
             (64, 5 * 96, 128),
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(5, 1),
                 in0_block_w=1,
                 out_subblock_h=1,
@@ -213,7 +213,7 @@ parameters = {
         (
             (1,),
             (64, 96, 128),
-            ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(1, 1),
                 in0_block_w=1,
                 out_subblock_h=1,

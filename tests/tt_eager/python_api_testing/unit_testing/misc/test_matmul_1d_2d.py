@@ -5,6 +5,7 @@
 import pytest
 from loguru import logger
 import tt_lib as ttl
+import ttnn
 from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
@@ -136,7 +137,7 @@ def test_llama2_matmul(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -155,12 +156,12 @@ def test_llama2_matmul(
         packer_l1_acc=packer_l1_acc,
     )
 
-    output_t = ttl.operations.primary.matmul_1d(
+    output_t = ttnn.matmul(
         in0_t,
         in1_t,
         program_config=program_config,
-        output_mem_config=output_mem_config,
-        output_dtype=ttl.tensor.DataType.BFLOAT8_B,
+        memory_config=output_mem_config,
+        dtype=ttl.tensor.DataType.BFLOAT8_B,
         compute_kernel_config=compute_kernel_config,
     )
     if out_sharded:
@@ -461,7 +462,7 @@ def test_multi_core_matmul_2d_wh(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -479,11 +480,11 @@ def test_multi_core_matmul_2d_wh(
         packer_l1_acc=packer_l1_acc,
     )
 
-    output_t = ttl.operations.primary.matmul(
+    output_t = ttnn.matmul(
         in0_t,
         in1_t,
         program_config=program_config,
-        output_mem_config=output_mem_config,
+        memory_config=output_mem_config,
         compute_kernel_config=compute_kernel_config,
     )
 
@@ -788,7 +789,7 @@ def test_multi_core_matmul_1d_wh(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -807,12 +808,12 @@ def test_multi_core_matmul_1d_wh(
         packer_l1_acc=packer_l1_acc,
     )
 
-    output_t = ttl.operations.primary.matmul_1d(
+    output_t = ttnn.matmul(
         in0_t,
         in1_t,
         program_config=program_config,
-        output_mem_config=output_mem_config,
-        output_dtype=dtype,
+        memory_config=output_mem_config,
+        dtype=dtype,
         compute_kernel_config=compute_kernel_config,
     )
     if out_sharded:
@@ -1000,7 +1001,7 @@ def test_multi_core_matmul_2d_gs(
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -1014,20 +1015,20 @@ def test_multi_core_matmul_2d_gs(
     compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(math_fidelity=fidelity, math_approx_mode=True)
 
     if has_bias:
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.linear(
             in0_t,
             in1_t,
             bias=bias_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
+            memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
         )
     else:
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.matmul(
             in0_t,
             in1_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
+            memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
         )
 
@@ -1160,7 +1161,7 @@ def test_multi_core_matmul_1d_gs(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -1177,12 +1178,12 @@ def test_multi_core_matmul_1d_gs(
         math_approx_mode=True,
     )
 
-    output_t = ttl.operations.primary.matmul_1d(
+    output_t = ttnn.matmul(
         in0_t,
         in1_t,
         program_config=program_config,
-        output_mem_config=output_mem_config,
-        output_dtype=dtype,
+        memory_config=output_mem_config,
+        dtype=dtype,
         compute_kernel_config=compute_kernel_config,
     )
     if out_sharded:

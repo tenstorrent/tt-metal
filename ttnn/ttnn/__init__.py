@@ -278,6 +278,10 @@ from ttnn.operations.core import (
 from ttnn.operations.matmul import (
     matmul,
     linear,
+    MatmulMultiCoreReuseProgramConfig,
+    MatmulMultiCoreReuseMultiCastProgramConfig,
+    MatmulMultiCoreReuseMultiCast1DProgramConfig,
+    MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
 )
 
 from ttnn.operations.embedding import (

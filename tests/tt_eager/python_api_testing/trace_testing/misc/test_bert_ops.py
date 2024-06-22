@@ -5,6 +5,7 @@
 import pytest
 import torch
 import math
+import ttnn
 
 import tt_lib as ttl
 
@@ -119,7 +120,7 @@ def test_bert_linear(
         bias, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
     )[0]
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -148,20 +149,20 @@ def test_bert_linear(
             in0_t = ttl.tensor.clone(in0_t_res, interleaved_mem_config_L1)
 
         if has_bias:
-            output_t = ttl.operations.primary.matmul(
+            output_t = ttnn.linear(
                 in0_t,
                 in1_t,
                 bias=bias_t,
                 program_config=program_config,
-                output_mem_config=output_mem_config,
+                memory_config=output_mem_config,
                 compute_kernel_config=compute_kernel_config,
             )
         else:
-            output_t = ttl.operations.primary.matmul(
+            output_t = ttnn.matmul(
                 in0_t,
                 in1_t,
                 program_config=program_config,
-                output_mem_config=output_mem_config,
+                memory_config=output_mem_config,
                 compute_kernel_config=compute_kernel_config,
             )
         if out_sharded:
