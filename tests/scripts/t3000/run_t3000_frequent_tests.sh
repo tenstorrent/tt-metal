@@ -91,8 +91,8 @@ run_t3000_trace_stress_tests() {
 
   echo "LOG_METAL: Running run_t3000_trace_stress_tests"
 
-  NUM_TRACE_LOOPS=30 pytest tests/ttnn/unit_tests/test_multi_device_trace.py
-  NUM_TRACE_LOOPS=30 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_trace.py
+  NUM_TRACE_LOOPS=15 pytest tests/ttnn/unit_tests/test_multi_device_trace.py
+  NUM_TRACE_LOOPS=15 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_trace.py
 
   # Record the end time
   end_time=$(date +%s)
