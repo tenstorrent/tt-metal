@@ -234,6 +234,7 @@ void add_prefetcher_packed_paged_read_cmd(vector<uint32_t>& cmds,
     uint32_t aligned_stride = round_cmd_size_up(stride);
     cmd.relay_paged_packed.total_length = length;
     cmd.relay_paged_packed.stride = aligned_stride;
+    cmd.relay_paged_packed.count = sub_cmds.size();
 
     uint32_t *ptr = (uint32_t *)&cmd;
     for (int i = 0; i < sizeof(CQPrefetchCmd) / sizeof(uint32_t); i++) {
