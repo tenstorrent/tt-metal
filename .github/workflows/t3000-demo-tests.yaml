@@ -17,13 +17,11 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {
-            name: "T3000 demo tests",
-            arch: wormhole_b0,
-            runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "runner-test", "bare-metal", "pipeline-functional"],
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_t3000_device --dispatch-mode ""'
-          },
+          { name: "t3k falcon40b tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 120, owner_id: U044T8U8DEF}, #Johanna Rock
+          { name: "t3k falcon7b tests", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 120, owner_id: U05RWH3QUPM}, #Salar Hosseini
+          { name: "t3k mixtral tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 120, owner_id: U03PUAKE719}, # Miguel Tairum
         ]
+
     name: ${{ matrix.test-group.name }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
@@ -31,7 +29,7 @@ jobs:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on: ${{ matrix.test-group.runs-on }}
+    runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "runner-test", "bare-metal", "pipeline-functional"]
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Enable performance mode
@@ -52,7 +50,13 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
+          source ${{ github.workspace }}/tests/scripts/t3000/t3000_demo_tests_func.sh
           ${{ matrix.test-group.cmd }}
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
       - name: Disable performance mode
         if: always()
         run: |
