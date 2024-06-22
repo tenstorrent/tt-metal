@@ -8,6 +8,7 @@ import tt_lib as ttl
 from models.utility_functions import is_wormhole_b0, is_grayskull
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
+import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
@@ -78,7 +79,7 @@ def test_matmul_1d_in0_batched(
 
         per_core_M = M // 32
 
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=1,
             out_subblock_h=1,
@@ -89,13 +90,13 @@ def test_matmul_1d_in0_batched(
             fused_activation=None,
             mcast_in0=True,
         )
-        output_t = ttl.operations.primary.matmul_1d(
+        output_t = ttnn.linear(
             in0_t,
             in1_t,
             bias=bias_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
-            output_dtype=activations_dtype,
+            memory_config=output_mem_config,
+            dtype=activations_dtype,
         )
 
         in0_t.deallocate()
@@ -182,7 +183,7 @@ def test_matmul_1d_fp32_acc_l1(
 
         per_core_M = M // 32
 
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=1,
             out_subblock_h=1,
@@ -201,13 +202,13 @@ def test_matmul_1d_fp32_acc_l1(
             packer_l1_acc=packer_l1_acc,
         )
 
-        output_t = ttl.operations.primary.matmul_1d(
+        output_t = ttnn.linear(
             in0_t,
             in1_t,
             bias=bias_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
-            output_dtype=activations_dtype,
+            memory_config=output_mem_config,
+            dtype=activations_dtype,
             compute_kernel_config=compute_kernel_config,
         )
         if out_sharded:
@@ -293,7 +294,7 @@ def test_matmul_no_mcast_fp32_acc_l1(
                 ttl.tensor.ShardOrientation.COL_MAJOR,
             )
 
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=K // 32,
             out_subblock_h=out_subblock_h,
@@ -309,12 +310,12 @@ def test_matmul_no_mcast_fp32_acc_l1(
             packer_l1_acc=packer_l1_acc,
         )
 
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.matmul(
             in0_t,
             in1_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
-            output_dtype=activations_dtype,
+            memory_config=output_mem_config,
+            dtype=activations_dtype,
             compute_kernel_config=compute_kernel_config,
         )
         if out_sharded:
@@ -405,7 +406,7 @@ def test_matmul_1d_fp32_input_output(
 
         per_core_M = M // 32
 
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=1,
             out_subblock_h=1,
@@ -424,13 +425,13 @@ def test_matmul_1d_fp32_input_output(
             packer_l1_acc=packer_l1_acc,
         )
 
-        output_t = ttl.operations.primary.matmul_1d(
+        output_t = ttnn.linear(
             in0_t,
             in1_t,
             bias=bias_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
-            output_dtype=activations_dtype,
+            memory_config=output_mem_config,
+            dtype=activations_dtype,
             compute_kernel_config=compute_kernel_config,
         )
         if out_sharded:
@@ -522,7 +523,7 @@ def test_matmul_no_mcast_fp32_input_output(
                 ttl.tensor.ShardOrientation.COL_MAJOR,
             )
 
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=K // 32,
             out_subblock_h=out_subblock_h,
@@ -538,12 +539,12 @@ def test_matmul_no_mcast_fp32_input_output(
             packer_l1_acc=packer_l1_acc,
         )
 
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.matmul(
             in0_t,
             in1_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
-            output_dtype=activations_dtype,
+            memory_config=output_mem_config,
+            dtype=activations_dtype,
             compute_kernel_config=compute_kernel_config,
         )
         if out_sharded:
@@ -640,7 +641,7 @@ def test_matmul_untilize_output(
                 ttl.tensor.ShardOrientation.COL_MAJOR,
             )
 
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=K // 32,
             out_subblock_h=out_subblock_h,

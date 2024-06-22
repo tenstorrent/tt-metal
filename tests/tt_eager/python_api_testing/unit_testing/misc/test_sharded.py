@@ -358,7 +358,7 @@ def test_height_sharded_matmul_1d_padding(device, M, K, N, num_cores):
         ttl.tensor.ShardOrientation.ROW_MAJOR,
     )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=K // 32,
         out_subblock_h=1,
@@ -370,13 +370,13 @@ def test_height_sharded_matmul_1d_padding(device, M, K, N, num_cores):
         mcast_in0=False,
     )
 
-    output_t = ttl.operations.primary.matmul_1d(
+    output_t = ttnn.linear(
         in0_t,
         in1_t,
         bias=None,
         program_config=program_config,
-        output_mem_config=sharded_mem_config,
-        output_dtype=ttl.tensor.DataType.BFLOAT16,
+        memory_config=sharded_mem_config,
+        dtype=ttl.tensor.DataType.BFLOAT16,
     )
 
     output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
@@ -445,7 +445,7 @@ def test_sharded_matmul_1d_in1(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(12, 9),
         in0_block_w=K // 32,
         out_subblock_h=8 // (N // 32),
@@ -456,13 +456,13 @@ def test_sharded_matmul_1d_in1(
         fused_activation=None,
         mcast_in0=False,
     )
-    output_t = ttl.operations.primary.matmul_1d(
+    output_t = ttnn.linear(
         in0_t,
         in1_t,
         bias=bias_t,
         program_config=program_config,
-        output_mem_config=output_mem_config,
-        output_dtype=activations_dtype,
+        memory_config=output_mem_config,
+        dtype=activations_dtype,
     )
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
@@ -1126,7 +1126,7 @@ def test_sharded_matmul_2d(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=1,
         out_subblock_h=1,
@@ -1136,13 +1136,13 @@ def test_sharded_matmul_2d(
         transpose_mcast=False,
         fused_activation=None,
     )
-    output_t = ttl.operations.primary.matmul(
+    output_t = ttnn.linear(
         in0_t,
         in1_t,
         bias=bias_t,
         program_config=program_config,
-        output_mem_config=output_mem_config,
-        output_dtype=activations_dtype,
+        memory_config=output_mem_config,
+        dtype=activations_dtype,
     )
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
@@ -1221,7 +1221,7 @@ def test_sharded_matmul_2d_in0_height_sharded_in1_width_sharded(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=K // 32,
         out_subblock_h=1,
@@ -1232,13 +1232,13 @@ def test_sharded_matmul_2d_in0_height_sharded_in1_width_sharded(
         fused_activation=None,
     )
     output_mem_config = sharded_block_mem_config if out_sharded else interleaved_mem_config
-    output_t = ttl.operations.primary.matmul(
+    output_t = ttnn.linear(
         in0_t,
         in1_t,
         bias=bias_t,
         program_config=program_config,
-        output_mem_config=output_mem_config,
-        output_dtype=output_dtype,
+        memory_config=output_mem_config,
+        dtype=output_dtype,
     )
 
     if out_sharded:
@@ -1309,7 +1309,7 @@ def test_sharded_matmul_2d_transposed(
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=1,
         out_subblock_h=1,
@@ -1319,13 +1319,13 @@ def test_sharded_matmul_2d_transposed(
         transpose_mcast=True,
         fused_activation=None,
     )
-    output_t = ttl.operations.primary.matmul(
+    output_t = ttnn.linear(
         in0_t,
         in1_t,
         bias=bias_t,
         program_config=program_config,
-        output_mem_config=output_mem_config,
-        output_dtype=activations_dtype,
+        memory_config=output_mem_config,
+        dtype=activations_dtype,
     )
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
@@ -1401,7 +1401,7 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
         ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ttl.tensor.ShardOrientation.COL_MAJOR,
     )
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size_matmul,
         in0_block_w=2,
         out_subblock_h=5,
@@ -1411,12 +1411,12 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
         transpose_mcast=True,
         fused_activation=None,
     )
-    output_matmul_t = ttl.operations.primary.matmul(
+    output_matmul_t = ttnn.linear(
         output_binary_t,
         weight_t,
         bias=bias_t,
         program_config=program_config,
-        output_mem_config=block_sharded_mem_config,
+        memory_config=block_sharded_mem_config,
     )
     output_matmul_t = ttl.tensor.sharded_to_interleaved(output_matmul_t, interleaved_mem_config)
 
@@ -1968,7 +1968,7 @@ def test_sharded_matmul_1d_in0(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=2,
         out_subblock_h=1,
@@ -1979,13 +1979,13 @@ def test_sharded_matmul_1d_in0(
         fused_activation=None,
         mcast_in0=True,
     )
-    output_t = ttl.operations.primary.matmul_1d(
+    output_t = ttnn.linear(
         in0_t,
         in1_t,
         bias=bias_t,
         program_config=program_config,
-        output_mem_config=output_mem_config,
-        output_dtype=activations_dtype,
+        memory_config=output_mem_config,
+        dtype=activations_dtype,
     )
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
@@ -2042,7 +2042,7 @@ def test_sharded_matmul_1d_in1_wormhole(device, function_level_defaults):
         ttl.tensor.ShardOrientation.ROW_MAJOR,
     )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=K // 32,
         out_subblock_h=1,
@@ -2053,13 +2053,13 @@ def test_sharded_matmul_1d_in1_wormhole(device, function_level_defaults):
         fused_activation=None,
         mcast_in0=False,
     )
-    output_t = ttl.operations.primary.matmul_1d(
+    output_t = ttnn.linear(
         in0_t,
         in1_t,
         bias=bias_t,
         program_config=program_config,
-        output_mem_config=output_mem_config,
-        output_dtype=dtype,
+        memory_config=output_mem_config,
+        dtype=dtype,
     )
     output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 @ in1 + bias
@@ -2136,7 +2136,7 @@ def test_sharded_matmul_no_mcast(
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=K // 32,
         out_subblock_h=out_subblock_h,
@@ -2145,12 +2145,12 @@ def test_sharded_matmul_no_mcast(
         per_core_N=N // 32,
     )
 
-    output_t = ttl.operations.primary.matmul(
+    output_t = ttnn.matmul(
         in0_t,
         in1_t,
         program_config=program_config,
-        output_mem_config=output_mem_config,
-        output_dtype=activations_dtype,
+        memory_config=output_mem_config,
+        dtype=activations_dtype,
     )
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
