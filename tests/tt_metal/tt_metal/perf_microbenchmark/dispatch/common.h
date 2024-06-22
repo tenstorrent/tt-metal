@@ -1010,6 +1010,7 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(Device *device,
     memset(&cmd, 0, sizeof(CQDispatchCmd));
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED_LARGE;
     cmd.write_packed_large.count = ntransactions;
+    cmd.write_packed_large.alignment = L1_ALIGNMENT;
     add_bare_dispatcher_cmd(cmds, cmd);
 
     vector<uint32_t> data;
