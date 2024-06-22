@@ -9,8 +9,6 @@
 #include "debug/dprint.h"
 #include "debug/ring_buffer.h"
 
-#define L1_NOC_ALIGNMENT 16 // XXXXX is the defined elsewhere?
-
 FORCE_INLINE
 uint32_t round_up_pow2(uint32_t v, uint32_t pow2_size) {
     return (v + (pow2_size - 1)) & ~(pow2_size - 1);
@@ -276,4 +274,32 @@ uint32_t get_cb_page(uint32_t& cmd_ptr,
     cb_fence += n_pages << cb_log_page_size;
 
     return n_pages;
+}
+
+constexpr uint32_t l1_to_local_cache_copy_chunk = 6;
+
+// NOTE: CAREFUL USING THIS FUNCTION
+// It is call "careful_copy" because you need to be careful...
+// It copies beyond count by up to 5 elements make sure src and dst addresses are safe
+template<uint32_t l1_to_local_cache_copy_chunk, uint32_t l1_cache_elements_rounded>
+FORCE_INLINE
+void careful_copy_from_l1_to_local_cache(volatile uint32_t tt_l1_ptr *l1_ptr, uint32_t count, uint32_t * l1_cache) {
+    uint32_t n = 0;
+    ASSERT(l1_to_local_cache_copy_chunk == 6);
+    ASSERT(count <= l1_cache_elements_rounded);
+    while (n < count) {
+        uint32_t v0 = l1_ptr[n + 0];
+        uint32_t v1 = l1_ptr[n + 1];
+        uint32_t v2 = l1_ptr[n + 2];
+        uint32_t v3 = l1_ptr[n + 3];
+        uint32_t v4 = l1_ptr[n + 4];
+        uint32_t v5 = l1_ptr[n + 5];
+        l1_cache[n + 0] = v0;
+        l1_cache[n + 1] = v1;
+        l1_cache[n + 2] = v2;
+        l1_cache[n + 3] = v3;
+        l1_cache[n + 4] = v4;
+        l1_cache[n + 5] = v5;
+        n += 6;
+    }
 }

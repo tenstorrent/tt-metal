@@ -74,6 +74,17 @@ static uint32_t block_next_start_addr[cmddat_q_blocks];
 static uint32_t block_noc_writes_to_clear[cmddat_q_blocks];
 static uint32_t rd_block_idx;
 
+// Currently capping the same as dispatch
+constexpr uint32_t max_read_packed_cmd =
+    CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS *
+    sizeof(CQPrefetchRelayPagedPackedSubCmd) / sizeof(uint32_t);
+constexpr uint32_t l1_cache_elements = max_read_packed_cmd;
+constexpr uint32_t l1_cache_elements_rounded =
+    ((l1_cache_elements + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
+    l1_to_local_cache_copy_chunk;
+
+static uint32_t l1_cache[l1_cache_elements];
+
 static struct PrefetchExecBufState {
     uint32_t page_id;
     uint32_t base_addr;
@@ -134,7 +145,7 @@ uint32_t read_from_pcie(volatile tt_l1_ptr prefetch_q_entry_type *& prefetch_q_r
 
     uint32_t pending_read_size = 0;
     // Wrap cmddat_q
-    if (fence + size + preamble_size > cmddat_q_base + cmddat_q_size) {
+    if (fence + size + preamble_size > cmddat_q_end) {
         // only wrap if there are no commands ready, otherwise we'll leave some on the floor
         // TODO: does this matter for perf?
         if (cmd_ptr != fence) {
@@ -346,7 +357,7 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr,
 
     volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
 
-    uint32_t length = sizeof(CQDispatchCmd);
+    uint32_t length = cmd->relay_inline.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
 
     cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1);
@@ -356,7 +367,7 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr,
     noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
     dispatch_data_ptr += length;
 
-    return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+    return cmd->relay_inline.stride;
 }
 
 // The hard problem here is: when an xfer lands exactly at a page boundary, who is responsible for getting the next page?
@@ -411,9 +422,7 @@ uint32_t process_relay_paged_cmd_large(uint32_t cmd_ptr,
     DPRINT << "relay_paged_cmd_large: " << page_size << " " << pages << " " << length_adjust << ENDL();
 #endif
 
-    InterleavedAddrGen<is_dram> addr_gen;
-    addr_gen.bank_base_address = base_addr;
-    addr_gen.page_size = page_size;
+    InterleavedAddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
 
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
@@ -485,8 +494,6 @@ uint32_t process_relay_paged_cmd_large(uint32_t cmd_ptr,
     if (write_length > 0) {
         scratch_write_addr = scratch_db_top[db_toggle];
         uint32_t amt_to_write = write_length;
-        ASSERT((amt_to_write & 0x1f) == 0);
-
         uint32_t npages = write_pages_to_dispatcher<1, true>
             (downstream_data_ptr, scratch_write_addr, amt_to_write);
 
@@ -537,9 +544,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr,
         return process_relay_paged_cmd_large<is_dram>(cmd_ptr, downstream_data_ptr, page_id, base_addr, page_size, pages, cmd->relay_paged.length_adjust);
     }
 
-    InterleavedAddrGen<is_dram> addr_gen;
-    addr_gen.bank_base_address = base_addr;
-    addr_gen.page_size = page_size;
+    InterleavedAddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
 
     // First step - read into DB0
     uint32_t read_length = pages * page_size;
@@ -599,7 +604,6 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr,
     ASSERT(cmd->relay_paged.length_adjust < page_size);
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_read - cmd->relay_paged.length_adjust;
-    ASSERT((amt_to_write & 0x1f) == 0);
     uint32_t npages = write_pages_to_dispatcher<1, true>
         (downstream_data_ptr, scratch_write_addr, amt_to_write);
 
@@ -613,25 +617,19 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr,
 
 // Similar to relay_paged, this iterates and aggregates reads from multiple
 // embedded relay_paged cmds
-uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr,
-                                        uint32_t& downstream__data_ptr) {
+void process_relay_paged_packed_sub_cmds(uint32_t total_length) {
 
     // This ensures that a previous cmd using the scratch buf has finished
     noc_async_writes_flushed();
 
-    volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
-    uint32_t total_length = cmd->relay_paged_packed.total_length;
-    ASSERT(total_length > 0);
-
     // First step - read multiple sub_cmds worth into DB0
-    volatile CQPrefetchRelayPagedPackedSubCmd tt_l1_ptr *sub_cmd = (volatile CQPrefetchRelayPagedPackedSubCmd tt_l1_ptr *)(cmd_ptr + sizeof(CQPrefetchCmd));
+    CQPrefetchRelayPagedPackedSubCmd tt_l1_ptr *sub_cmd = (CQPrefetchRelayPagedPackedSubCmd tt_l1_ptr *)(l1_cache);
     uint32_t read_length = sub_cmd->length;
     ASSERT(read_length <= scratch_db_half_size);
     uint32_t amt_to_read = (scratch_db_half_size > total_length) ? total_length : scratch_db_half_size;
     uint32_t amt_read = 0;
     uint32_t scratch_read_addr = scratch_db_top[0];
 
-    DPRINT << "paged_packed: " << total_length << " " << cmd->relay_paged_packed.stride << ENDL();
     while (read_length <= amt_to_read) {
         uint32_t page_id = sub_cmd->start_page;
         uint32_t log_page_size = sub_cmd->log_page_size;
@@ -639,9 +637,7 @@ uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr,
         sub_cmd++;
 
         uint32_t page_size = 1 << log_page_size;
-        InterleavedAddrGen<true> addr_gen;
-        addr_gen.bank_base_address = base_addr;
-        addr_gen.page_size = page_size; // XXXX confirm mult goes away on GS or just replace
+        InterleavedPow2AddrGen<true> addr_gen {.bank_base_address = base_addr, .log_base_2_of_page_size = log_page_size};
 
         uint32_t amt_to_read2 = (scratch_db_half_size - amt_read > read_length) ? read_length : scratch_db_half_size - amt_read;
         uint32_t amt_read2 = 0;
@@ -688,9 +684,7 @@ uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr,
             sub_cmd++;
 
             uint32_t page_size = 1 << log_page_size;
-            InterleavedAddrGen<true> addr_gen;
-            addr_gen.bank_base_address = base_addr;
-            addr_gen.page_size = page_size; // XXXX confirm mult goes away on GS or just replace
+            InterleavedPow2AddrGen<true> addr_gen {.bank_base_address = base_addr, .log_base_2_of_page_size = log_page_size};
 
             uint32_t amt_to_read2 = (scratch_db_half_size - amt_read > read_length) ? read_length : scratch_db_half_size - amt_read;
             uint32_t amt_read2 = 0;
@@ -733,8 +727,22 @@ uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr,
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
     cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
+}
 
-    return cmd->relay_paged_packed.stride;
+uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr,
+                                        uint32_t& downstream__data_ptr) {
+
+    volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
+    uint32_t total_length = cmd->relay_paged_packed.total_length;
+    uint32_t count = cmd->relay_paged_packed.count * sizeof(CQPrefetchRelayPagedPackedSubCmd) / sizeof(uint32_t);
+    uint32_t stride = cmd->relay_paged_packed.stride;
+    ASSERT(total_length > 0);
+    DPRINT << "paged_packed: " << total_length << " " << cmd->relay_paged_packed.stride << ENDL();
+
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>((volatile uint32_t tt_l1_ptr *)(cmd_ptr + sizeof(CQPrefetchCmd)), count, l1_cache);
+
+    process_relay_paged_packed_sub_cmds(total_length);
+    return stride;
 }
 
 uint32_t process_relay_linear_cmd(uint32_t cmd_ptr,
@@ -836,9 +844,7 @@ void paged_read_into_cmddat_q(uint32_t read_ptr) {
     uint32_t pages_at_once = (pages > NUM_DRAM_BANKS) ? NUM_DRAM_BANKS : pages; // XXXX tune
     uint32_t read_length = pages_at_once << log_page_size;
 
-    InterleavedAddrGen<true> addr_gen;
-    addr_gen.bank_base_address = base_addr;
-    addr_gen.page_size = page_size;
+    InterleavedAddrGen<true> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
 
     while (pages_at_once != 0) {
         uint64_t noc_addr = addr_gen.get_noc_addr(page_id); // XXXX replace this w/ walking the banks to save mul on GS

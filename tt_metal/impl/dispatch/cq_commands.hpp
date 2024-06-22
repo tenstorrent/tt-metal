@@ -86,7 +86,7 @@ struct CQPrefetchRelayPagedCmd {
 
 struct CQPrefetchRelayPagedPackedCmd {
     uint8_t pad1;
-    uint16_t pad2;
+    uint16_t count;
     uint32_t total_length;      // aggregate length of all sub-read-cmds
     uint32_t stride;            // stride to start of next cmd
 } __attribute__((packed));
@@ -97,6 +97,9 @@ struct CQPrefetchRelayPagedPackedSubCmd {
     uint32_t base_addr;
     uint32_t length;            // multiple of DRAM alignment, <= half scratch_db_size
 } __attribute__((packed));
+
+// Current implementation limit is based on size of the l1_cache which stores the sub_cmds
+constexpr uint32_t CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS = 35;
 
 struct CQPrefetchRelayInlineCmd {
     uint8_t pad1;
@@ -183,7 +186,7 @@ struct CQDispatchWritePackedLargeSubCmd {
 } __attribute__((packed));
 
 // Current implementation limit is based on size of the l1_cache which stores the sub_cmds
-const uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS = 35;
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS = 35;
 
 // More flexible/slower than WritePacked
 // Removes size constraints
@@ -191,7 +194,8 @@ const uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS = 35;
 struct CQDispatchWritePackedLargeCmd {
     uint8_t pad1;
     uint16_t count;           // number of sub-cmds
-    uint32_t pad2;
+    uint16_t alignment;
+    uint16_t pad2;
     uint32_t pad3;
     uint32_t pad4;
 } __attribute__((packed));
