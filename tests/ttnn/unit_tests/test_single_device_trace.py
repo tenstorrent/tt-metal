@@ -14,7 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("shape", [[1, 3, 1024, 1024], (1, 1, 512, 512), (1, 3, 512, 512), (1, 3, 32, 32)])
 @pytest.mark.parametrize("enable_async", [True, False])
 @pytest.mark.parametrize("blocking", [True, False])
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 106496}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
 def test_single_device_single_trace(device, shape, enable_async, blocking):
     device.enable_async(enable_async)
     device.enable_program_cache()
@@ -74,7 +74,7 @@ def test_single_device_single_trace(device, shape, enable_async, blocking):
 @pytest.mark.parametrize("shape", [(1, 1, 512, 512), (1, 1, 32, 32), (1, 3, 512, 512), (1, 3, 32, 32)])
 @pytest.mark.parametrize("enable_async", [True, False])
 @pytest.mark.parametrize("blocking", [True, False])
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 133120}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 266240}], indirect=True)
 def test_single_device_multi_trace(device, shape, enable_async, blocking):
     device.enable_async(enable_async)
     device.enable_program_cache()
