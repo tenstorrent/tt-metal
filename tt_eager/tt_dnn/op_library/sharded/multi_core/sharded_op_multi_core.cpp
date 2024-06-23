@@ -778,14 +778,14 @@ inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<
                             break;
                         }
                         // next page is padding
-                        consecutive_it = consecutive_it + 1;
                         last_it_consec = consecutive_it;
+                        consecutive_it = consecutive_it + 1;
                     }
-                    uint32_t stride_size = std::distance(it, last_it_consec);
-                    if (last_it_consec == it) {
-                        stride_size = 1;
-                    }
-                    auto stride_it = it + stride_size;
+                    uint32_t stride_size = std::distance(it, last_it_consec) + 1;
+                    //if (last_it_consec == it) {
+                    //    stride_size = 1;
+                    //}
+                    auto stride_it = it + (stride_size);
                     auto last_it_stride = it;
 
                     // TT_ASSERT((stride_it == end) or stride_it->has_value());
@@ -803,7 +803,7 @@ inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<
                             auto prev_input_page = *(last_it_stride);
                             TT_ASSERT(prev_input_page.has_value());
                             TT_ASSERT(next_input_page.has_value());
-                            data_stride = next_input_page.value().second - prev_input_page.value().second - stride_size;
+                            data_stride = next_input_page.value().second - prev_input_page.value().second;
                             stride = Stride{.core = {0, 0}, .data = data_stride};
                         }
                         // strided core but same data

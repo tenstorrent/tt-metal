@@ -308,15 +308,73 @@ from enum import Enum
         #            (40, 32),
         #            (64, 32),
         #        ),
+        #        (
+        #            2,
+        #            16,
+        #            ttnn.ROW_MAJOR_LAYOUT,
+        #            dict(
+        #                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+        #                    {
+        #                        ttnn.experimental.tensor.CoreRange(
+        #                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
+        #                        ),
+        #                    }
+        #                ),
+        #                strategy=ttnn.ShardStrategy.BLOCK,
+        #                orientation=ttnn.ShardOrientation.COL_MAJOR,
+        #            ),
+        #            dict(
+        #                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+        #                    {
+        #                        ttnn.experimental.tensor.CoreRange(
+        #                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 0)
+        #                        ),
+        #                    }
+        #                ),
+        #                strategy=ttnn.ShardStrategy.BLOCK,
+        #                orientation=ttnn.ShardOrientation.COL_MAJOR,
+        #            ),
+        #            (8, 2),
+        #            (16, 2),
+        #        ),
+        #        (
+        #            2,
+        #            16,
+        #            ttnn.ROW_MAJOR_LAYOUT,
+        #            dict(
+        #                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+        #                    {
+        #                        ttnn.experimental.tensor.CoreRange(
+        #                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 0)
+        #                        ),
+        #                    }
+        #                ),
+        #                strategy=ttnn.ShardStrategy.BLOCK,
+        #                orientation=ttnn.ShardOrientation.COL_MAJOR,
+        #            ),
+        #            dict(
+        #                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+        #                    {
+        #                        ttnn.experimental.tensor.CoreRange(
+        #                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
+        #                        ),
+        #                    }
+        #                ),
+        #                strategy=ttnn.ShardStrategy.BLOCK,
+        #                orientation=ttnn.ShardOrientation.COL_MAJOR,
+        #            ),
+        #            (16, 2),
+        #            (8, 2),
+        #        ),
         (
-            2,
-            16,
+            1,
+            320,
             ttnn.ROW_MAJOR_LAYOUT,
             dict(
                 core_grid=ttnn.experimental.tensor.CoreRangeSet(
                     {
                         ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 7)
                         ),
                     }
                 ),
@@ -327,25 +385,25 @@ from enum import Enum
                 core_grid=ttnn.experimental.tensor.CoreRangeSet(
                     {
                         ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 0)
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 4)
                         ),
                     }
                 ),
                 strategy=ttnn.ShardStrategy.BLOCK,
                 orientation=ttnn.ShardOrientation.COL_MAJOR,
             ),
-            (8, 2),
-            (16, 2),
+            (40, 1),
+            (64, 1),
         ),
         (
-            2,
-            16,
+            1,
+            160,
             ttnn.ROW_MAJOR_LAYOUT,
             dict(
                 core_grid=ttnn.experimental.tensor.CoreRangeSet(
                     {
                         ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 0)
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 4)
                         ),
                     }
                 ),
@@ -356,15 +414,15 @@ from enum import Enum
                 core_grid=ttnn.experimental.tensor.CoreRangeSet(
                     {
                         ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 3)
                         ),
                     }
                 ),
                 strategy=ttnn.ShardStrategy.BLOCK,
                 orientation=ttnn.ShardOrientation.COL_MAJOR,
             ),
-            (16, 2),
-            (8, 2),
+            (32, 1),
+            (40, 1),
         ),
     ],
 )
@@ -411,7 +469,10 @@ def test_reshard(
     sharded_input_torch = ttnn.to_torch(sharded_input_tensor)
 
     torch.set_printoptions(profile="full")
+    print("Input Tensor without Reshard")
     print(sharded_input_torch)
+    print("Tensor after Reshard")
+    print(output)
     assert_with_pcc(torch_input_tensor, output, 1.0)
 
 
