@@ -86,9 +86,6 @@ bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & prog
     }
 
     return pass;
-
-
-
 }
 
 bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyProgramMultiCBConfig& program_config) {
@@ -527,15 +524,18 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
     CoreRangeSet cr_set = program_config.cr_set;
 
     // Tell kernel how many unique and common RT args to expect. Will increment each.
-    vector<uint32_t> compile_args = {num_unique_rt_args, num_common_rt_args, 0};
+    vector<uint32_t> compile_args = {num_unique_rt_args, num_common_rt_args, 0, 0};
 
     KernelHandle kernel_id = 0;
     uint32_t unique_args_addr = 0;
+    uint32_t common_args_addr = 0;
 
     switch (riscv) {
         case tt::RISCV::BRISC:
             unique_args_addr = L1_UNRESERVED_BASE;
+            common_args_addr = unique_args_addr + 3 * 256 * sizeof(uint32_t);
             compile_args[2] = unique_args_addr;
+            compile_args[3] = common_args_addr;
             kernel_id = CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
@@ -548,7 +548,9 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
             break;
         case tt::RISCV::NCRISC:
             unique_args_addr = L1_UNRESERVED_BASE + 256 * sizeof(uint32_t);
+            common_args_addr = unique_args_addr + 4 * 256 * sizeof(uint32_t);
             compile_args[2] = unique_args_addr;
+            compile_args[3] = common_args_addr;
             kernel_id = CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
@@ -561,7 +563,9 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
             break;
         case tt::RISCV::COMPUTE:
             unique_args_addr = L1_UNRESERVED_BASE + 2 * 256 * sizeof(uint32_t);
+            common_args_addr = unique_args_addr + 5 * 256 * sizeof(uint32_t);
             compile_args[2] = unique_args_addr;
+            compile_args[3] = common_args_addr;
             kernel_id = CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg.cpp",
@@ -572,7 +576,9 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
             break;
         case tt::RISCV::ERISC:
             unique_args_addr = idle_eth ? ERISC_L1_UNRESERVED_BASE: eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+            common_args_addr = unique_args_addr + 1 * 256 * sizeof(uint32_t);
             compile_args[2] = unique_args_addr;
+            compile_args[3] = common_args_addr;
             kernel_id = CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
@@ -606,8 +612,6 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
     EnqueueProgram(device->command_queue(), program, false);
     Finish(device->command_queue());
 
-    // Verify Unique/Common Args. Incr values match kernel used.
-    auto common_args_addr = unique_args_addr + kernel->get_common_runtime_args_index() * sizeof(uint32_t);
     constexpr uint32_t unique_arg_incr_val = 10;
     constexpr uint32_t common_arg_incr_val = 100;
     for (auto &core_range : kernel->logical_coreranges()) {
@@ -627,12 +631,11 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
 // Optionally force the max size for one of the vectors.
 std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(bool force_max_size = false, uint32_t unique_base = 0, uint32_t common_base = 100){
 
-    constexpr uint32_t MAX_RUNTIME_ARGS = 255;
+    constexpr uint32_t MAX_RUNTIME_ARGS = 256;
 
     // Generate Unique Runtime Args. Common RT args starting address must be L1 Aligned, so account for that here via padding
-    uint32_t num_rt_args_unique = num_rt_args_unique = rand() % (MAX_RUNTIME_ARGS + 1);
-    uint32_t num_rt_args_unique_padded = align(num_rt_args_unique, L1_ALIGNMENT / sizeof(uint32_t));
-    uint32_t num_rt_args_common = num_rt_args_unique_padded < MAX_RUNTIME_ARGS ? rand() % (MAX_RUNTIME_ARGS - num_rt_args_unique_padded + 1) : 0;
+    uint32_t num_rt_args_unique = rand() % (MAX_RUNTIME_ARGS + 1);
+    uint32_t num_rt_args_common = num_rt_args_unique < MAX_RUNTIME_ARGS ? rand() % (MAX_RUNTIME_ARGS - num_rt_args_unique + 1) : 0;
 
     if (force_max_size) {
         if (rand() % 2) {
@@ -1121,6 +1124,10 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
         uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
         bool USE_MAX_RT_ARGS;
 
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Compiling program {} of {}", i + 1, NUM_PROGRAMS);
+        }
+
         if (i == 0) {
             // Ensures that we get at least one compilation with the max amount to
             // ensure it compiles and runs
@@ -1265,8 +1272,8 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
     for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
         auto rng = std::default_random_engine {};
         std::shuffle(std::begin(programs), std::end(programs), rng);
-        if (i % 10 == 0) {
-            log_debug(tt::LogTest, "Enqueueing {} programs for iter: {}/{} now.", programs.size(), i+1, NUM_ITERATIONS);
+        if (i % 50 == 0) {
+            log_info(tt::LogTest, "Enqueueing {} programs for iter: {}/{} now.", programs.size(), i+1, NUM_ITERATIONS);
         }
         for (Program& program: programs) {
             EnqueueProgram(this->device_->command_queue(), program, false);
