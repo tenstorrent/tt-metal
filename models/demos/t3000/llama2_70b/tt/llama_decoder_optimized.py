@@ -305,11 +305,11 @@ class TtLlamaDecoder_optimized:
         if self.emulated:
             xs_replicated = tt_all_gather_torch(xs_replicated, dim=-1)
         else:
-            xs_replicated = ttnn.all_gather(
+            xs_replicated = tt_lib.tensor.all_gather(
                 xs_replicated,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                memory_config=self.model_config["L1_MEMCFG"],
+                output_mem_config=self.model_config["L1_MEMCFG"],
             )
 
         for i in range(self.num_devices):
@@ -360,11 +360,11 @@ class TtLlamaDecoder_optimized:
         if self.emulated:
             attn_resid_replicated = tt_all_gather_torch(attn_resid_replicated, dim=-1)
         else:
-            attn_resid_replicated = ttnn.all_gather(
+            attn_resid_replicated = tt_lib.tensor.all_gather(
                 attn_resid_replicated,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                memory_config=self.model_config["L1_MEMCFG"],
+                output_mem_config=self.model_config["L1_MEMCFG"],
             )
 
         for i in range(self.num_devices):
@@ -480,11 +480,11 @@ class TtLlamaDecoder_optimized:
         if self.emulated:
             xs_replicated = tt_all_gather_torch(xs_replicated, dim=-1)
         else:
-            xs_replicated = ttnn.all_gather(
+            xs_replicated = tt_lib.tensor.all_gather(
                 xs_replicated,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                memory_config=self.model_config["DRAM_MEMCFG"],
+                output_mem_config=self.model_config["DRAM_MEMCFG"],
             )
 
         attn_norm_interleaved = self.sharded_rmsnorm(xs_replicated, self.norm_eps, self.attn_norm_list)
@@ -515,11 +515,11 @@ class TtLlamaDecoder_optimized:
         if self.emulated:
             attn_resid_replicated = tt_all_gather_torch(attn_resid_replicated, dim=-1)
         else:
-            attn_resid_replicated = ttnn.all_gather(
+            attn_resid_replicated = tt_lib.tensor.all_gather(
                 attn_resid_replicated,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                memory_config=self.model_config["L1_MEMCFG"],
+                output_mem_config=self.model_config["L1_MEMCFG"],
             )
 
         ffn_norm_interleaved = self.sharded_rmsnorm(attn_resid_replicated, self.norm_eps, self.ffn_norm_list)
