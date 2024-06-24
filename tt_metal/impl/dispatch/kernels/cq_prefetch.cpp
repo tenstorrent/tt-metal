@@ -83,7 +83,7 @@ constexpr uint32_t l1_cache_elements_rounded =
     ((l1_cache_elements + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
     l1_to_local_cache_copy_chunk;
 
-static uint32_t l1_cache[l1_cache_elements];
+static uint32_t l1_cache[l1_cache_elements_rounded];
 
 static struct PrefetchExecBufState {
     uint32_t page_id;
@@ -729,7 +729,7 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length) {
     // Third step - write from DB
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_read;
-    uint32_t npages = write_pages_to_dispatcher<CQ_DISPATCH_CMD_SIZE, true>
+    uint32_t npages = write_pages_to_dispatcher<1, true>
         (downstream_data_ptr, scratch_write_addr, amt_to_write);
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
