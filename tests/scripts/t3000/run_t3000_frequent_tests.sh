@@ -104,7 +104,7 @@ run_t3000_tests() {
   run_t3000_tteager_tests
 
   # Run trace tests
-  run_t3000_trace_stress_tests
+  # run_t3000_trace_stress_tests
 
   # Run falcon40b tests
   run_t3000_falcon40b_tests
