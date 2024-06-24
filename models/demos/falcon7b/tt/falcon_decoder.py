@@ -8,7 +8,7 @@ import torch
 import ttnn
 from models.demos.falcon7b.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
 from models.demos.falcon7b.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
-from models.demos.falcon7b.tt.model_utils import get_weights_cached
+from models.demos.falcon7b.tt.model_utils import get_weights_cached, layernorm
 from torch import nn
 
 
@@ -129,31 +129,14 @@ class TtFalconDecoderLayer(nn.Module):
 
         assert not output_attentions
 
-        layernorm_output = []
-        for i in range(self.num_devices):
-            layernorm_output.append(
-                ttnn.experimental.tensor.layernorm(
-                    hidden_states[i],
-                    self.layernorm_eps,
-                    output_mem_config=self.model_config["INPUT_LAYERNORM_OUTPUT_MEMCFG"],
-                )
-            )
-        for i in range(self.num_devices):
-            layernorm_output[i] = ttnn.experimental.tensor.bcast(
-                layernorm_output[i],
-                self.layernorm_gamma[i],
-                ttnn.experimental.tensor.BcastOpMath.MUL,
-                ttnn.experimental.tensor.BcastOpDim.H,
-                output_mem_config=self.model_config["INPUT_LAYERNORM_OUTPUT_MEMCFG"],
-            )
-        for i in range(self.num_devices):
-            layernorm_output[i] = ttnn.experimental.tensor.bcast(
-                layernorm_output[i],
-                self.layernorm_beta[i],
-                ttnn.experimental.tensor.BcastOpMath.ADD,
-                ttnn.experimental.tensor.BcastOpDim.H,
-                output_mem_config=self.model_config["INPUT_LAYERNORM_OUTPUT_MEMCFG"],
-            )
+        layernorm_output = layernorm(
+            hidden_states,
+            self.layernorm_eps,
+            self.layernorm_gamma,
+            self.layernorm_beta,
+            self.num_devices,
+            self.model_config,
+        )
 
         residual = hidden_states
 

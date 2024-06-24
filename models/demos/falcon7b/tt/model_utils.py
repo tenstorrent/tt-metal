@@ -88,3 +88,53 @@ def get_falcon_default_core_grid(device):
     if is_wormhole_b0() and grid_size.y >= 8:
         return ttnn.CoreGrid(y=7, x=grid_size.x)
     return ttnn.CoreGrid(y=grid_size.y, x=grid_size.x)
+
+
+def layernorm(ln_input, ln_eps, ln_gamma, ln_betta, num_devices, model_config):
+    h_dim = ln_input[0].get_legacy_shape()[-2]  # corresponds to batch size (decode) or seq_len (prefill)
+    ln_output = []
+    if h_dim in [32, 128, 256, 1024, 2048]:
+        for i in range(num_devices):
+            ln_output.append(
+                ttnn.experimental.tensor.interleaved_to_sharded(
+                    ln_input[i], sharded_mem_config=model_config["LAYERNORM_BLOCK_SHARDED_MEM_CFG"][h_dim]
+                )
+            )
+        for i in range(num_devices):
+            ln_output[i] = ttnn.experimental.operations.primary.layernorm(
+                ln_output[i],
+                ln_eps,
+                ln_gamma[i],
+                ln_betta[i],
+                model_config["LAYERNORM_BLOCK_SHARDED_MEM_CFG"][h_dim],
+                model_config["LAYERNORM_BLOCK_SHARDED_PROG_CFG"][h_dim],
+                model_config["LAYERNORM_BLOCK_SHARDED_COMPUTE_KERNEL_CONFIG"][h_dim],
+            )
+        for i in range(num_devices):
+            ln_output[i] = ttnn.experimental.tensor.sharded_to_interleaved(ln_output[i])
+    else:
+        for i in range(num_devices):
+            ln_output.append(
+                ttnn.experimental.tensor.layernorm(
+                    ln_input[i],
+                    ln_eps,
+                    output_mem_config=model_config["LN_F_OUTPUT_MEMCFG"],
+                )
+            )
+        for i in range(num_devices):
+            ln_output[i] = ttnn.experimental.tensor.bcast(
+                ln_output[i],
+                ln_gamma[i],
+                ttnn.experimental.tensor.BcastOpMath.MUL,
+                ttnn.experimental.tensor.BcastOpDim.H,
+                output_mem_config=model_config["LN_F_OUTPUT_MEMCFG"],
+            )
+        for i in range(num_devices):
+            ln_output[i] = ttnn.experimental.tensor.bcast(
+                ln_output[i],
+                ln_betta[i],
+                ttnn.experimental.tensor.BcastOpMath.ADD,
+                ttnn.experimental.tensor.BcastOpDim.H,
+                output_mem_config=model_config["LN_F_OUTPUT_MEMCFG"],
+            )
+    return ln_output
