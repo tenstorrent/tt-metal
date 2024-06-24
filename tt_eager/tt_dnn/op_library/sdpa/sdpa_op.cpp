@@ -56,12 +56,14 @@ void ScaledDotProductAttention::validate(
     const auto v_shape = input_tensors.at(2).get_legacy_shape();
     const auto mask_shape = mask.get_legacy_shape();
 
+    // assert all dataformats are the same
+    TT_FATAL(
+        input_tensors.at(0).get_dtype() == input_tensors.at(1).get_dtype() &&
+        input_tensors.at(0).get_dtype() == input_tensors.at(2).get_dtype() &&
+        input_tensors.at(0).get_dtype() == mask.get_dtype());
+
+
     if (this->is_causal) {
-        // assert all dataformats are the same
-        TT_FATAL(
-            input_tensors.at(0).get_dtype() == input_tensors.at(1).get_dtype() &&
-            input_tensors.at(0).get_dtype() == input_tensors.at(2).get_dtype() &&
-            input_tensors.at(0).get_dtype() == mask.get_dtype());
         // All inputs must be in DRAM
         for (auto& input_tensor : input_tensors) {
             TT_FATAL(input_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
