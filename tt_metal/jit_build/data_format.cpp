@@ -76,7 +76,7 @@ DataFormat check_consistent_format_within_operand(DataFormat data_format[NUM_OPE
         if ((data_format[i] == DataFormat::Float32) || (data_format[i] == DataFormat::RawUInt32) ||
             (data_format[i] == DataFormat::UInt32) || (data_format[i] == DataFormat::RawUInt16) ||
             (data_format[i] == DataFormat::RawUInt8) || (data_format[i] == DataFormat::UInt16) ||
-            (data_format[i] == DataFormat::Int32)) {
+            (data_format[i] == DataFormat::UInt8) || (data_format[i] == DataFormat::Int32)) {
             continue;
         }
 
