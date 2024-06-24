@@ -185,12 +185,6 @@ std::vector<Tensor> fill_zero_bw(
 std::vector<Tensor> fill_bw(
     const Tensor& grad, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> sub_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> unary_sub_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -483,13 +477,6 @@ std::vector<Tensor> celu_bw(
 std::vector<Tensor> binary_lt_bw(
     const Tensor& grad,
     const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-std::vector<Tensor> subalpha_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    float alpha = 1.0,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> log10_bw(

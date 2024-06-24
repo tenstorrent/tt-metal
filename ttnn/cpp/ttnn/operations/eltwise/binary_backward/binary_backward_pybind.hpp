@@ -54,7 +54,8 @@ Example:
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor_a,
                const ttnn::Tensor& input_tensor_b,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<Tensor> {
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+                cout<<"inside overload 1 start \n";
                 return self(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
             },
             py::arg("grad_tensor"),
@@ -62,6 +63,25 @@ Example:
             py::arg("input_tensor_b"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt},
+
+
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const float alpha,
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+                cout<<"inside overload 2 start \n";
+                return self(grad_tensor, input_tensor_a, alpha, input_tensor_b, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::arg("alpha"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt},
+
 
         ttnn::pybind_overload_t{
             [](const binary_backward_operation_t& self,
@@ -74,6 +94,7 @@ Example:
                const std::optional<ttnn::Tensor>& optional_input_a_grad,
                const std::optional<ttnn::Tensor>& optional_input_b_grad,
                const uint8_t& queue_id) -> std::vector<ttnn::Tensor> {
+                cout<<"inside overload 3 start \n";
                 return self(queue_id, grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
             },
             py::arg("grad_tensor"),
@@ -97,6 +118,7 @@ Example:
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& optional_input_a_grad,
                const std::optional<ttnn::Tensor>& optional_input_b_grad) -> std::vector<ttnn::Tensor> {
+                cout<<"inside overload 4 start \n";
                 return self(grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
             },
             py::arg("grad_tensor"),
@@ -124,6 +146,16 @@ void py_module(py::module& module) {
         ttnn::embedding_bw,
         R"doc(Performs backward operations for embedding_bw function and it returns specific indices of the embedding table specified by the :attr:`grad_tensor`.
         The input tensor( :attr:`input_tensor_a`, :attr:`input_tensor_b`) should be unique.)doc");
+
+    detail::bind_binary_backward(
+        module,
+        ttnn::subalpha_bw,
+        R"doc(Performs backward operations for subalpha of :attr:`input_tensor_a` and :attr:`input_tensor_b` tensors with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_binary_backward(
+        module,
+        ttnn::sub_bw,
+        R"doc(Performs backward operations for sub of :attr:`input_tensor_a` and :attr:`input_tensor_b` tensors with given :attr:`grad_tensor`.)doc");
 
     detail::bind_binary_backward(
         module,

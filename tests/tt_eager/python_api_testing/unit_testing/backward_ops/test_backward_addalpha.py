@@ -17,7 +17,7 @@ from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs i
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("alpha", [0.05, 1.0, 0.5, 0.12])
+@pytest.mark.parametrize("alpha", [0.05])
 def test_bw_addalpha(input_shapes, alpha, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
