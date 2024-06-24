@@ -27,6 +27,8 @@ void validate_datatype(const Tensor& tensor) {
         TT_FATAL(tensor.get_dtype() == DataType::BFLOAT16);
     } else if constexpr (std::is_same_v<T, uint16_t>) {
         TT_FATAL(tensor.get_dtype() == DataType::UINT16);
+    } else if constexpr (std::is_same_v<T, uint8_t>) {
+        TT_FATAL(tensor.get_dtype() == DataType::UINT8);
     } else {
         static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported DataType");
     }
@@ -100,6 +102,8 @@ void validate_datatype(const Tensor& tensor) {
         TT_FATAL(tensor.get_dtype() == DataType::BFLOAT16);
     } else if constexpr (std::is_same_v<T, uint16_t>) {
         TT_FATAL(tensor.get_dtype() == DataType::UINT16);
+    } else if constexpr (std::is_same_v<T, uint8_t>) {
+        TT_FATAL(tensor.get_dtype() == DataType::UINT8);
     } else {
         static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported DataType");
     }
