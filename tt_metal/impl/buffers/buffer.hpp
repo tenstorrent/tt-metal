@@ -293,7 +293,6 @@ extern buffer_map_t BUFFER_MAP;
 }  // namespace detail
 
 using HostDataType = std::variant<
-    const std::shared_ptr<std::vector<uint8_t>>,
     const std::shared_ptr<std::vector<uint16_t>>,
     const std::shared_ptr<std::vector<int32_t>>,
     const std::shared_ptr<std::vector<uint32_t>>,
