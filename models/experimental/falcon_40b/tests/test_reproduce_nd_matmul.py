@@ -6,6 +6,7 @@ from loguru import logger
 import pytest
 
 import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_pcc, tt2torch_tensor, torch2tt_tensor
 import torch
 

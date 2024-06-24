@@ -8,6 +8,7 @@ from loguru import logger
 
 import tt_lib
 import tt_lib as ttl
+import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.tt.model_config import (
     get_model_config,

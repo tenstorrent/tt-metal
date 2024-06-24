@@ -6,6 +6,7 @@ from loguru import logger
 import torch
 import pytest
 import tt_lib
+import ttnn
 from models.utility_functions import comp_pcc
 from models.demos.resnet.tt.metalResnetBlock50 import (
     compute_conv_output_shape,
