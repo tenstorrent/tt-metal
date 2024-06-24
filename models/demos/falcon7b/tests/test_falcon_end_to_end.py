@@ -345,7 +345,7 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     if is_e75(device) and batch == 32:
         pytest.skip("Falcon batch 32 is unsupported on E75")
 
-    model_config = get_model_config(model_config_str, seq_len)
+    model_config = get_model_config(model_config_str, seq_len, batch)
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )

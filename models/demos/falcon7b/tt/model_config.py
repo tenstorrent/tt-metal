@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import math
 from loguru import logger
 from pathlib import Path
 from models.utility_functions import is_grayskull, is_wormhole_b0
@@ -78,6 +79,76 @@ NO_DTYPE = (
 ACCEPTABLE_MODEL_CONFIG_STRS = ("BFLOAT16-DRAM", "BFLOAT16-L1", "BFLOAT16-L1_SHARDED")
 
 
+def find_subblock_w(block_w, max_value):
+    factors = [i for i in range(1, max_value + 1) if block_w % i == 0]
+    return max(factors)
+
+
+def get_ln_block_sharded_config(height_dim, hidden_dim):
+    ln_max_num_cores_y = 8
+    for i in range(ln_max_num_cores_y, 0, -1):
+        if (height_dim // 32) % i == 0:
+            ln_num_cores_y = i
+            break
+
+    ln_num_cores_x = 8
+    num_tiles_per_core_h = math.ceil(height_dim / ln_num_cores_y / 32)
+    num_tiles_per_core_w = math.ceil(hidden_dim / ln_num_cores_x / 32)
+    ln_shard_height_hidden_dim = num_tiles_per_core_h * 32
+    ln_shard_width_hidden_dim = num_tiles_per_core_w * 32
+
+    core_range_block_sharded_layernorm = ttnn.experimental.tensor.CoreRangeSet(
+        {
+            ttnn.experimental.tensor.CoreRange(
+                ttnn.experimental.tensor.CoreCoord(0, 0),
+                ttnn.experimental.tensor.CoreCoord(ln_num_cores_x - 1, ln_num_cores_y - 1),
+            ),
+        }
+    )
+
+    ln_block_sharded_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.experimental.tensor.BufferType.L1,
+        ttnn.experimental.tensor.ShardSpec(
+            core_range_block_sharded_layernorm,
+            [
+                ln_shard_height_hidden_dim,
+                ln_shard_width_hidden_dim,
+            ],
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
+
+    fp32_dest_acc_en = False
+    if is_wormhole_b0():
+        ln_block_sharded_compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
+            math_approx_mode=True,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=False,
+        )
+    else:
+        ln_block_sharded_compute_kernel_config = ttnn.experimental.tensor.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
+            math_approx_mode=True,
+        )
+
+    max_tiles_in_dest = 8
+    if fp32_dest_acc_en and is_wormhole_b0():
+        max_tiles_in_dest = 4
+    subblock_w = find_subblock_w(num_tiles_per_core_w, max_tiles_in_dest)
+    ln_block_sharded_prog_config = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[ln_num_cores_x, ln_num_cores_y],
+        subblock_w=subblock_w,
+        block_h=num_tiles_per_core_h,
+        block_w=num_tiles_per_core_w,
+        inplace=True,
+    )
+
+    return ln_block_sharded_mem_config, ln_block_sharded_prog_config, ln_block_sharded_compute_kernel_config
+
+
 def pretty_print_model_config(model_config):
     print_str = []
     for key, val in model_config.items():
@@ -93,7 +164,7 @@ def pretty_print_model_config(model_config):
     return "\n".join(print_str)
 
 
-def get_model_config(model_config_str, prefill_seq_len=0):
+def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
     DRAM_MEMCFG = ttnn.experimental.tensor.MemoryConfig(
         ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
@@ -128,6 +199,19 @@ def get_model_config(model_config_str, prefill_seq_len=0):
     }  # DEFAULT_MEMCFG also used to determine banking for ttl.device.InitializeDevice
     model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
     model_config.update({f"{key}_DTYPE": dtype for key in OP_KEYS if key not in NO_DTYPE})
+
+    (
+        ln_block_sharded_mem_config_decode,
+        ln_block_sharded_prog_config_decode,
+        ln_compute_kernel_config_decode,
+    ) = get_ln_block_sharded_config(decode_batch_size, model_config_entries["hidden_size"])
+
+    model_config["LAYERNORM_BLOCK_SHARDED_MEM_CFG"] = {}
+    model_config["LAYERNORM_BLOCK_SHARDED_PROG_CFG"] = {}
+    model_config["LAYERNORM_BLOCK_SHARDED_COMPUTE_KERNEL_CONFIG"] = {}
+    model_config["LAYERNORM_BLOCK_SHARDED_MEM_CFG"][decode_batch_size] = ln_block_sharded_mem_config_decode
+    model_config["LAYERNORM_BLOCK_SHARDED_PROG_CFG"][decode_batch_size] = ln_block_sharded_prog_config_decode
+    model_config["LAYERNORM_BLOCK_SHARDED_COMPUTE_KERNEL_CONFIG"][decode_batch_size] = ln_compute_kernel_config_decode
 
     # Input ids are UINT32
     model_config["INPUT_DTYPE"] = ttnn.experimental.tensor.DataType.UINT32
@@ -343,6 +427,14 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
     )
 
     model_config["LM_HEAD_KERNEL_CONFIG"] = default_kernel_config
+    (
+        ln_block_sharded_mem_config_prefill,
+        ln_block_sharded_prog_config_prefill,
+        ln_compute_kernel_config_prefill,
+    ) = get_ln_block_sharded_config(seq_len, model_config_entries["hidden_size"])
+    model_config["LAYERNORM_BLOCK_SHARDED_MEM_CFG"][seq_len] = ln_block_sharded_mem_config_prefill
+    model_config["LAYERNORM_BLOCK_SHARDED_PROG_CFG"][seq_len] = ln_block_sharded_prog_config_prefill
+    model_config["LAYERNORM_BLOCK_SHARDED_COMPUTE_KERNEL_CONFIG"][seq_len] = ln_compute_kernel_config_prefill
 
 
 model_config_entries = {

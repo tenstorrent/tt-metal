@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
@@ -15,7 +13,6 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/tile_move_copy.h"
-
 
 // SPLIT REDUCE across Cores
 namespace NAMESPACE {
@@ -36,9 +33,10 @@ void MAIN {
     constexpr bool FLOAT32_DTYPE                      = get_compile_time_arg_val(10) == 1;
     constexpr uint32_t num_blocks_second_stage        = get_compile_time_arg_val(11);
 
-    const uint32_t num_tiles_per_allgather_worker           = is_allgather_worker ? get_arg_val<uint32_t>(0) : 0;
-    const bool use_two_stage_reduce                         = is_allgather_worker ? get_arg_val<uint32_t>(1) == 1 : false;
-    const bool is_second_stage_reader                       = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
+    const uint32_t num_reduce_tiles_per_block_h             = get_arg_val<uint32_t>(0); // This value is the same for all cores, except ones that have padding tiles in it. In that case, skip reduce for padding tiles.
+    const uint32_t num_tiles_per_allgather_worker           = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
+    const bool use_two_stage_reduce                         = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
+    const bool is_second_stage_reader                       = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
 
     uint32_t num_blocks_reduce;
     if (is_second_stage_reader) {
@@ -148,7 +146,7 @@ void MAIN {
     cb_reserve_back(cb_ex_partial, block_h);
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
-        for (uint32_t w = 0; w < block_w; w++) {
+        for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
             reduce_tile(cb_in, cb_scaler, w+index_h_offset, scaler0, dst0);
         }
         tile_regs_commit();
@@ -263,7 +261,7 @@ void MAIN {
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
-        for (uint32_t w = 0; w < block_w; w++) {
+        for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
             reduce_tile(cb_xmm2, cb_scaler, w+index_h_offset, scaler0, dst0);
         }
         tile_regs_commit();

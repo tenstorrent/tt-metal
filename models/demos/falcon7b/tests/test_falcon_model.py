@@ -218,7 +218,7 @@ def test_FalconModel_inference(
 ):
     devices = get_devices_for_t3000(all_devices, num_devices)
 
-    model_config = get_model_config(model_config_str, seq_len)
+    model_config = get_model_config(model_config_str, seq_len, batch)
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )

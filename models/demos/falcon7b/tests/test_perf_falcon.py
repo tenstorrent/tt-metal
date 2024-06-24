@@ -80,7 +80,7 @@ class TestParametrized:
         if model_config_str == "BFLOAT16-L1_SHARDED":
             pytest.skip("Sharded config is not supported on GS")
 
-        model_config = get_model_config(model_config_str, seq_len)
+        model_config = get_model_config(model_config_str, seq_len, batch)
         tt_cache_path = get_tt_cache_path(
             model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
         )
@@ -140,7 +140,7 @@ class TestParametrized:
         # Enable Async Mode
         for device in devices:
             device.enable_async(async_mode)
-        model_config = get_model_config(model_config_str, seq_len)
+        model_config = get_model_config(model_config_str, seq_len, batch)
         tt_cache_path = get_tt_cache_path(
             model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
         )

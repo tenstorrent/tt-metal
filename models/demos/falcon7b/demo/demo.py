@@ -88,7 +88,7 @@ def print_output_prompts(generated_ids, tokenizer, batch_size, num_users_to_disp
         logger.info(f"Output for user {user_id}:\n{output_prompt}")
 
 
-def update_model_config(model, model_config_str, prefill_seq_len=0):
+def update_model_config(model, model_config_str, prefill_seq_len=0, decode_batch_size=32):
     model.model_config.update(get_model_config(model_config_str, prefill_seq_len))
 
 
@@ -180,7 +180,7 @@ def run_falcon_demo_kv(
     )
     profiler.end(f"tokenizing_inputs")
 
-    model_config = get_model_config(model_config_strs_prefill_decode[0], nearest_32(num_input_tokens))
+    model_config = get_model_config(model_config_strs_prefill_decode[0], nearest_32(num_input_tokens), batch_size)
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )
@@ -273,7 +273,7 @@ def run_falcon_demo_kv(
     logger.info("Running 1st run decode stage with compile...")
 
     # Update model config
-    update_model_config(tt_FalconCausalLM_singlelayer, model_config_strs_prefill_decode[1])
+    update_model_config(tt_FalconCausalLM_singlelayer, model_config_strs_prefill_decode[1], batch_size)
 
     decode_ids = torch.randint(low=0, high=configuration.vocab_size - 1, size=(global_batch, 1), dtype=torch.int64)
 
@@ -326,7 +326,7 @@ def run_falcon_demo_kv(
         num_layers,
         configuration,
         max_seq_len,
-        get_model_config(model_config_strs_prefill_decode[0], nearest_32(num_input_tokens)),
+        get_model_config(model_config_strs_prefill_decode[0], nearest_32(num_input_tokens), batch_size),
         tt_cache_path,
         nearest_32(num_input_tokens),
     )
@@ -402,7 +402,7 @@ def run_falcon_demo_kv(
     logger.info("Running inference decode stage...")
 
     # Update model config
-    update_model_config(tt_FalconCausalLM, model_config_strs_prefill_decode[1])
+    update_model_config(tt_FalconCausalLM, model_config_strs_prefill_decode[1], batch_size)
 
     decode_ids = torch.zeros(global_batch, 1, dtype=torch.int64)
     for user_id, output_id in enumerate(output_ids):
