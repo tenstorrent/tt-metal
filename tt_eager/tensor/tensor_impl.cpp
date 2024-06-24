@@ -426,6 +426,11 @@ inline void print_datum(std::ostream& ss, bfloat16 datum) {
     print_datum(ss, datum.to_float());
 }
 
+template <>
+inline void print_datum(std::ostream& ss, uint8_t datum) {
+    print_datum<uint32_t>(ss, datum);
+}
+
 inline constexpr int constexpr_strlen(const char* str) { return *str ? 1 + constexpr_strlen(str + 1) : 0; }
 
 constexpr auto TENSOR_TYPE_STRING = "ttnn.Tensor";
