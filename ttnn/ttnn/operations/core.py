@@ -20,16 +20,7 @@ def _getitem_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
         operation_name,
         input_tensor,
         ranks=(1, 2, 3, 4, 5, 6, 7, 8),
-        dtypes=(
-            ttnn.bfloat16,
-            ttnn.bfloat8_b,
-            ttnn.bfloat4_b,
-            ttnn.uint8,
-            ttnn.uint16,
-            ttnn.int32,
-            ttnn.uint32,
-            ttnn.float32,
-        ),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.int32, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
@@ -220,7 +211,7 @@ def _from_torch_validate_input_tensors(operation_name, tensor, *args, **kwargs):
     ranks = (1, 2, 3, 4, 5, 6, 7, 8)
     if len(tensor.shape) not in ranks:
         raise RuntimeError(f"{operation_name}: ttnn.Tensor must be of rank {ranks}, but got {len(tensor.shape)}")
-    dtypes = (torch.bfloat16, torch.float32, torch.int16, ttnn.uint8, torch.int32, torch.int64, torch.float16)
+    dtypes = (torch.bfloat16, torch.float32, torch.int16, torch.int32, torch.int64, torch.float16)
     if tensor.dtype not in dtypes:
         raise RuntimeError(f"{operation_name}: ttnn.Tensor must be of type {dtypes}, but got {tensor.dtype}")
     # if not tensor.is_contiguous():
@@ -304,16 +295,7 @@ def _to_torch_validate_input_tensors(operation_name, input_tensor, *args, **kwar
         operation_name,
         input_tensor,
         ranks=(1, 2, 3, 4, 5, 6, 7, 8),
-        dtypes=(
-            ttnn.bfloat16,
-            ttnn.bfloat8_b,
-            ttnn.bfloat4_b,
-            ttnn.uint8,
-            ttnn.uint16,
-            ttnn.int32,
-            ttnn.uint32,
-            ttnn.float32,
-        ),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.int32, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
@@ -400,16 +382,7 @@ def _to_device_validate_input_tensors(operation_name, tensor, *args, **kwargs):
         operation_name,
         tensor,
         ranks=(1, 2, 3, 4, 5),
-        dtypes=(
-            ttnn.bfloat16,
-            ttnn.bfloat8_b,
-            ttnn.bfloat4_b,
-            ttnn.uint8,
-            ttnn.uint16,
-            ttnn.int32,
-            ttnn.uint32,
-            ttnn.float32,
-        ),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.int32, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
@@ -456,16 +429,7 @@ def _from_device_validate_input_tensors(operation_name, tensor, *args, **kwargs)
         operation_name,
         tensor,
         ranks=(1, 2, 3, 4, 5),
-        dtypes=(
-            ttnn.bfloat16,
-            ttnn.bfloat8_b,
-            ttnn.bfloat4_b,
-            ttnn.uint8,
-            ttnn.uint16,
-            ttnn.int32,
-            ttnn.uint32,
-            ttnn.float32,
-        ),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.int32, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=True,
@@ -557,16 +521,7 @@ def _clone_validate_input_tensors(operation_name, input_tensor, *args, **kwargs)
         operation_name,
         input_tensor,
         ranks=(1, 2, 3, 4, 5),
-        dtypes=(
-            ttnn.bfloat16,
-            ttnn.bfloat8_b,
-            ttnn.bfloat4_b,
-            ttnn.uint8,
-            ttnn.uint16,
-            ttnn.int32,
-            ttnn.uint32,
-            ttnn.float32,
-        ),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint16, ttnn.int32, ttnn.uint32, ttnn.float32),
         layouts=(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         can_be_on_device=True,
         can_be_on_cpu=False,
@@ -636,7 +591,7 @@ def _as_tensor_validate_input_tensors(operation_name, tensor, *args, **kwargs):
     ranks = (1, 2, 3, 4, 5, 6, 7, 8)
     if len(tensor.shape) not in ranks:
         raise RuntimeError(f"{operation_name}: ttnn.Tensor must be of rank {ranks}, but got {len(tensor.shape)}")
-    dtypes = (torch.bfloat16, torch.float32, torch.uint8, torch.int16, torch.int32, torch.int64, torch.float16)
+    dtypes = (torch.bfloat16, torch.float32, torch.int16, torch.int32, torch.int64, torch.float16)
     if tensor.dtype not in dtypes:
         raise RuntimeError(f"{operation_name}: ttnn.Tensor must be of type {dtypes}, but got {tensor.dtype}")
     # if not tensor.is_contiguous():
