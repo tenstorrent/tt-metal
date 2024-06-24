@@ -81,7 +81,9 @@ def run_test_FalconAttention_inference(
         assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
 
         attention_input = (torch.rand(batch, q_len, configuration.hidden_size) * 2) - 1
-        attention_mask_bool = torch.ones(batch, 1, q_len, kv_len, dtype=bool).triu(diagonal=1)
+        attention_mask_bool = torch.ones(batch, 1, seq_len, seq_len, dtype=bool)
+        attention_mask_bool = attention_mask_bool.triu(diagonal=1)
+
         layer_past = None
 
         tt_attention_input = ttnn.as_tensor(
@@ -93,20 +95,20 @@ def run_test_FalconAttention_inference(
             mesh_mapper=ReplicateTensorToMesh(device_mesh),
         )
 
-        attention_mask_memconfig = model_config["ATTN_MASK_MEMCFG"]
-        if attention_mask_memconfig.is_sharded():
-            attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-            attn_mask_shard_shape[-1] = kv_len
-            attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
-
         tt_attention_mask = ttnn.as_tensor(
             tensor=attention_mask_bool,
-            dtype=model_config["ATTN_MASK_DTYPE"],
-            layout=ttnn.TILE_LAYOUT,
+            dtype=model_config["BFLOAT16_DTYPE"],
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device_mesh,
-            memory_config=attention_mask_memconfig,
+            memory_config=model_config["DEFAULT_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(device_mesh),
-            preprocess=lambda x: x * (-1e5),
+            preprocess=lambda x: (x * (-1e5)).expand(1, 1, -1, -1),
+        )
+
+        tt_attention_mask = ttnn.experimental.tensor.tilize(
+            tt_attention_mask,
+            output_mem_config=model_config["DRAM_MEMCFG"],
+            output_dtype=model_config["ATTN_MASK_DTYPE"],
         )
 
         tt_k_cache_host = torch.zeros(batch, configuration.num_kv_heads, max_position_embeddings, head_dim)

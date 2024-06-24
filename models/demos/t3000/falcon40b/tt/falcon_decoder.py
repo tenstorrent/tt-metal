@@ -135,9 +135,6 @@ class TtFalconDecoderLayer:
         self.self_attn.set_model_config(model_config)
         self.mlp.set_model_config(model_config)
 
-    def preprocessing(self, llm_mode, batch_size, sequence_size):
-        self.self_attn.preprocessing(llm_mode, batch_size, sequence_size)
-
     def __call__(
         self,
         hidden_states: ttnn.experimental.tensor.Tensor,
