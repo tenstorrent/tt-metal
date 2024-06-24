@@ -30,7 +30,6 @@ def run_unary_test(device, h, w, ttnn_function, torch_function, pcc=0.9999):
 def run_identity_test(device, h, w, data_type, pcc=0.9999):
     torch.manual_seed(0)
 
-    int_format = data_type in [ttnn.uint32, ttnn.uint8, ttnn.uint16, ttnn.int32]
     if data_type == ttnn.uint8:
         # init value
         torch_input_tensor = torch.randint(0, 245, (1, 1, h, w), dtype=torch.uint8)
