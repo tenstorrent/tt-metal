@@ -670,9 +670,9 @@ def as_tensor(
         * :attr:`cache_file_name`: the optional cache file name.
         * :attr:`preprocess`: the optional function to preprocess the tensor before serializing/converting to ttnn.
         * :attr:`mesh_mapper`: the optional TensorToMesh to define the mapping from torch to multi-device.
-        * :attr:`use_device_tilizer`: the optional flag to use device tilizer instead of host-tilizer.
-
-    Example::
+        * :attr:`use_device_tilizer`: the optional flag to use device tilizer instead of host-tilizer. This toggles whether to use host vs. device tilizer:
+            - For Grayskull, the on-device tilizer will truncate mantissa bits for bfp* formats.
+            - For Wormhole, the on-device tilizer will raise a runtime error (RTE) for bfp8 but will truncate for bfp4/2 formats.
 
         >>> tensor = ttnn.as_tensor(torch.randn((2,3)), dtype=ttnn.bfloat16)
         >>> print(tensor)
@@ -682,40 +682,60 @@ def as_tensor(
 
     dtype_name = dtype.name if dtype is not None else "None"
     layout_name = layout.name if layout is not None else "None"
+
+    if use_device_tilizer:
+        if device is None:
+            raise RuntimeError("device must be specified when use_device_tilizer is True")
+        if memory_config is None:
+            raise RuntimeError("memory_config must be specified when use_device_tilizer is True")
+        if layout != ttnn.TILE_LAYOUT:
+            raise RuntimeError("layout must be TILE_LAYOUT when use_device_tilizer is True")
+
     if device is not None and memory_config is None:
         raise RuntimeError("memory_config must be specified when device is specified")
 
-    if cache_file_name is None:
+    def torch_to_ttnn(
+        tensor: torch.Tensor,
+        dtype: Optional[ttnn.DataType],
+        layout: Optional[ttnn.Layout],
+        device: Optional[ttnn.Device],
+        memory_config: Optional[ttnn.MemoryConfig],
+        mesh_mapper: Optional[ttnn.TensorToMesh],
+    ):
         if preprocess:
             tensor = preprocess(tensor)
-        return ttnn.from_torch(
-            tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config, mesh_mapper=mesh_mapper
-        )
+        if use_device_tilizer:
+            tensor = ttnn.from_torch(
+                tensor,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mesh_mapper,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            tensor = ttnn.to_layout(tensor, layout, dtype=dtype, memory_config=memory_config, device=device)
+        else:
+            tensor = ttnn.from_torch(
+                tensor,
+                dtype=dtype,
+                layout=layout,
+                mesh_mapper=mesh_mapper,
+                memory_config=memory_config,
+                device=device,
+            )
+        return tensor
+
+    if cache_file_name is None:
+        return torch_to_ttnn(tensor, dtype, layout, device, memory_config, mesh_mapper)
     else:
 
-        def from_torch_and_dump(tensor, dtype, layout, cache_file_name):
-            if preprocess:
-                tensor = preprocess(tensor)
-            if use_device_tilizer and device and layout == ttnn.TILE_LAYOUT:
-                # To use the device tilizer, we're going to first move the tensor
-                # to the device because the on-device tilizer works on bfloat16, on-device tensor.
-                tensor = ttnn.from_torch(
-                    tensor,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=mesh_mapper,
-                    device=device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                tensor = ttnn.to_layout(tensor, layout, dtype=dtype, memory_config=memory_config, device=device)
-            else:
-                tensor = ttnn.from_torch(
-                    tensor,
-                    dtype=dtype,
-                    layout=layout,
-                    mesh_mapper=mesh_mapper,
-                    memory_config=memory_config,
-                    device=device,
-                )
+        def from_torch_and_dump(
+            tensor: torch.Tensor,
+            dtype: Optional[ttnn.DataType],
+            layout: Optional[ttnn.Layout],
+            cache_file_name: str,
+            mesh_mapper: Optional[ttnn.TensorToMesh],
+        ):
+            tensor = torch_to_ttnn(tensor, dtype, layout, device, memory_config, mesh_mapper)
             logger.debug(
                 f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
             )
@@ -739,10 +759,10 @@ def as_tensor(
                 logger.warning(
                     f"Cached file {cache_file_name} has shape {tensor.shape}, expected {tensor.shape}, regenerating cache"
                 )
-                tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name)
+                tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
             logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
         except (FileNotFoundError, RuntimeError):
-            tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name)
+            tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
         return tensor
 
 
