@@ -10,7 +10,9 @@ from typing import Optional
 import ttnn
 from models.demos.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
 from models.demos.mamba.tt.full_model import MambaTT
+from models.demos.mamba.reference.prefill_model import MambaPrefill
 from models.demos.mamba.tt import model_config
+from models.demos.mamba.tt.types import ModelMode
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
@@ -108,6 +110,86 @@ def test_inference(
         use_program_cache,
         model_version,
         batch,
+        pcc,
+        num_layers,
+        iterations,
+        cache_dir=get_tt_cache_path(model_version),
+    )
+
+
+def run_prefill(
+    device: ttnn.Device,
+    use_program_cache,
+    model_version: MambaPretrainedModelName,
+    seq_len: int,
+    pcc: float,
+    num_layers: int,
+    iterations: int,
+    cache_dir: Optional[str],
+):
+    batch = 1
+
+    torch.manual_seed(10)
+
+    reference_model = MambaPrefill.from_pretrained(model_version)
+    reference_model.args.batch_size = batch
+    reference_model.args.seq_len = seq_len
+    reference_model.args.mode = ModelMode.PREFILL
+
+    tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
+    input_ids = tokenizer("Hello", return_tensors="pt")["input_ids"]
+    input_ids = input_ids.repeat(1, seq_len)
+
+    mamba_model_pytorch = MambaPytorch(reference_model, num_layers)
+    mamba_model_pytorch.eval()
+    for _ in range(iterations):
+        with torch.no_grad():
+            reference_output = mamba_model_pytorch(input_ids)
+    breakpoint()
+    config = model_config.create_model_config(batch, reference_model.args.d_model)
+    mamba_model_tt = MambaTT(reference_model, device, config, tt_cache_path=cache_dir, num_layers=num_layers)
+
+    for _ in range(iterations):
+        tt_output = mamba_model_tt(input_ids)
+
+    logger.info(comp_allclose(reference_output, tt_output))
+
+    does_pass, output_pcc = comp_pcc(reference_output, tt_output, pcc)
+    logger.info(f"PCC value: {output_pcc}")
+
+    if not does_pass:
+        logger.warning("Mamba output failed")
+        assert does_pass, f"PCC value is lower than {pcc}"
+
+
+@skip_for_grayskull("Not supported on Grayskull")
+@pytest.mark.parametrize(
+    "model_version, seq_len, pcc, num_layers, iterations",
+    (
+        (
+            "state-spaces/mamba-2.8b",
+            32,
+            0.98,
+            64,
+            1,
+        ),
+    ),
+)
+def test_prefill(
+    device: ttnn.Device,
+    use_program_cache,
+    get_tt_cache_path,
+    model_version: MambaPretrainedModelName,
+    seq_len: int,
+    pcc: float,
+    num_layers: int,
+    iterations: int,
+):
+    run_prefill(
+        device,
+        use_program_cache,
+        model_version,
+        seq_len,
         pcc,
         num_layers,
         iterations,
