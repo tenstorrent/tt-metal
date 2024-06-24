@@ -19,6 +19,7 @@ enum class BinaryBackwardOpType {
     SUBALPHA_BW,
     SUB_BW,
     XLOGY_BW,
+    HYPOT_BW,
 };
 
 
