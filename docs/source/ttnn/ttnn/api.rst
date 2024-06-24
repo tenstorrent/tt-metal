@@ -195,6 +195,7 @@ Pointwise Binary
    ttnn/subalpha_bw
    ttnn/sub_bw
    ttnn/xlogy_bw
+   ttnn/hypot_bw
 
 Pointwise Ternary
 =================

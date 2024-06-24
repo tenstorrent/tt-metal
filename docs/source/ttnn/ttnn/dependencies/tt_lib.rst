@@ -904,8 +904,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.binary_le_bw
 
-.. autofunction:: tt_lib.tensor.hypot_bw
-
 .. autofunction:: tt_lib.tensor.gelu_bw
 
 .. autofunction:: tt_lib.tensor.bias_gelu_bw

@@ -7,6 +7,7 @@
 
 #include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
@@ -135,7 +136,7 @@ std::vector<ttnn::Tensor> _sub_bw(
 }
 
 
-std::vector<Tensor> _xlogy_bw(
+std::vector<ttnn::Tensor> _xlogy_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
        std::vector<Tensor> grad_tensor;
     Tensor grad1_result = log(other, output_mem_config);
@@ -168,6 +169,20 @@ std::vector<Tensor> _xlogy_bw(
 }
 
 
+std::vector<ttnn::Tensor> _hypot_bw(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result_recip = recip(hypot(input, other, output_mem_config), output_mem_config);
+    Tensor grad_a =
+        ttnn::multiply(grad, ttnn::multiply(input, result_recip, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    Tensor grad_b =
+        ttnn::multiply(grad, ttnn::multiply(other, result_recip, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ATAN2_BW:
@@ -178,6 +193,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _sub_bw;
         case BinaryBackwardOpType::XLOGY_BW:
             return _xlogy_bw;
+        case BinaryBackwardOpType::HYPOT_BW:
+            return _hypot_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

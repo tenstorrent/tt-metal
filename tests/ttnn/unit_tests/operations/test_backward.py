@@ -110,3 +110,12 @@ def test_atan2_zero(device, h, w, in_val, grad_val, other_val):
 @pytest.mark.parametrize("other_val", [-1, 1])
 def test_xlogy(device, h, w, in_val, grad_val, other_val):
     run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.xlogy_bw, torch.xlogy)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("in_val", [-1, 1])
+@pytest.mark.parametrize("grad_val", [-1, 0, 1])
+@pytest.mark.parametrize("other_val", [-1, 1])
+def test_hypot(device, h, w, in_val, grad_val, other_val):
+    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.hypot_bw, torch.hypot)
