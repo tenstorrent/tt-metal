@@ -30,9 +30,6 @@ def main(args):
     # Load the model and tokenizer
     model, tokenizer = generator.model, generator.tokenizer
 
-    # set num_tokens to 1, because this the number of tokens to generate
-    args.num_tokens = 1
-
     # Dataset preparation
     dataset = datasets.load_dataset(args.dataset, args.config, split=args.split, ignore_verifications=True)
     text = wikitext_detokenizer("\n".join(dataset["text"]))
@@ -62,8 +59,13 @@ def main(args):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Dump perplexity and max_seq_len to a JSON file with timestamp and max_length in the file name
-    filename = f"perplexity_{args.llama_version}_{args.implementation}_{args.sample_len}_{timestamp}.json"
-    result = {"model": args.llama_version, "perplexity": perplexity.item(), "seq_len": args.sample_len}
+    filename = f"models/experimental/llama2_70b/scripts/llama_perplexity_runs/perplexity_{args.llama_version}_{args.implementation}_{args.sample_len}_{args.num_tokens}_{timestamp}.json"
+    result = {
+        "model": args.llama_version,
+        "perplexity": perplexity.item(),
+        "seq_len": args.sample_len,
+        "gen_length": args.num_tokens,
+    }
     with open(filename, "w") as f:
         json.dump(result, f)
 
@@ -84,7 +86,7 @@ def calculate_perplexity(args, model, tokenizer, seq_len, max_len, stride, encod
 
     # construct perplexity calculation inputs
     for i, begin_loc in enumerate(range(0, total_len, stride)):
-        end_loc = begin_loc + seq_len
+        end_loc = begin_loc + seq_len + args.num_tokens - 1
         if end_loc >= total_len:
             raise ValueError(
                 "The dataset is too small to decode the number of samples requested with the given stride."
@@ -109,7 +111,13 @@ def calculate_perplexity(args, model, tokenizer, seq_len, max_len, stride, encod
         for sample in tqdm(dataloader):
             tokens, labels = sample
             outputs = run_decode(
-                args=args, model=model, tokenizer=tokenizer, prompt_tokens=tokens, prompts=None, return_full_logits=True
+                args=args,
+                model=model,
+                tokenizer=tokenizer,
+                prompt_tokens=tokens,
+                seq_len=seq_len,
+                prompts=None,
+                return_full_logits=True,
             )
 
             all_text, logits = outputs
@@ -269,13 +277,15 @@ def construct_arg(**kwargs):
     ],
     ids=["greedy", "sampling"],
 )
-@pytest.mark.parametrize(
-    "dataset, split, config, stride, sample_len, num_samples, perplexity_score",
+@pytest.mark.parametrize(  # sample_len => prefill length, num_samples => decode length
+    "dataset, split, config, stride, sample_len, num_tokens, num_samples, perplexity_score",
     [
-        ("wikitext", "test", "wikitext-2-raw-v1", 128, 128, 128, 5.4),
-        ("wikitext", "test", "wikitext-2-raw-v1", 128, 2048, 128, 3.4313),
+        ("wikitext", "test", "wikitext-2-raw-v1", 128, 128, 1, 128, 5.4),
+        ("wikitext", "test", "wikitext-2-raw-v1", 128, 2048, 1, 128, 3.4313),
+        ("wikitext", "test", "wikitext-2-raw-v1", 128, 128, 128, 128, 5.4),
+        ("wikitext", "test", "wikitext-2-raw-v1", 128, 2048, 128, 128, 3.4313),
     ],
-    ids=["wikitext-128", "wikitext-2k"],
+    ids=["wikitext-128-0", "wikitext-2k-0", "wikitext-128-128", "wikitext-2k-128"],
 )
 def test_LlamaModel_demo(
     # model args
@@ -283,6 +293,7 @@ def test_LlamaModel_demo(
     skip_model_load,
     num_layers,
     # Generation args
+    num_tokens,
     top_p,
     top_k,
     temperature,
@@ -315,6 +326,7 @@ def test_LlamaModel_demo(
         tokenizer_path=tokenizer_path,
         skip_model_load=skip_model_load,
         num_layers=num_layers,
+        num_tokens=num_tokens,
         top_p=top_p,
         top_k=top_k,
         temperature=temperature,

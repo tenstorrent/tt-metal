@@ -140,7 +140,7 @@ def prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token):
     return tokens, eos_reached, prev_pos
 
 
-def run_decode(args, model, tokenizer, prompt_tokens, prompts, return_logits=False, return_full_logits=False):
+def run_decode(args, model, tokenizer, prompt_tokens, seq_len, prompts, return_logits=False, return_full_logits=False):
     """
     return_logits: return the logits for the last token
     return_full_logits: return the logits for all tokens
@@ -153,8 +153,8 @@ def run_decode(args, model, tokenizer, prompt_tokens, prompts, return_logits=Fal
     max_gen_len = args.num_tokens
     args.greedy = args.top_k == 1  # greedy decoding is top-k with k=1
 
-    min_prompt_len = min(len(t) for t in prompt_tokens) if not args.decode_only else 1
-    max_prompt_len = max(len(t) for t in prompt_tokens)
+    min_prompt_len = min(min(len(t) for t in prompt_tokens) if not args.decode_only else 1, seq_len)
+    max_prompt_len = min(max(len(t) for t in prompt_tokens), seq_len)
     assert max_prompt_len <= model_args.max_seq_len
     total_len = min(model_args.max_seq_len, max_gen_len + max_prompt_len)
     assert total_len <= model_args.max_seq_len
