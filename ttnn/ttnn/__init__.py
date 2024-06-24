@@ -460,6 +460,7 @@ from ttnn.operations.binary_backward import (
     subalpha_bw,
     sub_bw,
     xlogy_bw,
+    hypot_bw,
 )
 
 from ttnn.operations.ternary import (
