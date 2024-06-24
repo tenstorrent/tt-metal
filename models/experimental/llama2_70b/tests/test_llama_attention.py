@@ -349,19 +349,19 @@ def run_test_LlamaAttention_inference(
     # Check kv cache
     # PyTorch output --------------------------------------------------------------------
     pytorch_layer_present = [
-        pytorch_LlamaAttention_model.attention.cache_k.clone().permute(
-            0, 2, 1, 3
-        ),  # [batch, n_kv_heads, seq, head_dim]
-        pytorch_LlamaAttention_model.attention.cache_v.clone().permute(
-            0, 2, 1, 3
-        ),  # [batch, n_kv_heads, seq, head_dim]
+        pytorch_LlamaAttention_model.attention.cache_k.clone().permute(0, 2, 1, 3)[
+            :batch, ...
+        ],  # [batch, n_kv_heads, seq, head_dim]
+        pytorch_LlamaAttention_model.attention.cache_v.clone().permute(0, 2, 1, 3)[
+            :batch, ...
+        ],  # [batch, n_kv_heads, seq, head_dim]
     ]
     # TT hardware output ----------------------------------------------------------------
 
     # concat the pasts by heads
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_LlamaAttention_model.layer_past]
     tt_layer_present_all = [
-        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)
+        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)[:batch, ...]
         for lp in tt_layer_present_all
     ]
 

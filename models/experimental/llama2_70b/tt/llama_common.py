@@ -415,22 +415,3 @@ def check_kv_cache(pt_cache_all, tt_cache_all, generation_start_pos, generation_
             logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
             test_passed = False
     return test_passed
-
-
-def get_flash_decode_chunk_size(token_idx):
-    # Not sure if optimal
-    if token_idx <= 32:
-        return 32
-    if token_idx <= 64:
-        return 64
-    if token_idx <= 128:
-        return 128
-    if token_idx <= 256:
-        return 256
-    if token_idx <= 2048:
-        return 512
-    return 1024
-
-
-def get_padded_layer_len(token_idx, chunk_size):
-    return ((token_idx + chunk_size - 1) // chunk_size) * chunk_size
