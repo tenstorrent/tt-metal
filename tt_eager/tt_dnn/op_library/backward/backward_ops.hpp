@@ -323,12 +323,6 @@ std::vector<Tensor> ldexp_bw(
     const Tensor& other,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> xlogy_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> logaddexp_bw(
     const Tensor& grad,
     const Tensor& input,

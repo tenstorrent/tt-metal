@@ -30,6 +30,21 @@ def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwarg
 atan2_bw = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary_backward.atan2_bw)
 
 
+def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    pyt_y = torch.xlogy(input_tensor_a, input_tensor_b)
+    input_tensor_a.retain_grad()
+    input_tensor_b.retain_grad()
+
+    pyt_y.backward(gradient=grad_tensor)
+    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
+    return golden_tensor
+
+
+xlogy_bw = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary_backward.xlogy_bw)
+
+
 def _golden_function(grad_tensor, input_tensor, weight_tensor, *args, **kwargs):
     import torch
 
