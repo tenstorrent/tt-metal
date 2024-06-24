@@ -162,7 +162,7 @@ def test_sharded_matmul_1d_in0(
             ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 1),
         in0_block_w=32,
         out_subblock_h=1,
@@ -264,7 +264,7 @@ def test_sharded_matmul_1d_in0_multi_chip(
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
     if num_devices == 4:
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,
             out_subblock_h=1,
@@ -276,7 +276,7 @@ def test_sharded_matmul_1d_in0_multi_chip(
             mcast_in0=True,
         )
     elif num_devices == 8:
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,
             out_subblock_h=1,
@@ -377,7 +377,7 @@ def test_sharded_matmul_1d_in0_multi_chip(
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
     if num_devices == 4:
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,
             out_subblock_h=1,
@@ -389,7 +389,7 @@ def test_sharded_matmul_1d_in0_multi_chip(
             mcast_in0=True,
         )
     elif num_devices == 8:
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,
             out_subblock_h=1,

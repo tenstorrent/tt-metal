@@ -151,7 +151,7 @@ class TtMistralAttention(nn.Module):
             for i in range(self.num_devices)
         ]
 
-        self.q_heads_program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        self.q_heads_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
             out_subblock_h=4,
@@ -161,7 +161,7 @@ class TtMistralAttention(nn.Module):
             transpose_mcast=False,
             fused_activation=None,
         )
-        self.k_heads_program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        self.k_heads_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
             out_subblock_h=1,
@@ -205,7 +205,7 @@ class TtMistralAttention(nn.Module):
             )
             for i in range(len(devices))
         ]
-        self.expand_program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        self.expand_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
             out_subblock_h=2,
@@ -216,7 +216,7 @@ class TtMistralAttention(nn.Module):
             fused_activation=None,
         )
 
-        self.reduce_program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        self.reduce_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
             out_subblock_h=4,
@@ -227,7 +227,7 @@ class TtMistralAttention(nn.Module):
             fused_activation=None,
         )
 
-        self.attn_program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        self.attn_program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(8, 4),
             in0_block_w=1,
             out_subblock_h=1,

@@ -8,6 +8,7 @@ from loguru import logger
 
 import tt_lib
 import tt_lib as ttl
+import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.tt.model_config import (
     get_model_config,
@@ -156,7 +157,7 @@ def run_test(
     q_tt = torch2tt_tensor(q_in, device)  # , tt_memory_config=inp_mem_config)
     k_tt = torch2tt_tensor(k_in, device, tt_memory_config=k_mem_config)
 
-    prog_config = tt_lib.operations.primary.MatmulMultiCoreReuseProgramConfig(
+    prog_config = ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=[8, 4],
         in0_block_w=HEAD_DIM // TILE_SIZE,
         out_subblock_h=1,  # TODO: Maximize

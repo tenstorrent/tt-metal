@@ -125,7 +125,7 @@ def matmul_1d_config(
     if overwrite_subblock_h is not None:
         out_subblock_h = overwrite_subblock_h
 
-    return ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(grid.x, grid.y),
         in0_block_w=per_core_k,
         out_subblock_h=out_subblock_h,
@@ -214,7 +214,7 @@ def matmul_2d_config(
     #     f"per_core_m: {per_core_m}, per_core_k: {per_core_k}, per_core_n: {per_core_n}, out_subblock_h: {out_subblock_h}, out_subblock_w: {out_subblock_w}"
     # )
 
-    return ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid.x, grid.y),
         in0_block_w=per_core_k,  # how much inner dim you take each time
         out_subblock_h=out_subblock_h,  # Must be divisible by per_core_M

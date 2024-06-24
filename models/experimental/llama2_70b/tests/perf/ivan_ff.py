@@ -8,6 +8,7 @@ from loguru import logger
 
 import tt_lib
 import tt_lib as ttl
+import ttnn
 
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
@@ -66,7 +67,7 @@ def run_test_ff1(
     max_dst_size = 4 if USE_ACC else 8
     out_subblock_w = max([i for i in range(1, max_dst_size + 1) if (per_core_N % i) == 0])
 
-    prog_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    prog_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         # compute_with_storage_grid_size=(8,4),
         compute_with_storage_grid_size=compute_grid,
         in0_block_w=in0_block_w,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size

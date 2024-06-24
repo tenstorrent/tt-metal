@@ -61,7 +61,7 @@ def falcon_lm_head_matmul_2d(
     per_core_N = nearest_y(weights_n_in_tiles / grid.x, out_subblock_w)
     in0_block_w = 4 if seq_len <= 1024 else 8
 
-    program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
