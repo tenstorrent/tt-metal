@@ -39,7 +39,6 @@ class TtLlamaModelForGeneration:
             n_layers,
             model_config,
             configuration,
-            batch,
             cache_path=cache_path,
             read_cache=False,
         )
