@@ -161,12 +161,6 @@ class TtFalconModelShared:
             attention_mask_bool = torch.ones(batch_size, 1, sequence_size, sequence_size, dtype=bool)
             attention_mask_bool = attention_mask_bool.triu(diagonal=1)
 
-            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
-            if attention_mask_memconfig.is_sharded():
-                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-                attn_mask_shard_shape[-1] = sequence_size
-                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
-
             # TODO: set use_device_tilizer to True and remove tilize below
             # Check if then layout is ttnn.RowMajor or Tile as argument
             tt_attention_mask = ttnn.as_tensor(
@@ -174,13 +168,13 @@ class TtFalconModelShared:
                 dtype=self.model_config["BFLOAT16_DTYPE"],  # subsequent tilize op expects bfloat16 inputs
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device_mesh,
-                memory_config=attention_mask_memconfig,
-                mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=1),
-                preprocess=lambda x: (x * -1e5).expand(-1, self.num_devices, -1, -1),
+                memory_config=self.model_config["DEFAULT_MEMCFG"],
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                preprocess=lambda x: (x * -1e5).expand(1, 1, -1, -1),
             )
             tt_attention_mask = ttnn.experimental.tensor.tilize(
                 tt_attention_mask,
-                output_mem_config=attention_mask_memconfig,
+                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
                 output_dtype=self.model_config["ATTN_MASK_DTYPE"],
             )
             # Genereate ln output tensors for prefill if not existing
@@ -238,9 +232,6 @@ class TtFalconModelShared:
 
         else:
             raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
-
-        for layer in self.layers:
-            layer.preprocessing(llm_mode, batch_size, sequence_size)
 
         return tt_inputs, tt_attention_mask
 
