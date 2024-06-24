@@ -5,16 +5,17 @@
 #include "tt_eager/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
-    const auto input_addr = get_arg_val<uint32_t>(0);
-    const auto num_rows_per_core = get_arg_val<uint32_t>(1);
-    const auto num_inner = get_arg_val<uint32_t>(2);
-    const auto tile_offset = get_arg_val<uint32_t>(3);
-    const auto scaler = get_arg_val<uint32_t>(4);
-    const auto eps = get_arg_val<uint32_t>(5);
-    const auto gamma_addr = get_arg_val<uint32_t>(6);
-    const auto beta_addr = get_arg_val<uint32_t>(7);
-    const auto mask_h = get_arg_val<uint32_t>(8);
-    const auto mask_w = get_arg_val<uint32_t>(9);
+    uint32_t i = 0;
+    const auto input_addr = get_arg_val<uint32_t>(i++);
+    const auto gamma_addr = get_arg_val<uint32_t>(i++);
+    const auto beta_addr = get_arg_val<uint32_t>(i++);
+    const auto num_rows_per_core = get_arg_val<uint32_t>(i++);
+    const auto num_inner = get_arg_val<uint32_t>(i++);
+    const auto tile_offset = get_arg_val<uint32_t>(i++);
+    const auto scaler = get_arg_val<uint32_t>(i++);
+    const auto eps = get_arg_val<uint32_t>(i++);
+    const auto mask_h = get_arg_val<uint32_t>(i++);
+    const auto mask_w = get_arg_val<uint32_t>(i++);
 
     constexpr uint32_t cb_id_input = tt::CB::c_in0;
     constexpr uint32_t cb_id_scaler = tt::CB::c_in1;

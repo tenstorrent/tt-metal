@@ -245,49 +245,10 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
         tile_offset += num_cols_per_core;
     }
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Callback SetUp
-    ////////////////////////////////////////////////////////////////////////////
-    auto override_runtime_args_callback = [reader_kernels_id = reader_kernels_id,
-                                           writer_kernels_id = writer_kernels_id,
-                                           num_cores_to_be_used = num_cores_to_be_used,
-                                           num_cores_y = num_cores_y](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto output_grad_buffer = input_buffers.at(0);
-        auto input_buffer = input_buffers.at(1);
-        auto mean_buffer = input_buffers.at(2);
-        auto rstd_buffer = input_buffers.at(3);
-
-        auto gamma_grad_buffer = output_buffers.at(0);
-        auto beta_grad_buffer = output_buffers.at(1);
-        TT_ASSERT(gamma_grad_buffer != nullptr || beta_grad_buffer != nullptr);
-
-        for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-            {
-                auto& runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
-                runtime_args[0] = output_grad_buffer->address();
-                runtime_args[1] = input_buffer->address();
-                runtime_args[2] = mean_buffer->address();
-                runtime_args[3] = rstd_buffer->address();
-            }
-
-            {
-                auto& runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
-                if (gamma_grad_buffer != nullptr) {
-                    runtime_args[0] = gamma_grad_buffer->address();
-                }
-                if (beta_grad_buffer != nullptr) {
-                    runtime_args[1] = beta_grad_buffer->address();
-                }
-            }
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return {
+        .program = std::move(program),
+        .override_runtime_arguments_callback =
+            create_override_runtime_arguments_callback(reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y)};
 }
 
 }  // namespace primary

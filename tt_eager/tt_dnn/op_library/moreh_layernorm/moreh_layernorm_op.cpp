@@ -347,7 +347,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
         }
 
         const std::vector<uint32_t> reader_runtime_args{
-            input_addr, num_rows_per_core, num_inner, tile_offset, scaler.u, e.u, gamma_addr, beta_addr, mask_h, mask_w};
+            input_addr, gamma_addr, beta_addr, num_rows_per_core, num_inner, tile_offset, scaler.u, e.u, mask_h, mask_w};
         SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
 
         const std::vector<uint32_t> writer_runtime_args{
@@ -359,52 +359,10 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
         tile_offset += num_rows_per_core * num_inner;
     }
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Callback SetUp
-    ////////////////////////////////////////////////////////////////////////////
-    auto override_runtime_args_callback = [reader_kernels_id = reader_kernels_id,
-                                           writer_kernels_id = writer_kernels_id,
-                                           num_cores_to_be_used = num_cores_to_be_used,
-                                           num_cores_y = num_cores_y](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto input_buffer = input_buffers.at(0);
-        auto gamma_buffer = input_buffers.at(1);
-        auto beta_buffer = input_buffers.at(2);
-        auto mean_buffer = input_buffers.at(3);
-        auto rstd_buffer = input_buffers.at(4);
-
-        auto ouput_buffer = output_buffers.at(0);
-
-        for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-            {
-                auto& runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
-                runtime_args[0] = input_buffer->address();
-                if (gamma_buffer != nullptr) {
-                    runtime_args[6] = gamma_buffer->address();
-                }
-                if (beta_buffer != nullptr) {
-                    runtime_args[7] = beta_buffer->address();
-                }
-            }
-
-            {
-                auto& runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
-                runtime_args[0] = ouput_buffer->address();
-                if (mean_buffer != nullptr) {
-                    runtime_args[1] = mean_buffer->address();
-                }
-                if (rstd_buffer != nullptr) {
-                    runtime_args[2] = rstd_buffer->address();
-                }
-            }
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return {
+        .program = std::move(program),
+        .override_runtime_arguments_callback =
+            create_override_runtime_arguments_callback(reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y)};
 }
 
 void MorehLayerNorm::validate_with_output_tensors(
