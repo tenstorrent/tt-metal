@@ -185,7 +185,7 @@ def run_test_LlamaModel_end_to_end(
         model_config,
         configuration,
         cache_path=cache_path,
-        read_cache=False,
+        read_cache=True,
     )
 
     for i in device_mesh.get_device_ids():
@@ -270,9 +270,9 @@ def test_Llama_perf_host(
 
     check_device_mesh(t3k_device_mesh, model_config)
 
-    for i in t3k_device_mesh.get_device_ids():
-        device = t3k_device_mesh.get_device(i)
-        device.enable_async(True)
+    # for i in t3k_device_mesh.get_device_ids():
+    #     device = t3k_device_mesh.get_device(i)
+    #     device.enable_async(True)
 
     disable_compilation_reports()
 
