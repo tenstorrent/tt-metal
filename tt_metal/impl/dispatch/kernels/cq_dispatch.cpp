@@ -89,7 +89,7 @@ constexpr uint32_t l1_cache_elements_rounded =
     ((l1_cache_elements + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
     l1_to_local_cache_copy_chunk;
 
-static uint32_t l1_cache[l1_cache_elements];
+static uint32_t l1_cache[l1_cache_elements_rounded];
 
 FORCE_INLINE volatile uint32_t *get_cq_completion_read_ptr() {
     return reinterpret_cast<volatile uint32_t *>(CQ_COMPLETION_READ_PTR);
