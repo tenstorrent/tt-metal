@@ -50,6 +50,7 @@ struct GroupNormShardedMultiCoreProgramConfig {
     DataType im_data_format;
     DataType out_data_format;
     bool inplace;
+    Layout output_layout;
 
     tt::stl::reflection::Attributes attributes() const;
 };

@@ -43,10 +43,6 @@ void kernel_main() {
     const uint32_t beta_tile_start_id             = get_arg_val<uint32_t>(7);
     const uint32_t input_mask_tile_start_id             = get_arg_val<uint32_t>(8);
 
-    // DPRINT << "gamma_tile_start_id " <<gamma_tile_start_id<<ENDL();
-    // DPRINT << "beta_tile_start_id " <<beta_tile_start_id<<ENDL();
-    // DPRINT << "input_mask_tile_start_id " <<input_mask_tile_start_id<<ENDL();
-
     constexpr uint32_t cb_gamma = tt::CB::c_in5;
     constexpr uint32_t cb_beta = tt::CB::c_in6;
     constexpr uint32_t cb_out0 = tt::CB::c_out0;

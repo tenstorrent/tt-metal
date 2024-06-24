@@ -23,24 +23,6 @@ void kernel_main() {
     constexpr uint32_t per_core_M                      = get_compile_time_arg_val(8);
     constexpr uint32_t TILE_HEIGHT                      = get_compile_time_arg_val(9);
 
-    // DPRINT << "num_mcast_cores " <<num_mcast_cores<<ENDL();
-    // DPRINT << "per_core_N " <<per_core_N<<ENDL();
-    // DPRINT << "per_core_N_bytes " <<per_core_N_bytes<<ENDL();
-    // DPRINT << "per_core_N_bytes_with_stride " <<per_core_N_bytes_with_stride<<ENDL();
-    // DPRINT << "per_core_M " <<per_core_M<<ENDL();
-    // DPRINT << "TILE_HEIGHT " <<TILE_HEIGHT<<ENDL();
-    // DPRINT << "is_num_channel_div_by_tile " <<is_num_channel_div_by_tile<<ENDL();
-    // DPRINT << "num_cols_per_group " <<num_cols_per_group<<ENDL();
-    // DPRINT << "num_group " <<num_group<<ENDL();
-    // DPRINT << "num_batch " <<num_batch<<ENDL();
-    // DPRINT << "group_offset " <<group_offset<<ENDL();
-    // DPRINT << "batch_offset " <<batch_offset<<ENDL();
-
-    // DPRINT << "block_h " <<block_h<<ENDL();
-    // DPRINT << "block_w " <<block_w<<ENDL();
-    // DPRINT << "block_h_offset " <<block_h_offset<<ENDL();
-    // DPRINT << "block_w_offset " <<block_w_offset<<ENDL();
-
     const bool has_mcast_first_group                    = get_arg_val<uint32_t>(0);
     const bool has_mcast_last_group                     = get_arg_val<uint32_t>(1);
 
@@ -178,7 +160,7 @@ void kernel_main() {
     const DataFormat data_format = get_dataformat(cb_ex_partial);
     const uint32_t num_bytes_read = datum_size_bytes;
 
-    #ifdef READER_REPACK
+    #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = get_read_ptr(cb_in0);
     uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
     for (uint32_t m = 0; m < per_core_M; ++m) {
@@ -252,11 +234,10 @@ void kernel_main() {
         }
     }
 
-    #ifdef READER_REPACK
+    #if defined(READER_REPACK) and defined(UNTILIZE_OUT)
     uint32_t l1_write_addr_repack = get_write_ptr(cb_out0);
     for (uint32_t m = 0; m < per_core_M; ++m) {
         cb_wait_front(cb_repack_out, per_core_N);
-        // DPRINT << TSLICE(cb_repack, 0, SliceRange::h0_w0_32()) << ENDL();
         uint32_t in0_l1_read_addr = get_read_ptr(cb_repack_out);
         uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
         for (uint32_t i = 0; i < TILE_HEIGHT; ++i) {

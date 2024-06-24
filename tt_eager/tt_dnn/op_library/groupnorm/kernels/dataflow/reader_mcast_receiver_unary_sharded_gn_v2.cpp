@@ -41,7 +41,7 @@ void kernel_main() {
 
     const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(mcast_sender_noc_x, mcast_sender_noc_y, reduce_receiver_semaphore_addr);
 
-    #ifdef READER_REPACK
+    #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = get_read_ptr(cb_in0);
     uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
     for (uint32_t m = 0; m < per_core_M; ++m) {
@@ -70,11 +70,10 @@ void kernel_main() {
         }
     }
 
-    #ifdef READER_REPACK
+    #if defined(READER_REPACK) and defined(UNTILIZE_OUT)
     uint32_t l1_write_addr_repack = get_write_ptr(cb_out0);
     for (uint32_t m = 0; m < per_core_M; ++m) {
         cb_wait_front(cb_repack_out, per_core_N);
-        // DPRINT << TSLICE(cb_repack, 0, SliceRange::h0_w0_32()) << ENDL();
         uint32_t in0_l1_read_addr = get_read_ptr(cb_repack_out);
         uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
         for (uint32_t i = 0; i < TILE_HEIGHT; ++i) {

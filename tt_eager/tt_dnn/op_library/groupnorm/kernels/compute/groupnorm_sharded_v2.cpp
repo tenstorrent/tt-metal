@@ -63,33 +63,6 @@ void MAIN {
     constexpr uint32_t block_w_minus_two = block_w - 2;
     constexpr uint32_t tile_w_minux_group_size = TILE_WIDTH - num_cols_per_group;
 
-    // UNPACK(( DPRINT << "num_cores_per_mcast_group " << num_cores_per_mcast_group << ENDL() ));
-
-    // UNPACK(( DPRINT << "batch " << batch << ENDL() ));
-    // UNPACK(( DPRINT << "group " << group << ENDL() ));
-
-    // UNPACK(( DPRINT << "num_cols_per_group " << num_cols_per_group << ENDL() ));
-
-    // UNPACK(( DPRINT << "block_h " << block_h << ENDL() ));
-    // UNPACK(( DPRINT << "block_w " << block_w << ENDL() ));
-    // UNPACK(( DPRINT << "block_hw " << block_hw << ENDL() ));
-    // UNPACK(( DPRINT << "num_subblocks_w " << num_subblocks_w << ENDL() ));
-    // UNPACK(( DPRINT << "subblock_w " << subblock_w << ENDL() ));
-
-    // UNPACK(( DPRINT << "per_core_M " << per_core_M << ENDL() ));
-    // UNPACK(( DPRINT << "per_core_N " << per_core_N << ENDL() ));
-    // UNPACK(( DPRINT << "per_core_MN " << per_core_MN << ENDL() ));
-
-    // UNPACK(( DPRINT << "per_core_N_tile_bytes " << per_core_N_tile_bytes << ENDL() ));
-    // UNPACK(( DPRINT << "num_groups_per_reset " << num_groups_per_reset << ENDL() ));
-
-    // UNPACK(( DPRINT << "single_tile_size_bytes " << single_tile_size_bytes << ENDL() ));
-
-    // UNPACK(( DPRINT << "block_w_last " << block_w_last << ENDL() ));
-
-    // UNPACK(( DPRINT << "GROUP_SIZE_IS_POWER_OF_2 " << GROUP_SIZE_IS_POWER_OF_2 << ENDL() ));
-    // UNPACK(( DPRINT << "GROUP_SIZE_SMALLER_THAN_TILE_W " << GROUP_SIZE_SMALLER_THAN_TILE_W << ENDL() ));
-
 
     // dst regs
     constexpr uint32_t dst0 = 0;
@@ -121,9 +94,13 @@ void MAIN {
     constexpr uint32_t cb_xmm2 = cb_x;
 
     // output cb
-    constexpr uint32_t num_out_cbs = 7;
-    constexpr uint32_t cb_out = tt::CB::c_intermed6;
     constexpr uint32_t cb_out0 = tt::CB::c_out0;
+    #ifdef UNTILIZE_OUT
+    constexpr uint32_t cb_out = tt::CB::c_intermed6;
+    #else
+    constexpr uint32_t cb_out = (do_gamma or do_beta) ? (((do_gamma and not do_beta) or (not do_gamma and do_beta)) ? cb_in : cb_out0) : cb_out0;
+    #endif
+
 
     // tile offset
     uint32_t index_subblock_w_offset = 0;
@@ -142,40 +119,47 @@ void MAIN {
     uint32_t row_offset = num_cols_per_group;
     uint32_t output_tile_index = 0;
 
-    // constexpr int cb_im = cb_x;
-    constexpr int cb_outgamma = cb_in;
-    constexpr int cb_inbeta = do_gamma ? cb_outgamma : cb_out;
-    constexpr int cb_outbeta = do_gamma ? cb_out : cb_in;
-    constexpr int cb_untilize_in = (do_gamma and not do_beta) ? cb_outgamma : do_beta ? cb_outbeta : cb_out;
-    constexpr int cb_untilize_out =
-    #ifdef READER_REPACK
-    cb_repack_out;
-    #else
-    cb_out0;
-    #endif
-
-    binary_op_init_common(cb_in0, cb_in0, cb_in);
-
-    // tilize in0 -> in
-    #ifdef READER_REPACK
-    constexpr uint32_t cb_in_rm = cb_repack;
-    #else
-    constexpr uint32_t cb_in_rm = cb_in0;
-    #endif
-
-
-    tilize_init_short(cb_in_rm, per_core_N);
-    for (uint32_t m = 0; m < per_core_M; ++m) {
+    #ifdef UNTILIZE_OUT
+        constexpr int cb_outgamma = cb_in;
+        constexpr int cb_inbeta = do_gamma ? cb_outgamma : cb_out;
+        constexpr int cb_outbeta = do_gamma ? cb_out : cb_in;
+        constexpr int cb_untilize_in = (do_gamma and not do_beta) ? cb_outgamma : do_beta ? cb_outbeta : cb_out;
+        constexpr int cb_untilize_out =
         #ifdef READER_REPACK
-        cb_wait_front(cb_in_rm, per_core_N);
+        cb_repack_out;
+        #else
+        cb_out0;
         #endif
-        cb_reserve_back(cb_in, per_core_N);
-        tilize_block(cb_in_rm, per_core_N, cb_in);
-        cb_push_back(cb_in, per_core_N);
-        cb_pop_front(cb_in_rm, per_core_N);
-    }
-    tilize_uninit(cb_in_rm);
-    cb_wait_front(cb_in, per_core_MN);
+    #else
+        constexpr int cb_outgamma = do_beta ? cb_in : cb_out0;
+        constexpr int cb_inbeta = do_gamma ? cb_outgamma : cb_out;
+        constexpr int cb_outbeta = cb_out0;
+    #endif
+
+    // tilize input from RM to tile layout
+    #ifdef TILIZE_IN
+        binary_op_init_common(cb_in0, cb_in0, cb_in);
+        // tilize in0 -> in
+        #ifdef READER_REPACK
+        constexpr uint32_t cb_in_rm = cb_repack;
+        #else
+        constexpr uint32_t cb_in_rm = cb_in0;
+        #endif
+        tilize_init_short(cb_in_rm, per_core_N);
+        for (uint32_t m = 0; m < per_core_M; ++m) {
+            #ifdef READER_REPACK
+            cb_wait_front(cb_in_rm, per_core_N);
+            #endif
+            cb_reserve_back(cb_in, per_core_N);
+            tilize_block(cb_in_rm, per_core_N, cb_in);
+            cb_push_back(cb_in, per_core_N);
+            cb_pop_front(cb_in_rm, per_core_N);
+        }
+        tilize_uninit(cb_in_rm);
+        cb_wait_front(cb_in, per_core_MN);
+    #else
+        binary_op_init_common(cb_in0, cb_input_mask, cb_x);
+    #endif
 
     index_b_offset = 0;
     for (uint32_t b = 0; b < batch; ++b) {
@@ -196,7 +180,11 @@ void MAIN {
                     for (uint32_t w = 0; w < subblock_w; ++w) {
                         uint32_t index = w + index_subblock_w_offset + index_h_offset;
                         uint32_t index_mask = w + index_subblock_w_offset;
+                        #ifdef TILIZE_IN
                         mul_tiles(cb_in, cb_input_mask, index, index_mask, w);
+                        #else
+                        mul_tiles(cb_in0, cb_input_mask, index, index_mask, w);
+                        #endif
                     }
                     tile_regs_commit();
                     tile_regs_wait();
@@ -563,6 +551,7 @@ void MAIN {
         cb_wait_front(cb_outbeta, per_core_MN);
     }
 
+    #ifdef UNTILIZE_OUT
     // untilize
     untilize_init_short(cb_untilize_in);
     cb_wait_front(cb_untilize_in, per_core_MN);
@@ -573,6 +562,7 @@ void MAIN {
         cb_pop_front(cb_untilize_in, per_core_N);
     }
     untilize_uninit(cb_untilize_in);
+    #endif
 
 }
 }

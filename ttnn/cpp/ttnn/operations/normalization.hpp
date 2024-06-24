@@ -183,7 +183,16 @@ struct GroupNorm {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<ttnn::DataType> dtype = std::nullopt,
         std::optional<CoreGrid> core_grid = std::nullopt,
-        std::optional<bool> inplace = std::nullopt) {
+        std::optional<bool> inplace = std::nullopt,
+        std::optional<ttnn::Layout> output_layout = std::nullopt) {
+        if (input_tensor.get_layout() == Layout::TILE and inplace.has_value()) {
+            TT_FATAL(inplace == false, "Tile layour does not support inplace tensors");
+        }
+        if (output_layout.has_value() and inplace.has_value()) {
+            if (output_layout != input_tensor.get_layout()) {
+                TT_FATAL(inplace == false, "cannot inplace tensors when layout are different");
+            }
+        }
         TT_FATAL(core_grid.has_value(), "Automatic determination of grid size not supported");
 
         TT_FATAL(input_tensor.is_sharded(), "Only sharded input tensors supported");
@@ -219,7 +228,8 @@ struct GroupNorm {
             .math_fidelity = MathFidelity::HiFi4,
             .im_data_format = DataType::BFLOAT16,
             .out_data_format = DataType::BFLOAT16,
-            .inplace = inplace.value_or(false)};
+            .inplace = inplace.value_or(false),
+            .output_layout = output_layout.value_or(input_tensor.get_layout())};
 
         return tt::operations::primary::groupnorm(
             input_tensor, num_groups, epsilon, gamma, beta, input_mask, output_mem_config, program_config);
