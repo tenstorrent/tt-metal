@@ -874,8 +874,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.fill_bw
 
-.. autofunction:: tt_lib.tensor.sub_bw
-
 .. autofunction:: tt_lib.tensor.unary_sub_bw
 
 .. autofunction:: tt_lib.tensor.log_bw
@@ -975,8 +973,6 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.celu_bw
 
 .. autofunction:: tt_lib.tensor.binary_lt_bw
-
-.. autofunction:: tt_lib.tensor.subalpha_bw
 
 .. autofunction:: tt_lib.tensor.log10_bw
 
