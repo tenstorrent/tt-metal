@@ -222,15 +222,6 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
         attn_masks = tt_lib.tensor.repeat(
             attn_masks, repeat_shape, output_mem_config=llama_decoder_model.model_config["DRAM_MEMCFG"]
         )
-        # Put attn_mask on the device with the sharded config
-        attention_mask_memconfig = llama_decoder_model.model_config["ATTN_MASK_MEMCFG"]
-        if attention_mask_memconfig.is_sharded():
-            attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
-            attn_mask_shard_shape[-1] = padded_layer_past_len
-            attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
-
-            attn_masks = tt_lib.tensor.interleaved_to_sharded(attn_masks, sharded_mem_config=attention_mask_memconfig)
-
     return (
         xs,
         start_pos,
