@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "impl/buffers/circular_buffer_types.hpp"
 #include "tt_eager/tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/math.hpp"
@@ -548,7 +549,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
     uint32_t ex_CB_size = ex_partial_CB_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size;
-    uint32_t ex_external_CB_size = Kt / block_wt * single_tile_size;
+    uint32_t ex_external_CB_size = div_up(Kt, block_wt) * single_tile_size;
     uint32_t xmm2_CB_size = in0_block_tiles * single_tile_size / block_ht;
     uint32_t ex2pe_CB_size = num_rows_per_all_to_all_worker * single_tile_size;
     // output buffer size
@@ -1102,6 +1103,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
     }
 
+    uint32_t last_core_width_index = 0;
+    if (!mcast_1d) {
+        last_core_width_index = row_wise ? (num_cores_x - 1) : (num_cores_y - 1);
+    } else {
+        last_core_width_index = cores.size() - 1;
+    }
+
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
         uint32_t height_index = 0, width_index = 0;
@@ -1129,10 +1137,16 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         uint32_t gamma_tile_start_id = width_index * block_wt;
         uint32_t beta_tile_start_id = width_index * block_wt;
 
+        uint32_t num_reduce_tiles_per_block_h = block_wt;
+        // account for padding
+        if (width_index == last_core_width_index) {
+            num_reduce_tiles_per_block_h = Kt - last_core_width_index * block_wt;
+        }
+
+        std::vector<uint32_t> compute_args { num_reduce_tiles_per_block_h };
         if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < num_cores_all_to_all_first_stage))
         {
-            std::vector<uint32_t> compute_args;
             uint32_t num_rows;
             if (use_two_stage_reduce) {
                 num_rows = width_index_two_stage == num_cores_all_to_all_first_stage - 1 ? num_rows_per_all_to_all_worker_last : num_rows_per_all_to_all_worker;
@@ -1149,6 +1163,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             }
             compute_args.push_back((uint32_t)is_second_stage_reader);
             tt_metal::SetRuntimeArgs(program, compute_kernels_id_all_to_all, core, compute_args);
+        } else {
+            tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
         }
 
         if (width_index == 0) {

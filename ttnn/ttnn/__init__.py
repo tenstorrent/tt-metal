@@ -158,6 +158,7 @@ from ttnn._ttnn.multi_device import get_device_tensor, get_device_tensors, aggre
 from ttnn.types import (
     TILE_SIZE,
     DataType,
+    uint8,
     uint16,
     int32,
     uint32,
@@ -278,6 +279,10 @@ from ttnn.operations.core import (
 from ttnn.operations.matmul import (
     matmul,
     linear,
+    MatmulMultiCoreReuseProgramConfig,
+    MatmulMultiCoreReuseMultiCastProgramConfig,
+    MatmulMultiCoreReuseMultiCast1DProgramConfig,
+    MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
 )
 
 from ttnn.operations.embedding import (

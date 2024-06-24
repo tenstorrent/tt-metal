@@ -45,7 +45,7 @@ def test_device_perf_wh_bare_metal(
     get_tt_cache_path,
     device,
 ):
-    model_config = get_model_config(model_config_str, seq_len)
+    model_config = get_model_config(model_config_str, seq_len, batch)
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )
@@ -80,7 +80,7 @@ def test_device_perf_wh_bare_metal(
 
 
 @pytest.mark.models_device_performance_bare_metal
-@pytest.mark.parametrize("seq_len, samples", [(128, 1700), (2048, 2600)])
+@pytest.mark.parametrize("seq_len, samples", [(128, 2060), (2048, 2680)])
 def test_device_perf(seq_len, samples):
     margin = 0.03
     num_iterations = 1

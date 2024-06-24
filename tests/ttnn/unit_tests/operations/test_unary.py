@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 from models.utility_functions import torch_random, skip_for_grayskull, skip_for_wormhole_b0
 
 
@@ -30,29 +30,93 @@ def run_unary_test(device, h, w, ttnn_function, torch_function, pcc=0.9999):
 def run_identity_test(device, h, w, data_type, pcc=0.9999):
     torch.manual_seed(0)
 
-    int_format = data_type == ttnn.uint32 or data_type == ttnn.uint16 or data_type == ttnn.int32
-    if int_format:
-        bias = -5000 if data_type == ttnn.int32 else 0
-        torch_input_tensor = torch.randint(0, 10000, (1, 1, h, w), dtype=torch.int32)
+    if data_type == ttnn.uint8:
+        # init value
+        torch_input_tensor = torch.randint(0, 245, (1, 1, h, w), dtype=torch.uint8)
+        bias = 10
+
+        # run torch
         torch_input_tensor = torch_input_tensor + bias
+        torch_output_tensor = torch_input_tensor
+
+        # run tt
+        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
+        output_tensor = ttnn.experimental.tensor.identity_uint32(input_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
+
+        # compare result
+        assert_equal(torch_output_tensor, output_tensor)
+    elif data_type == ttnn.uint16:
+        # init value
+        torch_input_tensor = torch.randint(0, 60000, (1, 1, h, w), dtype=torch.uint16)
+        bias = 2000
+
+        # run torch
+        torch_input_tensor = torch_input_tensor + bias
+        torch_output_tensor = torch_input_tensor
+
+        # run tt
+        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
+        output_tensor = ttnn.experimental.tensor.identity_uint32(input_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
+
+        # compare result
+        assert_equal(torch_output_tensor, output_tensor)
+
+    elif data_type == ttnn.uint32:
+        # init value
+        torch_input_tensor = torch.randint(0, 2047483648, (1, 1, h, w), dtype=torch.int32)
+        bias = 2000
+
+        # run torch
+        torch_input_tensor = torch_input_tensor + bias
+        torch_output_tensor = torch_input_tensor
+
+        # run tt
+        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
+        output_tensor = ttnn.experimental.tensor.identity_uint32(input_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
+
+        # compare result
+        assert_equal(torch_output_tensor, output_tensor)
+
+    elif data_type == ttnn.int32:
+        # init value
+        torch_input_tensor = torch.randint(-2047483648, 2047483648, (1, 1, h, w), dtype=torch.int32)
+        bias = 2000
+
+        # run torch
+        torch_input_tensor = torch_input_tensor + bias
+        torch_output_tensor = torch_input_tensor
+
+        # run tt
+        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
+        output_tensor = ttnn.experimental.tensor.identity_uint32(input_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
+
+        # compare result
+        assert_equal(torch_output_tensor, output_tensor)
+
     else:
+        # init value
         torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
 
-    torch_output_tensor = torch_input_tensor
+        # run torch
+        torch_input_tensor = torch_input_tensor
+        torch_output_tensor = torch_input_tensor
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
-    if int_format:
-        output_tensor = ttnn.experimental.tensor.identity_uint32(input_tensor)
-    else:
+        # run tt
+        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
         output_tensor = ttnn.experimental.tensor.identity(input_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+        # compare result
+        assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32, ttnn.int32, ttnn.float32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint8, ttnn.uint32, ttnn.int32, ttnn.float32])
 @skip_for_grayskull("Grayskull doesn't support uint32 / fp32 formats and fp32 dest")
 def test_fp32_uint32(device, h, w, dtype):
     run_identity_test(device, h, w, dtype, pcc=0.9998)

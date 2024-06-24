@@ -885,11 +885,21 @@ Tensor addcdiv(
     return operation::decorate_as_composite(__func__, _addcdiv)(input_a, input_b, input_c, value, output_mem_config);
 }
 
-Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, const MemoryConfig& output_mem_config) {
+Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, string round_mode,  const MemoryConfig& output_mem_config) {
+    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
     Tensor result = ttnn::divide(input_a, input_b);
+
+    if(round_mode == "trunc"){
+        result = trunc(result);
+    }
+    else if(round_mode == "floor"){
+        result = floor(result);
+    }
+
     if (accurate_mode == false) {  // If input_b is non-zero tensor
         return result;
     }
+
     Tensor t_inf = full_like(input_a, std::numeric_limits<float>::infinity(), output_mem_config);
     Tensor t_nan = full_like(input_a, std::nanf(""), output_mem_config);
     return where(
@@ -902,8 +912,25 @@ Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, co
         result,
         output_mem_config);
 }
-Tensor div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _div)(input_a, input_b, accurate_mode, output_mem_config);
+Tensor div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, string round_mode, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _div)(input_a, input_b, accurate_mode, round_mode, output_mem_config);
+}
+
+Tensor _div_overload(const Tensor& input_a, float scalar, bool accurate_mode, string round_mode,  const MemoryConfig& output_mem_config) {
+    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
+    Tensor result = div_unary(input_a, scalar);
+
+    if(round_mode == "trunc"){
+        result = trunc(result);
+    }
+    else if(round_mode == "floor"){
+        result = floor(result);
+    }
+
+    return result;
+}
+Tensor div(const Tensor& input_a, float scalar, bool accurate_mode, string round_mode, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _div_overload)(input_a, scalar, accurate_mode, round_mode, output_mem_config);
 }
 
 Tensor _trunc(const Tensor& input, const MemoryConfig& output_mem_config) {

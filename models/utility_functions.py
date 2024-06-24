@@ -671,6 +671,18 @@ def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
     return passing, output
 
 
+def comp_equal(golden, calculated):
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
+
+    atol_delta = torch.max(torch.abs(golden - calculated)).item()
+    rtol_delta = torch.max(torch.abs(golden - calculated) / torch.abs(calculated)).item()
+    return (
+        torch.equal(golden, calculated),
+        f"Max ATOL Delta: {atol_delta}, Max RTOL Delta: {rtol_delta}",
+    )
+
+
 def get_oom_of_float(float_lst):
     """
     Given a list of floats, returns a list of the order or magnitudes
