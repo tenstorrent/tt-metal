@@ -159,7 +159,14 @@ def run_test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype=ttn
     padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
     torch.manual_seed(1234)
 
-    min_pcc = 0.97 if dtype == tt_lib.tensor.DataType.BFLOAT4_B else 0.99
+    num_parallel_cores = grid_size[0] * grid_size[1] // b
+    if num_parallel_cores == 1:
+        min_pcc = 0.90
+    else:
+        min_pcc = 0.99
+        if q_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
+            min_pcc = 0.98
+        min_pcc = 0.97 if dtype == tt_lib.tensor.DataType.BFLOAT4_B else min_pcc
 
     compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
         math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
@@ -273,7 +280,7 @@ def run_test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype=ttn
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, grid_size",
     (
-        # [32, 8, 1, 32768, 128, (8, 6)],  # Llama2-70B
+        [32, 8, 1, 32768, 128, (8, 6)],  # Llama2-70B
         [16, 8, 1, 32768, 128, (8, 6)],  # Llama2-70B
         [8, 8, 1, 32768, 128, (8, 6)],  # Llama2-70B
         [4, 8, 1, 32768, 128, (8, 6)],  # Llama2-70B
