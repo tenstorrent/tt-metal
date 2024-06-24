@@ -344,7 +344,7 @@ def test_falcon7b_attnention_sliced(
         subblock_w = 1
         if seq_len == 2048:
             subblock_w = 8  # best option
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=2,
             per_core_M=tiles_per_shard,
@@ -415,7 +415,7 @@ def test_falcon7b_attnention_sliced(
 
         subblock_w = 2
         subblock_h = 1
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=seq_len // 32,
             per_core_M=tiles_per_shard,
@@ -641,7 +641,7 @@ def test_falcon7b_attention_softmax_sequence(
         subblock_w = 1
         if seq_len == 2048:
             subblock_w = 8  # best option
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=2,
             per_core_M=tiles_per_shard,
@@ -686,7 +686,7 @@ def test_falcon7b_attention_softmax_sequence(
 
         subblock_w = 2
         subblock_h = 1
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=seq_len // 32,
             per_core_M=tiles_per_shard,

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import tt_lib as ttl
+import ttnn
 from loguru import logger
 from pathlib import Path
 
@@ -405,7 +406,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         # )
     model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
     if num_devices == 1:
-        model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["FUSED_QKV_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,
             out_subblock_h=1,
@@ -417,7 +418,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             mcast_in0=True,
         )
     elif num_devices == 4:
-        model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["FUSED_QKV_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 2),
             in0_block_w=16,
             out_subblock_h=1,
@@ -430,7 +431,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         )
     elif num_devices == 8:
         # Unpadded version
-        model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["FUSED_QKV_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 1),
             in0_block_w=32,
             out_subblock_h=1,
@@ -442,7 +443,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             mcast_in0=True,
         )
         # Padded version
-        # model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        # model_config["FUSED_QKV_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         #     compute_with_storage_grid_size=(8, 8),
         #     in0_block_w=4,
         #     out_subblock_h=1,
@@ -455,7 +456,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         # )
 
     # Split QKV Matmul Config
-    model_config["WQ_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    model_config["WQ_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
         in0_block_w=8,
         out_subblock_h=1,
@@ -467,7 +468,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         mcast_in0=True,
     )
 
-    model_config["WK_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    model_config["WK_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
         in0_block_w=8,
         out_subblock_h=1,
@@ -585,7 +586,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
     # )
 
     if num_devices == 8:
-        model_config["ROT_MAT_K_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["ROT_MAT_K_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(1, 1),
             in0_block_w=4,
             out_subblock_h=1,
@@ -598,7 +599,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         )
         model_config["ROT_MAT_K_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
 
-        model_config["ROT_MAT_Q_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["ROT_MAT_Q_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 1),
             in0_block_w=4,
             out_subblock_h=1,
@@ -739,7 +740,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
     model_config["SELFOUT_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
     if num_devices == 4:
         # (32 x 8k) x (8k x 2k) = (32 x 2k)
-        model_config["SELFOUT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["SELFOUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=4,
             out_subblock_h=1,
@@ -752,7 +753,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         )
     elif num_devices == 8:
         # (32 x 8k) x (8k x 1k) = (32 x 1k)
-        model_config["SELFOUT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["SELFOUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,
             out_subblock_h=1,
@@ -888,7 +889,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
 
     per_core_N = 14 if num_devices == 1 else 7  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
 
-    model_config["FF1_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    model_config["FF1_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=compute_with_storage_grid_size,
         in0_block_w=in0_block_w,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
         out_subblock_h=1,  # Must be divisible by per_core_M
@@ -900,7 +901,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         mcast_in0=True,
     )
 
-    model_config["FF3_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    model_config["FF3_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=compute_with_storage_grid_size,
         in0_block_w=in0_block_w,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
         out_subblock_h=1,  # Must be divisible by per_core_M
@@ -913,7 +914,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
     )
     # FF2 Matmul Config Variables, using dim=-2 shard, All-gather/All-reduce(1D-Weight Stationary) schemes,
     if num_devices == 1:
-        model_config["FF2_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=14,
             out_subblock_h=1,
@@ -926,7 +927,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         )
     elif num_devices == 4:
         if all_gather:
-            model_config["FF2_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            model_config["FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=28,  # K = 28672 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
                 out_subblock_h=1,
@@ -938,7 +939,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 mcast_in0=True,
             )
         else:  # All Reduce Case
-            model_config["FF2_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            model_config["FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=7,  # K = 7168 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
                 out_subblock_h=1,
@@ -951,7 +952,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             )
     elif num_devices == 8:
         if all_gather:
-            model_config["FF2_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            model_config["FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=28,  # K = 28672 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
                 out_subblock_h=1,
@@ -963,7 +964,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 mcast_in0=True,
             )
         else:
-            model_config["FF2_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            model_config["FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 2),
                 in0_block_w=7,  # K = 3584 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
                 out_subblock_h=1,
@@ -997,7 +998,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         ),
     )
     if num_devices == 4:
-        model_config["PADDED_FF1_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["PADDED_FF1_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=4,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -1008,7 +1009,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             fused_activation=ttl.tensor.FusibleActivation.SILU,
             mcast_in0=True,
         )
-        model_config["PADDED_FF3_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["PADDED_FF3_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=4,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -1039,7 +1040,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 False,
             ),
         )
-        model_config["PADDED_FF2_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["PADDED_FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=16,  # K = 32768 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,
@@ -1052,7 +1053,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         )
 
     elif num_devices == 8:
-        model_config["PADDED_FF1_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["PADDED_FF1_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=4,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -1063,7 +1064,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             fused_activation=ttl.tensor.FusibleActivation.SILU,
             mcast_in0=True,
         )
-        model_config["PADDED_FF3_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["PADDED_FF3_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=4,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -1094,7 +1095,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 False,
             ),
         )
-        model_config["PADDED_FF2_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["PADDED_FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=32,  # K = 32768 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,
@@ -1156,7 +1157,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
 
     # LM Head
     model_config["LM_HEAD_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
-    model_config["LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    model_config["LM_HEAD_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
         in0_block_w=8,
         out_subblock_h=1,

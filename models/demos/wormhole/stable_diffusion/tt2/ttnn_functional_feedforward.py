@@ -71,7 +71,7 @@ class feedforward:
         if size == 512:
             out_subblock_h = 1
             out_subblock_w = 1
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,

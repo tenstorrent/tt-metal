@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import tt_lib as ttl
+import ttnn
 from loguru import logger
 import os
 from pathlib import Path
@@ -283,7 +284,7 @@ def get_model_config(
             inplace=True,
         )
         # LM Head
-        model_config["LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["LM_HEAD_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,
             out_subblock_h=1,
@@ -294,7 +295,7 @@ def get_model_config(
             fused_activation=None,
             mcast_in0=True,
         )
-        model_config["LLAMA3_LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["LLAMA3_LM_HEAD_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,
             out_subblock_h=1,
@@ -326,7 +327,7 @@ def get_model_config(
             block_w=num_tiles_per_core_w,
             inplace=True,
         )
-        model_config["LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        model_config["LM_HEAD_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -339,7 +340,7 @@ def get_model_config(
 
         cores_y = 4 if seq_len == 128 else 8
         max_mm_seq_tiles = min(seq_len, model_config["MAX_MM_SEQ_LEN"]) // 32
-        model_config["LLAMA3_LM_HEAD_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        model_config["LLAMA3_LM_HEAD_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, cores_y),
             in0_block_w=1,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -421,7 +422,7 @@ def get_model_config(
         cores_y = 4  # 8 if seq_len_tiles % 8 == 0 else 4
         max_mm_seq_tiles = min(seq_len, model_config["MAX_MM_SEQ_LEN"]) // 32
         in0_block_w = 32 if seq_len == 128 else 8  # smaller in0_block_w for larger seq_len to fit in L1)
-        model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        model_config["FUSED_QKV_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, cores_y),
             in0_block_w=in0_block_w,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -433,7 +434,7 @@ def get_model_config(
             fuse_batch=False,
         )
     else:
-        model_config["FUSED_QKV_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["FUSED_QKV_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 5),
             in0_block_w=8,
             out_subblock_h=1,
@@ -460,7 +461,7 @@ def get_model_config(
     )
 
     if llm_mode == "decode":
-        model_config["ROT_MAT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        model_config["ROT_MAT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=batch_size_coregrid,
             in0_block_w=4,  # 128 // TILE_SIZE (dynamic)
             out_subblock_h=1,
@@ -496,7 +497,7 @@ def get_model_config(
         )
         model_config[
             "ATTN_BATCHED_MM_PROGCFG_LAMBDA"
-        ] = lambda seq_tiles: ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        ] = lambda seq_tiles: ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=[8, 4],
             in0_block_w=head_dim // 32,  # HEAD_DIM // TILE_SIZE
             out_subblock_h=1,  # TODO: Maximize
@@ -534,7 +535,7 @@ def get_model_config(
 
         model_config[
             "SCORES_BATCHED_MM_PROGCFG_LAMBDA"
-        ] = lambda seq_tiles: ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        ] = lambda seq_tiles: ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=[8, 4],
             in0_block_w=seq_tiles,  # SEQ_LEN // TILE_SIZE (dynamic)
             out_subblock_h=1,  # TODO: Maximize
@@ -609,7 +610,7 @@ def get_model_config(
         ),
     )
     if llm_mode == "decode":
-        model_config["SELFOUT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["SELFOUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,  # (32 x 8k) x (8k x 1k) = (32 x 1k)
             out_subblock_h=1,
@@ -624,7 +625,7 @@ def get_model_config(
         cores_y = 4  # 8 if seq_len_tiles % 8 == 0 else 4
         max_mm_seq_tiles = min(seq_len, model_config["MAX_MM_SEQ_LEN"]) // 32
         in0_block_w = 32 if seq_len == 128 else 8  # smaller in0_block_w for larger seq_len to fit in L1)
-        model_config["SELFOUT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        model_config["SELFOUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, cores_y),
             in0_block_w=8,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -638,7 +639,7 @@ def get_model_config(
     # Llama MLP config
     # Padded MLP 32K config:
     if llm_mode == "decode":
-        model_config["PADDED_FF1_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["PADDED_FF1_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -649,7 +650,7 @@ def get_model_config(
             fused_activation=ttl.tensor.FusibleActivation.SILU,
             mcast_in0=True,
         )
-        model_config["PADDED_FF3_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["PADDED_FF3_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -660,7 +661,7 @@ def get_model_config(
             fused_activation=None,
             mcast_in0=True,
         )
-        model_config["PADDED_FF2_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["PADDED_FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=32,  # K = 32768 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,
@@ -675,7 +676,7 @@ def get_model_config(
         # Llama MLP Module Prefill
         cores_y = 4  # 8 if seq_tiles % 8 == 0 else 4
         max_mm_seq_tiles = min(seq_len, model_config["MAX_MM_SEQ_LEN"]) // 32
-        model_config["PADDED_FF1_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        model_config["PADDED_FF1_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, cores_y),
             in0_block_w=4,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -687,7 +688,7 @@ def get_model_config(
             fuse_batch=False,
         )
 
-        model_config["PADDED_FF3_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        model_config["PADDED_FF3_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, cores_y),
             in0_block_w=4,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -701,7 +702,7 @@ def get_model_config(
 
         # input0: [1,32,128,32k]
         # input1: [1,1,32k,1k]
-        model_config["PADDED_FF2_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        model_config["PADDED_FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, cores_y),
             in0_block_w=4,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M

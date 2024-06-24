@@ -507,7 +507,7 @@ class resnetBlock2D:
                     time_emb_proj_out_channels = out_channels * 2
                 else:
                     raise ValueError(f"unknown time_embedding_norm : {time_embedding_norm} ")
-                program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=grid_size,
                     in0_block_w=temb.shape[-1] // grid_size[1] // 32,
                     out_subblock_h=1,

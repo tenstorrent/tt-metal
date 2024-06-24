@@ -76,7 +76,7 @@ def run_test_rotary_matmul1(
     )
     L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
 
-    ROT_MAT_Q_MM_PROGCFG = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    ROT_MAT_Q_MM_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 1),
         in0_block_w=4,
         out_subblock_h=1,
@@ -189,7 +189,7 @@ def run_test_rotary_matmul2(
     )
     L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
 
-    ROT_MAT_MM_PROGCFG = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    ROT_MAT_MM_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
         in0_block_w=4,
         out_subblock_h=1,
@@ -303,7 +303,7 @@ def run_test_rotary_matmul3(
     )
     L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
 
-    ROT_MAT_MM_PROGCFG = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+    ROT_MAT_MM_PROGCFG = ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=[8, 4],
         in0_block_w=4,  # 128 // TILE_SIZE (dynamic)
         out_subblock_h=1,
@@ -425,7 +425,7 @@ def run_test_rotary_matmul4(
             False,
         ),
     )
-    ROT_MAT_MM_PROGCFG = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+    ROT_MAT_MM_PROGCFG = ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=[8, 4],
         in0_block_w=4,  # 128 // TILE_SIZE (dynamic)
         out_subblock_h=1,
