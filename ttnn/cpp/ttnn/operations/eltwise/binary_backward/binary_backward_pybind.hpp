@@ -161,6 +161,12 @@ void py_module(py::module& module) {
         module,
         ttnn::addalpha_bw,
         R"doc(Performs backward operations for addalpha on :attr:`input_tensor_b` , attr:`input_tensor_a`, attr:`alpha` tensors with given attr:`grad_tensor`.)doc");
+
+    detail::bind_binary_backward(
+        module,
+        ttnn::xlogy_bw,
+        R"doc(Performs backward operations for xlogy of :attr:`input_tensor_a` and :attr:`input_tensor_b` tensors with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace copy
