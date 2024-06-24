@@ -28,14 +28,27 @@ Install and build the project by following the instructions in the
 `installation guide
 <../installing.html>`_.
 
-2. Beginner Metalium Usage: Single-core Matrix Multiplication Kernel
+2. Beginner Metalium Usage: DRAM Loopback
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Try creating a :ref:`basic kernel example <DRAM Loopback Example>` that uses
+the L1 and DRAM memory structures of the Tenstorrent device.
+
+3. Beginner Metalium Usage: Eltwise Binary Kernel
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Augment your loopback example an :ref:`additional kernel <Eltwise binary
+example>` that will use the compute engine of the Tensix core to add values in
+two buffers.
+
+4. Beginner Metalium Usage: Single-core Matrix Multiplication Kernel
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Use TT-Metalium to define your own matrix multiplication kernels. Refer to our
 simpler :ref:`single-core <MatMul_Single_Core example>` example as a starting
 point.
 
-3. Advanced Metalium Usage: Multi-core Matrix Multiplication Kernel
+5. Advanced Metalium Usage: Multi-core Matrix Multiplication Kernel
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Explore expert-level usage by building on the previous example to create a
