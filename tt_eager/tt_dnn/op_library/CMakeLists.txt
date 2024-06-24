@@ -69,6 +69,8 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/conv/multi_core_optimized_conv/optimized_conv_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded_v2.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/depthwise_conv1d/optimized_depthwise_conv_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/depthwise_conv1d/multi_core_optimized_depthwise_conv_sharded/optimized_depthwise_conv_op_sharded.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tilize/tilize_multi_core/tilize_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tilize/tilize_single_core/tilize_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tilize/tilize_op.cpp

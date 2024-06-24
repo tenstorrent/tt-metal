@@ -30,6 +30,7 @@ class TtTensorLoader:
             tt_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             tt_dtype=ttnn.bfloat16,
             torch_tensor=None,
+            return_as_torch=False,
         ):
             if layer_num == None:
                 tensor_name = name
@@ -44,6 +45,9 @@ class TtTensorLoader:
             if torch_tensor is None:
                 torch_tensor = self.state_dict[tensor_name]
             torch_tensor = tm_fn(torch_tensor)
+
+            if return_as_torch:
+                return torch_tensor
 
             # All tensors need to be rank 4 because of op performance issues with rank 1/2 inputs in ttnn
             while len(torch_tensor.size()) < 4:
