@@ -1040,39 +1040,6 @@ std::vector<Tensor> ldexp_bw(
     return operation::decorate_as_composite(__func__, _ldexp_bw)(grad, input, other, output_mem_config);
 }
 
-std::vector<Tensor> _xlogy_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad1_result = ttnn::multiply(grad, log(other, output_mem_config), std::nullopt, output_mem_config);
-    Tensor zero_tensor = full_like(other, 0.0, output_mem_config);
-    grad1_result = where(
-        ttnn::logical_and(
-            eqz(input, output_mem_config),
-            ttnn::le(other, zero_tensor, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        zero_tensor,
-        where(ltz(other, output_mem_config), std::nanf(" "), grad1_result, output_mem_config),
-        output_mem_config);
-    grad1_result =
-        where(eq_unary(input, std::nanf(" "), output_mem_config), std::nanf(" "), grad1_result, output_mem_config);
-    grad_tensor.emplace_back(grad1_result);
-    Tensor div_result = ttnn::multiply(input, recip(other, output_mem_config), std::nullopt, output_mem_config);
-    Tensor grad2_result = ttnn::multiply(grad, div_result, std::nullopt, output_mem_config);
-    grad2_result = where(
-        eqz(other, output_mem_config),
-        mul_unary(sign(grad, output_mem_config), std::numeric_limits<float>::infinity(), output_mem_config),
-        grad2_result,
-        output_mem_config);
-    grad2_result =
-        where(eq_unary(other, std::nanf(" "), output_mem_config), std::nanf(" "), grad2_result, output_mem_config);
-    grad_tensor.emplace_back(grad2_result);
-    return grad_tensor;
-}
-std::vector<Tensor> xlogy_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _xlogy_bw)(grad, input, other, output_mem_config);
-}
 
 /*
 Torch Reference:
