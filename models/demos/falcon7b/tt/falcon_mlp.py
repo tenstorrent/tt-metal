@@ -307,22 +307,24 @@ class TtFalconMLPDecode(nn.Module):
                 )
         for device_id in range(self.num_devices):
             hidden_states.append(
-                ttnn.experimental.tensor.falcon_dense_h_to_4h_matmul(
+                ttnn.matmul(
                     x[device_id],
                     self.dense_h_to_4h_weights[device_id],
-                    fused_activation=[ttnn.experimental.tensor.FusibleActivation.GELU, True],
-                    output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
+                    activation="gelu",
+                    memory_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
+                    dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
+                    core_grid=get_falcon_default_core_grid(x[device_id].device()),
                 )
             )
             x[device_id].deallocate()
         for device_id in range(self.num_devices):
-            hidden_states[device_id] = ttnn.experimental.tensor.falcon_dense_4h_to_h_matmul(
+            hidden_states[device_id] = ttnn.matmul(
                 hidden_states[device_id],
                 self.dense_4h_to_h_weights[device_id],
-                output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
-                output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
-                packer_l1_acc=True,
+                memory_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
+                dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
+                compute_kernel_config=self.model_config["MLP_KERNEL_CONFIG"],
+                core_grid=get_falcon_default_core_grid(hidden_states[device_id].device()),
             )
         # remove padding from output
         if self.model_config["PREFILL_OPTIMIZED_MODE"] and self.prefill_seq_len in [1024, 2048]:

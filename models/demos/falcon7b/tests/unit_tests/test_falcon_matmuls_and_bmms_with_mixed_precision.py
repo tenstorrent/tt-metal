@@ -6,6 +6,7 @@ import pytest
 from loguru import logger
 
 import ttnn
+from models.demos.falcon7b.tt.model_utils import get_falcon_default_core_grid
 from models.utility_functions import comp_pcc, tt2torch_tensor, torch2tt_tensor, skip_for_wormhole_b0
 import torch
 import math
@@ -26,15 +27,15 @@ def run_falcon_matmul_test(
     if out_dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B:
         pcc = 0.98
 
-    if falcon_op == ttnn.experimental.tensor.falcon_fused_qkv_matmul:
+    if falcon_op == "falcon_fused_qkv_matmul":
         a_shape = [1, 1, seq_len, 4544]
         b_shape = [1, 1, 4544, 4672]
         expected_output_shape = [1, 1, seq_len, 4672]
-    elif falcon_op == ttnn.experimental.tensor.falcon_selfout_matmul:
+    elif falcon_op == "falcon_selfout_matmul":
         a_shape = [1, 1, seq_len, 4544]
         b_shape = [1, 1, 4544, 4544]
         expected_output_shape = [1, 1, seq_len, 4544]
-    elif falcon_op == ttnn.experimental.tensor.falcon_dense_4h_to_h_matmul:
+    elif falcon_op == "falcon_dense_4h_to_h_matmul":
         a_shape = [1, 1, seq_len, 18176]
         b_shape = [1, 1, 18176, 4544]
         expected_output_shape = [1, 1, seq_len, 4544]
@@ -59,7 +60,7 @@ def run_falcon_matmul_test(
             out_mem_config = ttnn.experimental.tensor.MemoryConfig(
                 ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             )
-    elif falcon_op == ttnn.experimental.tensor.falcon_dense_h_to_4h_matmul:
+    elif falcon_op == "falcon_dense_h_to_4h_matmul":
         a_shape = [1, 1, seq_len, 4544]
         b_shape = [1, 1, 4544, 18176]
         expected_output_shape = [1, 1, seq_len, 18176]
@@ -77,7 +78,7 @@ def run_falcon_matmul_test(
             out_mem_config = ttnn.experimental.tensor.MemoryConfig(
                 ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             )
-    elif falcon_op == ttnn.experimental.tensor.falcon_lm_head_matmul:
+    elif falcon_op == "falcon_lm_head_matmul":
         a_shape = [1, 1, seq_len, 4544]
         b_shape = [1, 1, 4544, 65024]
         expected_output_shape = [1, 1, seq_len, 65024]
@@ -124,7 +125,14 @@ def run_falcon_matmul_test(
     )
     bias_t = None
 
-    out = falcon_op(a_t, b_t, bias_t, output_mem_config=out_mem_config, output_dtype=out_dtype)
+    out = ttnn.linear(
+        a_t,
+        b_t,
+        bias=bias_t,
+        memory_config=out_mem_config,
+        dtype=out_dtype,
+        core_grid=get_falcon_default_core_grid(a_t.device()),
+    )
 
     # Check memory and dtype of inputs and outputs
     assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
@@ -186,11 +194,11 @@ def run_falcon_matmul_test(
 @pytest.mark.parametrize(
     "falcon_op",
     (
-        ttnn.experimental.tensor.falcon_fused_qkv_matmul,
-        ttnn.experimental.tensor.falcon_selfout_matmul,
-        ttnn.experimental.tensor.falcon_dense_4h_to_h_matmul,
-        ttnn.experimental.tensor.falcon_dense_h_to_4h_matmul,
-        ttnn.experimental.tensor.falcon_lm_head_matmul,
+        "falcon_fused_qkv_matmul",
+        "falcon_selfout_matmul",
+        "falcon_dense_4h_to_h_matmul",
+        "falcon_dense_h_to_4h_matmul",
+        "falcon_lm_head_matmul",
     ),
     ids=["fused_qkv", "selfout", "dense_4h_to_h", "dense_h_to_4h", "lm_head"],
 )
@@ -213,7 +221,7 @@ def test_falcon_matmul(
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     is_e75_grid_size = (compute_grid_size.x * compute_grid_size.y) == 88
-    if is_e75_grid_size and (seq_len == 512) and (falcon_op == ttnn.experimental.tensor.falcon_lm_head_matmul):
+    if is_e75_grid_size and (seq_len == 512) and (falcon_op == "falcon_lm_head_matmul"):
         pytest.skip(f"LM Head does not work on E75 grid size {compute_grid_size}")
 
     run_falcon_matmul_test(
