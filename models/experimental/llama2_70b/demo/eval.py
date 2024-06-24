@@ -115,7 +115,6 @@ def calculate_perplexity(args, model, tokenizer, seq_len, max_len, stride, encod
                 model=model,
                 tokenizer=tokenizer,
                 prompt_tokens=tokens,
-                seq_len=seq_len,
                 prompts=None,
                 return_full_logits=True,
             )
