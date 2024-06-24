@@ -137,7 +137,7 @@ class TtLlamaModelForGeneration:
                 tt_logits, device=self.device_mesh, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=3)
             )
             logits = logits.squeeze(1)
-            logits = logits[..., : self.params.vocab_size].float()  # [batch, 1, vocab_size]
+            logits = logits[..., : self.params.vocab_size].float()  # [batch, seq_len, vocab_size]
             del tt_logits
 
             output_logits[user_id] = logits[:, :seq_len, :]
