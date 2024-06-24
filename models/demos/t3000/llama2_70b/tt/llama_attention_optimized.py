@@ -915,7 +915,7 @@ class TtLlamaAttention_optimized(torch.nn.Module):
                 attn_output,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                outout_mem_config=self.model_config["DRAM_MEMCFG"],
+                output_mem_config=self.model_config["DRAM_MEMCFG"],
             )
 
         for i in range(len(attn_output)):
