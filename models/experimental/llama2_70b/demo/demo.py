@@ -92,7 +92,6 @@ def build_generator(args):
             device_mesh=args.device_mesh,
             n_devices=args.n_devices,
             n_layers=args.num_layers,
-            batch=args.max_batch_size,
             cache_path=args.cache_path,
         )
     return generator
