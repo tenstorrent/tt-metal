@@ -183,7 +183,6 @@ void DevicePool::add_devices_to_pool(std::vector<chip_id_t> device_ids) {
             }
         }
     }
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
 }
 
 void DevicePool::init_firmware_on_active_devices() const {
