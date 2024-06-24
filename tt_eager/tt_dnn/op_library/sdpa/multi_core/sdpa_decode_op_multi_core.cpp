@@ -493,9 +493,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         auto c_out2_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_out2, stats_df}}).set_page_size(CB::c_out2, stats_tile_size);
         auto c_out2_id = CreateCircularBuffer(program, core, c_out2_config);
 
-        // cb_intermed_out
-        auto c_out3_config = CircularBufferConfig(intermed_output_tiles * stats_tile_size, {{CB::c_out3, stats_df}}).set_page_size(CB::c_out3, stats_tile_size);
-        auto c_out3_id = CreateCircularBuffer(program, core, c_out3_config);
+        // when there are worker cores
+        if (intermed_output_tiles > 0){
+            // cb_intermed_out
+            auto c_out3_config = CircularBufferConfig(intermed_output_tiles * stats_tile_size, {{CB::c_out3, stats_df}}).set_page_size(CB::c_out3, stats_tile_size);
+            auto c_out3_id = CreateCircularBuffer(program, core, c_out3_config);
+        }
 
         // cb_out_final
         auto c_out4_config = CircularBufferConfig(out0_t * out_tile_size, {{CB::c_out4, out_df}}).set_page_size(CB::c_out4, out_tile_size);
