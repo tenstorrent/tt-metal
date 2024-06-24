@@ -144,6 +144,10 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_div_unary,
         "pytorch_op": pytorch_ops.div_unary,
     },
+    "eltwise-unary_div": {
+        "tt_op": tt_lib_ops.eltwise_unary_div,
+        "pytorch_op": pytorch_ops.unary_div,
+    },
     "eltwise-mul_unary": {
         "tt_op": tt_lib_ops.eltwise_mul_unary,
         "pytorch_op": pytorch_ops.mul_unary,

@@ -1109,10 +1109,11 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 
     m_tensor.def(
         "div",
-        &div,
+        py::overload_cast<const Tensor&, const Tensor&, bool, string, const MemoryConfig&>(&div),
         py::arg("input_a").noconvert(),
         py::arg("input_b").noconvert(),
         py::arg("accurate_mode") = false,
+        py::arg("round_mode") = "None",
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
             Performs the element-wise division of ``input_a`` by ``input_b``.
@@ -1128,6 +1129,33 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
                 "input_a", "Numerator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "input_b", "Denominator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "accurate_mode", "Mode of Implementation", "bool", "default to false", "No"
+                "round_mode", "Mode of Rounding", "String", "default to None", "No"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+    m_tensor.def(
+        "div",
+        py::overload_cast<const Tensor&, float, bool, string, const MemoryConfig&>(&div),
+        py::arg("input_a").noconvert(),
+        py::arg("scalar").noconvert(),
+        py::arg("accurate_mode") = false,
+        py::arg("round_mode") = "None",
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+            Performs the element-wise division of  tensor ``input_a`` by ``scalar`` value.
+            If scalar value is non-zero, then ``accurate_mode`` can be ``false``,else set ``accurate_mode`` to ``true``
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input_a", "Numerator Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "scalar", "Denominator value", "float", "", "Yes"
+                "accurate_mode", "Mode of Implementation", "bool", "default to false", "No"
+                "round_mode", "Mode of Rounding", "String", "default to None", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 

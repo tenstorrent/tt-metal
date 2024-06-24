@@ -183,6 +183,14 @@ Tensor div(
     const Tensor& input_a,
     const Tensor& input_b,
     bool accurate_mode = false,
+    string round_mode = "None",
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+Tensor div(
+    const Tensor& input_a,
+    float scalar,
+    bool accurate_mode = false,
+    string round_mode = "None",
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 Tensor div_no_nan(
