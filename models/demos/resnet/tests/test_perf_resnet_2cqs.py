@@ -13,7 +13,7 @@ from models.utility_functions import skip_for_wormhole_b0
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((20, 0.005, 16),),
+    ((20, 0.0042, 16),),
 )
 def test_perf_2cqs_bare_metal(
     device,
@@ -35,7 +35,7 @@ def test_perf_2cqs_bare_metal(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((20, 0.005, 16),),
+    ((20, 0.0042, 16),),
 )
 def test_perf_trace_2cqs_bare_metal(
     device,
