@@ -160,10 +160,10 @@ def tt_layernorm_backward(
     input_rank = len(input_shape)
 
     # mean_rstd_shape
-    mean_rstd_shape = input_shape[:-normalized_dims] + [1] * normalized_dims
+    mean_rstd_shape = input_shape[:-normalized_dims]
 
     # gamma_beta_shape
-    gamma_beta_shape = [1] * (input_rank - normalized_dims) + input_shape[-normalized_dims:]
+    gamma_beta_shape = input_shape[-normalized_dims:]
 
     # dtype
     cpu_dtype = torch.bfloat16
@@ -372,9 +372,9 @@ def run_moreh_layernorm_backward(
 @pytest.mark.parametrize(
     "input_shape_normalized_dims",
     [
+        ([10, 20, 30], 1),  # test 2d
         ([1, 20], 1),  # test 2d
         ([10, 20], 2),  # test 2d
-        ([3, TILE_HEIGHT * 1, TILE_WIDTH * 5], 1),  # test 3d
         ([3, 3, 4 * TILE_HEIGHT, 5 * TILE_WIDTH], 4),  # test 4d
         ([5, 2, 3, 4, 2 * TILE_HEIGHT + 13, 3 * TILE_WIDTH + 13], 4),  # test 6d
         ([2, TILE_HEIGHT + 13, 200 * TILE_WIDTH * 2 + 15], 1),  # test 6d
@@ -394,7 +394,8 @@ def test_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, d
 @pytest.mark.parametrize(
     "input_shape_normalized_dims",
     [
-        ([TILE_HEIGHT, TILE_WIDTH], 2),  # test 2d
+        ([20, 30], 2),  # test 2d
+        ([2, 20, 30], 1),  # test 3d
         ([6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH], 2),  # test 3d
         ([5, 2, 3, 4, TILE_HEIGHT + 13, TILE_WIDTH + 13], 3),  # test 6d
     ],

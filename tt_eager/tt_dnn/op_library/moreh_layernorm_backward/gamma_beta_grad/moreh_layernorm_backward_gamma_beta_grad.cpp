@@ -48,20 +48,19 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const bool is_lastdim_layernorm = normalized_dims == 1;
     const bool is_groupnorm = false;
 
-    // const auto origin_H = output_grad_shape_without_padding[2];
-    // const auto origin_W = output_grad_shape_without_padding[3];
     const auto origin_H = output_grad_shape_without_padding[-2];
     const auto origin_W = output_grad_shape_without_padding[-1];
 
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && is_lastdim_layernorm;
     const uint32_t mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
 
+    const auto mean_rstd_shape = mean.get_legacy_shape();
+    const auto mean_rstd_shape_without_padding = mean_rstd_shape.without_padding();
+    auto mean_rstd_height = mean_rstd_shape_without_padding[-2];
+    auto mean_rstd_width = mean_rstd_shape_without_padding[-1];
 
     auto num_inner = compute_inner(output_grad_shape, normalized_dims);
     auto num_outer = compute_outer(output_grad_shape, normalized_dims);
-
-    auto Wt = num_inner;
-    auto NCHt = num_outer;
 
     const bool gamma_grad_has_value = gamma_grad.has_value();
     const bool beta_grad_has_value = beta_grad.has_value();
@@ -79,7 +78,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
          core_group_1,
          core_group_2,
          num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt_metal::split_work_to_cores(grid, Wt);
+         num_cols_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_inner);
 
     auto arch = input.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
@@ -169,8 +168,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
         num_cols_per_core_group_1,
         origin_H,
         origin_W,
-        NCHt,
-        Wt,
+        num_outer,
+        num_inner,
         static_cast<uint32_t>(gamma_grad_has_value),
         static_cast<uint32_t>(beta_grad_has_value),
         static_cast<uint32_t>(is_lastdim_layernorm),
@@ -194,8 +193,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
             num_cols_per_core_group_2,
             origin_H,
             origin_W,
-            NCHt,
-            Wt,
+            num_outer,
+            num_inner,
             static_cast<uint32_t>(gamma_grad_has_value),
             static_cast<uint32_t>(beta_grad_has_value),
             static_cast<uint32_t>(is_lastdim_layernorm),
@@ -236,7 +235,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
         }
 
         const std::vector<uint32_t> reader_runtime_args{
-            output_grad_addr, input_addr, mean_addr, rstd_addr, num_cols_per_core, NCHt, Wt, tile_offset, mask_h};
+            output_grad_addr, input_addr, mean_addr, rstd_addr, num_cols_per_core, num_outer, num_inner, tile_offset, mask_h, normalized_dims, mean_rstd_height, mean_rstd_width};
         SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
 
         const std::vector<uint32_t> writer_runtime_args{
@@ -261,8 +260,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
         auto mean_buffer = input_buffers.at(2);
         auto rstd_buffer = input_buffers.at(3);
 
-        auto gamma_grad_buffer = input_buffers.at(4);
-        auto beta_grad_buffer = input_buffers.at(5);
+        auto gamma_grad_buffer = output_buffers.at(0);
+        auto beta_grad_buffer = output_buffers.at(1);
         TT_ASSERT(gamma_grad_buffer != nullptr || beta_grad_buffer != nullptr);
 
         for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {

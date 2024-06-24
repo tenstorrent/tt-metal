@@ -58,6 +58,10 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
     const bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
     const uint32_t mask_w = do_mask_w ? origin_W % TILE_WIDTH : TILE_WIDTH;
 
+    const auto mean_rstd_shape = mean.get_legacy_shape();
+    const auto mean_rstd_shape_without_padding = mean_rstd_shape.without_padding();
+    auto mean_rstd_height = mean_rstd_shape_without_padding[-2];
+    auto mean_rstd_width = mean_rstd_shape_without_padding[-1];
 
     auto normalized_numel = 1.0f;
     for (uint32_t i = output_grad_rank - normalized_dims; i < output_grad_rank; i++) {
@@ -70,11 +74,6 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
 
     auto num_inner = compute_inner(output_grad_shape, normalized_dims);
     auto num_outer = compute_outer(output_grad_shape, normalized_dims);
-
-    const auto Wt = num_inner;  // inner_size
-
-    const auto NCHt = num_outer;  // outer_size
-
 
     const bool gamma_has_value = gamma.has_value();
 
@@ -90,7 +89,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
          core_group_1,
          core_group_2,
          num_rows_per_core_group_1,
-         num_rows_per_core_group_2] = tt_metal::split_work_to_cores(grid, NCHt);
+         num_rows_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_outer);
 
     auto arch = input.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
@@ -110,8 +109,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
     // dx = ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * ((1.0 / n) * rstd)
     const uint32_t out0_t = 1;  // input_grad(==dx)
 
-    uint32_t im0_t = Wt;       // copy output_grad(==dycopy)
-    uint32_t im1_t = Wt;       // output(==y)
+    uint32_t im0_t = num_inner;       // copy output_grad(==dycopy)
+    uint32_t im1_t = num_inner;       // output(==y)
     const uint32_t im2_t = 1;  // Sum[dy]
     const uint32_t im3_t = 1;  // Sum[y * dy]
     const uint32_t im4_t = 1;  // (1.0 / n) * rstd
@@ -206,7 +205,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
         num_rows_per_core_group_1,
         origin_H,
         origin_W,
-        Wt,
+        num_inner,
         static_cast<uint32_t>(gamma_has_value),
         static_cast<uint32_t>(is_lastdim_layernorm),
         static_cast<uint32_t>(is_groupnorm)};
@@ -231,7 +230,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
             num_rows_per_core_group_2,
             origin_H,
             origin_W,
-            Wt,
+            num_inner,
             static_cast<uint32_t>(gamma_has_value),
             static_cast<uint32_t>(is_lastdim_layernorm),
             static_cast<uint32_t>(is_groupnorm)};
@@ -277,18 +276,21 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
             rstd_addr,
             gamma_addr,
             num_rows_per_core,
-            Wt,
+            num_inner,
             tile_offset,
             *reinterpret_cast<uint32_t*>(&n),
             *reinterpret_cast<uint32_t*>(&recip_n),
             mask_h,
-            mask_w};
+            mask_w,
+            normalized_dims,
+            mean_rstd_height,
+            mean_rstd_width};
         SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
 
-        const std::vector<uint32_t> writer_runtime_args{input_grad_addr, num_rows_per_core, Wt, tile_offset};
+        const std::vector<uint32_t> writer_runtime_args{input_grad_addr, num_rows_per_core, num_inner, tile_offset};
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
 
-        tile_offset += num_rows_per_core * Wt;
+        tile_offset += num_rows_per_core * num_inner;
     }
 
     ////////////////////////////////////////////////////////////////////////////

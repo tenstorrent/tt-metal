@@ -26,11 +26,12 @@ struct MorehLayerNormBackwardInputGrad {
     MemoryConfig output_mem_config;
     const DeviceComputeKernelConfig compute_kernel_config;
 
-    void validate(
+    void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors,
-        const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
+        const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+        const std::vector<std::optional<Tensor>>& output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
@@ -46,14 +47,13 @@ struct MorehLayerNormBackwardGammaBetaGrad {
     MemoryConfig output_mem_config;
     const DeviceComputeKernelConfig compute_kernel_config;
 
-    void validate(
+    void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors,
-        const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
+        const std::vector<std::optional<Tensor>>& output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors,
-        const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors) const;
     static constexpr auto attribute_names = std::make_tuple("normalized_dims", "output_mem_config", "compute_kernel_config");
     const auto attribute_values() const {
@@ -87,7 +87,7 @@ Tensor moreh_layernorm_backward_input_grad(
     const Tensor &mean,
     const Tensor &rstd,
     uint32_t normalized_dims,
-    const Tensor &input_grad,
+    const std::optional<const Tensor> input_grad = std::nullopt,
     const std::optional<const Tensor> gamma = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
