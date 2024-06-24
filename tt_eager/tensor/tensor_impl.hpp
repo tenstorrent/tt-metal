@@ -70,6 +70,13 @@ std::vector<uint32_t> pack_vec_into_uint32_vec(const BufferType<DataType>& data_
             uint32_data.push_back(a.u);
         }
         return uint32_data;
+    } else if constexpr (std::is_same_v<DataType, uint8_t>) {
+        std::vector<uint32_t> output;
+        for (auto index = 0; index < data_to_pack.size(); index += 4) {
+            auto value = data_to_pack[index + 3] << 24 | data_to_pack[index + 2] << 16 | data_to_pack[index + 1] << 8 | data_to_pack[index];
+            output.push_back(value);
+        }
+        return output;
     } else if constexpr (std::is_same_v<DataType, uint16_t>) {
         std::vector<uint32_t> output;
         for (auto index = 0; index < data_to_pack.size(); index += 2) {
@@ -115,6 +122,15 @@ std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t>& data_to_unpack) {
             int32_data.push_back(a.i);
         }
         return int32_data;
+    } else if constexpr (std::is_same_v<DataType, uint8_t>) {
+        std::vector<DataType> output;
+        for (auto index = 0; index < data_to_unpack.size(); index++) {
+            output.push_back((data_to_unpack[index]) & 0xFF);
+            output.push_back((data_to_unpack[index] >> 8) & 0xFF);
+            output.push_back((data_to_unpack[index] >> 16) & 0xFF);
+            output.push_back((data_to_unpack[index] >> 24) & 0xFF);
+        }
+        return output;
     } else if constexpr (std::is_same_v<DataType, uint16_t>) {
         std::vector<DataType> output;
         for (auto index = 0; index < data_to_unpack.size(); index++) {
