@@ -152,7 +152,7 @@ def run_perf_bert11(
     (
         [7, "BFLOAT8_B-SHARDED", 0.0329, 3.1, 10],
         [8, "BFLOAT8_B-SHARDED", 0.0329, 3.1, 10],
-        [12, "BFLOAT8_B-SHARDED", 0.0329, 3.1, 10],
+        [12, "BFLOAT8_B-SHARDED", 0.0323, 3.1, 10],
     ),
 )
 def test_perf_bare_metal(

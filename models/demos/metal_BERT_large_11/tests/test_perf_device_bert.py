@@ -35,7 +35,7 @@ def run_bert_perf(batch_size, test, expected_perf):
     "batch_size, test, expected_perf",
     [
         # [9, "BERT_LARGE-batch_9-MIXED_PRECISION_BATCH9", 70],
-        [8, "BERT_LARGE-batch_8-MIXED_PRECISION_BATCH8", 165],
+        [8, "BERT_LARGE-batch_8-MIXED_PRECISION_BATCH8", 170],
         # [7, "BERT_LARGE-batch_7-BFLOAT8_B-SHARDED", 240],
         [12, "BERT_LARGE-batch_12-BFLOAT8_B-SHARDED", 400],
     ],
