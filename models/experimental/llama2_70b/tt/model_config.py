@@ -26,7 +26,7 @@ def pretty_print_model_config(model_config):
 
 
 def get_model_config(
-    llama_version="llama3", batch=32, seq_len=1, num_devices=8, max_batch_size=32, max_context_len=2048 + 128
+    llama_version="llama3", batch=32, seq_len=1, num_devices=8, max_batch_size=32, max_context_len=4096
 ):
     llm_mode = "decode" if seq_len == 1 else "prefill"
     assert num_devices == 8
@@ -34,7 +34,7 @@ def get_model_config(
     assert seq_len in (1, 128, 2048, 8192)
 
     # Supported values, TODO update for larger TT chips
-    if max_context_len > 2048 + 128:
+    if max_context_len > 4096:
         assert max_batch_size == 16
     else:
         assert max_batch_size == 32
