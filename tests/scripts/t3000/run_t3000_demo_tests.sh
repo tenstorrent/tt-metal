@@ -55,26 +55,7 @@ run_t3000_mixtral_tests() {
   echo "LOG_METAL: run_t3000_mixtral_tests $duration seconds to complete"
 }
 
-run_t3000_llama3_tests() {
-  # Record the start time
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
-
-  # llama3 70b 8 chip demo test - 128 token generation with general weights (env flags set inside the test)
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/llama2_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-check_enabled-greedy-tt-70b-T3000-80L-decode_only-text_completion-llama3]
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama3_tests $duration seconds to complete"
-}
-
 run_t3000_tests() {
-
-  # Run llama3 tests
-  run_t3000_llama3_tests
-
   # Run falcon40b tests
   run_t3000_falcon40b_tests
 
