@@ -445,3 +445,41 @@ def test_moreh_layernorm_backward_compute_kernel_options(
 ):
     torch.manual_seed(2023)
     run_moreh_layernorm_backward(input_shape_normalized_dims, elementwise_affine, eps, device, compute_kernel_options)
+
+
+@pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
+@pytest.mark.parametrize(
+    "elementwise_affine",
+    [False, True],
+    ids=["elementwise_affine=False", "elementwise_affine=True"],
+)
+@pytest.mark.parametrize(
+    "input_shape_normalized_dims",
+    [
+        ([6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH], 2),  # test 3d
+    ],
+)
+def test_moreh_layernorm_callback(input_shape_normalized_dims, elementwise_affine, eps, device, use_program_cache):
+    torch.manual_seed(2023)
+    for _ in range(2):
+        run_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, device)
+
+
+@pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
+@pytest.mark.parametrize(
+    "elementwise_affine",
+    [False, True],
+    ids=["elementwise_affine=False", "elementwise_affine=True"],
+)
+@pytest.mark.parametrize(
+    "input_shape_normalized_dims",
+    [
+        ([6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH], 2),  # test 3d
+    ],
+)
+def test_moreh_layernorm_backward_callback(
+    input_shape_normalized_dims, elementwise_affine, eps, device, use_program_cache
+):
+    torch.manual_seed(2023)
+    for _ in range(2):
+        run_moreh_layernorm_backward(input_shape_normalized_dims, elementwise_affine, eps, device)
