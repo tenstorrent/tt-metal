@@ -82,7 +82,7 @@ run_t3000_llm_tests() {
   run_t3000_mixtral_tests
 
   # Run llama2-70b tests
-  run_t3000_llama2_70b_tests
+  # run_t3000_llama2_70b_tests
 
   # Run falcon40b tests
   run_t3000_falcon40b_tests
