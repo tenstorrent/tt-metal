@@ -18,12 +18,16 @@ class TensorMemoryConfigs(enum.Enum):
     CUSTOM_MEMORY_CONFIG = enum.auto()
 
 
+IN0_INNER_DIM_PER_CORE = 96
 parameters = {
     "matmul_specs": [
-        # Matmul 2D mcast in0: in0 grid == output grid along tensor width
+        ########################################
+        # TESTS: in0 inner dim != output width #
+        ########################################
+        # Matmul 2D mcast: in0 grid == output grid along tensor width
         (
             (1,),
-            (5 * 128, 7 * 64, 7 * 96),
+            (5 * 128, 7 * IN0_INNER_DIM_PER_CORE, 7 * 96),
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(7, 5),
                 in0_block_w=1,  # Modified by in0_block_w test parameter
@@ -39,7 +43,7 @@ parameters = {
                 buffer_type=ttnn.BufferType.L1,
                 shard_spec=ttnn.ShardSpec(
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 4))}),
-                    (128, 64),
+                    (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
                 ),
@@ -47,7 +51,7 @@ parameters = {
         ),
         (
             (1,),
-            (5 * 128, 7 * 64, 7 * 96),
+            (5 * 128, 7 * IN0_INNER_DIM_PER_CORE, 7 * 96),
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(5, 7),
                 in0_block_w=1,  # Modified by in0_block_w test parameter
@@ -63,16 +67,16 @@ parameters = {
                 buffer_type=ttnn.BufferType.L1,
                 shard_spec=ttnn.ShardSpec(
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 6))}),
-                    (128, 64),
+                    (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.COL_MAJOR,
                     False,
                 ),
             ),
         ),
-        # Matmul 2D mcast in0: in0 grid < output grid along tensor width
+        # Matmul 2D mcast: in0 grid < output grid along tensor width
         (
             (1,),
-            (5 * 128, 4 * 64, 7 * 96),
+            (5 * 128, 4 * IN0_INNER_DIM_PER_CORE, 7 * 96),
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(7, 5),
                 in0_block_w=1,  # Modified by in0_block_w test parameter
@@ -88,7 +92,7 @@ parameters = {
                 buffer_type=ttnn.BufferType.L1,
                 shard_spec=ttnn.ShardSpec(
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 4))}),
-                    (128, 64),
+                    (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
                 ),
@@ -96,7 +100,7 @@ parameters = {
         ),
         (
             (1,),
-            (5 * 128, 4 * 64, 7 * 96),
+            (5 * 128, 4 * IN0_INNER_DIM_PER_CORE, 7 * 96),
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(5, 7),
                 in0_block_w=1,  # Modified by in0_block_w test parameter
@@ -112,16 +116,16 @@ parameters = {
                 buffer_type=ttnn.BufferType.L1,
                 shard_spec=ttnn.ShardSpec(
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
-                    (128, 64),
+                    (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.COL_MAJOR,
                     False,
                 ),
             ),
         ),
-        # Matmul 2D mcast in0: in0 grid > output grid along tensor width
+        # Matmul 2D mcast: in0 grid > output grid along tensor width
         (
             (1,),
-            (5 * 128, 7 * 64, 4 * 96),
+            (5 * 128, 7 * IN0_INNER_DIM_PER_CORE, 4 * 96),
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(7, 5),
                 in0_block_w=1,  # Modified by in0_block_w test parameter
@@ -137,7 +141,7 @@ parameters = {
                 buffer_type=ttnn.BufferType.L1,
                 shard_spec=ttnn.ShardSpec(
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 4))}),
-                    (128, 64),
+                    (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
                 ),
@@ -145,7 +149,7 @@ parameters = {
         ),
         (
             (1,),
-            (5 * 128, 7 * 64, 4 * 96),
+            (5 * 128, 7 * IN0_INNER_DIM_PER_CORE, 4 * 96),
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(5, 7),
                 in0_block_w=1,  # Modified by in0_block_w test parameter
@@ -161,7 +165,207 @@ parameters = {
                 buffer_type=ttnn.BufferType.L1,
                 shard_spec=ttnn.ShardSpec(
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 6))}),
-                    (128, 64),
+                    (128, IN0_INNER_DIM_PER_CORE),
+                    ttnn.ShardOrientation.COL_MAJOR,
+                    False,
+                ),
+            ),
+        ),
+        ###############################################################
+        # TESTS: Single row/col or single core output grid edge cases #
+        ###############################################################
+        # Matmul 2D mcast in1 only: output grid along tensor width is 1
+        (
+            (1,),
+            (5 * 128, IN0_INNER_DIM_PER_CORE, 96),
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(1, 5),
+                in0_block_w=1,  # Modified by in0_block_w test parameter
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=4,
+                per_core_N=3,
+                transpose_mcast=False,
+                fused_activation=None,
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 4))}),
+                    (128, IN0_INNER_DIM_PER_CORE),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            ),
+        ),
+        (
+            (1,),
+            (5 * 128, IN0_INNER_DIM_PER_CORE, 96),
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(5, 1),
+                in0_block_w=1,  # Modified by in0_block_w test parameter
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=4,
+                per_core_N=3,
+                transpose_mcast=True,
+                fused_activation=None,
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
+                    (128, IN0_INNER_DIM_PER_CORE),
+                    ttnn.ShardOrientation.COL_MAJOR,
+                    False,
+                ),
+            ),
+        ),
+        # Matmul 2D mcast in0 only: output grid along tensor height is 1
+        (
+            (1,),
+            (128, 7 * IN0_INNER_DIM_PER_CORE, 4 * 96),
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(7, 1),
+                in0_block_w=1,  # Modified by in0_block_w test parameter
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=4,
+                per_core_N=3,
+                transpose_mcast=False,
+                fused_activation=None,
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 0))}),
+                    (128, IN0_INNER_DIM_PER_CORE),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            ),
+        ),
+        (
+            (1,),
+            (128, 7 * IN0_INNER_DIM_PER_CORE, 4 * 96),
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(1, 7),
+                in0_block_w=1,  # Modified by in0_block_w test parameter
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=4,
+                per_core_N=3,
+                transpose_mcast=True,
+                fused_activation=None,
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 6))}),
+                    (128, IN0_INNER_DIM_PER_CORE),
+                    ttnn.ShardOrientation.COL_MAJOR,
+                    False,
+                ),
+            ),
+        ),
+        # Matmul 2D no mcast: output grid along tensor height and width are both 1
+        (
+            (1,),
+            (128, IN0_INNER_DIM_PER_CORE, 96),
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(1, 1),
+                in0_block_w=1,  # Modified by in0_block_w test parameter
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=4,
+                per_core_N=3,
+                transpose_mcast=False,
+                fused_activation=None,
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+                    (128, IN0_INNER_DIM_PER_CORE),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            ),
+        ),
+        (
+            (1,),
+            (128, IN0_INNER_DIM_PER_CORE, 96),
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(1, 1),
+                in0_block_w=1,  # Modified by in0_block_w test parameter
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=4,
+                per_core_N=3,
+                transpose_mcast=True,
+                fused_activation=None,
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+                    (128, IN0_INNER_DIM_PER_CORE),
+                    ttnn.ShardOrientation.COL_MAJOR,
+                    False,
+                ),
+            ),
+        ),
+        # Matmul 2D mcast in1 "only" special case: output grid along tensor width is 1 but in0 shard width > 1
+        # in0 interleaved has no mcast but in0 sharded mcasts along tensor width to first core
+        (
+            (1,),
+            (5 * 128, 7 * IN0_INNER_DIM_PER_CORE, 96),
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(7, 5),
+                in0_block_w=1,  # Modified by in0_block_w test parameter
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=4,
+                per_core_N=3,
+                transpose_mcast=False,
+                fused_activation=None,
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 4))}),
+                    (128, IN0_INNER_DIM_PER_CORE),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            ),
+        ),
+        (
+            (1,),
+            (5 * 128, 7 * IN0_INNER_DIM_PER_CORE, 96),
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(5, 7),
+                in0_block_w=1,  # Modified by in0_block_w test parameter
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=4,
+                per_core_N=3,
+                transpose_mcast=True,
+                fused_activation=None,
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 6))}),
+                    (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.COL_MAJOR,
                     False,
                 ),
@@ -171,7 +375,7 @@ parameters = {
     "batch_matrix_multiply": [False],
     "in0_block_w": [
         1,
-        2,
+        int(IN0_INNER_DIM_PER_CORE / 32),
     ],  # Used to override in0_block_w in program config (1: loop along in0 shard width; 2: no looping along in0 shard width)
     "input_a_memory_config": [TensorMemoryConfigs.CUSTOM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
