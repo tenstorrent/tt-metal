@@ -309,8 +309,6 @@ const DataFormat get_single_pack_src_format(
             pack_src_format = DataFormat::Int32;
         } else if(output_format == DataFormat::UInt16){
             pack_src_format = DataFormat::UInt16;
-        } else if(output_format == DataFormat::UInt8){
-            pack_src_format = DataFormat::UInt8;
         } else {
             TT_THROW("No valid conversion from fp32 dest to output format = {}", output_format);
         }
