@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >=12)
 #include <string_view>
 #include <reflect>
 
@@ -29,3 +30,4 @@ static_assert(B == reflect::get<"b">(f), "Reflect get<\"b\"> check failed");
 constexpr auto t = reflect::to<std::tuple>(f);
 static_assert(42 == std::get<0>(t), "Reflect to<std::tuple> get<0> check failed");
 static_assert(B == std::get<1>(t), "Reflect to<std::tuple> get<1> check failed");
+#endif

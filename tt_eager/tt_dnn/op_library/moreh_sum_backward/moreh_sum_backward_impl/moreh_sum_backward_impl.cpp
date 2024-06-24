@@ -148,7 +148,8 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args =
-    { static_cast<uint32_t>(is_dram(output_grad)), input_grad_rank };
+    { static_cast<uint32_t>(is_dram(output_grad)),
+      static_cast<uint32_t>(input_grad_rank) };
     std::vector<uint32_t> writer_compile_time_args =
     { static_cast<uint32_t>(is_dram(input_grad)) };
     const auto reader_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/reader_moreh_sum_backward.cpp";

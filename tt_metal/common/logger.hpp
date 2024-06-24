@@ -120,7 +120,11 @@ class Logger {
                 level_names[static_cast<std::underlying_type_t<Level>>(level)]);
             std::string type_str = fmt::format(fmt::fg(fmt::color::green), "{:>23}", type_names[type]);
             fmt::print(*fd, "{} | {} | ", type_str, level_str);
+#if FMT_VERSION < 100000
             fmt::print(*fd, fmt, std::forward<Args>(args)...);
+#else
+            fmt::print(*fd, fmt::runtime(fmt), std::forward<Args>(args)...);
+#endif
             *fd << std::endl;
         }
     }

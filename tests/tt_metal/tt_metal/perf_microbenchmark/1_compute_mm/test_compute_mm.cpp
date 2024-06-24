@@ -233,9 +233,9 @@ int main(int argc, char** argv) {
         //                      Initial Runtime Args Parse
         ////////////////////////////////////////////////////////////////////////////
         std::vector<std::string> input_args(argv, argv + argc);
-        uint32_t M;
-        uint32_t N;
-        uint32_t K;
+        uint32_t M = 0;
+        uint32_t N = 0;
+        uint32_t K = 0;
         uint32_t dtype = 0; // bfp8
         uint32_t fidel = 0; // lofi
         uint32_t num_tests = 10;

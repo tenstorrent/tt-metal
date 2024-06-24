@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
     uint32_t noc_index = 0;
     uint32_t noc_direction = 0;
     uint32_t access_type = 0;
-    uint32_t tiles_per_transfer;
+    uint32_t tiles_per_transfer = 0;
     uint32_t num_tests = 10;
     bool use_device_profiler = false;
     bool bypass_check = false;

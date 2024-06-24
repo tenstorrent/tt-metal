@@ -90,9 +90,9 @@ concept DeviceOperationWithCustomProgramCacheConcept = DeviceOperationConcept<de
 };
 
 template <typename... Ts>
-[[nodiscard]] std::variant<Ts...> constexpr map_index_to_variant(std::size_t i, std::variant<Ts...>) {
+[[nodiscard]] std::variant<Ts...> map_index_to_variant(std::size_t i, std::variant<Ts...>) {
     assert(i < sizeof...(Ts));
-    static constexpr std::variant<Ts...> table[] = { Ts{ }... };
+    static std::variant<Ts...> table[] = { Ts{ }... };
     return table[i];
 }
 

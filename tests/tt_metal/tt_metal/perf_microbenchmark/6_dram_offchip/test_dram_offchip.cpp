@@ -99,11 +99,11 @@ int main(int argc, char **argv) {
     }
 
     bool pass = true;
-    bool use_device_profiler;
+    bool use_device_profiler = false;
     bool bypass_check = false;
     std::vector<double> dram_bandwidth;
     uint32_t num_tests = 10;
-    uint64_t input_size;
+    uint64_t input_size = 0;
     uint32_t access_type;
     uint32_t dram_bandwidth_spec = 0;
 

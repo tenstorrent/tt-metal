@@ -7,6 +7,8 @@
 #include <string>
 #include <thread>
 #include <mutex>
+#include <vector>
+#include <sstream>
 
 using std::string;
 
