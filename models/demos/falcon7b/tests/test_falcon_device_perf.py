@@ -80,7 +80,7 @@ def test_device_perf_wh_bare_metal(
 
 
 @pytest.mark.models_device_performance_bare_metal
-@pytest.mark.parametrize("seq_len, samples", [(128, 1700), (2048, 2600)])
+@pytest.mark.parametrize("seq_len, samples", [(128, 2060), (2048, 2680)])
 def test_device_perf(seq_len, samples):
     margin = 0.03
     num_iterations = 1
