@@ -167,9 +167,7 @@ class TtModelArgs:
         self.model_config["SHARDED_NORM_OUTPUT_MEMCFG"] = self.model_config["SHARDED_NORM_INPUT_MEMCFG"]
 
         # Create program configs for the different ttlib matmul ops
-        self.model_config[
-            "ROT_MAT_MM_PROGCFG"
-        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        self.model_config["ROT_MAT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=4,
             out_subblock_h=1,
@@ -190,9 +188,7 @@ class TtModelArgs:
             )
         )
 
-        self.model_config[
-            "GATE_MM_OUTPUT_PROGCFG"
-        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        self.model_config["GATE_MM_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 1),
             in0_block_w=16,
             out_subblock_h=1,
@@ -204,9 +200,7 @@ class TtModelArgs:
             mcast_in0=False,
         )
 
-        self.model_config[
-            "QKV_MM_OUTPUT_PROGCFG"
-        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        self.model_config["QKV_MM_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=4,
             out_subblock_h=1,
@@ -219,7 +213,7 @@ class TtModelArgs:
         )
 
         self.model_config["SCORES_BATCHED_MM_PROGCFG"] = cached_lambda(
-            lambda p: ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            lambda p: ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=4,
                 out_subblock_h=1,
@@ -230,7 +224,7 @@ class TtModelArgs:
         )
 
         self.model_config["VALUES_BATCHED_MM_PROGCFG"] = cached_lambda(
-            lambda p: ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            lambda p: ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=p,
                 out_subblock_h=1,
@@ -240,9 +234,7 @@ class TtModelArgs:
             )
         )
 
-        self.model_config[
-            "LM_HEAD_OUTPUT_PROGCFG"
-        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        self.model_config["LM_HEAD_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=1,
             out_subblock_h=1,
@@ -254,9 +246,7 @@ class TtModelArgs:
             mcast_in0=True,
         )
 
-        self.model_config[
-            "FF1_OUTPUT_PROGCFG"
-        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        self.model_config["FF1_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=2,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -268,9 +258,7 @@ class TtModelArgs:
             mcast_in0=True,
         )
 
-        self.model_config[
-            "FF3_OUTPUT_PROGCFG"
-        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        self.model_config["FF3_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=2,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -282,9 +270,7 @@ class TtModelArgs:
             mcast_in0=True,
         )
 
-        self.model_config[
-            "FF2_OUTPUT_PROGCFG"
-        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        self.model_config["FF2_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=7,  # K = 14336 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -297,9 +283,7 @@ class TtModelArgs:
             mcast_in0=True,
         )
 
-        self.model_config[
-            "OUTPUT_MM_PROGCFG"
-        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(7, 6),  # TODO Hanging with full coreGrid (8,8)
             in0_block_w=2,
             out_subblock_h=1,

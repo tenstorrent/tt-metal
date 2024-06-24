@@ -446,9 +446,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                 False,
             ),
         )
-        model_config[
-            "QKV_MM_PROGCFG"
-        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["QKV_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 1),
             in0_block_w=32,  # TODO: Can this be larger
             out_subblock_h=1,  # TODO: Can this be larger
@@ -567,9 +565,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
             ),
         )
         model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
-        model_config[
-            "SELFOUT_MM_PROGCFG"
-        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["SELFOUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,  # TODO: Can this be larger
             out_subblock_h=1,  # TODO: Can this be larger
@@ -581,9 +577,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
             mcast_in0=True,
         )
         # MLP
-        model_config[
-            "DENSE_H_TO_4H_MM_PROGCFG"
-        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["DENSE_H_TO_4H_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,  # TODO: Can this be larger
             out_subblock_h=1,  # TODO: Can this be larger
@@ -594,9 +588,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
             fused_activation=[ttnn.experimental.tensor.FusibleActivation.GELU, True],
             mcast_in0=True,
         )
-        model_config[
-            "DENSE_4H_TO_H_MM_PROGCFG"
-        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["DENSE_4H_TO_H_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=32,  # TODO: Can this be larger
             out_subblock_h=1,  # TODO: Can this be larger
@@ -644,9 +636,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
 
         # LM Head
         model_config["LM_HEAD_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
-        model_config[
-            "LM_HEAD_MM_PROGCFG"
-        ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        model_config["LM_HEAD_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),
             in0_block_w=8,
             out_subblock_h=1,
@@ -834,9 +824,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     )  # attetnion_slice_size * 16 qheads // attention_num_cores // TILE_SIZE
 
     # Attention
-    model_config[
-        "ATTENTION_MM_PROGCFG"
-    ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    model_config["ATTENTION_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=attention_mm_grid_size,
         in0_block_w=head_dim // 32,
         out_subblock_h=1,
@@ -855,9 +843,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         block_h=attetnion_mm_M,
         block_w=row_height // 32,
     )
-    model_config[
-        "ATTENTION_MM_2_PROGCFG"
-    ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    model_config["ATTENTION_MM_2_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=attention_mm_grid_size,
         in0_block_w=row_height // 32,
         out_subblock_h=1,  # use 4 for S=2k when hang is fixed
