@@ -49,7 +49,7 @@ class DevicePool {
 
          _inst->add_devices_to_pool(device_ids);
          _inst->init_firmware_on_active_devices();
-
+         tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     }
 
     Device *get_active_device(chip_id_t device_id) const;
