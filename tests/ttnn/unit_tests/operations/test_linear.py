@@ -122,26 +122,16 @@ def test_linear_with_core_grid(
     else:
         bias = None
 
-    if batch_size == 1:
-        with pytest.raises(RuntimeError) as exception:
-            output_tensor = ttnn.linear(
-                input_tensor_a,
-                input_tensor_b,
-                bias=bias,
-                core_grid=ttnn.CoreGrid(y=batch_size, x=6),
-            )
-        assert "1D mcast for in0 or in1 is not implemented yet" in str(exception.value)
-    else:
-        output_tensor = ttnn.linear(
-            input_tensor_a,
-            input_tensor_b,
-            bias=bias,
-            core_grid=ttnn.CoreGrid(y=batch_size, x=6),
-        )
+    output_tensor = ttnn.linear(
+        input_tensor_a,
+        input_tensor_b,
+        bias=bias,
+        core_grid=ttnn.CoreGrid(y=batch_size, x=6),
+    )
 
-        output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
 
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
