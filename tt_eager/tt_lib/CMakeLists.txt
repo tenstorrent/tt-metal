@@ -1,5 +1,5 @@
 
-if(not WITH_PYTHON_BINDINGS)
+if(NOT WITH_PYTHON_BINDINGS)
     message(FATAL_ERROR "Remove include of tt_lib when WITH_PYTHON_BINDINGS flag is OFF")
 endif()
 
