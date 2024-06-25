@@ -364,6 +364,7 @@ class CoreRangeSet {
     }
 
     CoreRange bounding_box() const {
+        TT_FATAL(this->ranges().size() > 0, "Cannot get bounding_box of an empty CoreRangeSet!");
         size_t min_x = UINT32_MAX, min_y = UINT32_MAX, max_x = 0, max_y = 0;
         for (const auto &cr : this->ranges()) {
             min_x = std::min(min_x, cr.start.x);
