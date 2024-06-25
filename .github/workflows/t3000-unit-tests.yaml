@@ -1,4 +1,4 @@
-name: "[T3K] T3000 unit tests"
+name: "(T3K) T3000 unit tests"
 
 on:
   workflow_dispatch:
