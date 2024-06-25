@@ -23,38 +23,16 @@ run_t3000_llama2_70b_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama2_70b_tests"
 
-  # Llama2_70b related cached files and tests (the test should parse env variables similar to these)
-  export LLAMA_CKPT_DIR=/mnt/MLPerf/tt_dnn-models/llama-2/llama-2-70b-repacked/
-  export LLAMA_TOKENIZER_PATH=/mnt/MLPerf/tt_dnn-models/llama-2/tokenizer.model
-  export LLAMA_CACHE_PATH=/mnt/MLPerf/tt_dnn-models/llama-2/llama-data-cache/weights-cache-2
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama2_70b/tests/test_llama_mlp_t3000.py
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama2_70b/tests/test_llama_attention_t3000.py
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama2_70b/tests/test_llama_decoder_t3000.py
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama2_70b/tests/test_llama_model_t3000.py
 
-  pytest models/demos/t3000/llama2_70b/tests/test_llama_mlp_t3000.py
-  pytest models/demos/t3000/llama2_70b/tests/test_llama_attention_t3000.py
-  pytest models/demos/t3000/llama2_70b/tests/test_llama_decoder_t3000.py
-  pytest models/demos/t3000/llama2_70b/tests/test_llama_model_t3000.py
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_llama2_70b_tests $duration seconds to complete"
-}
-
-run_t3000_llama2_70b_experimental_tests() {
-  # Record the start time
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_llama2_70b_experimental_tests"
-
-  # Removing tests to reduce the time taken to run the tests
-  # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/llama2_70b/tests/test_llama_mlp_t3000.py
-  # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/llama2_70b/tests/test_llama_attention_t3000.py
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/llama2_70b/tests/test_llama_decoder_t3000.py
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/llama2_70b/tests/test_llama_model_t3000.py
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama2_70b_experimental_tests $duration seconds to complete"
 }
 
 run_t3000_mixtral_tests() {
@@ -128,9 +106,6 @@ run_t3000_tests() {
 
   # Run trace tests
   run_t3000_trace_stress_tests
-
-  # Run llama2-70b experimental tests
-  run_t3000_llama2_70b_experimental_tests
 
   # Run falcon40b tests
   run_t3000_falcon40b_tests
