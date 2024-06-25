@@ -69,13 +69,20 @@ enum dispatch_core_processor_masks {
     DISPATCH_CLASS_MASK_ETH_DM0 = 1 << DISPATCH_CLASS_ETH_DM0,
 };
 
+// Address offsets to kernel runtime configuration components
+// struct to densely packs values used by each processor
+struct dyn_mem_map_t {
+    volatile uint16_t rta_offset;
+    volatile uint16_t crta_offset;
+};
+
 struct launch_msg_t {  // must be cacheline aligned
     volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
     // Ring buffer of kernel configuration data
     volatile uint32_t kernel_config_base;
-    volatile uint16_t rta_offsets[DISPATCH_CLASS_MAX];
+    dyn_mem_map_t mem_map[DISPATCH_CLASS_MAX];
 
     volatile uint8_t mode;                   // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
@@ -85,7 +92,7 @@ struct launch_msg_t {  // must be cacheline aligned
     volatile uint8_t dispatch_core_y;
     volatile uint8_t exit_erisc_kernel;
     volatile uint8_t run;  // must be in last cacheline of this msg
-};
+} __attribute__((packed));
 
 struct slave_sync_msg_t {
     union {
