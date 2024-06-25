@@ -224,6 +224,7 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     }
 
     cb_pop_front(in1_cb, num_tiles);
+    UNPACK(tensix_sync());
 }
 
 void add_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
@@ -264,6 +265,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
         cb_push_back(in0_cb, 1);
         release_dst(tt::DstMode::Half);
     }
+    UNPACK(tensix_sync());
 }
 
 void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
