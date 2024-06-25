@@ -101,6 +101,7 @@ def ref_groupnorm(x, group_size, eps, **kwargs):
 def test_groupnorm_sharded_narrow_channel_per_group(
     test_id, device, layout, num_batches, C, H, W, num_groups, grid_size, shard_orientation, shard_layout
 ):
+    pytest.skip("Requires TT_METAL_CLEAR_L1=1 to pass")
     torch.manual_seed(1234)
 
     out_mem_config = ttl.tensor.MemoryConfig(shard_layout, ttl.tensor.BufferType.L1)

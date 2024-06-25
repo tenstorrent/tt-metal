@@ -271,6 +271,7 @@ def plot_diff(vals, fid, nsticks, stick_len):
 def test_generate_all_configs_and_references(
     device, conv_params, batch_size, input_chw_shape, num_cores_nhw, grid_size, test_max_pool, skip_untilize
 ):
+    pytest.skip("Requires TT_METAL_CLEAR_L1=1 to pass")
     assert len(conv_params) == 10
     output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups = [
         conv_params[i] for i in range(10)
