@@ -351,7 +351,7 @@ namespace ckernel::unpacker
       }
       */
       // Workaround for HW bug (int32 dest and movd2a/b is used with srcA/B configured as int8)
-      if (int8_math_enabled) {
+      if (int8_math_enabled || (fp32_dest_acc_en && ((uint)unpA_dst_format == (uint)DataFormat::UInt16))) {
           reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1<<11); // Set debug feature disable bit 11
                                                                  // workaround for bug tenstorrent/budabackend#1948
       }
