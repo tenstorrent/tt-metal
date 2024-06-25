@@ -989,21 +989,6 @@ std::vector<Tensor> bias_gelu_unary_bw(
         grad, input, bias, approximate, output_mem_config);
 }
 
-std::vector<Tensor> _squared_difference_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor difference = ttnn::subtract(input, other);
-    Tensor grad_a = mul_unary(2, ttnn::multiply(grad, difference, std::nullopt, output_mem_config), output_mem_config);
-    grad_tensor.emplace_back(grad_a);
-    Tensor grad_b = mul_unary(-1, grad_a, output_mem_config);
-    grad_tensor.emplace_back(grad_b);
-    return grad_tensor;
-}
-std::vector<Tensor> squared_difference_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _squared_difference_bw)(grad, input, other, output_mem_config);
-}
-
 std::vector<Tensor> _concat_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;

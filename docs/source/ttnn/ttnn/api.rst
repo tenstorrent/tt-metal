@@ -199,6 +199,7 @@ Pointwise Binary
    ttnn/ldexp_bw
    ttnn/logaddexp_bw
    ttnn/logaddexp2_bw
+   ttnn/squared_difference_bw
 
 Pointwise Ternary
 =================
