@@ -16,6 +16,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     compute_kernel_options,
     compute_kernel_ids,
 )
+from models.utility_functions import skip_for_grayskull
 
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
@@ -363,6 +364,7 @@ def run_moreh_layernorm_backward(
         assert actual_beta_grad is None
 
 
+@skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
 @pytest.mark.parametrize(
     "elementwise_affine",
@@ -385,6 +387,7 @@ def test_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, d
     run_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, device)
 
 
+@skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
 @pytest.mark.parametrize(
     "elementwise_affine",
@@ -405,6 +408,7 @@ def test_moreh_layernorm_backward(input_shape_normalized_dims, elementwise_affin
     run_moreh_layernorm_backward(input_shape_normalized_dims, elementwise_affine, eps, device)
 
 
+@skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
 @pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
 @pytest.mark.parametrize(
     "elementwise_affine",
@@ -426,6 +430,7 @@ def test_moreh_layernorm_compute_kernel_options(
     run_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, device, compute_kernel_options)
 
 
+@skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
 @pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
 @pytest.mark.parametrize(
     "elementwise_affine",
@@ -447,6 +452,7 @@ def test_moreh_layernorm_backward_compute_kernel_options(
     run_moreh_layernorm_backward(input_shape_normalized_dims, elementwise_affine, eps, device, compute_kernel_options)
 
 
+@skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
 @pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
 @pytest.mark.parametrize(
     "elementwise_affine",
@@ -465,6 +471,7 @@ def test_moreh_layernorm_callback(input_shape_normalized_dims, elementwise_affin
         run_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, device)
 
 
+@skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
 @pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
 @pytest.mark.parametrize(
     "elementwise_affine",
