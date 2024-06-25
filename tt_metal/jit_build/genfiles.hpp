@@ -42,7 +42,8 @@ void jit_build_genfiles_noc_addr_ranges_header(
     const std::vector<CoreCoord>& dram_cores,
     const std::vector<CoreCoord>& ethernet_cores,
     CoreCoord grid_size,
-    const std::vector<uint32_t>& harvested_rows);
+    const std::vector<uint32_t>& harvested_rows,
+    bool has_pcie_cores);
 
 void jit_build_genfiles_descriptors(const JitBuildEnv& env,
                                     JitBuildOptions& options);
