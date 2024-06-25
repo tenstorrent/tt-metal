@@ -139,10 +139,11 @@ def get_job_row_from_github_job(github_job):
         if ubuntu_version == "ubuntu-latest":
             logger.warning("Found ubuntu-latest, replacing with ubuntu-22.04 but may not be case for long")
             ubuntu_version = "ubuntu-22.04"
-    else:
-        assert host_location == "tt_cloud"
+    elif host_location == "tt_cloud":
         logger.warning("Assuming ubuntu-20.04 for tt cloud, but may not be the case soon")
         ubuntu_version = "ubuntu-20.04"
+    else:
+        ubuntu_version = None
 
     host_os = ubuntu_version
 
