@@ -187,6 +187,11 @@ void py_module(py::module& module) {
         ttnn::logaddexp2_bw,
         R"doc(Performs backward operations for logaddexp2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` tensors with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_binary_backward(
+        module,
+        ttnn::squared_difference_bw,
+        R"doc(Performs backward operations for squared_difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` tensors with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace binary_backward
