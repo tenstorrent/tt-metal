@@ -81,6 +81,12 @@ run_t3000_cnn_tests() {
 }
 
 main() {
+  # For CI pipeline - source func commands but don't execute tests if not invoked directly
+  if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    echo "Script is being sourced, not executing main function"
+    return 0
+  fi
+
   # Parse the arguments
   while [[ $# -gt 0 ]]; do
     case $1 in
