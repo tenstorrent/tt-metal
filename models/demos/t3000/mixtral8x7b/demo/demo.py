@@ -300,7 +300,6 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
                 logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
 
 
-@pytest.mark.timeout(10000)
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
     [

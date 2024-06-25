@@ -54,5 +54,5 @@ if [ "$ARCH_NAME" != "wormhole_b0" ]; then
     # higher sequence lengths and different formats trigger memory issues
     pytest $TT_METAL_HOME/models/demos/falcon7b/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
 
-    SLOW_MATMULS=1 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest $TT_METAL_HOME/tests/ttnn/integration_tests/stable_diffusion/test_unet_2d_condition_model.py -k 512
+    SLOW_MATMULS=1 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest $TT_METAL_HOME/tests/ttnn/integration_tests/stable_diffusion/test_unet_2d_condition_model.py -k 512 --timeout=420
 fi
