@@ -23,6 +23,7 @@ enum class BinaryBackwardOpType {
     LDEXP_BW,
     LOGADDEXP_BW,
     LOGADDEXP2_BW,
+    SQUARED_DIFFERENCE_BW,
 };
 
 
