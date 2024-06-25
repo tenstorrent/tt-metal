@@ -1049,6 +1049,17 @@ Tensor remainder(const Tensor& input_a, const Tensor& input_b, const MemoryConfi
     return operation::decorate_as_composite(__func__, _remainder)(input_a, input_b, output_mem_config);
 }
 
+Tensor _fmod(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+    DataType input_dtype = input_a.get_dtype();
+    Tensor a = typecast(input_a, DataType::FLOAT32);
+    Tensor b = typecast(input_b, DataType::FLOAT32);
+    Tensor result = ttnn::subtract(a, ttnn::multiply(b, div(input_a, input_b, true, "trunc"), std::nullopt, output_mem_config));
+    result = where(ttnn::eq(a, b), 0, result);
+    return typecast(result, input_dtype);
+}
+Tensor fmod(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _fmod)(input_a, input_b, output_mem_config);
+}
 
 // logit(input, eps)=log(input / 1 - input)
 Tensor _logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_config) {

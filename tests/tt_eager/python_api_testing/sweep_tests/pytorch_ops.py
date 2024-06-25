@@ -550,6 +550,11 @@ def remainder(x, y, *args, **kwargs):
     return result
 
 
+def fmod(x, y, *args, **kwargs):
+    result = torch.fmod(x, y)
+    return result
+
+
 def unary_ne(x, *args, **kwargs):
     value = kwargs.pop("scalar")
     result = torch.ne(x, value)

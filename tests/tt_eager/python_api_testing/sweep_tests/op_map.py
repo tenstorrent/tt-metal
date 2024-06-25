@@ -508,6 +508,10 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_remainder,
         "pytorch_op": pytorch_ops.remainder,
     },
+    "eltwise-fmod": {
+        "tt_op": tt_lib_ops.eltwise_fmod,
+        "pytorch_op": pytorch_ops.fmod,
+    },
     "eltwise-unary_ne": {
         "tt_op": tt_lib_ops.eltwise_unary_ne,
         "pytorch_op": pytorch_ops.unary_ne,
