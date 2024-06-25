@@ -185,7 +185,7 @@ def test_cross_attn_up_block_2d_256x256(
 
 
 @skip_for_grayskull()
-@pytest.mark.skip("Tests are failing.")
+@pytest.mark.skip(reason="#9599: Tests are failing.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "hidden_states, res_hidden_states_tuple, index, prev_output_channel, in_channels ,out_channels",

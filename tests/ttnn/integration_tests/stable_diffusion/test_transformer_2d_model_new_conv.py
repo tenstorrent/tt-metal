@@ -136,7 +136,7 @@ def test_transformer_2d_model_256x256(
 
 
 @skip_for_grayskull()
-@pytest.mark.skip("Tests are failing.")
+@pytest.mark.skip(reason="#9599: Tests are failing.")
 @pytest.mark.parametrize(
     "input_shape, index1, index2, attention_head_dim, block ",
     [
