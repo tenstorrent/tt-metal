@@ -155,7 +155,20 @@ def scaled_dot_product_attention_simulated(
     return output_tensor
 
 
-def run_test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype=ttnn.bfloat16, mask_dtype=ttnn.bfloat16):
+def run_test_sdpa_decode(
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    dtype,
+    grid_size,
+    q_dtype=ttnn.bfloat16,
+    mask_dtype=ttnn.bfloat16,
+    sharded_in=False,
+    sharded_out=False,
+):
     padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
     torch.manual_seed(1234)
 
@@ -175,6 +188,15 @@ def run_test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype=ttn
         packer_l1_acc=False,
     )
     dram_memcfg = ttnn.types.MemoryConfig(ttnn.types.TensorMemoryLayout.INTERLEAVED, ttnn.types.BufferType.DRAM)
+
+    shard_grid = ttnn.experimental.tensor.CoreRangeSet({num_to_corerange(b)})
+    shard_spec = ttnn.experimental.tensor.ShardSpec(
+        shard_grid, (padded_num_heads, d), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+    )
+
+    height_sharded_memcfg = ttnn.types.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
 
     K = torch.randn(nkv, b, s, d)
     V = torch.randn(nkv, b, s, d)
@@ -211,7 +233,11 @@ def run_test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype=ttn
         # Q = torch.ones(1, b, padded_num_heads, d) * 1
 
         tt_Q = ttnn.as_tensor(
-            Q, device=device, dtype=q_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg  # height_sharded_memcfg
+            Q,
+            device=device,
+            dtype=q_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
         )
         # print(f"Q memcfg: {tt_Q.memory_config()}")
 
@@ -233,7 +259,7 @@ def run_test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype=ttn
             program_config=program_config,
             valid_seq_len=padded_layer_len,
             compute_kernel_config=compute_kernel_config,
-            output_mem_config=dram_memcfg,  # height_sharded_memcfg,
+            output_mem_config=height_sharded_memcfg if sharded_out else dram_memcfg,
         )
 
         tt_back = ttnn.to_torch(tt_back)
@@ -263,14 +289,14 @@ def run_test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype=ttn
 @pytest.mark.parametrize(
     "dtype, q_dtype, mask_dtype",
     [
-        # [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B],
+        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B],
         [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16],
         [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
         [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT4_B],
         [tt_lib.tensor.DataType.BFLOAT4_B, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT4_B],
     ],
     ids=[
-        # "all_bfp8",
+        "all_bfp8",
         "all_bfp16",
         "kvmask_bfp8",
         "kv_bfp8_mask_bfp4",
@@ -296,10 +322,54 @@ def run_test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype=ttn
 )
 def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype):
     tt_lib.device.DisablePersistentKernelCache()
-    run_test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype)
+    run_test_sdpa_decode(
+        device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype, sharded_in=False, sharded_out=False
+    )
 
 
-def run_test_sdpa_decode_single_iter(device, b, nh, nkv, s, d, dtype):
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.parametrize(
+    "dtype, q_dtype, mask_dtype",
+    [
+        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B],
+        [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16],
+        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT4_B],
+        [tt_lib.tensor.DataType.BFLOAT4_B, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT4_B],
+    ],
+    ids=[
+        "all_bfp8",
+        "all_bfp16",
+        "kvmask_bfp8",
+        "kv_bfp8_mask_bfp4",
+        "kvmask_bfp4",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size",
+    (
+        [32, 8, 1, 32768, 128, (8, 6)],  # Llama2-70B
+        [16, 8, 1, 32768, 128, (8, 6)],  # Llama2-70B
+        [8, 8, 1, 32768, 128, (8, 6)],  # Llama2-70B
+        [4, 8, 1, 32768, 128, (8, 6)],  # Llama2-70B
+        # [16, 8, 1, 32768, 128, (8,6)],  # Llama2-70B
+        # [16, 8, 1, 32768, 128, (8,7)],  # Llama2-70B
+        # [16, 8, 1, 32768, 128, (8,8)],  # Llama2-70B
+        # [1, 8, 1, 2048, 128],  # Llama2-70B
+        # [32, 16, 1, 2048, 64],  # Falcon-40B
+        # [32, 71, 1, 2048, 64],  # Falcon-7B
+        # [8, 8, 1, 2048, 128],  # Llama2-70B large batch
+        # [1, 8, 1, 8192, 128],  # Llama2-70B large sequence
+    ),
+)
+def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype):
+    tt_lib.device.DisablePersistentKernelCache()
+    run_test_sdpa_decode(
+        device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype, sharded_in=True, sharded_out=False
+    )
+
+
+def run_test_sdpa_decode_single_iter(device, b, nh, nkv, s, d, dtype, sharded_in=False, sharded_out=False):
     padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
     torch.manual_seed(1234)
 
@@ -310,6 +380,15 @@ def run_test_sdpa_decode_single_iter(device, b, nh, nkv, s, d, dtype):
         packer_l1_acc=False,
     )
     dram_memcfg = ttnn.types.MemoryConfig(ttnn.types.TensorMemoryLayout.INTERLEAVED, ttnn.types.BufferType.DRAM)
+
+    shard_grid = ttnn.experimental.tensor.CoreRangeSet({num_to_corerange(b)})
+    shard_spec = ttnn.experimental.tensor.ShardSpec(
+        shard_grid, (padded_num_heads, d), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+    )
+
+    height_sharded_memcfg = ttnn.types.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
 
     K = torch.randn(nkv, b, s, d)
     V = torch.randn(nkv, b, s, d)
@@ -341,7 +420,13 @@ def run_test_sdpa_decode_single_iter(device, b, nh, nkv, s, d, dtype):
 
     Q = torch.randn(1, b, padded_num_heads, d)
 
-    tt_Q = ttnn.as_tensor(Q, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
+    tt_Q = ttnn.as_tensor(
+        Q,
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
+    )
 
     tt_attn_mask = ttnn.as_tensor(
         attn_mask, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg
@@ -356,7 +441,7 @@ def run_test_sdpa_decode_single_iter(device, b, nh, nkv, s, d, dtype):
         program_config=program_config,
         valid_seq_len=padded_layer_len,
         compute_kernel_config=compute_kernel_config,
-        output_mem_config=dram_memcfg,
+        output_mem_config=height_sharded_memcfg if sharded_out else dram_memcfg,
     )
 
     tt_back = ttnn.to_torch(tt_back)
@@ -421,6 +506,7 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
                 ),
             )
         )
-        run_test_sdpa_decode_single_iter(device, b, nh, nkv, s, d, dtype)
+        run_test_sdpa_decode_single_iter(device, b, nh, nkv, s, d, dtype, sharded_in=False, sharded_out=False)
+        run_test_sdpa_decode_single_iter(device, b, nh, nkv, s, d, dtype, sharded_in=True, sharded_out=False)
 
-    assert device.num_program_cache_entries() == 1
+    assert device.num_program_cache_entries() == 2

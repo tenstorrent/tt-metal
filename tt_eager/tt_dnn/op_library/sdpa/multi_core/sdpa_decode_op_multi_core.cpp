@@ -53,7 +53,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t DHt = DH/TILE_WIDTH;
     uint32_t PNHt = PNH/TILE_HEIGHT;
     uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
-    uint32_t k_num_chunks = valid_seq_len.value() / k_chunk_size;
+    uint32_t num_chunks = valid_seq_len.value() / k_chunk_size;
+    bool is_q_sharded = input_tensor_q.is_sharded();
+    bool is_output_sharded = output_tensor.is_sharded();
 
     // log_debug all of the above
     log_debug("B: {}", B);
@@ -64,7 +66,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     log_debug("PNHt: {}", PNHt);
     log_debug("Sk_chunk_t: {}", Sk_chunk_t);
     log_debug("k_chunk_size: {}", k_chunk_size);
-    log_debug("k_num_chunks: {}", k_num_chunks);
+    log_debug("num_chunks: {}", num_chunks);
 
     Program program = CreateProgram();
 
@@ -129,7 +131,6 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     // Sequence length assignment
     assert(valid_seq_len.value() % k_chunk_size == 0);
-    uint32_t num_chunks = valid_seq_len.value() / k_chunk_size;
     int chunks_per_core = num_chunks / num_cores_per_batch;
 
     std::vector<std::vector<int>> chunk_assignment(num_cores_per_batch, std::vector<int>(2));
@@ -144,12 +145,39 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // residual chunks exists when other chunks are 0, and has less chunks than the other cores when other chunks are not 0
     std::reverse(chunk_assignment.begin(), chunk_assignment.end());
 
+    // create core group, which is a 1D list of cores sorted by reducer1, worker, ..., reducer2, worker, ..., reducer n, worker, ...
+    std::vector<CoreCoord> core_group;
+    uint32_t num_reducers = B;
+    if (is_q_sharded || is_output_sharded) {
+        int reducer_idx = 0;
+        int worker_idx = num_reducers;
+
+        for (int i = 0; i < num_active_cores; ++i) {
+            CoreCoord core;
+            if (i%num_cores_per_batch==0){
+                core = {reducer_idx % grid_size.x, reducer_idx / grid_size.x};
+                reducer_idx++;
+            }
+            else {
+                core = {worker_idx % grid_size.x, worker_idx / grid_size.x};
+                worker_idx++;
+            }
+            core_group.push_back(core);
+        }
+    } else {
+        for (int i = 0; i < num_active_cores; ++i) {
+            CoreCoord core = {i % grid_size.x, i / grid_size.x};
+            core_group.push_back(core);
+        }
+    }
+
     log_debug("Parallelization scheme:");
     log_debug("num_cores_per_batch: {}", num_cores_per_batch);
     log_debug("num_active_cores: {}", num_active_cores);
     log_debug("num_chunks: {}", num_chunks);
     log_debug("chunks_per_core: {}", chunks_per_core);
     log_debug("chunk_assignment: {}", chunk_assignment);
+    log_debug("core_group: {}", core_group);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles  = PNHt * DHt;
@@ -267,6 +295,109 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     log_debug("intermediate_data_format: {}", im_df);
     log_debug("statistics_data_format: {}", stats_df);
 
+    // CBs
+    // Q input
+    auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{CB::c_in0, q_df}}).set_page_size(CB::c_in0, q_tile_size);
+    auto cb_in0_id = CreateCircularBuffer(program, core_grid, c_in0_config);
+
+    // K input
+    auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{CB::c_in1, k_df}}).set_page_size(CB::c_in1, k_tile_size);
+    auto cb_in1_id = CreateCircularBuffer(program, core_grid, c_in1_config);
+    // V input
+    auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{CB::c_in2, v_df}}).set_page_size(CB::c_in2, v_tile_size);
+    auto cb_in2_id = CreateCircularBuffer(program, core_grid, c_in2_config);
+
+    // attn_mask input
+    auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{CB::c_in3, mask_df}}).set_page_size(CB::c_in3, mask_tile_size);
+    auto cb_in3_id = CreateCircularBuffer(program, core_grid, c_in3_config);
+
+    // scale input
+    auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{CB::c_in4, scalar_df}}).set_page_size(CB::c_in4, scalar_tile_size);
+    auto cb_in4_id = CreateCircularBuffer(program, core_grid, c_in4_config);
+
+    // identity scale input
+    auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{CB::c_in5, scalar_df}}).set_page_size(CB::c_in5, scalar_tile_size);
+    auto cb_in5_id = CreateCircularBuffer(program, core_grid, c_in5_config);
+
+    // cb_m_in
+    auto c_in6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_in6, stats_df}}).set_page_size(CB::c_in6, stats_tile_size);
+    auto cb_in6_id = CreateCircularBuffer(program, core_grid, c_in6_config);
+
+    // cb_l_in
+    auto c_in7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_in7, stats_df}}).set_page_size(CB::c_in7, stats_tile_size);
+    auto c_in7_id = CreateCircularBuffer(program, core_grid, c_in7_config);
+
+    // cb_qk_im
+    auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{CB::c_intermed0, im_df}}).set_page_size(CB::c_intermed0, im_tile_size);
+    auto cb_intermed0_id = CreateCircularBuffer(program, core_grid, c_intermed0_config);
+
+    // cb_out_im
+    auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{CB::c_intermed1, im_df}}).set_page_size(CB::c_intermed1, im_tile_size);
+    auto cb_intermed1_id = CreateCircularBuffer(program, core_grid, c_intermed1_config);
+
+    // cb_out_accumulate_im
+    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{CB::c_intermed2, im_df}}).set_page_size(CB::c_intermed2, im_tile_size);
+    auto cb_intermed2_id = CreateCircularBuffer(program, core_grid, c_intermed2_config);
+
+    // cb_cur_max
+    auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_intermed3, stats_df}}).set_page_size(CB::c_intermed3, stats_tile_size);
+    auto cb_intermed3_id = CreateCircularBuffer(program, core_grid, c_intermed3_config);
+
+    // cb_prev_max
+    auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_intermed4, stats_df}}).set_page_size(CB::c_intermed4, stats_tile_size);
+    auto cb_intermed4_id = CreateCircularBuffer(program, core_grid, c_intermed4_config);
+
+    // cb_cur_sum
+    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_intermed5, stats_df}}).set_page_size(CB::c_intermed5, stats_tile_size);
+    auto cb_intermed5_id = CreateCircularBuffer(program, core_grid, c_intermed5_config);
+
+    // cb_prev_sum
+    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_intermed6, stats_df}}).set_page_size(CB::c_intermed6, stats_tile_size);
+    auto cb_intermed6_id = CreateCircularBuffer(program, core_grid, c_intermed6_config);
+
+    // cb_exp_max_diff
+    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_intermed7, stats_df}}).set_page_size(CB::c_intermed7, stats_tile_size);
+    auto cb_intermed7_id = CreateCircularBuffer(program, core_grid, c_intermed7_config);
+
+    // cb_prev_sum_2
+    auto c_out5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_out5, stats_df}}).set_page_size(CB::c_out5, stats_tile_size);
+    auto c_out5_id = CreateCircularBuffer(program, core_grid, c_out5_config);
+
+    // cb_exp_max_diff_2
+    auto c_out6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_out6, stats_df}}).set_page_size(CB::c_out6, stats_tile_size);
+    auto c_out6_id = CreateCircularBuffer(program, core_grid, c_out6_config);
+
+    // cb_out_accumulate_im_2
+    auto c_out7_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{CB::c_out7, im_df}}).set_page_size(CB::c_out7, im_tile_size);
+    auto c_out7_id = CreateCircularBuffer(program, core_grid, c_out7_config);
+
+    // Output
+    // cb_out_o
+    auto c_out0_config = CircularBufferConfig(out0_t * stats_tile_size, {{CB::c_out0, stats_df}}).set_page_size(CB::c_out0, stats_tile_size);
+    auto cb_out0_id = CreateCircularBuffer( program, core_grid, c_out0_config );
+
+    // cb_out_m
+    auto c_out1_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_out1, stats_df}}).set_page_size(CB::c_out1, stats_tile_size);
+    auto cb_out1_id = CreateCircularBuffer(program, core_grid, c_out1_config);
+
+    // cb_out_l
+    auto c_out2_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_out2, stats_df}}).set_page_size(CB::c_out2, stats_tile_size);
+    auto c_out2_id = CreateCircularBuffer(program, core_grid, c_out2_config);
+
+    // when there are worker cores
+    if (intermed_output_tiles > 0){
+        // cb_intermed_out
+        auto c_out3_config = CircularBufferConfig(intermed_output_tiles * stats_tile_size, {{CB::c_out3, stats_df}}).set_page_size(CB::c_out3, stats_tile_size);
+        auto c_out3_id = CreateCircularBuffer(program, core_grid, c_out3_config);
+    }
+
+    // cb_out_final
+    auto c_out4_config = CircularBufferConfig(out0_t * out_tile_size, {{CB::c_out4, out_df}}).set_page_size(CB::c_out4, out_tile_size);
+    auto cb_out4_id = CreateCircularBuffer(program, core_grid, c_out4_config);
+    if (is_output_sharded) {
+        c_out4_config.set_globally_allocated_address(*out0_buffer);
+    }
+
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     bfloat16 bfloat_identity_scalar = bfloat16(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
@@ -275,7 +406,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     std::vector<uint32_t> reader_compile_time_args_common = {
         // interleaved accessor args
-        B, PNHt, PSt, St, DHt, Sk_chunk_t, k_num_chunks, num_cores
+        B, PNHt, PSt, St, DHt, Sk_chunk_t, num_chunks, num_cores
     };
 
     std::vector<uint32_t> writer_reducer_compile_time_args_common = {
@@ -298,13 +429,11 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     std::vector<uint32_t> compute_compile_time_args_common = {
         // matmul args
-        St, DHt, PNHt, Sk_chunk_t, k_num_chunks,
+        St, DHt, PNHt, Sk_chunk_t, num_chunks,
         qk_in0_block_w, qk_out_subblock_w, qk_out_subblock_h, qk_in0_num_subblocks, qk_in1_num_subblocks, qk_num_blocks,
         out_in0_block_w, out_out_subblock_w, out_out_subblock_h, out_in0_num_subblocks, out_in1_num_subblocks, out_num_blocks,
         num_cores_per_batch
     };
-
-    log_debug("breakpoint 1");
 
     std::map<string, string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -316,17 +445,14 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
 
-    log_debug("breakpoint 2");
-
     uint32_t reduce_core_noc_x;
     uint32_t reduce_core_noc_y;
     uint32_t in0_mcast_reducer_semaphore;
     std::vector<uintptr_t> all_reader_kernels_id;
     std::vector<uintptr_t> all_writer_kernels_id;
     std::vector<uintptr_t> all_compute_kernels_id;
-    log_debug("breakpoint 3");
     for (int i = 0; i < num_active_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
+        CoreCoord core = core_group[i];
         int worker_id = i % num_cores_per_batch - 1;
         bool do_reduce = (worker_id == -1);
         uint32_t cur_batch = i / num_cores_per_batch;
@@ -337,6 +463,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             reduce_core_noc_y = core.y;
             in0_mcast_reducer_semaphore = tt_metal::CreateSemaphore(program, core, 0);
         }
+        // get physical core
+        CoreCoord reduce_core = {(std::size_t)reduce_core_noc_x, (std::size_t)reduce_core_noc_y};
+        auto reduce_core_physical = device->worker_core_from_logical_core(reduce_core);
 
         log_debug("i = {} -------------------------------------", i);
         log_debug("core: {}", core);
@@ -350,7 +479,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
         // Reader
         std::vector<uint32_t> reader_compile_time_args = reader_compile_time_args_common;
-        reader_compile_time_args.insert(reader_compile_time_args.end(), {cur_batch, k_chunk_start, k_chunk_end});
+        reader_compile_time_args.insert(reader_compile_time_args.end(), {cur_batch, k_chunk_start, k_chunk_end, is_q_sharded, !do_reduce, reduce_core_physical.x, reduce_core_physical.y});
         auto reader_kernels_id = CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/sdpa/kernels/dataflow/reader_decode_interleaved.cpp",
@@ -364,7 +493,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         uintptr_t writer_kernels_id;
         std::vector<uint32_t> writer_compile_time_args = do_reduce ? writer_reducer_compile_time_args_common : writer_worker_compile_time_args_common;
         if (do_reduce) {
-            writer_compile_time_args.insert(writer_compile_time_args.end(), {in0_mcast_reducer_semaphore, cur_batch, k_num_chunks, k_chunk_start, k_chunk_end});
+            writer_compile_time_args.insert(writer_compile_time_args.end(), {in0_mcast_reducer_semaphore, cur_batch, num_chunks, k_chunk_start, k_chunk_end});
             writer_kernels_id = CreateKernel(
                 program,
                 "tt_eager/tt_dnn/op_library/sdpa/kernels/dataflow/writer_decode_reducer_interleaved.cpp",
@@ -374,9 +503,6 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                     defines
             ));
         } else {
-            // get physical core
-            CoreCoord reduce_core = {(std::size_t)reduce_core_noc_x, (std::size_t)reduce_core_noc_y};
-            auto reduce_core_physical = device->worker_core_from_logical_core(reduce_core);
             writer_compile_time_args.insert(writer_compile_time_args.end(), {in0_mcast_reducer_semaphore, reduce_core_physical.x, reduce_core_physical.y, cur_batch, worker_id, k_chunk_start, k_chunk_end});
             writer_kernels_id = CreateKernel(
                 program,
@@ -404,105 +530,6 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         all_reader_kernels_id.push_back(reader_kernels_id);
         all_writer_kernels_id.push_back(writer_kernels_id);
         all_compute_kernels_id.push_back(compute_kernels_id);
-
-        // CBs
-        // Q input
-        auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{CB::c_in0, q_df}}).set_page_size(CB::c_in0, q_tile_size);
-        auto cb_in0_id = CreateCircularBuffer(program, core, c_in0_config);
-        // K input
-        auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{CB::c_in1, k_df}}).set_page_size(CB::c_in1, k_tile_size);
-        auto cb_in1_id = CreateCircularBuffer(program, core, c_in1_config);
-        // V input
-        auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{CB::c_in2, v_df}}).set_page_size(CB::c_in2, v_tile_size);
-        auto cb_in2_id = CreateCircularBuffer(program, core, c_in2_config);
-
-        // attn_mask input
-        auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{CB::c_in3, mask_df}}).set_page_size(CB::c_in3, mask_tile_size);
-        auto cb_in3_id = CreateCircularBuffer(program, core, c_in3_config);
-
-        // scale input
-        auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{CB::c_in4, scalar_df}}).set_page_size(CB::c_in4, scalar_tile_size);
-        auto cb_in4_id = CreateCircularBuffer(program, core, c_in4_config);
-
-        // identity scale input
-        auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{CB::c_in5, scalar_df}}).set_page_size(CB::c_in5, scalar_tile_size);
-        auto cb_in5_id = CreateCircularBuffer(program, core, c_in5_config);
-
-        // cb_m_in
-        auto c_in6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_in6, stats_df}}).set_page_size(CB::c_in6, stats_tile_size);
-        auto cb_in6_id = CreateCircularBuffer(program, core, c_in6_config);
-
-        // cb_l_in
-        auto c_in7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_in7, stats_df}}).set_page_size(CB::c_in7, stats_tile_size);
-        auto c_in7_id = CreateCircularBuffer(program, core, c_in7_config);
-
-        // cb_qk_im
-        auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{CB::c_intermed0, im_df}}).set_page_size(CB::c_intermed0, im_tile_size);
-        auto cb_intermed0_id = CreateCircularBuffer(program, core, c_intermed0_config);
-
-        // cb_out_im
-        auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{CB::c_intermed1, im_df}}).set_page_size(CB::c_intermed1, im_tile_size);
-        auto cb_intermed1_id = CreateCircularBuffer(program, core, c_intermed1_config);
-
-        // cb_out_accumulate_im
-        auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{CB::c_intermed2, im_df}}).set_page_size(CB::c_intermed2, im_tile_size);
-        auto cb_intermed2_id = CreateCircularBuffer(program, core, c_intermed2_config);
-
-        // cb_cur_max
-        auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_intermed3, stats_df}}).set_page_size(CB::c_intermed3, stats_tile_size);
-        auto cb_intermed3_id = CreateCircularBuffer(program, core, c_intermed3_config);
-
-        // cb_prev_max
-        auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_intermed4, stats_df}}).set_page_size(CB::c_intermed4, stats_tile_size);
-        auto cb_intermed4_id = CreateCircularBuffer(program, core, c_intermed4_config);
-
-        // cb_cur_sum
-        auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_intermed5, stats_df}}).set_page_size(CB::c_intermed5, stats_tile_size);
-        auto cb_intermed5_id = CreateCircularBuffer(program, core, c_intermed5_config);
-
-        // cb_prev_sum
-        auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_intermed6, stats_df}}).set_page_size(CB::c_intermed6, stats_tile_size);
-        auto cb_intermed6_id = CreateCircularBuffer(program, core, c_intermed6_config);
-
-        // cb_exp_max_diff
-        auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_intermed7, stats_df}}).set_page_size(CB::c_intermed7, stats_tile_size);
-        auto cb_intermed7_id = CreateCircularBuffer(program, core, c_intermed7_config);
-
-        // cb_prev_sum_2
-        auto c_out5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_out5, stats_df}}).set_page_size(CB::c_out5, stats_tile_size);
-        auto c_out5_id = CreateCircularBuffer(program, core, c_out5_config);
-
-        // cb_exp_max_diff_2
-        auto c_out6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_out6, stats_df}}).set_page_size(CB::c_out6, stats_tile_size);
-        auto c_out6_id = CreateCircularBuffer(program, core, c_out6_config);
-
-        // cb_out_accumulate_im_2
-        auto c_out7_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{CB::c_out7, im_df}}).set_page_size(CB::c_out7, im_tile_size);
-        auto c_out7_id = CreateCircularBuffer(program, core, c_out7_config);
-
-        // Output
-        // cb_out_o
-        auto c_out0_config = CircularBufferConfig(out0_t * stats_tile_size, {{CB::c_out0, stats_df}}).set_page_size(CB::c_out0, stats_tile_size);
-        auto cb_out0_id = CreateCircularBuffer( program, core, c_out0_config );
-
-        // cb_out_m
-        auto c_out1_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_out1, stats_df}}).set_page_size(CB::c_out1, stats_tile_size);
-        auto cb_out1_id = CreateCircularBuffer(program, core, c_out1_config);
-
-        // cb_out_l
-        auto c_out2_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CB::c_out2, stats_df}}).set_page_size(CB::c_out2, stats_tile_size);
-        auto c_out2_id = CreateCircularBuffer(program, core, c_out2_config);
-
-        // when there are worker cores
-        if (intermed_output_tiles > 0){
-            // cb_intermed_out
-            auto c_out3_config = CircularBufferConfig(intermed_output_tiles * stats_tile_size, {{CB::c_out3, stats_df}}).set_page_size(CB::c_out3, stats_tile_size);
-            auto c_out3_id = CreateCircularBuffer(program, core, c_out3_config);
-        }
-
-        // cb_out_final
-        auto c_out4_config = CircularBufferConfig(out0_t * out_tile_size, {{CB::c_out4, out_df}}).set_page_size(CB::c_out4, out_tile_size);
-        auto cb_out4_id = CreateCircularBuffer(program, core, c_out4_config);
     }
 
     uint32_t q_addr = q_buffer->address();
@@ -514,7 +541,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_active_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
+        CoreCoord core = core_group[i];
         uint32_t worker_id = i % num_cores_per_batch - 1;
         bool do_reduce = (worker_id == -1);
 
@@ -530,11 +557,13 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     auto override_runtime_arguments_callback = [
         num_active_cores,
-        grid_size,
+        core_group,
         all_reader_kernels_id,
         all_writer_kernels_id,
         all_compute_kernels_id,
-        num_cores_per_batch
+        num_cores_per_batch,
+        is_output_sharded,
+        cb_out4_id
         ]
     (
         const void* operation,
@@ -559,7 +588,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
         // Set reader rt args
         for (uint32_t i = 0; i < num_active_cores; ++i) {
-            CoreCoord core = {i % grid_size.x, i / grid_size.x};
+            CoreCoord core = core_group[i];
             uint32_t worker_id = i % num_cores_per_batch - 1;
             bool do_reduce = (worker_id == -1);
 
@@ -573,7 +602,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             }
         }
 
-
+        if (is_output_sharded) {
+            UpdateDynamicCircularBufferAddress(program, cb_out4_id, *out0_buffer);
+        }
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
