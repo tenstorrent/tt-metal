@@ -912,8 +912,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.bias_gelu_unary_bw
 
-.. autofunction:: tt_lib.tensor.squared_difference_bw
-
 .. autofunction:: tt_lib.tensor.lerp_bw
 
 .. autofunction:: tt_lib.tensor.concat_bw
