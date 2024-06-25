@@ -239,6 +239,18 @@ std::vector<ttnn::Tensor> _logaddexp2_bw(
 }
 
 
+std::vector<ttnn::Tensor> _squared_difference_bw(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor difference = ttnn::subtract(input, other);
+    Tensor grad_a = mul_unary(2, ttnn::multiply(grad, difference, std::nullopt, output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    Tensor grad_b = mul_unary(-1, grad_a, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ATAN2_BW:
@@ -257,6 +269,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _logaddexp_bw;
         case BinaryBackwardOpType::LOGADDEXP2_BW:
             return _logaddexp2_bw;
+        case BinaryBackwardOpType::SQUARED_DIFFERENCE_BW:
+            return _squared_difference_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
@@ -286,8 +300,13 @@ std::function<std::vector<ttnn::Tensor>(uint8_t , const Tensor&, const Tensor&, 
 }
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type2_wo_qid(BinaryBackwardOpType OpType){
+    switch (OpType) {
         case BinaryBackwardOpType::ADDALPHA_BW:
             return _addalpha_bw_overload;
+        default:
+            TT_ASSERT(false && "Undefined op type");
+            return 0;
+    }
 }
 }
 
