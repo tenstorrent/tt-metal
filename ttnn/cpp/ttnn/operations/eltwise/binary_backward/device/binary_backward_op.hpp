@@ -21,6 +21,8 @@ enum class BinaryBackwardOpType {
     XLOGY_BW,
     HYPOT_BW,
     LDEXP_BW,
+    LOGADDEXP_BW,
+    LOGADDEXP2_BW,
 };
 
 

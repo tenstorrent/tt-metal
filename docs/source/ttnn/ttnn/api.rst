@@ -197,6 +197,8 @@ Pointwise Binary
    ttnn/xlogy_bw
    ttnn/hypot_bw
    ttnn/ldexp_bw
+   ttnn/logaddexp_bw
+   ttnn/logaddexp2_bw
 
 Pointwise Ternary
 =================
