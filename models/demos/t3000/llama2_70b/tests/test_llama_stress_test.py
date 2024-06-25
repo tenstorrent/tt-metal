@@ -5,9 +5,9 @@
 import pytest
 from loguru import logger
 import torch
-from torch import nn
 import tt_lib
 import ttnn
+from ttnn import ConcatMeshToTensor
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
@@ -18,17 +18,11 @@ from models.demos.t3000.llama2_70b.tests.test_llama_perf import (
 from models.demos.t3000.llama2_70b.tt.model_config import (
     get_model_config,
 )
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    get_llama_path,
-    MAX_SEQ_LEN,
-    BASE_URL,
-)
+from models.demos.t3000.llama2_70b.tt.llama_common import get_llama_path, MAX_SEQ_LEN, BASE_URL, load_llama_state_dict
 from models.utility_functions import (
-    tt2torch_tensor,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     skip_for_grayskull,
-    get_devices_for_t3000,
 )
 from tqdm import tqdm
 
@@ -45,7 +39,7 @@ def prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token):
 
 
 def run_test_LlamaModel_stress_test(
-    devices,
+    device_mesh,
     batch,
     seq_len,
     model_config,
@@ -53,7 +47,6 @@ def run_test_LlamaModel_stress_test(
     n_devices,
     generation_length,
     emulated,
-    num_users,
 ):
     devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config, n_devices, emulated)
     logger.info(f"Running num_layer: {n_layers}")
@@ -62,12 +55,13 @@ def run_test_LlamaModel_stress_test(
         ckpt_dir,
         tokenizer_path,
         max_seq_len=MAX_SEQ_LEN,
-        max_batch_size=num_users,
+        max_batch_size=batch,
         n_layers=1,
         skip_model_load=False,
     )
     hugging_face_reference_model, tokenizer = generator.model.eval(), generator.tokenizer
-    state_dict = hugging_face_reference_model.state_dict()
+    # state_dict = hugging_face_reference_model.state_dict()
+    state_dict = load_llama_state_dict(ckpt_dir, n_layers=n_layers)
     configuration = hugging_face_reference_model.params
 
     # Prepare input -----------------------------------------------------------------------
@@ -80,7 +74,7 @@ def run_test_LlamaModel_stress_test(
     # Set up model -----------------------------------------------------------------------
     logger.info("Moving weights to devices; might take some time...")
     tt_model = TtLlamaModel_optimized(
-        devices,
+        device_mesh,
         state_dict,
         BASE_URL,
         n_layers,
@@ -89,28 +83,28 @@ def run_test_LlamaModel_stress_test(
         batch,
         emulated=emulated,
         cache_path=cache_path,
+        read_cache=True,
     )
-    for device in devices:
+    for i in device_mesh.get_device_ids():
+        device = device_mesh.get_device(i)
         tt_lib.device.Synchronize(device)
 
     del state_dict
 
     logger.info("Starting stress test...")
     # enable_persistent_kernel_cache()
-    for stress_test_iteration in tqdm(range(3), desc="Stress Test Progress", colour="blue"):
-        tokens, input_text_mask = intialize_inputs(tokenizer, prefill_ids, num_users, total_len)
+    for stress_test_iteration in tqdm(range(10), desc="Stress Test Progress", colour="blue"):
+        tokens, input_text_mask = intialize_inputs(tokenizer, prefill_ids, batch, total_len)
 
         start_pos = 0
         prev_pos = start_pos
         for cur_pos in tqdm(range(start_pos + 1, total_len), desc="Decode to 2k Progress", leave=False, colour="green"):
             tt_inp_emb, prev_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tokens[:, prev_pos:cur_pos], prev_pos)
             tt_logits = tt_model(tt_inp_emb, rot_mat, prev_pos, attn_mask)
+
             del tt_inp_emb, rot_mat, attn_mask
 
-            for device in devices:
-                tt_lib.device.Synchronize(device)
-
-            logits = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_logits], -1)
+            logits = ttnn.to_torch(tt_logits, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3))
             logits = logits[..., : configuration.vocab_size].float()
             del tt_logits
 
@@ -132,20 +126,26 @@ def run_test_LlamaModel_stress_test(
 )
 def test_Llama_stress_test(
     generation_length,
-    all_devices,
-    use_program_cache,
+    t3k_device_mesh,
     n_layers=80,
     n_devices=8,
     emulated=False,
-    num_users=32,
 ):
-    devices = get_devices_for_t3000(all_devices, num_devices=n_devices if not emulated else 1)
     batch, seq_len = 32, 1
+
     model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
+
+    if t3k_device_mesh.get_num_devices() < n_devices and not emulated:
+        pytest.skip(f"Requires at {n_devices} devices to run")
+
+    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
+    for i in t3k_device_mesh.get_device_ids():
+        device = t3k_device_mesh.get_device(i)
+        device.enable_program_cache()
+    disable_compilation_reports()
     run_test_LlamaModel_stress_test(
         devices,
         batch,

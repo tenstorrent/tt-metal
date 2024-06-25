@@ -4,32 +4,68 @@
 
 import pytest
 
-from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
-from models.utility_functions import get_devices_for_t3000, skip_for_grayskull
+from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tests.test_llama_mlp import run_test_LlamaMLP_inference
+from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check_device_mesh
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "batch, seq_len, pcc",
-    ((32, 1, 0.9999), (1, 128, 0.9998), (1, 2048, 0.9998)),
-    ids=("decode", "prefill_128", "prefill_2k"),
+    "llama_version",
+    (("llama3"),),
 )
-def test_LlamaMLP_inference_t3000(batch, seq_len, pcc, all_devices, use_program_cache):
-    n_devices = 8
-    devices = get_devices_for_t3000(all_devices, num_devices=n_devices)
-    model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
-    if len(all_devices) < n_devices:
-        pytest.skip(f"Requires at {n_devices} devices to run")
-    if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
-        pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
+@pytest.mark.parametrize(
+    "batch, seq_len, pcc",
+    ((32, 1, 0.9995), (1, 128, 0.9996), (1, 2048, 0.9996), (1, 8192, 0.9996)),
+    ids=("decode", "prefill_128", "prefill_2k", "prefill_8k"),
+)
+@pytest.mark.parametrize(
+    "max_batch_size, max_context_len",
+    (
+        # (32, 2048),
+        (16, 8192),
+    ),
+    ids=(
+        # "short_context",
+        "long_context",
+    ),
+)
+def test_LlamaMLP_inference_t3000(
+    batch,
+    seq_len,
+    pcc,
+    t3k_device_mesh,
+    max_batch_size,
+    max_context_len,
+    llama_version,
+    use_program_cache,
+):
+    if batch > max_batch_size:
+        pytest.skip(f"Decode with {batch} users is not supported with large context")
 
+    if batch == 1 and seq_len > max_context_len:
+        pytest.skip(f"Prefill with {seq_len=} is not supported with short context")
+
+    if llama_version == "llama2" and seq_len > 2048:
+        pytest.skip(f"Llama2 with {seq_len=} is not supported (max 2048)")
+
+    model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
+        llama_version=llama_version,
+        batch=batch,
+        seq_len=seq_len,
+        max_batch_size=max_batch_size,
+        max_context_len=max_context_len,
+    )
+
+    check_device_mesh(t3k_device_mesh, model_config)
     run_test_LlamaMLP_inference(
-        devices,
+        t3k_device_mesh,
         batch,
         seq_len,
         pcc,
         model_config,
-        n_devices,
+        llama_version,
+        ckpt_dir,
+        tokenizer_path,
+        cache_path,
     )

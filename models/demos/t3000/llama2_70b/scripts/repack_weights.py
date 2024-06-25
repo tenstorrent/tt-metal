@@ -14,7 +14,6 @@ import torch
 from tqdm import tqdm
 from collections import defaultdict
 import argparse
-import shutil
 
 
 def layer_num(key):
@@ -69,15 +68,6 @@ def repack(in_dir, out_dir, chunk_size):
     # save chunks
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    # copy params.json from input to output directory
-    params_file = Path(in_dir) / "params.json"
-    if params_file.exists():
-        shutil.copy(params_file, out_dir)
-        print(f"Copied params.json to {out_dir}")
-    else:
-        print("No params.json file found in input directory.")
-
     for i, chunk in enumerate(chunks):
         # each chunk file name should tell which layers are in it
         start_layer = i * chunk_size
@@ -93,6 +83,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Repack llama2-70b weights")
     parser.add_argument("in_dir", type=str, help="input directory")
     parser.add_argument("out_dir", type=str, help="output directory")
-    parser.add_argument("chunk_size", type=int, nargs="?", default=5, help="number of layers per chunk")
+    parser.add_argument("chunk_size", type=int, default=5, help="number of layers per chunk")
     args = parser.parse_args()
     repack(args.in_dir, args.out_dir, args.chunk_size)

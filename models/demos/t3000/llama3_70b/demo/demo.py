@@ -4,82 +4,93 @@
 
 import pytest
 import torch
-
-from models.utility_functions import get_devices_for_t3000
-from models.demos.t3000.llama2_70b.tt.llama_common import get_llama_path
-from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
-from models.demos.t3000.llama2_70b.demo.demo import build_generator, load_prompts_file, run_decode, construct_arg
+from loguru import logger
 
 
-def main(args):
-    # Set random reproducible seed
-    torch.manual_seed(0)
-
-    generator = build_generator(args)
-
-    # Load the model and tokenizer
-    model, tokenizer = generator.model, generator.tokenizer
-
-    tokenized, prompts = load_prompts_file(args, tokenizer)
-
-    # Run decode
-    with torch.no_grad():
-        all_text = run_decode(args=args, model=model, tokenizer=tokenizer, prompt_tokens=tokenized, prompts=prompts)
-
-        if args.output_at_end:
-            with open("models/demos/t3000/llama3_70b/demo/data/demo_user_output.txt", "w") as f:
-                for i, text in enumerate(all_text):
-                    f.write(f"User {i}: {text}\n")
+from models.demos.t3000.llama2_70b.tt.llama_common import (
+    setup_llama_env,
+    check_device_mesh,
+)
+from models.demos.t3000.llama2_70b.demo.demo import main, construct_arg
 
 
 @pytest.mark.timeout(240000)
-# @pytest.mark.parametrize("decode_only", (True, False), ids=["decode_only", "prefill_decode"])
-@pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=["1L", "2L", "10L", "80L"])
+@pytest.mark.parametrize(
+    "llama_version",
+    (("llama3"),),
+)
+@pytest.mark.parametrize(
+    "chat, prompts_file",
+    (
+        (True, "models/demos/t3000/llama2_70b/demo/data/multi_prompt_chat.json"),
+        (False, "models/demos/t3000/llama2_70b/demo/data/multi_prompt.json"),
+    ),
+    ids=("chat_completion", "text_completion"),
+)
+@pytest.mark.parametrize("decode_only", (True, False), ids=("decode_only", "prefill_decode"))
+@pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=("1L", "2L", "10L", "80L"))
 @pytest.mark.parametrize(
     "implementation, skip_model_load, n_devices",
-    [
-        ("tt", False, 8),
-        ("meta", False, 8),
-    ],
-    ids=["tt-70b", "meta-70b"],
+    (
+        (
+            "tt",
+            False,
+            8,
+        ),
+        (
+            "meta",
+            False,
+            8,
+        ),
+    ),
+    ids=("tt-70b-T3000", "meta-70b"),
 )
 @pytest.mark.parametrize(
-    "num_tokens, prompts_file, output_at_end, top_p, top_k, temperature",
-    [
-        (128, "models/demos/t3000/llama3_70b/demo/data/multi_prompt.json", True, 1, 1, 1.0),
-        (128, "models/demos/t3000/llama3_70b/demo/data/multi_prompt.json", True, 0.9, 10, 1.0),
-    ],
-    ids=["greedy", "sampling"],
+    "num_tokens, output_at_end, top_p, top_k, temperature",
+    (
+        (128, True, 1, 1, 1.0),
+        (128, True, 0.9, 10, 1.0),
+    ),
+    ids=("greedy", "sampling"),
+)
+@pytest.mark.parametrize(
+    "ground_truth",
+    ("models/demos/t3000/llama2_70b/demo/data/llama3_ground_truth.json", None),
+    ids=("check_enabled", "check_disabled"),
 )
 def test_LlamaModel_demo(
+    # model args
     implementation,
     skip_model_load,
     num_layers,
+    # Generation args
     num_tokens,
     prompts_file,
     output_at_end,
     top_p,
     top_k,
     temperature,
-    all_devices,
+    chat,
+    # TT args
+    t3k_device_mesh,
     n_devices,
-    # decode_only,
+    decode_only,
+    llama_version,
+    ground_truth,
     use_program_cache,
 ):
+    logger.info("Running LlamaModel demo")
     ## Get model config
-    devices = get_devices_for_t3000(all_devices, num_devices=n_devices)
-    model_config_default = get_model_config()
 
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
-    if len(devices) < n_devices:
-        pytest.skip(f"Requires at {n_devices} devices to run")
-    if (
-        compute_grid_size.x < model_config_default["MAX_GRID_SIZE"][0]
-        or compute_grid_size.y < model_config_default["MAX_GRID_SIZE"][1]
-    ):
-        pytest.skip(f"Requires grid size of at least {model_config_default['MAX_GRID_SIZE']} to run")
+    model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
+        llama_version=llama_version,
+    )
 
-    devices, ckpt_dir, tokenizer_path, cache_path = get_llama_path(devices, model_config_default, n_devices, False)
+    check_device_mesh(t3k_device_mesh, model_config)
+
+    for i in t3k_device_mesh.get_device_ids():
+        device = t3k_device_mesh.get_device(i)
+        device.enable_async(True)
 
     args = construct_arg(
         implementation=implementation,
@@ -93,9 +104,12 @@ def test_LlamaModel_demo(
         top_p=top_p,
         top_k=top_k,
         temperature=temperature,
-        devices=devices,
+        chat=chat,
+        device_mesh=t3k_device_mesh,
         n_devices=n_devices,
         cache_path=cache_path,
-        decode_only=True,
+        decode_only=decode_only,
+        llama_version=llama_version,
+        ground_truth=ground_truth,
     )
     main(args)
