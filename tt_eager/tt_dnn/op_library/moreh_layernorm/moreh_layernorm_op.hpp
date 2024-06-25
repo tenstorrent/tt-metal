@@ -27,6 +27,9 @@ struct MorehLayerNorm {
     MemoryConfig output_mem_config;
     const DeviceComputeKernelConfig compute_kernel_config;
 
+    bool compute_mean;
+    bool compute_rstd;
+
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
