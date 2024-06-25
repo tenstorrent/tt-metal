@@ -462,6 +462,8 @@ from ttnn.operations.binary_backward import (
     xlogy_bw,
     hypot_bw,
     ldexp_bw,
+    logaddexp_bw,
+    logaddexp2_bw,
 )
 
 from ttnn.operations.ternary import (
