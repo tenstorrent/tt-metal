@@ -29,6 +29,10 @@ void kernel_main() {
     constexpr uint32_t cur_batch =  get_compile_time_arg_val(8);
     constexpr uint32_t k_chunk_start = get_compile_time_arg_val(9);
     constexpr uint32_t k_chunk_end = get_compile_time_arg_val(10);
+    constexpr bool is_q_sharded = get_compile_time_arg_val(11);
+    constexpr bool is_worker = get_compile_time_arg_val(12);
+    constexpr uint32_t reduce_core_noc_x          = get_compile_time_arg_val(13);
+    constexpr uint32_t reduce_core_noc_y          = get_compile_time_arg_val(14);
 
     const uint32_t q_addr  = get_arg_val<uint32_t>(0);
     const uint32_t k_addr  = get_arg_val<uint32_t>(1);
@@ -58,15 +62,48 @@ void kernel_main() {
     constexpr DataFormat mask_data_format = get_dataformat(cb_mask_in);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
+    uint32_t barrier_count = 0;
 
+    // First, read Q entirely, it could be interleaved or sharded
+    const uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
+    const uint32_t q_chunk_tiles_bytes = q_chunk_tiles * q_tile_bytes;
 
+    if (is_q_sharded){
+        uint64_t q_read_addr;
+        if (is_worker){
+            q_read_addr = get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, q_addr);
+        } else {
+            q_read_addr = get_noc_addr(q_addr);
+        }
+        cb_reserve_back(cb_q_in, q_chunk_tiles);
+        uint32_t q_write_ptr = get_write_ptr(cb_q_in);
+        noc_async_read(q_read_addr, q_write_ptr, q_chunk_tiles_bytes);
+        noc_async_read_barrier();
+        cb_push_back(cb_q_in, q_chunk_tiles);
+    }
+    else{
+        const InterleavedAddrGenFast<is_dram> q_reader = {
+            .bank_base_address = q_addr,
+            .page_size = q_tile_bytes,
+            .data_format = q_data_format
+        };
+        uint32_t q_tile_id = q_batch_offset;
+        cb_reserve_back(cb_q_in, q_chunk_tiles);
+        uint32_t q_write_ptr = get_write_ptr(cb_q_in);
+        for (uint32_t tile = 0; tile < q_chunk_tiles; ++tile) {
+            noc_async_read_tile(q_tile_id, q_reader, q_write_ptr);
+            q_tile_id += 1;
+            q_write_ptr += q_tile_bytes;
+            if (++barrier_count == barrier_threshold) {
+                noc_async_read_barrier();
+                barrier_count = 0;
+            }
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_q_in, q_chunk_tiles);
+    }
 
-    const InterleavedAddrGenFast<is_dram> q_reader = {
-        .bank_base_address = q_addr,
-        .page_size = q_tile_bytes,
-        .data_format = q_data_format
-    };
-
+    // Read the rest
     const InterleavedAddrGenFast<is_dram> k_reader = {
         .bank_base_address = k_addr,
         .page_size = k_tile_bytes,
@@ -86,29 +123,9 @@ void kernel_main() {
     };
 
     // Offset for current batch
-    const uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
     const uint32_t k_batch_offset = cur_batch * St * DHt;
     const uint32_t v_batch_offset = cur_batch * St * DHt;
     const uint32_t mask_batch_offset = cur_batch * PNHt * PSt;
-
-    // DPRINT << "[Reader] Start" << ENDL();
-
-    // First, read Q entirely
-    uint32_t q_tile_id = q_batch_offset;
-    uint32_t barrier_count = 0;
-    cb_reserve_back(cb_q_in, q_chunk_tiles);
-    uint32_t q_write_ptr = get_write_ptr(cb_q_in);
-    for (uint32_t tile = 0; tile < q_chunk_tiles; ++tile) {
-        noc_async_read_tile(q_tile_id, q_reader, q_write_ptr);
-        q_tile_id += 1;
-        q_write_ptr += q_tile_bytes;
-        if (++barrier_count == barrier_threshold) {
-            noc_async_read_barrier();
-            barrier_count = 0;
-        }
-    }
-    noc_async_read_barrier();
-    cb_push_back(cb_q_in, q_chunk_tiles);
 
     // DPRINT << "[Reader] read Q" << ENDL();
 
