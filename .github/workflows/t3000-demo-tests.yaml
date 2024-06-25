@@ -50,7 +50,7 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          source ${{ github.workspace }}/tests/scripts/t3000/t3000_demo_tests_func.sh
+          source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_demo_tests.sh
           ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
