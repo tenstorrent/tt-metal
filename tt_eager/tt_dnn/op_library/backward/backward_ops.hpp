@@ -68,25 +68,6 @@ std::vector<std::optional<Tensor>> mul_bw(
     std::optional<Tensor> input_a_grad = std::nullopt,
     std::optional<Tensor> input_b_grad = std::nullopt);
 
-std::vector<std::optional<Tensor>> add_bw(
-    uint8_t cq_id,
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
-
-std::vector<std::optional<Tensor>> add_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
-
 std::vector<Tensor> exp_bw(
     const Tensor& grad,
     const Tensor& input,
