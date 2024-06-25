@@ -119,6 +119,12 @@ squared_difference_bw = ttnn.register_operation(
     )
 )(ttnn._ttnn.operations.binary_backward.squared_difference_bw)
 
+fmod_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.fmod, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.fmod_bw)
+
 subalpha_bw = ttnn.register_operation(
     golden_function=lambda grad, a, b, alpha, *args, **kwargs: _golden_function_backward_with_float(
         torch.sub, grad, a, b, alpha, *args, **kwargs
