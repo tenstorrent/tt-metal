@@ -190,12 +190,25 @@ subalpha_bw = ttnn.register_operation(golden_function=_golden_function)(
 def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
-    pyt_y = torch.add(input_tensor_a, input_tensor_b, alpha=alpha)
+    pyt_y = torch.sub(input_tensor_a, input_tensor_b)
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
     return golden_tensor
 
 
 sub_bw = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary_backward.sub_bw)
+
+
+def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    pyt_y = torch.add(input_tensor_a, input_tensor_b)
+    pyt_y.backward(gradient=grad_tensor)
+    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
+    return golden_tensor
+
+
+add_bw = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary_backward.add_bw)
+
 
 __all__ = []
