@@ -52,6 +52,7 @@ struct Typecast {
         bool fp32_dest_acc_en = preserve_fp32_precision or
                                 output_dtype == DataType::UINT32 or
                                 output_dtype == DataType::INT32 or
+                                output_dtype == DataType::FLOAT32 or
                                 input_dtype == DataType::UINT32 or
                                 input_dtype == DataType::INT32;
         auto unary_op = UnaryWithParam{UnaryOpType::TYPECAST, {static_cast<float>(input_dtype), static_cast<float>(output_dtype)}};

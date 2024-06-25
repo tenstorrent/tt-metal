@@ -49,6 +49,7 @@ inline Tensor execute_on_worker_thread(
     bool fp32_dest_acc_en = preserve_fp32_precision or
                             output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or
+                            output_dtype == DataType::FLOAT32 or
                             input_tensor.get_dtype() == DataType::UINT32 or
                             input_tensor.get_dtype() == DataType::INT32;  // MT: Currently only uint32/int32 is moved to
                                                                           // DST directly, fp32 is converted to fp16b
