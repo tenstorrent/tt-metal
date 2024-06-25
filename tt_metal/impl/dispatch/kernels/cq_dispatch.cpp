@@ -77,14 +77,14 @@ static uint32_t cmd_ptr;   // walks through pages in cb cmd by cmd
 
 static uint32_t downstream_cb_data_ptr = downstream_cb_base;
 
-// For packed write on GS, below must be>= 120 - 1. TODO: this should be a compile time arg passed in from host
-// For packed_write_large, must match CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS
-constexpr uint32_t max_write_packed_cores = 108;
 constexpr uint32_t max_write_packed_large_cmd =
     CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS *
     sizeof(CQDispatchWritePackedLargeSubCmd) / sizeof(uint32_t);
-constexpr uint32_t l1_cache_elements = (max_write_packed_cores > max_write_packed_large_cmd) ?
-    max_write_packed_cores : max_write_packed_large_cmd;
+constexpr uint32_t max_write_packed_cmd =
+    CQ_DISPATCH_CMD_PACKED_WRITE_MAX_UNICAST_SUB_CMDS *
+    sizeof(CQDispatchWritePackedUnicastSubCmd) / sizeof(uint32_t);
+constexpr uint32_t l1_cache_elements = (max_write_packed_cmd > max_write_packed_large_cmd) ?
+    max_write_packed_cmd : max_write_packed_large_cmd;
 constexpr uint32_t l1_cache_elements_rounded =
     ((l1_cache_elements + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
     l1_to_local_cache_copy_chunk;
@@ -532,7 +532,7 @@ void process_write_packed(uint32_t flags) {
     volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
 
     uint32_t count = cmd->write_packed.count;
-    ASSERT(count <= (mcast ? max_write_packed_cores / 2 : max_write_packed_cores));
+    ASSERT(count <= (mcast ? CQ_DISPATCH_CMD_PACKED_WRITE_MAX_MULTICAST_SUB_CMDS : CQ_DISPATCH_CMD_PACKED_WRITE_MAX_UNICAST_SUB_CMDS));
     constexpr uint32_t sub_cmd_size = sizeof(WritePackedSubCmd);
     // Copying in a burst is about a 30% net gain vs reading one value per loop below
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
