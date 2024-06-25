@@ -394,8 +394,9 @@ namespace tt::tt_metal{
             // This implementation assumes contiguous ranges and aggregates the ranges into one bounds check
             // TODO: consider checking multiple ranges to detect straddling transactions
             uint64_t pcie_chan_base_addr = tt::Cluster::instance().get_pcie_base_addr_from_device(device->id());
+            uint32_t num_host_channels = tt::Cluster::instance().get_num_host_channels(device->id());
             uint64_t pcie_chan_end_addr = pcie_chan_base_addr;
-            for (int pcie_chan = 0; pcie_chan < tt::Cluster::instance().get_num_host_channels(device->id()); pcie_chan++) {
+            for (int pcie_chan = 0; pcie_chan < num_host_channels; pcie_chan++) {
                 pcie_chan_end_addr += tt::Cluster::instance().get_host_channel_size(device->id(), pcie_chan);
             }
 
@@ -409,7 +410,8 @@ namespace tt::tt_metal{
                 soc_d.get_dram_cores(),
                 soc_d.get_physical_ethernet_cores(),
                 soc_d.grid_size,
-                harvested_rows);
+                harvested_rows,
+                num_host_channels > 0);
         }
 
         inline void CheckDataMovementConfig(Program &program, const std::string &file_name, const CoreRangeSet &core_ranges) {

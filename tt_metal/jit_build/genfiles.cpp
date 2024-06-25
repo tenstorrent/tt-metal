@@ -595,7 +595,8 @@ static string generate_noc_addr_ranges_string(
     const std::vector<CoreCoord>& dram_cores,
     const std::vector<CoreCoord>& ethernet_cores,
     CoreCoord grid_size,
-    const std::vector<uint32_t>& harvested_rows) {
+    const std::vector<uint32_t>& harvested_rows,
+    bool has_pcie_cores) {
 
     stringstream ss;
 
@@ -623,7 +624,7 @@ static string generate_noc_addr_ranges_string(
     ss << "#define NOC_DRAM_ADDR_END (NOC_DRAM_ADDR_BASE + NOC_DRAM_ADDR_SIZE)" << endl;
     ss << endl;
 
-    if (pcie_addr_base == pcie_addr_size) {
+    if (not has_pcie_cores) {
         // If the address range is 0, then there are no PCIe cores (non-mmio device)
         ss << "#define NOC_PCIE_XY_P(x, y) false" << endl;
     } else {
@@ -687,10 +688,11 @@ void jit_build_genfiles_noc_addr_ranges_header(
     const std::vector<CoreCoord>& dram_cores,
     const std::vector<CoreCoord>& ethernet_cores,
     CoreCoord grid_size,
-    const std::vector<uint32_t>& harvested_rows) {
+    const std::vector<uint32_t>& harvested_rows,
+    bool has_pcie_cores) {
 
     string output_string = generate_noc_addr_ranges_string(pcie_addr_base, pcie_addr_size, dram_addr_base, dram_addr_size,
-                                                           pcie_cores, dram_cores, ethernet_cores, grid_size, harvested_rows);
+                                                           pcie_cores, dram_cores, ethernet_cores, grid_size, harvested_rows, has_pcie_cores);
 
     ofstream file_stream_br(path + "/brisc/noc_addr_ranges_gen.h");
     file_stream_br << output_string;
