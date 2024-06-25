@@ -18,7 +18,7 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
     std::vector<CoreCoord> preferred_eth_dram_core;     // per channel preferred eth endpoint
     std::vector<size_t> dram_address_offsets;           // starting address offset
     std::vector<CoreCoord> logical_ethernet_cores;
-    uint32_t dram_core_size;
+    uint64_t dram_core_size;
 
     // in tt_SocDescriptor worker_log_to_routing_x and worker_log_to_routing_y map logical coordinates to NOC virtual
     // coordinates UMD accepts NOC virtual coordinates but Metal needs NOC physical coordinates to ensure a harvested
