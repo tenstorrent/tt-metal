@@ -137,18 +137,23 @@ KernelGroup::KernelGroup(
     if (core_type == CoreType::WORKER) {
         // Dynamic address map
         this->launch_msg.kernel_config_base = L1_KERNEL_CONFIG_BASE;
-        this->launch_msg.rta_offsets[DISPATCH_CLASS_TENSIX_DM0] = 0;
-        this->launch_msg.rta_offsets[DISPATCH_CLASS_TENSIX_DM1] = max_runtime_args * sizeof(uint32_t);
-        this->launch_msg.rta_offsets[DISPATCH_CLASS_TENSIX_COMPUTE] = 2 * max_runtime_args * sizeof(uint32_t);
+    } else {
+        this->launch_msg.kernel_config_base =
+            erisc_is_idle ? IDLE_ERISC_L1_KERNEL_CONFIG_BASE : eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
+    }
 
-        for (int class_id = 0; class_id < DISPATCH_CLASS_MAX; class_id++) {
-            auto& optional_id = kernel_ids[class_id];
-            if (optional_id) {
-                const auto kernel = program.get_kernel(optional_id.value());
-                this->launch_msg.watcher_kernel_ids[class_id] = kernel->get_watcher_kernel_id();
-                this->launch_msg.enables |= 1 << class_id;
+    for (int class_id = 0; class_id < DISPATCH_CLASS_MAX; class_id++) {
+        auto& optional_id = kernel_ids[class_id];
+        if (optional_id) {
+            const auto kernel = program.get_kernel(optional_id.value());
+            this->launch_msg.watcher_kernel_ids[class_id] = kernel->get_watcher_kernel_id();
+            this->launch_msg.enables |= 1 << class_id;
 
-                if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
+            if (core_type == CoreType::WORKER) {
+                if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
+                    // Use brisc's noc if brisc specifies a noc
+                    this->launch_msg.brisc_noc_id = std::get<DataMovementConfig>(kernel->config()).noc;
+                } else if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
                     // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
                     // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
                     this->launch_msg.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
@@ -156,17 +161,6 @@ KernelGroup::KernelGroup(
                 }
             }
         }
-    } else {
-        // Dynamic address map
-        this->launch_msg.kernel_config_base =
-            erisc_is_idle ? IDLE_ERISC_L1_KERNEL_CONFIG_BASE : eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
-        this->launch_msg.rta_offsets[DISPATCH_CLASS_ETH_DM0] = 0;
-
-        TT_ASSERT(kernel_ids[DISPATCH_CLASS_ETH_DM0].has_value());
-        this->launch_msg.enables |= DISPATCH_CLASS_MASK_ETH_DM0;
-        // Ethernet cores use the brisc kernel id field
-        const auto kernel = program.get_kernel(kernel_ids[DISPATCH_CLASS_ETH_DM0].value());
-        this->launch_msg.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0] = kernel->get_watcher_kernel_id();
     }
 
     this->launch_msg.exit_erisc_kernel = false;
@@ -766,6 +760,103 @@ void Program::populate_dispatch_data(Device *device) {
     return;
 }
 
+template <typename T, std::size_t dim2, std::size_t dim1, std::size_t dim0>
+using Array3D = std::array<std::array<std::array<T, dim0>, dim1>, dim2>;
+
+void Program::finalize_rt_args() {
+
+    // Iterate over kernels in the program and "levels" the number of RTAs based on the max
+    // Unique RTAs are packed across dispatch classes
+    // Common RTAs come after unique RTAs and are also packed
+    static vector<CoreType>core_types = { CoreType::WORKER, CoreType::ETH }; // TODO: make this global
+    vector<uint32_t> max_rtas(DISPATCH_CLASS_MAX);
+    vector<uint32_t> max_crtas(DISPATCH_CLASS_MAX);
+
+    for (CoreType core_type : core_types) {
+        uint32_t unique_rta_size = 0;
+
+        for (auto& kg : this->get_kernel_groups(core_type)) {
+            for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+                max_rtas[dispatch_class] = 0;
+                auto& optional_id = kg.kernel_ids[dispatch_class];
+                if (optional_id) {
+                    auto kernel = detail::GetKernel(*this, optional_id.value());
+                    for (const CoreRange &core_range : kg.core_ranges.ranges()) {
+                        for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+                            for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                                CoreCoord core_coord(x, y);
+                                max_rtas[dispatch_class] =
+                                    std::max(max_rtas[dispatch_class], (uint32_t)kernel->runtime_args(core_coord).size());
+                            }
+                        }
+                    }
+                }
+            }
+
+            uint32_t offset = 0;
+            for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+                auto& optional_id = kg.kernel_ids[dispatch_class];
+                kg.rta_sizes[dispatch_class] = max_rtas[dispatch_class] * sizeof(uint32_t);
+                if (optional_id) {
+                    auto kernel = detail::GetKernel(*this, optional_id.value());
+                    kernel->set_runtime_args_count(kg.core_ranges, max_rtas[dispatch_class]);
+                    kg.launch_msg.mem_map[dispatch_class].rta_offset = offset;
+                    offset += max_rtas[dispatch_class] * sizeof(uint32_t);
+                } else {
+                    kg.launch_msg.mem_map[dispatch_class].rta_offset = 0;
+                }
+            }
+
+            kg.total_rta_size = offset;
+            offset = align(offset, L1_ALIGNMENT);
+            unique_rta_size = offset;
+        }
+
+        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+            max_crtas[dispatch_class] = 0;
+        }
+        // Find the max # common RTAs across all kernels for each dispatch class
+        for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
+            auto kernel = detail::GetKernel(*this, kernel_id);
+            if (core_type == kernel->get_kernel_core_type()) {
+                uint32_t dispatch_class = kernel->dispatch_class();
+                max_crtas[dispatch_class] =
+                    std::max(max_crtas[dispatch_class], (uint32_t)kernel->common_runtime_args().size());
+            }
+        }
+
+        // Calculate the address offset and size for common RTAs for each dispatch class
+        uint32_t offset = 0;
+        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+            uint32_t size = max_crtas[dispatch_class] * sizeof(uint32_t);
+            this->crta_offsets[core_type == CoreType::WORKER][dispatch_class] = unique_rta_size + offset;
+            this->crta_sizes[core_type == CoreType::WORKER][dispatch_class] = size;
+            offset += size;
+            offset = align(offset, L1_ALIGNMENT);
+        }
+
+        // Set the runtime_args_data sizing info based on the shared max
+        for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
+            auto kernel = detail::GetKernel(*this, kernel_id);
+            if (core_type == kernel->get_kernel_core_type()) {
+                uint32_t dispatch_class = kernel->dispatch_class();
+                kernel->set_common_runtime_args_count(max_crtas[dispatch_class]);
+            }
+        }
+
+        // Set the kernel group common runtime arg offsets use in the launch message
+        for (auto& kg : this->get_kernel_groups(core_type)) {
+            for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+                kg.launch_msg.mem_map[dispatch_class].crta_offset = this->crta_offsets[core_type == CoreType::WORKER][dispatch_class];
+            }
+        }
+
+        // TODO: this is asserted here as the leveling above can break the limits enforced by the API
+        // Once we use a ring buffer, memory space will be dynamic and this assert won't matter
+        TT_FATAL(offset <= L1_KERNEL_CONFIG_SIZE);
+    }
+}
+
 void Program::compile(Device *device) {
     ZoneScoped;
     bool first_compile_on_device = compile_needed_.find(device->id()) == compile_needed_.end();
@@ -788,7 +879,6 @@ void Program::compile(Device *device) {
             launch_build_step(
                 [kernel, device, this] {
                     JitBuildOptions build_options(device->build_env());
-                    kernel->set_common_runtime_args_index();
                     kernel->set_build_options(build_options);
                     this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
 
@@ -830,7 +920,6 @@ void Program::compile(Device *device) {
     sync_build_step(events);
 
     this->construct_core_range_set_for_worker_cores();
-
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
         this->populate_dispatch_data(device);  // TODO: maybe rename
     }

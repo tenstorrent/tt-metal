@@ -15,6 +15,7 @@
 #include "circular_buffer.h"
 
 #include "debug/status.h"
+#include "debug/dprint.h"
 // clang-format on
 
 uint32_t halt_stack_ptr_save;
@@ -34,7 +35,8 @@ uint32_t atomic_ret_val __attribute__((section("l1_data"))) __attribute__((used)
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
-uint32_t tt_l1_ptr *l1_arg_base __attribute__((used));
+uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -95,7 +97,8 @@ int main(int argc, char *argv[]) {
         setup_cb_read_write_interfaces(0, mailboxes->launch.max_cb_index, true, true);
 
         uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
-        l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offsets[DISPATCH_CLASS_TENSIX_DM1]);
+        rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.mem_map[DISPATCH_CLASS_TENSIX_DM1].rta_offset);
+        crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.mem_map[DISPATCH_CLASS_TENSIX_DM1].crta_offset);
 
         DEBUG_STATUS("R");
         kernel_init();
