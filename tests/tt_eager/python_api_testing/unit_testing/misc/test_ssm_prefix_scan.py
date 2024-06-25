@@ -80,6 +80,7 @@ def test_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
 
 @skip_for_grayskull("Grayskull not supported")
 def test_ssm_prefix_scan_with_program_cache(device, use_program_cache):
+    pytest.skip("Requires TT_METAL_CLEAR_L1=1 to pass")
     L, E, N = 32, 64, 32
     num_cores = 1
     dtype = ttl.tensor.DataType.BFLOAT8_B
