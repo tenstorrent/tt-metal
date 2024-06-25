@@ -101,7 +101,17 @@ def torch_layernorm_backward(input, output_grad, *, normalized_dims=1, eps=1e-5,
     return input.grad, gamma_grad, beta_grad
 
 
-def tt_layernorm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None, device=None, compute_kernel_config=None):
+def tt_layernorm(
+    input,
+    *,
+    normalized_dims=1,
+    eps=1e-5,
+    gamma=None,
+    beta=None,
+    device=None,
+    compute_kernel_config=None,
+    create_mean_rstd=True,
+):
     input_shape = list(input.shape)
 
     # mean_rstd_shape
@@ -139,14 +149,14 @@ def tt_layernorm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None, d
         npu_gamma,
         npu_beta,
         output=npu_output,
-        mean=npu_mean,
-        rstd=npu_rstd,
+        mean=npu_mean if create_mean_rstd else None,
+        rstd=npu_rstd if create_mean_rstd else None,
         compute_kernel_config=compute_kernel_config,
     )
 
     tt_output = to_cpu(npu_output, input_shape)
-    tt_mean = to_cpu(npu_mean, mean_rstd_shape)
-    tt_rstd = to_cpu(npu_rstd, mean_rstd_shape)
+    tt_mean = to_cpu(npu_mean, mean_rstd_shape) if create_mean_rstd else None
+    tt_rstd = to_cpu(npu_rstd, mean_rstd_shape) if create_mean_rstd else None
 
     return tt_output, tt_mean, tt_rstd
 
@@ -260,7 +270,9 @@ def make_input_tensors(input_shape, normalized_dims, elementwise_affine, do_back
     return cpu_input, cpu_gamma, cpu_beta, cpu_output_grad
 
 
-def run_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, device, compute_kernel_options=None):
+def run_moreh_layernorm(
+    input_shape_normalized_dims, elementwise_affine, eps, device, create_mean_rstd=True, compute_kernel_options=None
+):
     input_shape, normalized_dims = input_shape_normalized_dims
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
@@ -281,6 +293,7 @@ def run_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, de
         beta=cpu_beta,
         device=device,
         compute_kernel_config=compute_kernel_config,
+        create_mean_rstd=create_mean_rstd,
     )
 
     # Set rtol and atol and pcc for output
@@ -299,15 +312,16 @@ def run_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, de
     rtol = atol = 0.1
 
     # Check mean and rstd
-    pass_mean, out_mean = comp_allclose(expected_mean, actual_mean, rtol=rtol, atol=atol)
+    if create_mean_rstd:
+        pass_mean, out_mean = comp_allclose(expected_mean, actual_mean, rtol=rtol, atol=atol)
 
-    logger.debug(f"mean's {out_mean}")
-    assert pass_mean
+        logger.debug(f"mean's {out_mean}")
+        assert pass_mean
 
-    pass_rstd, out_rstd = comp_allclose(expected_rstd, actual_rstd, rtol=rtol, atol=atol)
+        pass_rstd, out_rstd = comp_allclose(expected_rstd, actual_rstd, rtol=rtol, atol=atol)
 
-    logger.debug(f"rstd's {out_rstd}")
-    assert pass_rstd
+        logger.debug(f"rstd's {out_rstd}")
+        assert pass_rstd
 
 
 def run_moreh_layernorm_backward(
@@ -488,3 +502,22 @@ def test_moreh_layernorm_backward_callback(
     torch.manual_seed(2023)
     for _ in range(2):
         run_moreh_layernorm_backward(input_shape_normalized_dims, elementwise_affine, eps, device)
+
+
+@skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
+@pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
+@pytest.mark.parametrize(
+    "elementwise_affine",
+    [False, True],
+    ids=["elementwise_affine=False", "elementwise_affine=True"],
+)
+@pytest.mark.parametrize(
+    "input_shape_normalized_dims",
+    [
+        ([1, 20], 1),  # test 2d
+        ([5, 2, 3, 4, 2 * TILE_HEIGHT + 13, 3 * TILE_WIDTH + 13], 4),  # test 6d
+    ],
+)
+def test_moreh_layernorm_no_mean_rstd(input_shape_normalized_dims, elementwise_affine, eps, device):
+    torch.manual_seed(2023)
+    run_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, device, create_mean_rstd=False)

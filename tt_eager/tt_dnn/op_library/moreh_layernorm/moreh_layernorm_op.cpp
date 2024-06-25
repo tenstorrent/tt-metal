@@ -461,16 +461,10 @@ std::vector<Tensor> MorehLayerNorm::create_output_tensors(
 
     if (output_tensors.at(1).has_value()) {
         result.push_back(output_tensors.at(1).value());
-    } else {
-        TT_FATAL(false, "Create an optional tensor is not supported yet. fix this after the 9552 issue is addressed.");
-        result.push_back(create_device_tensor(output_shapes.at(1), dtype, layout, device, this->output_mem_config));
     }
 
     if (output_tensors.at(2).has_value()) {
         result.push_back(output_tensors.at(2).value());
-    } else {
-        TT_FATAL(false, "Create an optional tensor is not supported yet. fix this after the 9552 issue is addressed.");
-        result.push_back(create_device_tensor(output_shapes.at(2), dtype, layout, device, this->output_mem_config));
     }
 
     return result;
@@ -486,8 +480,15 @@ operation::ProgramWithCallbacks MorehLayerNorm::create_program(
     const auto& beta = optional_input_tensors.at(1);
 
     auto& output = output_tensors.at(0);
-    auto& mean = output_tensors.at(1);
-    auto& rstd = output_tensors.at(2);
+
+    std::optional<Tensor> mean = std::nullopt;
+    std::optional<Tensor> rstd = std::nullopt;
+    if (compute_mean) {
+        mean = output_tensors.at(1);
+    }
+    if (compute_rstd) {
+        rstd = output_tensors.at(2);
+    }
 
     return moreh_layernorm_impl(
         input, this->normalized_dims, this->eps, output, gamma, beta, mean, rstd, this->compute_kernel_config);
@@ -507,11 +508,15 @@ std::vector<std::optional<Tensor>> moreh_layernorm(
     std::vector<Tensor> output_tensors = {
         Tensor(operation::get_workers_for_op_output({input}, {gamma, beta}))};
 
+    bool compute_mean = false;
+    bool compute_rstd = false;
     if (mean.has_value()) {
+        compute_mean = true;
         output_tensors.push_back(Tensor(operation::get_workers_for_op_output({input}, {gamma, beta})));
     }
 
     if (rstd.has_value()) {
+        compute_rstd = true;
         output_tensors.push_back(Tensor(operation::get_workers_for_op_output({input}, {gamma, beta})));
     }
 
@@ -520,7 +525,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm(
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
     operation::launch_op(
-        [normalized_dims, eps, output_mem_config, compute_kernel_config_val](
+        [normalized_dims, eps, output_mem_config, compute_kernel_config_val, compute_mean, compute_rstd](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -529,7 +534,10 @@ std::vector<std::optional<Tensor>> moreh_layernorm(
                     .normalized_dims = normalized_dims,
                     .eps = eps,
                     .output_mem_config = std::move(output_mem_config),
-                    .compute_kernel_config = compute_kernel_config_val},
+                    .compute_kernel_config = compute_kernel_config_val,
+                    .compute_mean = compute_mean,
+                    .compute_rstd = compute_rstd,
+                    },
                 input_tensors,
                 optional_input_tensors,
                 optional_output_tensors);
@@ -578,13 +586,25 @@ std::vector<std::optional<Tensor>> moreh_layernorm(
     std::vector<Tensor> output_tensors = {
         Tensor(operation::get_workers_for_op_output({input}, {gamma, beta}))};
 
+    bool compute_mean = false;
+    bool compute_rstd = false;
+    if (mean.has_value()) {
+        compute_mean = true;
+        output_tensors.push_back(Tensor(operation::get_workers_for_op_output({input}, {gamma, beta})));
+    }
+
+    if (rstd.has_value()) {
+        compute_rstd = true;
+        output_tensors.push_back(Tensor(operation::get_workers_for_op_output({input}, {gamma, beta})));
+    }
+
     auto device = input.device();
 
     auto compute_kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
     operation::launch_op(
-        [normalized_dims, eps, output_mem_config, compute_kernel_config_val](
+        [normalized_dims, eps, output_mem_config, compute_kernel_config_val, compute_mean, compute_rstd](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -593,7 +613,9 @@ std::vector<std::optional<Tensor>> moreh_layernorm(
                     .normalized_dims = normalized_dims,
                     .eps = eps,
                     .output_mem_config = std::move(output_mem_config),
-                    .compute_kernel_config = compute_kernel_config_val},
+                    .compute_kernel_config = compute_kernel_config_val,
+                    .compute_mean = compute_mean,
+                    .compute_rstd = compute_rstd,},
                 input_tensors,
                 optional_input_tensors,
                 optional_output_tensors);
