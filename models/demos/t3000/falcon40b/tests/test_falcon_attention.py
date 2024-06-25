@@ -69,7 +69,7 @@ def run_test_FalconAttention_inference(
     torch.manual_seed(0)
     layer_num = 0
     base_url = "transformer.h"
-    max_position_embeddings = 2048
+    max_position_embeddings = max(2048, seq_len)
     head_dim = configuration.hidden_size // configuration.num_attention_heads
 
     # Generate input, attention_mask, and kv_cache --------------------------------------
@@ -309,9 +309,16 @@ def run_test_FalconAttention_inference(
         ("prefill", 1, 32, 0),
         ("prefill", 1, 128, 0),
         ("prefill", 1, 2048, 0),
+        # ("prefill", 1, 8192, 0),
         ("decode", 32, 1, 128),
     ),
-    ids=["prefill_seq32", "prefill_seq128", "prefill_seq2048", "decode_batch32"],
+    ids=[
+        "prefill_seq32",
+        "prefill_seq128",
+        "prefill_seq2048",
+        # "prefill_seq8192",
+        "decode_batch32",
+    ],
 )
 @pytest.mark.parametrize(
     "model_version",

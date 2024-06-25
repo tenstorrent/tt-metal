@@ -156,6 +156,7 @@ def matmul_2d_config(
     overwrite_per_core_k=None,
     overwrite_subblock_w=None,
     overwrite_subblock_h=None,
+    fuse_batch=True,
 ):
     tile_width = 32
     tile_height = 32
@@ -223,6 +224,7 @@ def matmul_2d_config(
         per_core_N=per_core_n,
         transpose_mcast=transpose_mcast,
         fused_activation=act,
+        fuse_batch=fuse_batch,
     )
 
 
@@ -244,10 +246,13 @@ def falcon_prefill_matmul(
     overwrite_per_core_k=None,
     overwrite_subblock_w=None,
     overwrite_subblock_h=None,
+    fuse_batch_mm2d=True,
 ):
     in0_shape = in0.shape
     in1_shape = in1.shape
     m, k, n = in0_shape[0] * in0_shape[1] * in0_shape[2], in0_shape[3], in1_shape[3]
+    if not fuse_batch_mm2d:
+        m = in0_shape[2]
 
     use_2d_mm = m >= 512  # select 2d matmul for S >= 512, otherwise fall back to matmul 1d
 
@@ -266,6 +271,7 @@ def falcon_prefill_matmul(
             overwrite_per_core_k=overwrite_per_core_k,
             overwrite_subblock_w=overwrite_subblock_w,
             overwrite_subblock_h=overwrite_subblock_h,
+            fuse_batch=fuse_batch_mm2d,
         )
         # print(f"Program config: {matmul_pgmcfg}")
         return ttnn.matmul(
