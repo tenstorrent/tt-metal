@@ -308,6 +308,10 @@ inline void calculate_asin()
     {
         vFloat v = dst_reg[0];
         v = sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v);
+        v_if(dst_reg[0] < -1.0f || dst_reg[0] > 1.0f )
+        {
+           v = std::numeric_limits<float>::quiet_NaN();
+        }v_endif;
         dst_reg[0] = v;
         dst_reg++;
     }
