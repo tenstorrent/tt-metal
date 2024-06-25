@@ -5,10 +5,8 @@
 from loguru import logger
 import math
 import torch
-from torch import nn
 import tt_lib
-import ttnn
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, nearest_32, pad_by_zero
+from models.utility_functions import torch2tt_tensor, nearest_32
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     tt_all_gather_torch,
     gather_rotary_emb,

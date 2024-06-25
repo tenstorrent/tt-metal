@@ -2,24 +2,6 @@
 
 ## How to Run
 
-### For Users on TT-VPN
-
-If you have access to TT-VPN, you can copy the weights directly to your local machine using the following SCP commands:
-
-1. **Copying repacked Llama3-70B weights:**
-    ```bash
-    scp -r 10.230.36.208:/home/llama3-data-repacked/llama-3-70b/ <repacked_output_dir>
-    ```
-
-2. **Copying Llama3-70B tokenizer:**
-    ```bash
-    scp -r 10.230.36.208:/home/llama3-data-repacked/tokenizer.model <path_to_checkpoint_dir>
-    ```
-
-### For Users without TT-VPN Access
-
-If you do not have access to TT-VPN, follow these steps to download the weights directly from Meta and use the repacking script:
-
 1. **Download the Llama3-70B weights from Meta (https://llama.meta.com/):**
 
 2. **Repack the weights:**
@@ -32,39 +14,48 @@ If you do not have access to TT-VPN, follow these steps to download the weights 
 
 After setting up the repacked weights and tokenizer, you can run the demo using the commands below:
 
-1. **Install requirements for reference/llama folder:**
-    ```bash
-    pip install blobfile
-    ```
-
-2. **Prepare the weight cache directory:**
+1. **Prepare the weight cache directory:**
     ```bash
     # Make a directory for us to cache weights into. This speeds up subsequent runs.
     mkdir <weight_cache_dir>
     ```
 
-3. **Set up environment variables:**
+2. **Set up environment variables:**
     ```bash
-    export LLAMA_CKPT_DIR=<repacked_output_dir>
-    export LLAMA_TOKENIZER_PATH=<path_to_checkpoint_dir> # Path needs to include the tokenizer.model file
-    export LLAMA_CACHE_PATH=<weight_cache_dir>
+    export LLAMA3_CKPT_DIR=<repacked_output_dir>
+    export LLAMA3_TOKENIZER_PATH=<path_to_checkpoint_dir> # Path needs to include the tokenizer.model file
+    export LLAMA3_CACHE_PATH=<weight_cache_dir>
+
+    export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+    export TIKTOKEN_CACHE_DIR=""
+
+    pip install -r models/demos/t3000/llama2_70b/reference/llama/requirements.txt
 
     # Example:
-    # export LLAMA_CKPT_DIR="/home/llama3-data-repacked/llama-3-70b/"
-    # export LLAMA_TOKENIZER_PATH="/home/llama3-data-repacked/tokenizer.model"
-    # export LLAMA_CACHE_PATH="/home/llama3-data-cache/weights-cache"
+    # export LLAMA3_CKPT_DIR="/home/llama-data-repacked/llama-3-70b/"
+    # export LLAMA3_TOKENIZER_PATH="/home/llama-data-repacked/tokenizer.model"
+    # export LLAMA3_CACHE_PATH="/home/llama-data-cache/weights-cache"
+
+
     ```
 
-4. **Cache the weights (first-time setup only):**
-    ```bash
-    # Build a full 80 layer model to cache the weights. This will take some time.
-    pytest -svv models/demos/t3000/llama2_70b/tests/test_llama_model.py::test_LlamaModel_inference[decode-8chip-T3000-80L]
-    ```
+3. **Run the demo:**
 
-5. **Run the demo:**
+    NOTE: Run the following comand twice.
+    1. The first run will cache the weights. This will take some time.
+    2. The second run will use the cached weights, thereby running much faster.
+
     ```bash
     # Run the demo using sampling decode
-    pytest -svv models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[sampling-tt-70b-80L]
+    pytest -svv models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-check_disabled-sampling-tt-70b-T3000-80L-decode_only-text_completion-llama3]
+    ```
+
+4. **[TODO: UPDATE COMMAND TO INCLUDE LLAMA2/3] Run the performance test:**
+
+    The above demo does not achieve peak performance because we log outputs to the screen. The following perf test will print an accurate end-to-end throughput number.
+    For best performance numbers, we recommend building `tt-metal` with `CONFIG=Release` env var, and ensuring the host's CPU governors are set to `performance`.
+    ```bash
+    pytest -svv models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_host[wormhole_b0-True-gen128-llama3]
     ```
 
 ## Details
@@ -75,10 +66,4 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
 - **Hardware Requirements:** Runs on an 8-chip T3000 machine using tensor parallelism. The host machine must have at least 512 GB of memory.
 - **Model Functionality:** Implements decode-to-prefill strategy, where prompts are processed token-by-token to produce KV caches, followed by token generation in decode mode.
 
-Ensure you follow these guidelines to successfully run the Llama3-70B demo.
-
-## Benchmarking
-For best performance results, please do the following:
-
-- Set environment variable `TT_METAL_ASYNC_DEVICE_QUEUE=1`.
-- Ensure the cpu frequency governor is set to `performance`.
+Ensure you follow these guidelines to successfully run the Llama2-70B demo.

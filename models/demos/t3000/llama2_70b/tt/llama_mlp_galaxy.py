@@ -7,7 +7,7 @@ import torch
 from torch import nn
 import tt_lib
 import ttnn
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.utility_functions import torch2tt_tensor
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     tt_all_gather_torch,
     get_weight_cache_path_galaxy,

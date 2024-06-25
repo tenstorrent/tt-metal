@@ -9,11 +9,20 @@ from typing import Tuple
 import numpy as np
 import torch
 from torch import nn
-import tt_lib
+import ttnn.experimental as tt_lib
 import ttnn
 from models.utility_functions import tt2torch_tensor, torch2tt_tensor
+from loguru import logger
+from pathlib import Path
+from models.demos.t3000.llama2_70b.reference.llama.llama.generation import (
+    load_chunked_checkpoints,
+    load_sharded_checkpoints,
+)
+import pytest
+from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
 
 MAX_SEQ_LEN = 4096
+MAX_SEQ_LEN_LLAMA3 = 8192
 BASE_URL = "layers"
 UNIT_TEST_N_LAYER = 1
 UNIT_TEST_LAYER_NUM = 0
@@ -21,32 +30,98 @@ UNIT_TEST_START_POS = 0
 UNIT_TEST_GENERATION_LENGTH = 20
 
 
-def get_llama_path(devices, model_config, n_devices, emulated):
-    ckpt_dir = model_config["DEFAULT_CKPT_DIR"]
-    tokenizer_path = model_config["DEFAULT_TOKENIZER_PATH"]
-    cache_path = model_config["DEFAULT_CACHE_PATH"]
+def load_llama_state_dict(ckpt_dir, n_layers, start_layer_idx=0):
+    checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
+    assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
+    is_chunked = "layers_" in str(checkpoints[0])
+    if is_chunked:
+        checkpoint = load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx)
+    else:
+        checkpoint = load_sharded_checkpoints(checkpoints, n_layers)
 
-    assert os.path.exists(
-        ckpt_dir
-    ), f"Checkpoint directory {ckpt_dir} does not exist, please use export LLAMA_CKPT_DIR=..."
-    assert os.path.exists(
-        tokenizer_path
-    ), f"Tokenizer file {tokenizer_path} does not exist, please use export LLAMA_TOKENIZER_PATH=..."
-    assert os.path.exists(
-        cache_path
-    ), f"Cache directory {cache_path} does not exist, please use export LLAMA_CACHE_PATH=..."
+    return checkpoint
+
+
+# string similarity score in percentage of two strings based on words in the same order
+def string_similarity_score(ground_truths, predictions):
+    scores = []
+    for ground_truth, prediction in zip(ground_truths, predictions):
+        ground_truth = ground_truth.split()
+        prediction = prediction.split()
+        if len(ground_truth) == 0:
+            return 0
+        score = 0
+        for i in range(len(ground_truth)):
+            if i < len(prediction) and ground_truth[i] == prediction[i]:
+                score += 1
+        scores.append(score / len(ground_truth))
+
+    return scores
+
+
+def should_skip_model_load():
+    skip_model_load = bool(os.environ.get("LLAMA_SKIP_MODEL_LOAD", 0))
+    if skip_model_load:
+        logger.warning("LLAMA_SKIP_MODEL_LOAD is set. Skipping model load")
+    return skip_model_load
+
+
+def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, max_batch_size=32, max_context_len=4096):
+    if os.getenv("CI") == "true":
+        if llama_version == "llama3":
+            ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-3/llama-3-70b-repacked/"
+            tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama-3/tokenizer.model"
+            cache_path = Path("/mnt/MLPerf/tt_dnn-models/llama-3/llama-data-cache/weights-cache-3")
+        else:
+            ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-2/llama-2-70b-repacked/"
+            tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama-2/tokenizer.model"
+            cache_path = Path("/mnt/MLPerf/tt_dnn-models/llama-2/llama-data-cache/weights-cache-2")
+    else:
+        if llama_version == "llama3":
+            ckpt_dir = os.getenv("LLAMA3_CKPT_DIR", "/home/llama3-data-repacked/llama-3-70b/")
+            tokenizer_path = os.getenv("LLAMA3_TOKENIZER_PATH", "/home/llama3-data/Meta-Llama-3-70B/tokenizer.model")
+            cache_path = Path(os.getenv("LLAMA3_CACHE_PATH", "/home/llama3-data-cache/weights-cache"))
+        else:
+            ckpt_dir = os.getenv("LLAMA2_CKPT_DIR", "/home/llama-data-repacked-2/llama-2-70b/")
+            tokenizer_path = os.getenv("LLAMA2_TOKENIZER_PATH", "/home/llama-data/tokenizer.model")
+            cache_path = Path(os.getenv("LLAMA2_CACHE_PATH", "/home/llama-data-cache/weights-cache-2"))
+
+        assert os.path.exists(
+            ckpt_dir
+        ), f"Checkpoint directory {ckpt_dir} does not exist, please use export {llama_version.upper()}_CKPT_DIR=..."
+        assert os.path.exists(
+            tokenizer_path
+        ), f"Tokenizer file {tokenizer_path} does not exist, please use export {llama_version.upper()}_TOKENIZER_PATH=..."
+        assert os.path.exists(
+            cache_path
+        ), f"Cache directory {cache_path} does not exist, please use export {llama_version.upper()}_CACHE_PATH=..."
 
     logger.info(f"Checkpoint directory: {ckpt_dir}")
     logger.info(f"Tokenizer file: {tokenizer_path}")
     logger.info(f"Cache directory: {cache_path}")
 
-    if emulated:
-        logger.info(f"Running emulated, replicating on {n_devices} devices")
-        devices = [devices[0] for _ in range(n_devices)]  # Emulate fracturing on N chips
-    else:
-        logger.info(f"Running on {n_devices} devices on T3000 chips")
+    model_config = get_model_config(
+        llama_version=llama_version,
+        batch=batch,
+        seq_len=seq_len,
+        num_devices=n_devices,
+        max_batch_size=max_batch_size,
+        max_context_len=max_context_len,
+    )
 
-    return devices, ckpt_dir, tokenizer_path, cache_path
+    return model_config, ckpt_dir, tokenizer_path, cache_path
+
+
+def check_device_mesh(t3k_device_mesh, model_config):
+    assert t3k_device_mesh.get_num_devices() >= model_config["NUM_DEVICES"], (
+        "Requires at least %d devices to run",
+        model_config["NUM_DEVICES"],
+    )
+
+    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
+    assert not (
+        compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]
+    ), ("Requires grid size of at least %d to run", model_config["MAX_GRID_SIZE"])
 
 
 def extract_pcc_from_log(log):
@@ -58,6 +133,12 @@ def extract_pcc_from_log(log):
 
 def get_weight_cache_path(base_cache_path, tensor_str, device_idx, num_devices, cache_id=None):
     return base_cache_path / f"{tensor_str}{'' if cache_id is None else cache_id}_{device_idx}_{num_devices}.bin"
+
+
+def get_weight_cache_path_ttnn(
+    base_cache_path, tensor_str, device_idx, num_devices, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+):
+    return base_cache_path / f"{tensor_str}_{device_idx}_{num_devices}_dtype_{dtype.name}_layout_{layout.name}.bin"
 
 
 def get_weight_cache_path_galaxy(base_cache_path, tensor_str, device_idx, num_devices, x, y):
@@ -313,3 +394,24 @@ def get_atol_rtol_pcc(golden, calculated):
         cal_pcc,
         f"Max ATOL Delta: {cal_atol}, Max RTOL Delta: {cal_rtol}, PCC: {cal_pcc}",
     )
+
+
+def check_kv_cache(pt_cache_all, tt_cache_all, generation_start_pos, generation_length, seq_len, is_prefill, pcc):
+    test_passed = True
+    for cache_pt, cache_tt in zip(pt_cache_all, tt_cache_all):
+        cache_length_to_check = generation_start_pos + generation_length
+        if is_prefill:
+            cache_pt = cache_pt[:, :, :seq_len, :]
+            cache_tt = cache_tt[:, :, :seq_len, :]
+        else:
+            cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
+            cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
+        does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
+        logger.info(f"Output: {output_pcc}")
+
+        if does_pass:
+            logger.info(f"KV Cache Passed!")
+        else:
+            logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
+            test_passed = False
+    return test_passed
