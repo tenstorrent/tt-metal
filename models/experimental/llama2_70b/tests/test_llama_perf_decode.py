@@ -238,7 +238,6 @@ def run_test_LlamaModel_end_to_end(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.timeout(240000)
 @pytest.mark.model_perf_t3000
 @pytest.mark.parametrize(
     "generation_length, expected_compile_time, expected_inference_time",
