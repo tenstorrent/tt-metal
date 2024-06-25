@@ -5,7 +5,7 @@
 #include "dataflow_api.h"
 
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -59,7 +59,13 @@ void kernel_main() {
     constexpr uint32_t out_width_num_tiles = get_compile_time_arg_val(28);
 
     constexpr uint32_t out_addr = get_compile_time_arg_val(29);
-
+    // unused args 30-31 // todo cleanup host code
+    #ifdef UNPAD_UNTILIZE_OUT
+    constexpr uint32_t out_block_width_ntiles = get_compile_time_arg_val(32);
+    constexpr uint32_t out_block_width_padded_bytes = get_compile_time_arg_val(33);
+    constexpr uint32_t out_block_width_bytes = get_compile_time_arg_val(34);
+    constexpr uint32_t untilized_padded_out_cb = get_compile_time_arg_val(35);
+    #endif
     uint32_t i = 0;
     i+=1;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
@@ -71,7 +77,17 @@ void kernel_main() {
     uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i); i+=1;
     i+=9;
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i); i += 1;
-
+    DPRINT << "In writer kernel" << ENDL();
+    #ifdef UNPAD_UNTILIZE_OUT
+    DPRINT << "UNPAD_UNTILIZE_OUT is enabled" << ENDL();
+    DPRINT << "out_num_blocks_w: " << out_num_blocks_w << ENDL();
+    DPRINT << "out_num_blocks_h: " << out_num_blocks_h << ENDL();
+    DPRINT << "out_block_height_num_tiles: " << out_block_height_num_tiles << ENDL();
+    DPRINT << "out_block_width_ntiles: " << out_block_width_ntiles << ENDL();
+    #endif
+    #ifdef SHARDED_OUT
+    DPRINT << "SHARDED_OUT is enabled" << ENDL();
+    #endif
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
     if(noop) {
         return;
@@ -151,7 +167,9 @@ void kernel_main() {
             // read slice only once for all activation blocks
             uint32_t weight_current_block_start_tile_id = weight_start_tile_id;
             for(uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer; weight_tile_h_outer_i++) {
+                DPRINT << "Reserving " << weight_block_num_tiles << " tiles in weight cb" << ENDL();
                 cb_reserve_back(cb_id_weight, weight_block_num_tiles);
+                DPRINT << "Reserved " << weight_block_num_tiles << " tiles in weight cb" << ENDL();
                 uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
 
                 // mcast args
@@ -174,9 +192,9 @@ void kernel_main() {
                     } // for weight_block_w
                     weight_current_block_start_tile_id += weight_stride_h;
                 }
-
+                DPRINT << "Waiting for read to complete" << ENDL();
                 noc_async_read_barrier();
-
+                DPRINT << "Read complete" << ENDL();
                 #ifndef SKIP_MCAST
                     // wait until all weights mcast destinations have atomically incremented the weights semaphore_addr (i.e. its value should be weights_mcast_num_dests), then reset
                     // the semaphore_addr value back to zero for the next block
@@ -200,8 +218,9 @@ void kernel_main() {
                     // num_dests must not include source, since we are NOT really doing a local copy!
                     noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores, false, false);
                 #endif
-
+                DPRINT << "Pushing " << weight_block_num_tiles << " tiles to weight cb" << ENDL();
                 cb_push_back(cb_id_weight, weight_block_num_tiles);
+                DPRINT << "Pushed back weight block" << ENDL();
             } // for weight_block_height_num_outer
 
 
@@ -244,8 +263,9 @@ void kernel_main() {
                     // num_dests must not include source, since we are NOT really doing a local copy!
                     noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores, false, false);
                 #endif
-
+                DPRINT << "Pushing " << bias_ntiles << " tiles to bias cb" << ENDL();
                 cb_push_back(bias_cb_id, bias_ntiles);
+                DPRINT << "Pushed back bias block" << ENDL();
                 load_bias = false;
             }
             #endif
@@ -258,6 +278,26 @@ void kernel_main() {
         weight_start_tile_id += weight_next_block_stride_w;
     } // out_num_blocks_w
     #ifdef SHARDED_OUT
+    #ifdef UNPAD_UNTILIZE_OUT
+    uint32_t src_cb_addr = get_read_ptr(untilized_padded_out_cb);
+    uint32_t dst_cb_addr = get_write_ptr(cb_id_out0);
+    for (uint32_t nbw = 0; nbw < out_num_blocks_w; nbw++) {
+        for(uint32_t nbh = 0; nbh < out_num_blocks_h; nbh++) {
+            for (uint32_t bh = 0; bh < out_block_height_num_tiles; bh++) {
+                DPRINT << "Going to wait for " << out_block_width_ntiles << " tiles" << ENDL();
+                cb_wait_front(untilized_padded_out_cb, out_block_width_ntiles);
+                DPRINT << "Waited for " << out_block_width_ntiles << " tiles" << ENDL();
+                for (uint32_t r = 0; r < 32; r++) {
+                    noc_async_read(get_noc_addr(src_cb_addr), dst_cb_addr, out_block_width_bytes);
+                    noc_async_read_barrier();
+                    src_cb_addr += out_block_width_padded_bytes;
+                    dst_cb_addr += out_block_width_bytes;
+                }
+            }
+        }
+    }
+    #else
     cb_wait_front(cb_id_out0, out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
+    #endif
     #endif
 }

@@ -32,6 +32,7 @@ const uint32_t act_cb_second_reader = CB::c_in7;
 const uint32_t matmul_partials_cb = CB::c_intermed0;
 const uint32_t tilize_mode_tilized_act_cb = CB::c_intermed1;
 const uint32_t untilize_mode_reblock_cb = CB::c_intermed2;
+const uint32_t untilized_padded_out_cb = CB::c_intermed3;
 const uint32_t out0_cb = CB::c_out0;
 
 // TODO: Add namespace for utilities?
@@ -58,6 +59,7 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     bool split_reader,
     bool fp32_dest_acc_en,
     bool packer_l1_acc_en) {
+    TT_FATAL(output.is_sharded());
     tt::DataFormat interm0_df =
         packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
 
@@ -136,6 +138,7 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
 
     CBHandle cb_output = 0;
     if (untilize_out) {
+        auto output_shard_shape = output.shard_spec().value().shape;
         CircularBufferConfig cb_matmul_partials_config =
             CircularBufferConfig(num_output_tiles * interm0_single_tile_size, {{matmul_partials_cb, interm0_df}})
                 .set_page_size(matmul_partials_cb, interm0_single_tile_size);
@@ -147,14 +150,25 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
             CircularBufferConfig(num_reblock_cb_tiles * out_tile_size, {{untilize_mode_reblock_cb, out_df}})
                 .set_page_size(untilize_mode_reblock_cb, out_tile_size);
         auto cb_reblock = tt_metal::CreateCircularBuffer(program, core, cb_reblock_config);
-
-        CircularBufferConfig cb_output_config =
-            CircularBufferConfig(num_writer_output_tiles * out_tile_size, {{out0_cb, out_df}})
-                .set_page_size(out0_cb, out_tile_size);
-        if (output.is_sharded()) {
+        bool need_unpad_after_untilize = output_shard_shape[1] * output_shard_shape[0] < num_writer_output_tiles * 1024;
+        if (need_unpad_after_untilize) {
+            CircularBufferConfig compute_cb_output_config =
+            CircularBufferConfig(num_writer_output_tiles * out_tile_size, {{untilized_padded_out_cb, out_df}})
+                .set_page_size(untilized_padded_out_cb, out_tile_size);
+            uint32_t num_bytes_for_df = datum_size(out_df);
+            cout << "num_bytes_for_df: " << num_bytes_for_df << endl;
+            CircularBufferConfig cb_output_config =
+            CircularBufferConfig(num_bytes_for_df * output_shard_shape[0] * output_shard_shape[1], {{out0_cb, out_df}})
+                .set_page_size(out0_cb, output_shard_shape[1] * num_bytes_for_df);
             cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
+            cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        } else {
+            CircularBufferConfig cb_output_config =
+                CircularBufferConfig(num_writer_output_tiles * out_tile_size, {{out0_cb, out_df}})
+                    .set_page_size(out0_cb, out_tile_size);
+            cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
+            cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
         }
-        cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
     } else {
         // Share buffer if same data format
         if (interm0_df == out_df) {
@@ -1926,7 +1940,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     string writer_mcast_receiver_kernel;
     bool tilize_in0 = true;
 
-    compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
+    compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks_sharded.cpp";
     // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
     if (weight_size_h == weight_size_w and weight_size_w >= 1 and (stride_h == 1 or stride_h == 2)) {
         if (weight_width_sliced) {
@@ -1975,10 +1989,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
             } else {
                 writer_mcast_sender_kernel =
                     "tt_eager/tt_dnn/op_library/conv/kernels/"
-                    "writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks_sharded.cpp";
+                    "writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
                 writer_mcast_receiver_kernel =
                     "tt_eager/tt_dnn/op_library/conv/kernels/"
-                    "writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_block_sharded.cpp";
+                    "writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks_sharded.cpp";
             }
         }
 
@@ -2120,7 +2134,21 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         writer_compile_time_args.insert(
             writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     }
+    bool need_unpad_after_untilize = parallelization_config.per_core_out_matrix_width < per_core_out_matrix_width_ntiles * TILE_WIDTH;
+    cout << "need_unpad_after_untilize: " << need_unpad_after_untilize << endl;
+    if (need_unpad_after_untilize) {
+        TT_FATAL(weight_width_sliced, "Need to handle this case for non-sliced weights");
+        TT_FATAL(untilize_out, "Cannot support non-tile multiple shard width with tilized output");
+        writer_compile_time_args.push_back(per_core_out_matrix_width_ntiles);
+        writer_compile_time_args.push_back(per_core_out_matrix_width_ntiles * TILE_WIDTH);
+        writer_compile_time_args.push_back(parallelization_config.per_core_out_matrix_width);
+        writer_compile_time_args.push_back(untilized_padded_out_cb);
+        writer_defines["UNPAD_UNTILIZE_OUT"] = 1;
+        writer_mcast_sender_defines["UNPAD_UNTILIZE_OUT"] = 1;
+    }
 
+    uint32_t compute_output_cb = need_unpad_after_untilize ? untilized_padded_out_cb : out0_cb;
+    cout << "compute_output_cb: " << compute_output_cb << endl;
     vector<uint32_t> compute_kernel_args = {
         in0_block_w,
         act_num_subblocks,
@@ -2143,7 +2171,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         tilize_in0,
         untilize_out,
 
-        bias_ntiles_per_core};
+        bias_ntiles_per_core,
+        compute_output_cb};
 
     auto writer_mcast_noc = NOC::NOC_0;
     auto reader_noc = writer_mcast_noc == NOC::NOC_0 ? NOC::NOC_1 : NOC::NOC_0;

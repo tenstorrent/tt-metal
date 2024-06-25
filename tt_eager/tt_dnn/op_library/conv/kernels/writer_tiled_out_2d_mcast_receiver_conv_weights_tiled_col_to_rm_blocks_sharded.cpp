@@ -60,6 +60,13 @@ void kernel_main() {
 
     constexpr uint32_t out_addr = get_compile_time_arg_val(29);
 
+    // unused args 30-31 // todo cleanup host code
+    #ifdef UNPAD_UNTILIZE_OUT
+    constexpr uint32_t out_block_width_ntiles = get_compile_time_arg_val(32);
+    constexpr uint32_t out_block_width_padded_bytes = get_compile_time_arg_val(33);
+    constexpr uint32_t out_block_width_bytes = get_compile_time_arg_val(34);
+    constexpr uint32_t untilized_padded_out_cb = get_compile_time_arg_val(35);
+    #endif
     uint32_t i = 0;
     i+=19;
     uint32_t out_start_tile_id = get_arg_val<uint32_t>(i); i+=1;
@@ -148,6 +155,24 @@ void kernel_main() {
     } // out_num_blocks_w
 
     #ifdef SHARDED_OUT
+    #ifdef UNPAD_UNTILIZE_OUT
+    uint32_t src_cb_addr = get_read_ptr(untilized_padded_out_cb);
+    uint32_t dst_cb_addr = get_write_ptr(cb_id_out0);
+    for (uint32_t nbw = 0; nbw < out_num_blocks_w; nbw++) {
+        for(uint32_t nbh = 0; nbh < out_num_blocks_h; nbh++) {
+            for (uint32_t bh = 0; bh < out_block_height_num_tiles; bh++) {
+                cb_wait_front(untilized_padded_out_cb, out_block_width_ntiles);
+                for (uint32_t r = 0; r < 32; r++) {
+                    noc_async_read(get_noc_addr(src_cb_addr), dst_cb_addr, out_block_width_bytes);
+                    noc_async_read_barrier();
+                    src_cb_addr += out_block_width_padded_bytes;
+                    dst_cb_addr += out_block_width_bytes;
+                }
+            }
+        }
+    }
+    #else
     cb_wait_front(cb_id_out0, out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
+    #endif
     #endif
 }

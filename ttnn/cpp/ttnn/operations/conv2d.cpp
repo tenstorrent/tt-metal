@@ -72,6 +72,7 @@ ParallelConfig determine_parallel_config(
     Device& device,
     ShardOrientation block_shard_orientation,
     bool is_out_tiled) {
+    //is_out_tiled = true;
     cout << "out tiled = " << is_out_tiled << endl;
     uint32_t conv_out_2d_matrix_height = batch_size * output_height * output_width;
     // pad height to 32
@@ -251,7 +252,7 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(
             "Config Error: act_block_h_override must be a multiple of 32 (tile height).");
     }
     auto grid_size = parallel_config.grid.bounding_box().grid_size();
-    uint32_t act_block_h_ntiles = act_block_h_override > 0 ? act_block_h_override / 32
+    uint32_t act_block_h_ntiles = act_block_h_override > 0 ? act_block_h_override / TILE_HEIGHT
                                                            : conv_op_parallel_config.per_core_out_matrix_height / TILE_HEIGHT;
     uint32_t act_c_num_blocks = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? 1
                                 : parallel_config.shard_orientation == ShardOrientation::COL_MAJOR ? grid_size.y
@@ -259,13 +260,13 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(
     TT_FATAL(padded_in_channels % act_c_num_blocks == 0);
     uint32_t act_block_w = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED
                             ? round_up(padded_in_channels * window_w, 32)
-                            : (padded_in_channels / act_c_num_blocks) * window_h * window_w;
+                            : round_up((padded_in_channels / act_c_num_blocks) * window_h * window_w, TILE_WIDTH);
     TT_ASSERT(act_block_w % 32 == 0);
     uint32_t act_block_w_ntiles = act_block_w / 32;
     TT_FATAL(conv_op_parallel_config.per_core_out_matrix_height % TILE_HEIGHT == 0);
-    TT_FATAL(conv_op_parallel_config.per_core_out_matrix_width % TILE_WIDTH == 0);
-    uint32_t out_block_h_ntiles = conv_op_parallel_config.per_core_out_matrix_height / TILE_HEIGHT;
-    uint32_t weight_block_w_ntiles = conv_op_parallel_config.per_core_out_matrix_width / TILE_WIDTH;
+    //TT_FATAL(conv_op_parallel_config.per_core_out_matrix_width % TILE_WIDTH == 0);
+    uint32_t out_block_h_ntiles = div_up(conv_op_parallel_config.per_core_out_matrix_height, TILE_HEIGHT);
+    uint32_t weight_block_w_ntiles = div_up(conv_op_parallel_config.per_core_out_matrix_width, TILE_WIDTH);
     auto [out_subblock_h_ntiles, out_subblock_w_ntiles] =
         determine_largest_subblock_size(act_block_h_ntiles, weight_block_w_ntiles, fp32_accum);
     if (use_shallow_conv_variant && ((act_block_h_ntiles / out_subblock_h_ntiles) % 2 != 0)) {
@@ -276,6 +277,7 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(
         TT_ASSERT((out_subblock_h_ntiles * out_subblock_w_ntiles) <= 8);
     }
     cout << "act_block_h_override = " << act_block_h_override << " act_block_h_ntiles = " << act_block_h_ntiles << " act_block_w_ntiles = " << act_block_w_ntiles
+        << " act_block_w = " << act_block_w
          << " act_c_num_blocks = " << act_c_num_blocks << " out_block_h_ntiles = " << out_block_h_ntiles
          << " out_subblock_h_ntiles = " << out_subblock_h_ntiles << " out_subblock_w_ntiles = " << out_subblock_w_ntiles
          << endl;
@@ -492,30 +494,34 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     }
 
     weight_tensor_ = tt::tt_metal::pad_on_host(weight_tensor_, weights_channels_padded_shape, {0, 0, 0, 0}, 0);
-
+    uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
     // for conv op, pad the weights to block shape
     if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         weight_tensor_ = convert_conv_weight_tensor_to_special_padding_tiled_layout(
             weight_tensor_, weight_block_h_ntiles, weight_block_w_ntiles, weights_bias_dtype);
     } else {
-        uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
         weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout_block_sharded(
             weight_tensor_, num_cores_c, weights_bias_dtype);
     }
     weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, const_cast<Device*>(&device), nullopt);
     if (bias_tensor.has_value()) {
-        bias_tensor_ = bias_tensor.value();
-        auto bias_shape = bias_tensor_.get_shape();
-        TT_ASSERT(bias_shape[3] == out_channels && bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1);
-        tt::tt_metal::Shape bias_channels_padded_shape = tt::tt_metal::Shape(
-            std::array<uint32_t, 4>({1, 1, 32, round_up(out_channels, weight_block_w_ntiles * 32)}));
-        bias_tensor_ = tt::tt_metal::pad_on_host(bias_tensor_, bias_channels_padded_shape, {0, 0, 0, 0}, 0);
-        bias_tensor_ = ttnn::operations::core::ToLayout::execute_on_worker_thread(
-            bias_tensor_, Layout::TILE, {}, {}, (Device*)nullptr);
-        if (bias_tensor_.get_dtype() != weights_bias_dtype) {
-            bias_tensor_ = ttnn::operations::core::ToDtype::execute_on_worker_thread(bias_tensor_, weights_bias_dtype);
+        if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
+            bias_tensor_ = bias_tensor.value();
+            auto bias_shape = bias_tensor_.get_shape();
+            TT_ASSERT(bias_shape[3] == out_channels && bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1);
+            tt::tt_metal::Shape bias_channels_padded_shape = tt::tt_metal::Shape(
+                std::array<uint32_t, 4>({1, 1, 32, round_up(out_channels, weight_block_w_ntiles * 32)}));
+            bias_tensor_ = tt::tt_metal::pad_on_host(bias_tensor_, bias_channels_padded_shape, {0, 0, 0, 0}, 0);
+            bias_tensor_ = ttnn::operations::core::ToLayout::execute_on_worker_thread(
+                bias_tensor_, Layout::TILE, {}, {}, (Device*)nullptr);
+            if (bias_tensor_.get_dtype() != weights_bias_dtype) {
+                bias_tensor_ = ttnn::operations::core::ToDtype::execute_on_worker_thread(bias_tensor_, weights_bias_dtype);
+            }
+            bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, const_cast<Device*>(&device), nullopt);
+        } else {
+            bias_tensor_ = convert_conv_bias_tensor_to_tiled_layout_block_sharded(
+                bias_tensor.value(), num_cores_c, weights_bias_dtype);
         }
-        bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, const_cast<Device*>(&device), nullopt);
     }
 
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
@@ -592,8 +598,9 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         }
         conv_config.deallocate_activation = true;
     }
-    auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
+    MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         Shape({1, 1, batch_size * output_height * output_width, round_up(out_channels, 32)}), parallel_config, 32);
+
     auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(
         conv_out_memory_config, get_num_cores_nhw_from_parallel_config(parallel_config));
     auto opt_conv_op_block_config = determine_per_core_conv_block_config(
@@ -687,6 +694,14 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         // call conv micro op
         std::vector<int> conv_params = {
             (int)kernel_size[0], (int)kernel_size[1], (int)stride[0], (int)stride[1], (int)padding[0], (int)padding[1]};
+        // // hack to support non tile multiple shard width. Remove this hack when new tensor shape infra adds support for shard tile-padding
+        // cout << "conv_out_memory_config.shard_spec.value().shape[0] = " << conv_out_memory_config.shard_spec.value().shape[0] << " conv_out_memory_config.shard_spec.value().shape[1] = " << conv_out_memory_config.shard_spec.value().shape[1] << endl;
+        // uint32_t actual_output_shard_width = conv_out_memory_config.shard_spec.value().shape[1];
+        // uint32_t actual_output_shard_height = conv_out_memory_config.shard_spec.value().shape[1];
+        // conv_out_memory_config.shard_spec.value().shape[1] = round_up(conv_out_memory_config.shard_spec.value().shape[1], 32) * conv_out_memory_config.shard_spec.value().shape[0];
+        // conv_out_memory_config.shard_spec.value().shape[0] = 1;
+        // cout << "conv_out_memory_config.shard_spec.value().shape[0] = " << conv_out_memory_config.shard_spec.value().shape[0] << " conv_out_memory_config.shard_spec.value().shape[1] = " << conv_out_memory_config.shard_spec.value().shape[1] << endl;
+
         auto conv_output = tt::tt_metal::optimized_conv_new(
             halo_output,
             weight_tensor_on_device,
