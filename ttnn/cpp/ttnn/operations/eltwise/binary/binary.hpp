@@ -110,7 +110,8 @@ struct BinaryOperation {
         const std::optional<const DataType> &output_dtype = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
-        std::optional<FusedActivations> activations = std::nullopt) {
+        std::optional<FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
         if(output_dtype.has_value() && optional_output_tensor.has_value()){
             TT_FATAL(output_dtype.value() == optional_output_tensor.value().get_dtype(), "If both output dtype and output tensor provided dtype should match");
         }
@@ -157,7 +158,7 @@ struct BinaryOperation {
         return ttnn::device_operation::run<BinaryDeviceOperation>(
             queue_id,
             BinaryDeviceOperation::operation_attributes_t{
-                binary_op_type, in_place, activations, output_memory_config, dtype, std::nullopt},
+                binary_op_type, in_place, activations, input_tensor_a_activation, output_memory_config, dtype, std::nullopt},
             BinaryDeviceOperation::tensor_args_t{input_tensor_a, input_tensor_b, optional_output_tensor});
     }
 
@@ -167,7 +168,8 @@ struct BinaryOperation {
         const std::optional<const DataType> &output_dtype = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
-        std::optional<FusedActivations> activations = std::nullopt) {
+        std::optional<FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
         return operator()(
             DefaultQueueId,
             input_tensor_a_arg,
@@ -175,7 +177,8 @@ struct BinaryOperation {
             output_dtype,
             memory_config,
             optional_output_tensor,
-            activations);
+            activations,
+            input_tensor_a_activation);
     }
 
     // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
@@ -186,9 +189,10 @@ struct BinaryOperation {
         const std::optional<const DataType> &dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
-        std::optional<FusedActivations> activations = std::nullopt) {
+        std::optional<FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
         return BinaryOperation::operator()(
-            DefaultQueueId, input_tensor_a, scalar, dtype, memory_config, optional_output_tensor, activations);
+            DefaultQueueId, input_tensor_a, scalar, dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
     }
 
     static Tensor operator()(
@@ -198,7 +202,8 @@ struct BinaryOperation {
         const std::optional<const DataType> &dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
-        std::optional<FusedActivations> activations = std::nullopt) {
+        std::optional<FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
         // Cast Float Scalar to a device tensor
         auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(TILE_HEIGHT * TILE_WIDTH));
         host_buffer[0] = scalar;
@@ -210,7 +215,7 @@ struct BinaryOperation {
         Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.device());
         // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
         return BinaryOperation::operator()(
-            input_tensor_a, scalar_tensor_device, dtype, memory_config, optional_output_tensor, activations);
+            input_tensor_a, scalar_tensor_device, dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
     }
 };
 
@@ -223,7 +228,8 @@ struct RelationalBinary {
         const std::optional<const DataType> &output_dtype = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
-        std::optional<FusedActivations> activations = std::nullopt) {
+        std::optional<FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
         if (output_dtype.has_value() && optional_output_tensor.has_value()) {
             TT_FATAL(
                 output_dtype.value() == optional_output_tensor.value().get_dtype(),
@@ -269,7 +275,7 @@ struct RelationalBinary {
         return ttnn::device_operation::run<BinaryDeviceOperation>(
             queue_id,
             BinaryDeviceOperation::operation_attributes_t{
-                binary_op_type, in_place, activations, output_memory_config, dtype, std::nullopt},
+                binary_op_type, in_place, activations, input_tensor_a_activation, output_memory_config, dtype, std::nullopt},
             BinaryDeviceOperation::tensor_args_t{input_tensor_a, input_tensor_b, optional_output_tensor});
     }
 
@@ -279,7 +285,8 @@ struct RelationalBinary {
         const std::optional<const DataType> &output_dtype = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
-        std::optional<FusedActivations> activations = std::nullopt) {
+        std::optional<FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
         return operator()(
             DefaultQueueId,
             input_tensor_a_arg,
@@ -287,7 +294,8 @@ struct RelationalBinary {
             output_dtype,
             memory_config,
             optional_output_tensor,
-            activations);
+            activations,
+            input_tensor_a_activation);
     }
 
     static Tensor operator()(
@@ -296,7 +304,8 @@ struct RelationalBinary {
         const std::optional<const DataType> &dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
-        std::optional<FusedActivations> activations = std::nullopt) {
+        std::optional<FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
         return detail::binary_impl(
             DefaultQueueId, binary_op_type, input_tensor_a, scalar, memory_config, optional_output_tensor);
     }
@@ -308,7 +317,8 @@ struct RelationalBinary {
         const std::optional<const DataType> &dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
-        std::optional<FusedActivations> activations = std::nullopt) {
+        std::optional<FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
         return detail::binary_impl(
             DefaultQueueId, binary_op_type, input_tensor_a, scalar, memory_config, optional_output_tensor);
     }
