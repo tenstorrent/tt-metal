@@ -1,6 +1,6 @@
-.. _ttnn.fmod_bw:
+.. _ttnn.binary_fmod_bw:
 
-ttnn.fmod_bw
-##############
+ttnn.binary_fmod_bw
+####################
 
-.. autofunction:: ttnn.fmod_bw
+.. autofunction:: ttnn.binary_fmod_bw
