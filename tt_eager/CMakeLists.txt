@@ -24,4 +24,6 @@ set_target_properties(tt_eager PROPERTIES
     INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib"
 )
 
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_lib)
+if(WITH_PYTHON_BINDINGS)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_lib)
+endif()
