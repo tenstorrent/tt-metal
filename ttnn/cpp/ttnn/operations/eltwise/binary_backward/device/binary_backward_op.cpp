@@ -183,6 +183,22 @@ std::vector<ttnn::Tensor> _hypot_bw(
 }
 
 
+// torch reference
+// - name: ldexp(Tensor self, Tensor other) -> Tensor
+//   self: grad * 2^other
+//   other: grad * self * ln(2) * (2^other)
+// # M_LN2 = ln(2)= 0.693147180559945309417
+std::vector<ttnn::Tensor> _ldexp_bw(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor tpow_o = ttnn::multiply(grad, rpow(other, 2.0, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(tpow_o);
+    Tensor result = ttnn::multiply(input, mul_unary(tpow_o, M_LN2, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ATAN2_BW:
@@ -195,6 +211,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _xlogy_bw;
         case BinaryBackwardOpType::HYPOT_BW:
             return _hypot_bw;
+         case BinaryBackwardOpType::LDEXP_BW:
+            return _ldexp_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

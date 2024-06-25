@@ -914,8 +914,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.lerp_bw
 
-.. autofunction:: tt_lib.tensor.ldexp_bw
-
 .. autofunction:: tt_lib.tensor.logaddexp_bw
 
 .. autofunction:: tt_lib.tensor.logaddexp2_bw

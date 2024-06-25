@@ -1004,26 +1004,6 @@ std::vector<Tensor> squared_difference_bw(
     return operation::decorate_as_composite(__func__, _squared_difference_bw)(grad, input, other, output_mem_config);
 }
 
-// torch reference
-// - name: ldexp(Tensor self, Tensor other) -> Tensor
-//   self: grad * 2^other
-//   other: grad * self * ln(2) * (2^other)
-// # M_LN2 = ln(2)= 0.693147180559945309417
-std::vector<Tensor> _ldexp_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor tpow_o = ttnn::multiply(grad, rpow(other, 2.0, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(tpow_o);
-    Tensor result = ttnn::multiply(input, mul_unary(tpow_o, M_LN2, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
-}
-std::vector<Tensor> ldexp_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _ldexp_bw)(grad, input, other, output_mem_config);
-}
-
-
 /*
 Torch Reference:
 name: logaddexp(Tensor self, Tensor other) -> Tensor
