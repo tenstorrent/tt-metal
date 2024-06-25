@@ -436,6 +436,7 @@ def gen_dtype_layout_device(
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],  # mem_configs[-1] is output_mem_config
     do_sanitize_args=True,
+    coregrid=[],
 ):
     # last buffer_types option is for output buffer
     dtype_mem_config_layouts = []
@@ -1990,3 +1991,148 @@ def gen_fmod_args(
         input_info.update({"value": random.randint(-100, 100) + 0.5})
 
         yield input_info
+
+
+
+def gen_dtype_layout_device_coregrid(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    mem_configs=[supported_mem_configs],  # mem_configs[-1] is output_mem_config
+    xcoregrid=None,
+    ycoregrid=None,
+    do_sanitize_args=True,
+):
+    # last buffer_types option is for output buffer
+    dtype_mem_config_layouts = []
+
+    for i in range(len(input_shapes)):
+        dtype_mem_config_layout = []
+
+        for dtype, layout, input_mem_config in product(
+            dtypes[i],
+            layouts[i],
+            mem_configs[i],
+        ):
+            dtype_mem_config_layout.append({"dtype": dtype, "layout": layout, "input_mem_config": input_mem_config})
+
+        dtype_mem_config_layouts.append(dtype_mem_config_layout)
+
+    result = []
+
+    for out_mem_config in mem_configs[-1]:
+        for dtype_mem_config_layout_combination in product(*dtype_mem_config_layouts):
+            if do_sanitize_args:
+                out = sanitize_args(input_shapes, dtype_mem_config_layout_combination)
+            else:
+                out = 1
+
+            if out is not None:
+                dtype = []
+                layout = []
+                input_mem_config = []
+
+                for x in dtype_mem_config_layout_combination:
+                    dtype.append(x["dtype"])
+                    layout.append(x["layout"])
+                    input_mem_config.append(x["input_mem_config"])
+
+                result.append(
+                    {
+                        "dtype": dtype,
+                        "layout": layout,
+                        "input_mem_config": input_mem_config,
+                        "output_mem_config": out_mem_config,
+                        "xcoregrid": xcoregrid,
+                        "ycoregrid": ycoregrid,
+                    }
+                )
+
+    return result
+
+
+def gen_dtype_layout_device_matmul(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    mem_configs=[supported_mem_configs],  # mem_configs[-1] is output_mem_config
+    xcoregrid=-1,
+    ycoregrid=-1,
+    do_sanitize_args=True,
+):
+    # last buffer_types option is for output buffer
+    dtype_mem_config_layouts = []
+
+    for i in range(len(input_shapes)):
+        dtype_mem_config_layout = []
+
+        for dtype, layout, input_mem_config in product(
+            dtypes[i],
+            layouts[i],
+            mem_configs[i],
+        ):
+            dtype_mem_config_layout.append({"dtype": dtype, "layout": layout, "input_mem_config": input_mem_config})
+
+        dtype_mem_config_layouts.append(dtype_mem_config_layout)
+
+    result = []
+
+    for out_mem_config in mem_configs[-1]:
+        for dtype_mem_config_layout_combination in product(*dtype_mem_config_layouts):
+            if do_sanitize_args:
+                out = sanitize_args(input_shapes, dtype_mem_config_layout_combination)
+            else:
+                out = 1
+
+            if out is not None:
+                dtype = []
+                layout = []
+                input_mem_config = []
+
+                for x in dtype_mem_config_layout_combination:
+                    dtype.append(x["dtype"])
+                    layout.append(x["layout"])
+                    input_mem_config.append(x["input_mem_config"])
+
+                result.append(
+                    {
+                        "dtype": dtype,
+                        "layout": layout,
+                        "input_mem_config": input_mem_config,
+                        "output_mem_config": out_mem_config,
+                        "xcoregrid": xcoregrid,
+                        "ycoregrid": ycoregrid,
+                    }
+                )
+
+    return result
+
+
+def gen_matmul_coregrid_args(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    mem_configs=[supported_mem_configs],
+    do_sanitize_args=False,
+    coregrid=[],
+):
+    xmin = coregrid[0]
+    xmax = coregrid[1]
+    ymin = coregrid[2]
+    ymax = coregrid[3]
+
+    assert xmin < xmax
+    assert ymin < ymax
+
+    xcoregrid = random.randint(xmin, xmax)
+    ycoregrid = random.randint(ymin, ymax)
+
+    return gen_dtype_layout_device_matmul(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        xcoregrid,
+        ycoregrid,
+        do_sanitize_args,
+    )
