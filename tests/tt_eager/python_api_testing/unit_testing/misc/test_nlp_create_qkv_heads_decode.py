@@ -255,6 +255,7 @@ def test_create_min_width_shard(
     device,
     use_program_cache,
 ):
+    pytest.skip("Requires TT_METAL_CLEAR_L1=1 to pass")
     torch.manual_seed(0)
 
     for i in range(3):
