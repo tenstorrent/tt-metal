@@ -118,10 +118,11 @@ class MambaTT(torch.nn.Module):
         x = ttnn.from_torch(
             x,
             device=self.device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=self.configs["dtype"]["activations"],
+            dtype=ttnn.bfloat16,
         )
+        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT, dtype=self.configs["dtype"]["activations"])
 
         for layer in self.layers:
             x = layer(x)
