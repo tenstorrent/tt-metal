@@ -45,7 +45,9 @@ if(WITH_PYTHON_BINDINGS)
     # TODO: should be using pybind11_add_module, but right now it introduces many build problems
     # pybinds will always be built as a shared library
     list(APPEND TTNN_FINAL_SRC ${PROJECT_SOURCE_DIR}/ttnn/cpp/pybind11/__init__.cpp)
-    list(APPEND TTNN_PUBLIC_INCLUDE_DIRS ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include)
+    list(APPEND TTNN_PUBLIC_INCLUDE_DIRS
+        ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include
+        ${Python3_INCLUDE_DIRS})
     list(APPEND TTNN_PUBLIC_LINK_LIBS pch_pybinds)
 endif()
 

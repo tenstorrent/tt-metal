@@ -61,6 +61,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(UMD_HOME "${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd")
 
 option(WITH_PYTHON_BINDINGS "Enables build of python bindings" ON)
+message(STATUS "Build Python bindings: ${WITH_PYTHON_BINDINGS}")
+
 option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
 option(TT_METAL_VERSIM_DISABLED "Disable TT_METAL_VERSIM" ON)
 
