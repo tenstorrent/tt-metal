@@ -26,24 +26,28 @@ constexpr uint32_t idle_eth_max_runtime_args = eth_l1_mem::address_map::ERISC_L1
 
 using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
 
+// RuntimeArgsData provides an indirection to the runtime args
+// Prior to generating the cq cmds for the device, this points into a vector within the kernel
+// After generation, this points into the cq cmds so that runtime args API calls
+// update the data directly in the command
 struct RuntimeArgsData {
     uint32_t * rt_args_data;
-    size_t rt_args_size;
+    size_t rt_args_count;
 
     inline uint32_t & operator[](size_t index) {
-        TT_ASSERT(index < rt_args_size, "Index specified is larger than runtime args size");
+        TT_ASSERT(index < rt_args_count, "Index specified is larger than runtime args size");
         return this->rt_args_data[index];
     }
     inline const uint32_t& operator[](size_t index) const {
-        TT_ASSERT(index < rt_args_size, "Index specified is larger than runtime args size");
+        TT_ASSERT(index < rt_args_count, "Index specified is larger than runtime args size");
         return this->rt_args_data[index];
     }
     inline uint32_t & at(size_t index) {
-        TT_FATAL(index < rt_args_size, "Index specified is larger than runtime args size");
+        TT_FATAL(index < rt_args_count, "Index specified is larger than runtime args size");
         return this->rt_args_data[index];
     }
     inline const uint32_t& at(size_t index) const {
-        TT_FATAL(index < rt_args_size, "Index specified is larger than runtime args size");
+        TT_FATAL(index < rt_args_count, "Index specified is larger than runtime args size");
         return this->rt_args_data[index];
     }
     inline uint32_t * data() noexcept {
@@ -53,7 +57,7 @@ struct RuntimeArgsData {
         return rt_args_data;
     }
     inline size_t size() const noexcept{
-        return rt_args_size;
+        return rt_args_count;
     }
 };
 
@@ -85,8 +89,11 @@ class Kernel : public JitBuildSettings {
     RuntimeArgsData & runtime_args_data(const CoreCoord &logical_core);
     std::vector< std::vector< std::vector<uint32_t>> > & runtime_args();
     std::vector< std::vector< RuntimeArgsData > > & runtime_args_data();
+    void set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count);
     std::vector<uint32_t> & common_runtime_args();
     RuntimeArgsData & common_runtime_args_data();
+    void set_common_runtime_args_count(uint32_t count);
+    uint32_t get_common_runtime_args_count() const  { return this->common_runtime_args_count_; }
 
     std::map<std::string, std::string> defines() const { return defines_; }
 
@@ -103,8 +110,6 @@ class Kernel : public JitBuildSettings {
     inline uint16_t get_binary_size16() const { return binary_size16_; }
     void set_binary_path ( const std::string & binary_path) { binary_path_ = binary_path; }
     void set_binaries(uint32_t build_key, std::vector<ll_api::memory> &&binaries);
-    uint32_t get_common_runtime_args_index();
-    void set_common_runtime_args_index();
     virtual void read_binaries(Device *device) = 0;
 
     void validate_runtime_args_size(size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core);
@@ -136,6 +141,7 @@ class Kernel : public JitBuildSettings {
     std::vector<uint32_t> compile_time_args_;
     std::vector< std::vector< std::vector<uint32_t>> > core_to_runtime_args_;
     std::vector< std::vector< RuntimeArgsData> > core_to_runtime_args_data_;
+    uint32_t common_runtime_args_count_;
     std::vector<uint32_t> common_runtime_args_;
     RuntimeArgsData common_runtime_args_data_;
     std::set<CoreCoord> core_with_runtime_args_;

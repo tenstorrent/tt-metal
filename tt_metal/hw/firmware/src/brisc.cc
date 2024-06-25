@@ -64,7 +64,8 @@ uint32_t atomic_ret_val __attribute__((section("l1_data"))) __attribute__((used)
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
-uint32_t tt_l1_ptr *l1_arg_base __attribute__((used));
+uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
 
 #define MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
 
@@ -384,7 +385,9 @@ int main() {
             // Run the BRISC kernel
             DEBUG_STATUS("R");
             uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
-            l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offsets[DISPATCH_CLASS_TENSIX_DM0]);
+            rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.mem_map[DISPATCH_CLASS_TENSIX_DM0].rta_offset);
+            crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.mem_map[DISPATCH_CLASS_TENSIX_DM0].crta_offset);
+
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
                 setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
                 kernel_init();

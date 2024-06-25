@@ -509,6 +509,80 @@ class DeviceCommand {
         this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
     }
 
+    // Tuple in data_collection is:
+    //  0:address, 1:size, 2:stride
+    template <typename PackedSubCmd>
+    void add_dispatch_write_packed(
+        uint16_t num_sub_cmds,
+        uint32_t common_addr,
+        uint16_t packed_data_sizeB,
+        uint32_t payload_sizeB,
+        const std::vector<PackedSubCmd> &sub_cmds,
+        const std::vector<std::vector<std::tuple<const void *, uint32_t, uint32_t>>> &data_collection,
+        uint32_t packed_write_max_unicast_sub_cmds,
+        const uint32_t offset_idx = 0,
+        const bool no_stride = false) {
+        static_assert(
+            std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
+            std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
+        bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
+
+        uint32_t packed_write_max_multicast_sub_cmds = get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
+        uint32_t max_num_packed_sub_cmds = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value ? packed_write_max_unicast_sub_cmds : packed_write_max_multicast_sub_cmds;
+        TT_ASSERT(
+            num_sub_cmds <= max_num_packed_sub_cmds,
+            "Max number of packed sub commands are {} but requesting {}",
+            max_num_packed_sub_cmds,
+            num_sub_cmds);
+
+        constexpr bool flush_prefetch = true;
+        this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
+
+        auto initialize_write_packed_cmd = [&](CQDispatchCmd *write_packed_cmd) {
+            write_packed_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
+            write_packed_cmd->write_packed.flags =
+                (multicast ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE) |
+                (no_stride ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE);
+            write_packed_cmd->write_packed.count = num_sub_cmds;
+            write_packed_cmd->write_packed.addr = common_addr;
+            write_packed_cmd->write_packed.size = packed_data_sizeB;
+        };
+        CQDispatchCmd *write_packed_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
+
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_packed_cmd;
+            initialize_write_packed_cmd(&write_packed_cmd);
+            this->memcpy(write_packed_cmd_dst, &write_packed_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_write_packed_cmd(write_packed_cmd_dst);
+        }
+
+        static_assert(sizeof(PackedSubCmd) % sizeof(uint32_t) == 0);
+        uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(PackedSubCmd);
+        this->memcpy((char *)this->cmd_region + this->cmd_write_offsetB, &sub_cmds[offset_idx], sub_cmds_sizeB);
+
+        uint32_t increment_sizeB =
+            align(sub_cmds_sizeB, L1_ALIGNMENT);  // this assumes CQDispatchCmd is L1_ALIGNEMENT aligned
+        this->cmd_write_offsetB += increment_sizeB;
+
+        // copy the actual data
+        increment_sizeB = align(packed_data_sizeB, L1_ALIGNMENT);
+        uint32_t num_data_copies = no_stride ? 1 : num_sub_cmds;
+        for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
+            uint32_t offset = 0;
+            for (auto& data : data_collection[i]) {
+                this->memcpy(
+                    (char *)this->cmd_region + this->cmd_write_offsetB + offset,
+                    std::get<0>(data),
+                    std::get<1>(data));
+                offset += std::get<2>(data);
+            }
+            this->cmd_write_offsetB += increment_sizeB;
+        }
+
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+    }
+
     void add_dispatch_write_packed_large(
         uint16_t alignment,
         uint16_t num_sub_cmds,

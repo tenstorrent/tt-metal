@@ -512,8 +512,13 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done)
         ZoneScoped;
         detail::DispatchStateCheck(false);
         detail::CompileProgram(device, program);
+        if (!program.is_finalized()) {
+            program.finalize_rt_args();
+            program.set_finalized();
+        }
         detail::WriteRuntimeArgsToDevice(device, program);
         detail::ConfigureDeviceWithProgram(device, program);
+
         auto device_id = device->id();
 
         tt::Cluster::instance().dram_barrier(device_id);
@@ -527,6 +532,7 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done)
         for (const auto &[core_type, logical_cores] : logical_cores_used_in_program) {
             for (const auto &logical_core : logical_cores) {
                 launch_msg_t *msg = &program.kernels_on_core(logical_core, core_type)->launch_msg;
+
                 auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
                 tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg);
@@ -607,82 +613,69 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
     return pass;
 }
 
-// Return base address in L1 for Runtime Args given processor type (and eth mode in case of ERISC).
-static uint32_t GetL1ArgBaseAddr(std::shared_ptr<Kernel> kernel) {
-    const RISCV &riscv = kernel->processor();
-    uint32_t l1_arg_base = 0;
-
-    switch (riscv) {
-        case RISCV::BRISC: {
-            l1_arg_base = L1_KERNEL_CONFIG_BASE;
-        } break;
-        case RISCV::NCRISC: {
-            l1_arg_base = L1_KERNEL_CONFIG_BASE + max_runtime_args * sizeof(uint32_t);
-        } break;
-        case RISCV::ERISC: {
-            auto config = std::get<EthernetConfig>(kernel->config());
-            if (config.eth_mode == Eth::IDLE) {
-                l1_arg_base = IDLE_ERISC_L1_KERNEL_CONFIG_BASE;
-            } else {
-                l1_arg_base = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
-            }
-        } break;
-        case RISCV::COMPUTE: {
-            l1_arg_base = L1_KERNEL_CONFIG_BASE + 2 * max_runtime_args * sizeof(uint32_t);
-        } break;
-        default: TT_THROW("Unsupported {} processor does not support runtime args", riscv);
-    }
-    return l1_arg_base;
-}
-
-void WriteRuntimeArgsToDevice(Device *device, const Program &program) {
+void WriteRuntimeArgsToDevice(Device *device, Program &program) {
     ZoneScoped;
     auto device_id = device->id();
     detail::DispatchStateCheck(false);
 
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        const auto kernel = detail::GetKernel(program, kernel_id);
-        auto args_base_addr = detail::GetL1ArgBaseAddr(kernel);
+    static vector<CoreType>core_types = {CoreType::WORKER, CoreType::ETH }; // TODO: make this global
 
-        for (const auto &logical_core : kernel->cores_with_runtime_args()) {
-            auto physical_core = device->physical_core_from_logical_core(logical_core, kernel->get_kernel_core_type());
-            const auto &rt_args = kernel->runtime_args(logical_core);
-            log_trace(
-                tt::LogMetal,
-                "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: {}",
-                __FUNCTION__,
-                rt_args.size(),
-                logical_core.str(),
-                physical_core.str(),
-                args_base_addr,
-                rt_args);
-            tt::llrt::write_hex_vec_to_core(device_id, physical_core, rt_args, args_base_addr);
-        }
-
-        // Unicast common runtime args to all cores for kernel. Fast-Dispatch will multicast as perf opt.
-        const auto &common_rt_args = kernel->common_runtime_args();
-        auto common_rt_args_offset = kernel->get_common_runtime_args_index() * sizeof(uint32_t);
-
-        if (common_rt_args.size() > 0) {
-            for (auto &core_range : kernel->logical_coreranges()) {
+    for (CoreType core_type : core_types) {
+        for (auto& kg : program.get_kernel_groups(core_type)) {
+            for (const CoreRange &core_range : kg.core_ranges.ranges()) {
                 for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
                     for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
-                        CoreCoord logical_core({x, y});
-                        auto physical_core =
-                            device->physical_core_from_logical_core(logical_core, kernel->get_kernel_core_type());
-                        const auto common_args_addr =
-                            args_base_addr +
-                            common_rt_args_offset;  // Common args are placed after unique args per core.
-                        log_trace(
-                            tt::LogMetal,
-                            "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: {}",
-                            __FUNCTION__,
-                            common_rt_args.size(),
-                            logical_core.str(),
-                            physical_core.str(),
-                            common_args_addr,
-                            common_rt_args);
-                        tt::llrt::write_hex_vec_to_core(device_id, physical_core, common_rt_args, common_args_addr);
+                        CoreCoord logical_core(x, y);
+                        auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
+                        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+                            auto& optional_id = kg.kernel_ids[dispatch_class];
+                            if (optional_id) {
+                                const auto kernel = detail::GetKernel(program, optional_id.value());
+                                const auto &rt_args = kernel->runtime_args(logical_core);
+
+                                uint32_t kernel_config_base;
+                                // TODO: get this from the dispatch ring buffer
+                                if (core_type == CoreType::WORKER) {
+                                    kernel_config_base = L1_KERNEL_CONFIG_BASE;
+                                } else {
+                                    TT_ASSERT(core_type == CoreType::ETH);
+                                    if (kernel->is_idle_eth()) {
+                                        kernel_config_base = IDLE_ERISC_L1_KERNEL_CONFIG_BASE;
+                                    } else {
+                                        kernel_config_base = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
+                                    }
+                                }
+
+                                if (rt_args.size() > 0) {
+                                    auto args_base_addr = kernel_config_base + kg.launch_msg.mem_map[dispatch_class].rta_offset;
+                                    log_trace(
+                                              tt::LogMetal,
+                                              "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: {}",
+                                              __FUNCTION__,
+                                              rt_args.size(),
+                                              logical_core.str(),
+                                              physical_core.str(),
+                                              args_base_addr,
+                                              rt_args);
+                                    tt::llrt::write_hex_vec_to_core(device_id, physical_core, rt_args, args_base_addr);
+                                }
+
+                                const auto &common_rt_args = kernel->common_runtime_args();
+                                if (common_rt_args.size() > 0) {
+                                    auto common_rt_args_addr = kernel_config_base + kg.launch_msg.mem_map[dispatch_class].crta_offset;
+                                    log_trace(
+                                              tt::LogMetal,
+                                              "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: {}",
+                                              __FUNCTION__,
+                                              common_rt_args.size(),
+                                              logical_core.str(),
+                                              physical_core.str(),
+                                              common_rt_args_addr,
+                                              common_rt_args);
+                                    tt::llrt::write_hex_vec_to_core(device_id, physical_core, common_rt_args, common_rt_args_addr);
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -127,7 +127,7 @@ namespace tt::tt_metal{
          * | device       | The device to whcih runtime args will be written                       | Device *                      |                                    | Yes      |
          * | program      | The program holding the runtime args                                   | const Program &               |                                    | Yes      |
          */
-        void WriteRuntimeArgsToDevice(Device *device, const Program &program);
+        void WriteRuntimeArgsToDevice(Device *device, Program &program);
 
         // Configures a given device with a given program.
         // - Loads all kernel binaries into L1s of assigned Tensix cores
