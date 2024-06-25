@@ -162,6 +162,7 @@ struct CQDispatchWritePagedCmd {
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE      = 0x00;
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST     = 0x01;
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE = 0x02;
+
 struct CQDispatchWritePackedCmd {
     uint8_t flags;            // see above
     uint16_t count;           // number of sub-cmds (max 1020 unicast, 510 mcast). Max num sub-cmds = (dispatch_constants::TRANSFER_PAGE_SIZE - sizeof(CQDispatchCmd)) / sizeof(CQDispatchWritePacked*castSubCmd)
@@ -177,6 +178,9 @@ struct CQDispatchWritePackedMulticastSubCmd {
     uint32_t noc_xy_addr;     // unique XY address for each SubCmd
     uint32_t num_mcast_dests;
 } __attribute__((packed));
+
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_MAX_UNICAST_SUB_CMDS = 108;  // GS 120 - 1 row TODO: this should be a compile time arg passed in from host
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_MAX_MULTICAST_SUB_CMDS = CQ_DISPATCH_CMD_PACKED_WRITE_MAX_UNICAST_SUB_CMDS * sizeof(CQDispatchWritePackedUnicastSubCmd) / sizeof(CQDispatchWritePackedMulticastSubCmd);
 
 struct CQDispatchWritePackedLargeSubCmd {
     uint32_t noc_xy_addr;
