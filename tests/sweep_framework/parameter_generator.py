@@ -13,6 +13,7 @@ import shortuuid
 from architecture import str_to_arch
 from permutations import *
 from sql_utils import *
+from serialize import serialize, deserialize
 from pymongo import MongoClient
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
@@ -32,7 +33,7 @@ def validate_vectors(vectors) -> None:
     pass
 
 
-# Output the individual test vectors from solver.model()
+# Output the individual test vectors.
 def export_test_vectors(vectors):
     vectors = list(vectors)
     # Perhaps we export with some sort of readable id, which can be passed to a runner to run specific sets of input vectors. (export seed as well for reproducability)
@@ -55,14 +56,21 @@ def export_test_vectors(vectors):
 
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-    for vector in vectors:
-        vector["sweep_name"] = MODULE_NAME
-        vector["timestamp"] = current_time
-        vector["batch_id"] = batch_id
-        for elem in vector:
-            vector[elem] = str(vector[elem])
+    import pdb
 
-    collection.insert_many(vectors)
+    pdb.set_trace()
+    serialized_vectors = []
+
+    for i in range(len(vectors)):
+        serialized_vectors.append(dict())
+        serialized_vectors[i]["sweep_name"] = MODULE_NAME
+        serialized_vectors[i]["timestamp"] = current_time
+        serialized_vectors[i]["batch_id"] = batch_id
+        for elem in vectors[i].keys():
+            serialized_vectors[i][elem] = serialize(vectors[i][elem])
+
+        des = deserialize(serialized_vectors[0]["input_a_memory_config"])
+    collection.insert_many(serialized_vectors)
 
     # for vector in vectors:
     #     row = [MODULE_NAME, current_time, batch_id] + list(get_parameter_values(parameter_names, vector))
