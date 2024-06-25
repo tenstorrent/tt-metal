@@ -49,6 +49,13 @@ Kernel::Kernel(
     }
     this->core_to_runtime_args_ = {max_x + 1, std::vector<std::vector<uint32_t>>(max_y + 1, std::vector<uint32_t>())};
     this->core_to_runtime_args_data_ = {max_x + 1, std::vector<RuntimeArgsData>(max_y + 1, RuntimeArgsData{})};
+    for (auto& runtime_args_data_x : this->core_to_runtime_args_data_) {
+        for (auto& runtime_args_data: runtime_args_data_x) {
+            runtime_args_data.rt_args_data = nullptr;
+            runtime_args_data.rt_args_count = 0;
+        }
+    }
+    this->common_runtime_args_count_ = 0;
 }
 
 std::string Kernel::name() const {
@@ -193,15 +200,13 @@ RuntimeArgsData &Kernel::common_runtime_args_data() { return this->common_runtim
 // Ensure that unique and common runtime args do not overflow reserved region in L1.
 void Kernel::validate_runtime_args_size(
     size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord &logical_core) {
-    // Common RT args starting address must be 16B aligned, so account for that here via padding
-    uint32_t num_unique_rt_args_padded = align(num_unique_rt_args, L1_ALIGNMENT / sizeof(uint32_t));
-    uint32_t total_rt_args = (num_unique_rt_args_padded + num_common_rt_args);
+    uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
     uint32_t max_rt_args = is_idle_eth() ? idle_eth_max_runtime_args : max_runtime_args;
 
     if (total_rt_args > max_rt_args) {
         log_warning(tt::LogMetal, "Too many runtime args, unique: {} common: {} on {}", num_unique_rt_args, num_common_rt_args, this->processor());
         TT_THROW(std::to_string(total_rt_args) + " unique+common runtime args targeting kernel " +  this->name() + " on " + logical_core.str() +
-            " are too large. Max allowable is " + std::to_string(max_runtime_args) + " (including up to 3 padding args)");
+            " are too large. Max allowable is " + std::to_string(max_runtime_args));
     }
 }
 
@@ -232,7 +237,7 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<u
     } else {
         TT_FATAL(
             set_rt_args.size() == runtime_args.size(),
-            "Illegal Runtime Args: Number of runtime args cannot be modified!");
+            "Illegal Runtime Args on {}: Number of runtime args cannot be modified from {} to {}!", logical_core.str(), set_rt_args.size(), runtime_args.size());
         std::memcpy(
             this->core_to_runtime_args_data_[logical_core.x][logical_core.y].rt_args_data,
             runtime_args.data(),
@@ -249,6 +254,29 @@ void Kernel::set_common_runtime_args(const std::vector<uint32_t> &common_runtime
         max_runtime_args_per_core_, common_runtime_args.size(), core_with_max_runtime_args_);
     set_rt_args = common_runtime_args;
     this->common_runtime_args_data_ = RuntimeArgsData{set_rt_args.data(), set_rt_args.size()};
+}
+
+// Pads runtime args to count
+void Kernel::set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count) {
+
+    for (const CoreRange &core_range : core_ranges.ranges()) {
+        for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+            for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                auto &set_rt_args = this->core_to_runtime_args_[x][y];
+                if (set_rt_args.empty()) continue;
+
+                TT_ASSERT(count >= core_to_runtime_args_data_[x][y].size());
+                core_to_runtime_args_data_[x][y].rt_args_count = count;
+            }
+        }
+    }
+}
+
+void Kernel::set_common_runtime_args_count(uint32_t count) {
+    TT_ASSERT(count >= this->common_runtime_args_.size());
+
+    this->common_runtime_args_count_ = count;
+    this->common_runtime_args_data_.rt_args_count = count;
 }
 
 bool Kernel::is_idle_eth() {
@@ -304,27 +332,6 @@ void ComputeKernel::generate_binaries(Device *device, JitBuildOptions &build_opt
     jit_build_genfiles_triscs_src(device->build_env(), *this, this->kernel_path_file_name_);
     JitBuildStateSubset build_states = device->build_kernel_states(JitBuildProcessorType::COMPUTE);
     jit_build_subset(build_states, this, this->kernel_path_file_name_);
-}
-
-// Calculate 16B aligned offset to reach common runtime args from core with most unique runtime args.
-uint32_t Kernel::get_common_runtime_args_index() {
-    uint32_t max_unique_rt_args = 0;
-    for (const auto &logical_core : this->cores_with_runtime_args()) {
-        auto& rt_args = this->runtime_args(logical_core);
-        max_unique_rt_args = rt_args.size() > max_unique_rt_args ? rt_args.size() : max_unique_rt_args;
-    }
-
-    uint32_t common_rt_args_index = align(max_unique_rt_args, L1_ALIGNMENT / sizeof(uint32_t));
-    return common_rt_args_index;
-}
-
-// Validate that all cores have same number of unique-runtime-args, and then calculate and set
-// define for offset to reach common-runtime-args per core.
-
-void Kernel::set_common_runtime_args_index() {
-    auto offset = get_common_runtime_args_index();
-    log_trace(tt::LogMetal, "Setting COMMON_RT_ARGS_INDEX: {} for kernel: {}", offset, this->name());
-    this->defines_["COMMON_RT_ARGS_INDEX"] = std::to_string(offset);
 }
 
 void Kernel::set_binaries(uint32_t build_key, std::vector<ll_api::memory> &&binaries) {

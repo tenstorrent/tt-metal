@@ -11,12 +11,8 @@
 #include "compute_kernel_api/cb_api.h"
 
 
-// JIT Build flow will set this as needed.
-#ifndef COMMON_RT_ARGS_INDEX
-    #define COMMON_RT_ARGS_INDEX 0
-#endif
-
-extern uint32_t *l1_arg_base;
+extern uint32_t *rta_l1_base;
+extern uint32_t *crta_l1_base;
 
 /**
  * Returns the address in L1 for a given runtime argument index for unique (per core) runtime arguments set via SetRuntimeArgs() API.
@@ -29,7 +25,7 @@ extern uint32_t *l1_arg_base;
  */
 static FORCE_INLINE
 uint32_t get_arg_addr(int arg_idx) {
-    return (uint32_t)&l1_arg_base[arg_idx];
+    return (uint32_t)&rta_l1_base[arg_idx];
 }
 
 /**
@@ -43,7 +39,7 @@ uint32_t get_arg_addr(int arg_idx) {
  */
 static FORCE_INLINE
 uint32_t get_common_arg_addr(int arg_idx) {
-    return (uint32_t)&l1_arg_base[arg_idx + COMMON_RT_ARGS_INDEX];
+    return (uint32_t)&crta_l1_base[arg_idx];
 }
 
 /**

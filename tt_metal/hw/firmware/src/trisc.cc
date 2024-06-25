@@ -13,6 +13,7 @@
 
 #include "debug/fw_debug.h"
 #include "debug/status.h"
+#include "debug/dprint.h"
 #include "circular_buffer.h"
 // clang-format on
 
@@ -25,7 +26,8 @@ namespace kernel_profiler {
 }
 #endif
 
-tt_l1_ptr uint32_t *l1_arg_base __attribute__((used));
+uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
 
 namespace ckernel {
 
@@ -108,7 +110,8 @@ int main(int argc, char *argv[]) {
 #endif
 
         uint32_t kernel_config_base = mailboxes->launch.kernel_config_base;
-        l1_arg_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.rta_offsets[DISPATCH_CLASS_TENSIX_COMPUTE]);
+        rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
+        crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base + mailboxes->launch.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
 
         DEBUG_STATUS("R");
         kernel_init();

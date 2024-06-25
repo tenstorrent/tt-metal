@@ -33,7 +33,6 @@ const uint32_t MAX_TILES_PER_PHASE = 2048;
 
 extern uint8_t my_x[NUM_NOCS];
 extern uint8_t my_y[NUM_NOCS];
-extern uint32_t *l1_arg_base;
 
 inline void WRITE_REG(uint32_t addr, uint32_t val) {
     volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)addr;
