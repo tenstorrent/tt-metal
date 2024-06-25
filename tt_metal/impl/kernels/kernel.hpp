@@ -67,7 +67,7 @@ class Kernel : public JitBuildSettings {
 
     std::string name() const;
 
-    CoreRangeSet core_range_set() const { return core_range_set_; }
+    const CoreRangeSet& core_range_set() const { return core_range_set_; }
 
     const std::set<CoreCoord> &logical_cores() const;
 
