@@ -71,6 +71,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::FLOOR: defines["SFPU_OP_FLOOR_INCLUDE"] = "1"; break;
         case UnaryOpType::LEFT_SHIFT: defines["SFPU_OP_LEFT_SHIFT_INCLUDE"] = "1"; break;
         case UnaryOpType::REMAINDER: defines["SFPU_OP_REMAINDER_INCLUDE"] = "1"; break;
+        case UnaryOpType::FMOD: defines["SFPU_OP_FMOD_INCLUDE"] = "1"; break;
         default: defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1"; break;
     };
 }
@@ -136,6 +137,11 @@ std::pair<string, string> get_op_init_and_func_parameterized(
             op_init_and_name = {
                 "remainder_tile_init();",
                 fmt::format("remainder_tile({}, {}u, {}u);", idst, Converter::to_hex(param0), Converter::to_hex(1.0f/param0))};
+            break;
+        case UnaryOpType::FMOD:
+            op_init_and_name = {
+                "fmod_tile_init();",
+                fmt::format("fmod_tile({}, {}u, {}u);", idst, Converter::to_hex(param0), Converter::to_hex(1.0f/param0))};
             break;
         case UnaryOpType::EXP:
             op_init_and_name = {
@@ -364,6 +370,11 @@ inline void validate_supported_arch_dtype(tt::ARCH arch, DataType input_datatype
             TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
             TT_FATAL(input_datatype == DataType::INT32, "Data type is not supported for Bitwise operations");
             TT_FATAL(output_datatype == DataType::INT32, "Data type is not supported for Bitwise operations");
+            break;
+        case UnaryOpType::FMOD:
+            TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+            TT_FATAL(input_datatype == DataType::BFLOAT16, "Data type is not supported for Fmod operations");
+            TT_FATAL(output_datatype == DataType::BFLOAT16, "Data type is not supported for Fmod operations");
             break;
         default:
             return;

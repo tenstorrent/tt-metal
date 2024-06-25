@@ -15,13 +15,12 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_remainder(const uint value, const uint recip) {
+inline void calculate_fmod(const uint value, const uint recip) {
 
     // SFPU microcode
     Converter c_value;
     c_value.u = value;
     vFloat s = c_value.f;
-    vFloat value_tmp = s;
     s = sfpi::abs(s);
 
     c_value.u = recip;
@@ -41,18 +40,10 @@ inline void calculate_remainder(const uint value, const uint recip) {
             newquotient = newquotient - 1;
         }
         v_endif;
+
         v = v - newquotient * s;
+        v = setsgn(v, val);
 
-        v_if(val<0 && v!=0){
-            v = s - v;
-        }
-        v_endif;
-
-        v_if(value_tmp<0 && v!=0){
-            v = v + value_tmp;
-        }
-        v_endif;
-        v = setsgn(v, value_tmp);
         v_if(s==0){
             v = std::numeric_limits<float>::quiet_NaN();
         }
