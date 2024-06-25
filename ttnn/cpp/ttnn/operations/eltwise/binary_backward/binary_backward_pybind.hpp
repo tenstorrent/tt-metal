@@ -170,10 +170,14 @@ void py_module(py::module& module) {
     detail::bind_binary_backward(
         module,
         ttnn::hypot_bw,
-        R"doc(Performs backward operations for hypot_bw of :attr:`input_tensor_a` and :attr:`input_tensor_b` tensors with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for hypot of :attr:`input_tensor_a` and :attr:`input_tensor_b` tensors with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_binary_backward(
+        module,
+        ttnn::ldexp_bw,
+        R"doc(Performs backward operations for ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` tensors with given :attr:`grad_tensor`.)doc");
 }
 
-}  // namespace copy
+}  // namespace binary_backward
 }  // namespace operations
 }  // namespace ttnn
