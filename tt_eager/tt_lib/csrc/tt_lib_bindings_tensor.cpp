@@ -217,6 +217,8 @@ void TensorModule(py::module& m_tensor) {
         .def_readonly("buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1")
         .def_readonly("memory_layout", &MemoryConfig::memory_layout, "Memory layout of tensor data.")
         .def_readwrite("shard_spec", &MemoryConfig::shard_spec, "Memory layout of tensor data.")
+        .def_property_readonly("attribute_names", [](const MemoryConfig& self) { return self.attribute_names; })
+        .def("attribute_values", [](const MemoryConfig& self) { return self.attribute_values(); })
         .def(py::self == py::self)
         .def(py::self != py::self);
 

@@ -7,9 +7,10 @@ import sys
 import sqlite3
 import pathlib
 import importlib
-import ttnn
-
-from ttnn.types import *
+from ttnn import *
+import tt_lib
+from pymongo import MongoClient
+from serialize import deserialize
 
 RESULTS_DB = pathlib.Path(__file__).parent / "results" / "results.sqlite"
 
@@ -20,9 +21,15 @@ def execute_tests(test_module, test_vectors):
     msg_results = []
 
     for test_vector in test_vectors:
-        status, message = test_module.run(**test_vector, device=device)
-        status_results.append(status)
-        msg_results.append(message)
+        try:
+            status, message = test_module.run(**test_vector, device=device)
+            status_results.append(status)
+            msg_results.append(message)
+            print(status)
+        except Exception as e:
+            status = False
+            message = e
+            continue
 
     ttnn.close_device(device)
     return zip(status_results, msg_results, test_vectors)
@@ -32,22 +39,19 @@ def flatten_results(results):
     pass
 
 
-def sanitize_inputs(test_vectors, cursor_description):
-    test_vectors = [list(vector) for vector in test_vectors]
-    column_names = [description[0] for description in cursor_description]
-    test_vectors = [dict(zip(column_names, vector)) for vector in test_vectors]
-    info_column_names = ["sweep_name", "timestamp", "batch_id"]
+def sanitize_inputs(test_vectors):
+    info_column_names = ["_id", "sweep_name", "timestamp", "batch_id"]
     for vector in test_vectors:
         for col in info_column_names:
             vector.pop(col)
-        for elem in vector:
-            vector[elem] = eval(vector[elem])
     return test_vectors
 
 
 def run_sweeps(module_name, batch_id):
-    connection = sqlite3.connect(VECTOR_DB)
-    cursor = connection.cursor()
+    # connection = sqlite3.connect(VECTOR_DB)
+    # cursor = connection.cursor()
+    client = MongoClient("mongodb://localhost:27017")
+    db = client.test_vectors
 
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
 
@@ -55,20 +59,27 @@ def run_sweeps(module_name, batch_id):
         for file in sorted(sweeps_path.glob("*.py")):
             sweep_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3]
             test_module = importlib.import_module("sweeps." + sweep_name)
-            table_name = sweep_name + "_test_vectors"
+            collection_name = sweep_name + "_test_vectors"
+            collection = db[collection_name]
 
             try:
-                test_vectors_query = f"SELECT * FROM {table_name}"
-                cursor.execute(test_vectors_query)
-                test_vectors = cursor.fetchall()
+                # test_vectors_query = f"SELECT * FROM {table_name}"
+                # cursor.execute(test_vectors_query)
+                # test_vectors = cursor.fetchall()
+                test_vectors = list(collection.find())
+
                 if len(test_vectors) == 0:
                     continue
 
-                test_vectors = sanitize_inputs(test_vectors, cursor.description)
+                test_vectors = sanitize_inputs(test_vectors)
+                param_names = test_vectors[0].keys()
+                test_vectors = [[deserialize(vector[elem]) for elem in vector] for vector in test_vectors]
+                test_vectors = [dict(zip(param_names, vector)) for vector in test_vectors]
                 results = execute_tests(test_module, test_vectors)
                 results = flatten_results(results)
                 export_test_results(results)
-            except:
+            except Exception as e:
+                print(e)
                 continue
 
     elif module_name and not batch_id:
@@ -107,8 +118,8 @@ def run_sweeps(module_name, batch_id):
         except:
             return
 
-    connection.commit()
-    connection.close()
+    # connection.commit()
+    # connection.close()
 
 
 # Export test output (msg), status, exception (if applicable), git hash, timestamp, test vector, test UUID?,
@@ -124,7 +135,7 @@ if __name__ == "__main__":
         description="Run test vector suites from generated vector database.",
     )
 
-    parser.add_argument("--vector-db", required=True, help="Path to the vector database.")
+    parser.add_argument("--vector-db", required=False, help="Path to the vector database.")
     parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted.")
     parser.add_argument("--batch-id", required=False, help="Batch of Test Vectors to run, or all tests if omitted.")
     parser.add_argument(
