@@ -4,39 +4,39 @@
 
 import argparse
 import sys
-import sqlite3
 import pathlib
 import importlib
+import datetime
 from ttnn import *
-import tt_lib
 from pymongo import MongoClient
-from serialize import deserialize
-
-RESULTS_DB = pathlib.Path(__file__).parent / "results" / "results.sqlite"
+from serialize import *
 
 
-def execute_tests(test_module, test_vectors):
+def git_hash():
+    try:
+        import subprocess
+
+        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode("ascii").strip()
+    except Exception as e:
+        raise RuntimeError("Couldn't get git hash!") from e
+
+
+def execute_tests(sweep_name, test_module, test_vectors):
     device = ttnn.open_device(device_id=0)
-    status_results = []
-    msg_results = []
 
     for test_vector in test_vectors:
         try:
-            status, message = test_module.run(**test_vector, device=device)
-            status_results.append(status)
-            msg_results.append(message)
-            print(status)
+            status, pcc = test_module.run(**test_vector, device=device)
+            test_vector["status"] = status
+            test_vector["pcc"] = pcc
         except Exception as e:
-            status = False
-            message = e
-            continue
+            test_vector["status"] = False
+            test_vector["exception"] = str(e)
+        test_vector["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        test_vector["sweep_name"] = sweep_name
 
     ttnn.close_device(device)
-    return zip(status_results, msg_results, test_vectors)
-
-
-def flatten_results(results):
-    pass
+    return test_vectors
 
 
 def sanitize_inputs(test_vectors):
@@ -48,9 +48,7 @@ def sanitize_inputs(test_vectors):
 
 
 def run_sweeps(module_name, batch_id):
-    # connection = sqlite3.connect(VECTOR_DB)
-    # cursor = connection.cursor()
-    client = MongoClient("mongodb://localhost:27017")
+    client = MongoClient(MONGO_CONNECTION_STRING)
     db = client.test_vectors
 
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
@@ -63,9 +61,6 @@ def run_sweeps(module_name, batch_id):
             collection = db[collection_name]
 
             try:
-                # test_vectors_query = f"SELECT * FROM {table_name}"
-                # cursor.execute(test_vectors_query)
-                # test_vectors = cursor.fetchall()
                 test_vectors = list(collection.find())
 
                 if len(test_vectors) == 0:
@@ -75,58 +70,60 @@ def run_sweeps(module_name, batch_id):
                 param_names = test_vectors[0].keys()
                 test_vectors = [[deserialize(vector[elem]) for elem in vector] for vector in test_vectors]
                 test_vectors = [dict(zip(param_names, vector)) for vector in test_vectors]
-                results = execute_tests(test_module, test_vectors)
-                results = flatten_results(results)
+                results = execute_tests(sweep_name, test_module, test_vectors)
                 export_test_results(results)
             except Exception as e:
                 print(e)
                 continue
 
-    elif module_name and not batch_id:
+    else:
         test_module = importlib.import_module("sweeps." + module_name)
-        table_name = module_name + "_test_vectors"
+        collection_name = module_name + "_test_vectors"
+        collection = db[collection_name]
 
         try:
-            test_vectors_query = f"SELECT * FROM {table_name}"
-            cursor.execute(test_vectors_query)
-            test_vectors = cursor.fetchall()
+            if not batch_id:
+                test_vectors = list(collection.find())
+            else:
+                test_vectors = list(collection.find({"batch_id": batch_id}))
+
             if len(test_vectors) == 0:
                 return
 
-            test_vectors = sanitize_inputs(test_vectors, cursor.description)
-            results = execute_tests(test_module, test_vectors)
-            results = flatten_results(results)
+            test_vectors = sanitize_inputs(test_vectors)
+            param_names = test_vectors[0].keys()
+            test_vectors = [[deserialize(vector[elem]) for elem in vector] for vector in test_vectors]
+            test_vectors = [dict(zip(param_names, vector)) for vector in test_vectors]
+            results = execute_tests(module_name, test_module, test_vectors)
             export_test_results(results)
-        except:
-            return
+        except Exception as e:
+            print(e)
 
-    elif module_name and batch_id:
-        test_module = importlib.import_module("sweeps." + module_name)
-        table_name = module_name + "_test_vectors"
-
-        try:
-            test_vectors_query = f"SELECT * FROM {table_name} WHERE batch_id={batch_id}"
-            cursor.execute(test_vectors_query)
-            test_vectors = cursor.fetchall()
-            if len(test_vectors) == 0:
-                return
-
-            test_vectors = sanitize_inputs(test_vectors, cursor.description)
-            results = execute_tests(test_module, test_vectors)
-            results = flatten_results(results)
-            export_test_results(results)
-        except:
-            return
-
-    # connection.commit()
-    # connection.close()
+    client.close()
 
 
 # Export test output (msg), status, exception (if applicable), git hash, timestamp, test vector, test UUID?,
 def export_test_results(results):
-    connection = sqlite3.connect(RESULTS_DB)
-    cursor = connection.cursor()
-    pass
+    client = MongoClient(MONGO_CONNECTION_STRING)
+    db = client.test_results
+    sweep_name = results[0]["sweep_name"]
+    collection = db[sweep_name + "_results"]
+
+    try:
+        git = git_hash()
+        for result in results:
+            result["git_hash"] = git
+    except:
+        pass
+
+    serialized_results = []
+    for i in range(len(results)):
+        serialized_results.append(dict())
+        for elem in results[i].keys():
+            serialized_results[i][elem] = serialize(results[i][elem])
+    collection.insert_many(serialized_results)
+
+    client.close()
 
 
 if __name__ == "__main__":
@@ -135,7 +132,7 @@ if __name__ == "__main__":
         description="Run test vector suites from generated vector database.",
     )
 
-    parser.add_argument("--vector-db", required=False, help="Path to the vector database.")
+    parser.add_argument("--mongo", required=False, help="Mongo Connection String for the vector and results database.")
     parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted.")
     parser.add_argument("--batch-id", required=False, help="Batch of Test Vectors to run, or all tests if omitted.")
     parser.add_argument(
@@ -152,7 +149,7 @@ if __name__ == "__main__":
         print("ERROR: Module name is required if batch id is specified.")
         exit(1)
 
-    global VECTOR_DB
-    VECTOR_DB = pathlib.Path(__file__).parent / args.vector_db
+    global MONGO_CONNECTION_STRING
+    MONGO_CONNECTION_STRING = args.mongo if args.mongo else "mongodb://localhost:27017"
 
     run_sweeps(args.module_name, args.batch_id)

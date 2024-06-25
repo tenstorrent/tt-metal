@@ -6,7 +6,6 @@ import argparse
 import sys
 import importlib
 import pathlib
-import sqlite3
 import datetime
 import shortuuid
 
@@ -37,28 +36,18 @@ def validate_vectors(vectors) -> None:
 def export_test_vectors(vectors):
     vectors = list(vectors)
     # Perhaps we export with some sort of readable id, which can be passed to a runner to run specific sets of input vectors. (export seed as well for reproducability)
-    # connection = sqlite3.connect(str(OUTPUT_DIR) + "/vectors.sqlite")
-    # cursor = connection.cursor()
-    client = MongoClient("mongodb://localhost:27017")
+    client = MongoClient(MONGO_CONNECTION_STRING)
     db = client.test_vectors
 
     parameter_names = get_parameter_names(vectors[0])
     batch_id = str(shortuuid.uuid())
     # TODO: Duplicate batch check?
-    # column_names = ["sweep_name", "timestamp", "batch_id"] + parameter_names
 
     table_name = MODULE_NAME + "_test_vectors"
-
     collection = db[table_name]
-
-    # table = f"CREATE TABLE IF NOT EXISTS {table_name} ({column_names_to_sql_string(column_names)})"
-    # cursor.execute(table)
 
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-    import pdb
-
-    pdb.set_trace()
     serialized_vectors = []
 
     for i in range(len(vectors)):
@@ -69,18 +58,7 @@ def export_test_vectors(vectors):
         for elem in vectors[i].keys():
             serialized_vectors[i][elem] = serialize(vectors[i][elem])
 
-        des = deserialize(serialized_vectors[0]["input_a_memory_config"])
     collection.insert_many(serialized_vectors)
-
-    # for vector in vectors:
-    #     row = [MODULE_NAME, current_time, batch_id] + list(get_parameter_values(parameter_names, vector))
-    #     row = [str(value) for value in row]
-    #     row_placeholders = ", ".join(["?"] * len(row))
-    #     command = f"INSERT INTO {table_name} VALUES ({row_placeholders})"
-    #     cursor.execute(command, row)
-
-    # connection.commit()
-    # connection.close()
 
 
 # Generate one or more sets of test vectors depending on module_name
@@ -106,7 +84,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted")
-    parser.add_argument("--output-dir", required=True, help="Output Directory")
+    parser.add_argument("--mongo", required=False, help="Mongo Connection String for vector database.")
     parser.add_argument("--seed", required=False, default=0, help="Seed for random value generation")
     parser.add_argument(
         "--arch",
@@ -117,10 +95,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args(sys.argv[1:])
 
-    global OUTPUT_DIR
-    OUTPUT_DIR = pathlib.Path(__file__).parent / args.output_dir
-
-    if not OUTPUT_DIR.exists():
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    global MONGO_CONNECTION_STRING
+    MONGO_CONNECTION_STRING = args.mongo if args.mongo else "mongodb://localhost:27017"
 
     generate_tests(args.module_name, str_to_arch(args.arch))
