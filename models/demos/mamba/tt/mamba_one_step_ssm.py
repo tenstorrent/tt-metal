@@ -163,7 +163,9 @@ class TtMambaSSM(torch.nn.Module):
         ttnn.deallocate(abar1)
 
         # multiply abar and hidden_state
-        hidden_state0 = ttnn.to_memory_config(self.tt_hidden_state, memory_config=ttnn.L1_MEMORY_CONFIG)
+        hidden_state0 = ttnn.to_memory_config(
+            self.tt_hidden_state, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
+        )
         amulh0 = ttnn.mul(
             abar2, hidden_state0, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
         )
@@ -213,7 +215,9 @@ class TtMambaSSM(torch.nn.Module):
             amulh0, bmulx0, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
         )
         ttnn.deallocate(self.tt_hidden_state)
-        self.tt_hidden_state = ttnn.to_memory_config(hidden_state1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        self.tt_hidden_state = ttnn.to_memory_config(
+            hidden_state1, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=self.configs["dtype"]["activations"]
+        )
         ttnn.deallocate(amulh0)
         ttnn.deallocate(bmulx0)
 
