@@ -76,6 +76,8 @@ class DeviceCommand {
 
     void *data() const { return this->cmd_region; }
 
+    uint32_t write_offset_bytes() const { return this->cmd_write_offsetB; }
+
     vector_memcpy_aligned<uint32_t> cmd_vector() const { return this->cmd_region_vector; }
 
     void add_dispatch_wait(
@@ -407,9 +409,8 @@ class DeviceCommand {
             std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
         bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
 
-        static constexpr uint32_t max_num_packed_sub_cmds =
-            (dispatch_constants::TRANSFER_PAGE_SIZE - sizeof(CQDispatchCmd)) / sizeof(PackedSubCmd);
-        TT_ASSERT(
+        constexpr uint32_t max_num_packed_sub_cmds = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value ? CQ_DISPATCH_CMD_PACKED_WRITE_MAX_UNICAST_SUB_CMDS : CQ_DISPATCH_CMD_PACKED_WRITE_MAX_MULTICAST_SUB_CMDS;
+        TT_FATAL(
             num_sub_cmds <= max_num_packed_sub_cmds,
             "Max number of packed sub commands are {} but requesting {}",
             max_num_packed_sub_cmds,

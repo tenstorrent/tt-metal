@@ -303,8 +303,7 @@ class EnqueueProgramCommand : public Command {
         std::vector<HostMemDeviceCommand> runtime_args_command_sequences;
         uint32_t runtime_args_fetch_size_bytes;
         HostMemDeviceCommand program_command_sequence;
-        uint32_t cb_configs_payload_start;
-        uint32_t aligned_cb_config_size_bytes;
+        std::vector<uint32_t *> cb_configs_payloads;
         std::vector<std::vector<std::shared_ptr<CircularBuffer>>> circular_buffers_on_core_ranges;
     };
     thread_local static std::unordered_map<uint64_t, CachedProgramCommandSequence> cached_program_command_sequences;
