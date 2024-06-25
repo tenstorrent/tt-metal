@@ -269,6 +269,13 @@ namespace tt::tt_metal::detail {
 
         );
         detail::bind_unary_op_with_param(
+            m_tensor, "unary_fmod", unary_fmod,
+            py::arg("value"),
+            R"doc(Perform an eltwise-fmod operation on ``{0}`` and ``{1}``. Formula : ``a - a.div(b, rounding_mode="trunc") * b`` . Support provided only for WH_B0.)doc",
+            R"doc("value", "float", "")doc"
+
+        );
+        detail::bind_unary_op_with_param(
             m_tensor, "unary_ne", unary_ne,
             py::arg("value"),
             R"doc(Perform an eltwise-unary not-equal (``{0} != {1}``) on input tensor.)doc",
