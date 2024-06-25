@@ -270,10 +270,14 @@ void ScaledDotProductAttentionDecode::validate(
     //     input_tensors.at(0).get_dtype() == mask.get_dtype());
 
 
-    // Input 0 must be sharded by height. All other inputs must be in DRAM.
-    // const auto Q_memcfg = input_tensors.at(0).memory_config();
-    // TT_FATAL(input_tensors.at(0).is_sharded() == true);
-    // TT_FATAL(Q_memcfg.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+    // Input 0 must be sharded by height or DRAM interleaved. All other inputs must be in DRAM.
+    const auto Q_memcfg = input_tensors.at(0).memory_config();
+    if (input_tensors.at(0).is_sharded()){
+        TT_FATAL(Q_memcfg.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+    }
+    else{
+        TT_FATAL(input_tensors.at(0).buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+    }
 
     for (std::size_t i = 1; i < input_tensors.size(); i++) {
         TT_FATAL(input_tensors.at(i).buffer()->buffer_type() == tt_metal::BufferType::DRAM);
