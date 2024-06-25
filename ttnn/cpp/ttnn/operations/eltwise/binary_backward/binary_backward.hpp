@@ -150,6 +150,8 @@ constexpr auto addalpha_bw = ttnn::register_operation<operations::binary_backwar
 constexpr auto xlogy_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::XLOGY_BW>>("ttnn::xlogy_bw");
 constexpr auto hypot_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::HYPOT_BW>>("ttnn::hypot_bw");
 constexpr auto ldexp_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::LDEXP_BW>>("ttnn::ldexp_bw");
+constexpr auto logaddexp_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::LOGADDEXP_BW>>("ttnn::logaddexp_bw");
+constexpr auto logaddexp2_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::LOGADDEXP2_BW>>("ttnn::logaddexp2_bw");
 
 
 }  // namespace ttnn

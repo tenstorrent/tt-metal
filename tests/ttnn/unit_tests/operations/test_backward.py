@@ -126,5 +126,23 @@ def test_hypot(device, h, w, in_val, grad_val, other_val):
 @pytest.mark.parametrize("in_val", [-1, 1])
 @pytest.mark.parametrize("grad_val", [-1, 0, 1])
 @pytest.mark.parametrize("other_val", [-1, 1])
-def test_hypot(device, h, w, in_val, grad_val, other_val):
+def test_ldexp(device, h, w, in_val, grad_val, other_val):
     run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.ldexp_bw, torch.ldexp)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("in_val", [-1, 1])
+@pytest.mark.parametrize("grad_val", [-1, 0, 1])
+@pytest.mark.parametrize("other_val", [-1, 1])
+def test_logaddexp(device, h, w, in_val, grad_val, other_val):
+    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.logaddexp_bw, torch.logaddexp)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("in_val", [-1, 1])
+@pytest.mark.parametrize("grad_val", [-1, 0, 1])
+@pytest.mark.parametrize("other_val", [-1, 1])
+def test_logaddexp2(device, h, w, in_val, grad_val, other_val):
+    run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.logaddexp2_bw, torch.logaddexp2)

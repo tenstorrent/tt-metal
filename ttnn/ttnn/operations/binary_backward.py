@@ -75,6 +75,40 @@ def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwarg
 ldexp_bw = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary_backward.ldexp_bw)
 
 
+def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    pyt_y = torch.logaddexp(input_tensor_a, input_tensor_b)
+    input_tensor_a.retain_grad()
+    input_tensor_b.retain_grad()
+
+    pyt_y.backward(gradient=grad_tensor)
+    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
+    return golden_tensor
+
+
+logaddexp_bw = ttnn.register_operation(golden_function=_golden_function)(
+    ttnn._ttnn.operations.binary_backward.logaddexp_bw
+)
+
+
+def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    pyt_y = torch.logaddexp2(input_tensor_a, input_tensor_b)
+    input_tensor_a.retain_grad()
+    input_tensor_b.retain_grad()
+
+    pyt_y.backward(gradient=grad_tensor)
+    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
+    return golden_tensor
+
+
+logaddexp2_bw = ttnn.register_operation(golden_function=_golden_function)(
+    ttnn._ttnn.operations.binary_backward.logaddexp2_bw
+)
+
+
 def _golden_function(grad_tensor, input_tensor, weight_tensor, *args, **kwargs):
     import torch
 

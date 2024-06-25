@@ -199,6 +199,46 @@ std::vector<ttnn::Tensor> _ldexp_bw(
 }
 
 
+/*
+Torch Reference:
+name: logaddexp(Tensor self, Tensor other) -> Tensor
+self: grad / (1 + exp(other - self)).conj()
+other: grad / (1 + exp(self - other)).conj()
+*/
+std::vector<ttnn::Tensor> _logaddexp_bw(
+    const Tensor& grad, const Tensor& input_a, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor opexp =
+        add1(ttnn::exp(ttnn::subtract(other, input_a, std::nullopt, output_mem_config), false, output_mem_config), output_mem_config);
+    Tensor grad_a = ttnn::multiply(grad, recip(opexp, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    opexp = add1(ttnn::exp(ttnn::subtract(input_a, other, std::nullopt, output_mem_config), false, output_mem_config), output_mem_config);
+    Tensor grad_b = ttnn::multiply(grad, recip(opexp, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+
+/*
+Torch reference
+name: logaddexp2(Tensor self, Tensor other) -> Tensor
+self: grad / (1 + pow(2, other - self))
+other: grad / (1 + pow(2, self - other))
+*/
+
+std::vector<ttnn::Tensor> _logaddexp2_bw(
+    const Tensor& grad, const Tensor& input_a, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor oppow =
+        add1(rpow(ttnn::subtract(other, input_a, std::nullopt, output_mem_config), 2, output_mem_config), output_mem_config);
+    Tensor grad_a = ttnn::multiply(grad, recip(oppow, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    oppow = add1(rpow(ttnn::subtract(input_a, other, std::nullopt, output_mem_config), 2, output_mem_config), output_mem_config);
+    Tensor grad_b = ttnn::multiply(grad, recip(oppow, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ATAN2_BW:
@@ -211,8 +251,12 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _xlogy_bw;
         case BinaryBackwardOpType::HYPOT_BW:
             return _hypot_bw;
-         case BinaryBackwardOpType::LDEXP_BW:
+        case BinaryBackwardOpType::LDEXP_BW:
             return _ldexp_bw;
+        case BinaryBackwardOpType::LOGADDEXP_BW:
+            return _logaddexp_bw;
+        case BinaryBackwardOpType::LOGADDEXP2_BW:
+            return _logaddexp2_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
