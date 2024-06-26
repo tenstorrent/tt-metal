@@ -80,4 +80,6 @@ class MambaConv:
             debug=False,
             groups=self.input_channels,
         )
+        self.tt_weight_tensor = weights_device
+
         return tt_output_tensor_on_device

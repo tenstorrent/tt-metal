@@ -29,17 +29,23 @@ class TtResidualBlock(torch.nn.Module):
         assert len(x.shape) == 4, "Mamba residual block expects inputs to be rank 4"
 
         residual = x
+        residual = ttnn.to_memory_config(residual, ttnn.DRAM_MEMORY_CONFIG)
         rms_norm_weights = ttnn.to_memory_config(self.rms_norm_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.experimental.tensor.interleaved_to_sharded(x, sharded_mem_config=self.configs["sharded_h"])
+        x_sharded = ttnn.experimental.tensor.interleaved_to_sharded(x, sharded_mem_config=self.configs["sharded_h"])
+        ttnn.deallocate(x)
         mamba_x = ttnn.experimental.operations.primary.rmsnorm(
-            x,
+            x_sharded,
             self.args.eps,
             rms_norm_weights,
             program_config=self.configs["SHARDED_NORM_PRGM_CFG"],
             output_mem_config=self.configs["sharded_h"],
         )
-        mamba_x = ttnn.to_memory_config(mamba_x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(x_sharded)
+        mamba_x_in_l1_int = ttnn.to_memory_config(mamba_x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(mamba_x)
         ttnn.deallocate(rms_norm_weights)
-        mamba_x = self.tt_mamba_block(mamba_x)
-
-        return ttnn.add(residual, mamba_x, dtype=self.configs["dtype"]["activations"])
+        mamba_block_out = self.tt_mamba_block(mamba_x_in_l1_int)
+        ttnn.deallocate(mamba_x_in_l1_int)
+        return ttnn.add(
+            residual, mamba_block_out, dtype=self.configs["dtype"]["activations"], memory_config=ttnn.L1_MEMORY_CONFIG
+        )

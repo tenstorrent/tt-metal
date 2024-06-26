@@ -55,6 +55,8 @@ def test_mamba_conv(
     torch_depthwise_conv.weight.data = loader.get_tensor_loader(LAYER_NUM)("mixer.conv1d.weight", return_as_torch=True)
     reference_output = torch_depthwise_conv(torch_input)
     reference_output = reference_output[:, :, :-3]
+    reference_output = torch_depthwise_conv(reference_output)
+    reference_output = reference_output[:, :, :-3]
     reference_output = reference_output.squeeze(0).permute(1, 0).unsqueeze(0).unsqueeze(0)
 
     # model = TtMambaBlock(reference_model.args, device, config, loader.get_tensor_loader(LAYER_NUM))
@@ -64,8 +66,15 @@ def test_mamba_conv(
 
     tt_input = input.view(1, seqlen, 1, 2 * d_model)
     tt_input = ttnn.from_torch(tt_input, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, device=device)
-    tt_output = tt_depthwise_conv(tt_input)
-    tt_output = ttnn.from_device(tt_output)
+    tt_output1 = tt_depthwise_conv(tt_input)
+    ttnn.deallocate(tt_input)
+    print("first conv done")
+    tt_output1 = ttnn.to_memory_config(tt_output1, ttnn.DRAM_MEMORY_CONFIG)
+    tt_output1 = ttnn.to_layout(tt_output1, ttnn.ROW_MAJOR_LAYOUT)
+    tt_output1 = ttnn.to_dtype(tt_output1, ttnn.bfloat16)
+    tt_output2 = tt_depthwise_conv(tt_output1)
+    ttnn.deallocate(tt_output1)
+    tt_output = ttnn.from_device(tt_output2)
     tt_output = ttnn.to_torch(tt_output)
 
     print(tt_output[:, :, :, 0])

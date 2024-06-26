@@ -129,7 +129,7 @@ def run_prefill(
 ):
     batch = 1
 
-    torch.manual_seed(10)
+    torch.manual_seed(0)
 
     reference_model = MambaPrefill.from_pretrained(model_version)
     reference_model.args.batch_size = batch
@@ -138,20 +138,21 @@ def run_prefill(
 
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
     input_ids = tokenizer("Hello", return_tensors="pt")["input_ids"]
-    input_ids = input_ids.repeat(1, seq_len)
+    # input_ids = input_ids.repeat(1, seq_len)
+    input_ids = torch.randint(0, 50256, (1, 32)).to(torch.long)
 
     mamba_model_pytorch = MambaPytorch(reference_model, num_layers)
     mamba_model_pytorch.eval()
     for _ in range(iterations):
         with torch.no_grad():
             reference_output = mamba_model_pytorch(input_ids)
-    breakpoint()
-    config = model_config.create_model_config(batch, reference_model.args.d_model)
+
+    config = model_config.create_model_config(seq_len, reference_model.args.d_model)
     mamba_model_tt = MambaTT(reference_model, device, config, tt_cache_path=cache_dir, num_layers=num_layers)
 
     for _ in range(iterations):
         tt_output = mamba_model_tt(input_ids)
-
+    tt_output = tt_output.permute(1, 0, 2)
     logger.info(comp_allclose(reference_output, tt_output))
 
     does_pass, output_pcc = comp_pcc(reference_output, tt_output, pcc)
@@ -162,6 +163,7 @@ def run_prefill(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @skip_for_grayskull("Not supported on Grayskull")
 @pytest.mark.parametrize(
     "model_version, seq_len, pcc, num_layers, iterations",

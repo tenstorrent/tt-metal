@@ -34,7 +34,7 @@ def create_model_config(batch_size, hidden_size):
         block_w=(hidden_size // (col * row)) // 32,
         inplace=False,
     )
-    configs["dtype"] = {"activations": ttnn.bfloat8_b}
+    configs["dtype"] = {"activations": ttnn.bfloat16}
     return configs
 
 

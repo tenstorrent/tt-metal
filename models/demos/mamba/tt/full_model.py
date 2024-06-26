@@ -10,7 +10,7 @@ from loguru import logger
 
 from pathlib import Path
 from typing import Callable, Optional
-
+from models.demos.mamba.tt.types import ModelMode
 from models.demos.mamba.tt.residual_block import TtResidualBlock
 
 
@@ -115,7 +115,10 @@ class MambaTT(torch.nn.Module):
         assert len(x.shape) == 2, f"Mamba expects inputs to be rank 2 (was {len(x.shape)})"
 
         x = self.embedding(x)  # (B, 1, E)
-        x = x.squeeze(1).unsqueeze(0).unsqueeze(0)  # (1, 1, B, E)
+        if self.args.mode == ModelMode.PREFILL:
+            x = x.unsqueeze(0)
+        elif self.args.mode == ModelMode.DECODE:
+            x = x.squeeze(1).unsqueeze(0).unsqueeze(0)  # (1, 1, B, E)
 
         assert len(x.shape) == 4, f"Expected embedding to be rank 4 (was {len(x.shape)})"
 
@@ -127,7 +130,8 @@ class MambaTT(torch.nn.Module):
             dtype=self.configs["dtype"]["activations"],
         )
 
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers):
+            print(f"Running layer {i}")
             x = layer(x)
 
         x = ttnn.experimental.tensor.interleaved_to_sharded(x, sharded_mem_config=self.configs["sharded_h"])

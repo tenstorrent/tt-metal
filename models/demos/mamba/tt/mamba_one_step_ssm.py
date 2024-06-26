@@ -210,6 +210,8 @@ class TtMambaSSM(torch.nn.Module):
 
         if self.mode == ModelMode.PREFILL:
             hidden_state1 = self.prefix_scan(abar2, bmulx0)
+            ttnn.deallocate(abar2)
+            ttnn.deallocate(bmulx0)
         else:
             # multiply abar and hidden_state
             hidden_state0 = ttnn.to_memory_config(self.tt_hidden_state, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -228,8 +230,7 @@ class TtMambaSSM(torch.nn.Module):
             self.tt_hidden_state = ttnn.to_memory_config(hidden_state1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             ttnn.deallocate(amulh0)
-
-        ttnn.deallocate(bmulx0)
+            ttnn.deallocate(bmulx0)
 
         # compute C
         C0 = ttnn.linear(
