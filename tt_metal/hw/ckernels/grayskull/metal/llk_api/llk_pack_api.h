@@ -22,13 +22,18 @@
 * LLK PACK
 *************************************************************************/
 
-template <bool untilize = false, bool zero_output = false>
+template <bool untilize = false, bool zero_output = false, bool tilize = false/*unused*/>
 inline void llk_pack_mop_config(const uint32_t output) {
     constexpr bool write_tile_header = false;
     _llk_pack_mop_config_<untilize, zero_output, DstTileFaceLayout::RowMajor, write_tile_header>();
 }
 
-template <bool untilize = false, bool is_fp32_dest_acc_en = false /*not used*/>
+template <
+    bool untilize = false,
+    bool is_fp32_dest_acc_en = false/*unused*/,
+    ReluType relu_type = ReluType::NO_RELU/*unused*/,
+    std::uint32_t relu_threshold = 0/*unused*/,
+    bool tilize = false/*unused*/>
 inline void llk_pack_hw_configure(const llk_pack_params_t *pack_params) {
 
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
@@ -42,7 +47,7 @@ inline void llk_pack_hw_configure(const llk_pack_params_t *pack_params) {
     );
 }
 
-template <bool untilize = false, bool is_fp32_dest_acc_en = false /*not used*/, ReluType relu_type = ReluType::NO_RELU, std::uint32_t relu_threshold = 0>
+template <bool untilize = false, bool is_fp32_dest_acc_en = false /*not used*/, ReluType relu_type = ReluType::NO_RELU, std::uint32_t relu_threshold = 0, bool tilize = false/*unused*/>
 inline void llk_pack_hw_configure_disaggregated(std::uint32_t pack_output) {
     llk_pack_params_t llk_pack_params = {
         .pack_output = pack_output, .relu_config = {.f = {.ApplyRelu = (std::uint32_t)relu_type, .Threshold = relu_threshold,}}};
@@ -69,7 +74,10 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
     llk_pack_reduce_hw_configure<untilize, type, dim, is_fp32_dest_acc_en>(&llk_pack_params);
 }
 
-template <bool untilize = false, bool zero_output = false>
+template <
+    bool untilize = false,
+    bool zero_output = false,
+    bool tilize = false/*unused*/>
 inline void llk_pack_init(const std::uint32_t pack_output = 16) {
 
     const std::uint32_t output_id = get_output_id(pack_output);
