@@ -224,6 +224,15 @@ OutputTensors run_device_operation(
         operation, input_tensors, optional_input_tensors, output_tensors, optional_output_tensors);
     uint32_t device_id = detail::get_device(input_tensors, optional_input_tensors)->id();
 
+    if (std::holds_alternative<std::reference_wrapper<Program>>(program))
+    {
+        std::get<std::reference_wrapper<Program>>(program).get().set_global_id(op_id);
+    }
+    else
+    {
+        std::get<std::shared_ptr<Program>>(program)->set_global_id(op_id);
+    }
+
     // Enqueue or Launch Program
     std::visit(
         [&operation, &input_tensors, &optional_input_tensors, &output_tensors, queue](auto&& program) {

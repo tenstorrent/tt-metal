@@ -4,26 +4,6 @@ source scripts/tools_setup_common.sh
 
 set -eo pipefail
 
-run_additional_T3000_test(){
-    remove_default_log_locations
-    mkdir -p $PROFILER_ARTIFACTS_DIR
-
-    ./tt_metal/tools/profiler/profile_this.py -c "pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_all_gather.py::test_all_gather_on_t3000_post_commit[mem_config0-input_dtype0-8-1-input_shape1-0-layout1]" > $PROFILER_ARTIFACTS_DIR/test_out.log
-
-    cat $PROFILER_ARTIFACTS_DIR/test_out.log
-
-    if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
-    then
-        echo "No verification as test was skipped"
-    else
-        echo "Verifying test results"
-        runDate=$(ls $PROFILER_OUTPUT_DIR/)
-        LINE_COUNT=9 #1 header + 8 devices
-        res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
-        echo $res
-    fi
-}
-
 run_async_mode_T3000_test(){
     #Some tests here do not skip grayskull
     if [ "$ARCH_NAME" != "grayskull" ]; then
@@ -47,6 +27,27 @@ run_async_mode_T3000_test(){
     fi
 }
 
+run_additional_T3000_test(){
+    remove_default_log_locations
+    mkdir -p $PROFILER_ARTIFACTS_DIR
+
+    ./tt_metal/tools/profiler/profile_this.py -c "pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_all_gather.py::test_all_gather_on_t3000_post_commit[mem_config0-input_dtype0-8-1-input_shape1-0-layout1]" > $PROFILER_ARTIFACTS_DIR/test_out.log
+
+    cat $PROFILER_ARTIFACTS_DIR/test_out.log
+
+    if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
+    then
+        echo "No verification as test was skipped"
+    else
+        echo "Verifying test results"
+        runDate=$(ls $PROFILER_OUTPUT_DIR/)
+        LINE_COUNT=9 #1 header + 8 devices
+        res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
+        echo $res
+        run_async_mode_T3000_test
+    fi
+}
+
 run_profiling_test(){
     if [[ -z "$ARCH_NAME" ]]; then
       echo "Must provide ARCH_NAME in environment" 1>&2
@@ -59,8 +60,6 @@ run_profiling_test(){
     export PYTHONPATH=$TT_METAL_HOME
 
     run_additional_T3000_test
-
-    run_async_mode_T3000_test
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py
 

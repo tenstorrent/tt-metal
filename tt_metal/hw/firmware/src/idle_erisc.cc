@@ -108,6 +108,7 @@ int main() {
 
         {
             DeviceZoneScopedMainN("ERISC-IDLE-FW");
+            DeviceZoneSetCounter(mailboxes->launch.kernel_config.host_assigned_op_id);
 
             noc_index = mailboxes->launch.kernel_config.brisc_noc_id;
 

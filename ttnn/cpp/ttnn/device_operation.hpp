@@ -293,6 +293,8 @@ typename device_operation_t::tensor_return_value_t run(
     auto& program = create_or_get_program_from_cache<device_operation_t>(
         program_cache, program_cache_hit, program_hash, operation_attributes, tensor_args, tensor_return_value);
 
+    program.set_global_id(operation_id);
+
     if (USE_FAST_DISPATCH) {
         ZoneScopedN("EnqueueProgram");
         auto& queue = device->command_queue(cq_id);

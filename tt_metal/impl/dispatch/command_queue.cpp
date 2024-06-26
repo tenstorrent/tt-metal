@@ -651,6 +651,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
 }
 
 void EnqueueProgramCommand::assemble_device_commands() {
+    ZoneScoped;
     auto& cached_program_command_sequence = this->cached_program_command_sequences[this->program.id];
     if (!program.is_finalized()) {
         // Calculate size of command and fill program indices of data to update
@@ -895,6 +896,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
             kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
             kernel_group.launch_msg.kernel_config.dispatch_core_x = this->dispatch_core.x;
             kernel_group.launch_msg.kernel_config.dispatch_core_y = this->dispatch_core.y;
+            kernel_group.launch_msg.kernel_config.host_assigned_op_id = program.get_global_id();
             const void* launch_message_data = (const void*)(&kernel_group.launch_msg);
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
                 CoreCoord physical_start =
@@ -917,11 +919,11 @@ void EnqueueProgramCommand::assemble_device_commands() {
                 this->packed_write_max_unicast_sub_cmds,
                 multicast_go_signals_payload);
         }
-
         for (KernelGroup& kernel_group : program.get_kernel_groups(CoreType::ETH)) {
             kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
             kernel_group.launch_msg.kernel_config.dispatch_core_x = this->dispatch_core.x;
             kernel_group.launch_msg.kernel_config.dispatch_core_y = this->dispatch_core.y;
+            kernel_group.launch_msg.kernel_config.host_assigned_op_id = program.get_global_id();
             const void* launch_message_data = (const launch_msg_t*)(&kernel_group.launch_msg);
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
                 for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
@@ -1113,6 +1115,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
         }
     } else {
         uint32_t i = 0;
+        ZoneScopedN("program_loaded_on_device");
         for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
             uint32_t* cb_config_payload = cached_program_command_sequence.cb_configs_payloads[i];
             for (const shared_ptr<CircularBuffer>& cb : cbs_on_core_range) {
@@ -1134,6 +1137,7 @@ void EnqueueProgramCommand::assemble_device_commands() {
         for (auto& go_signal : cached_program_command_sequence.go_signals) {
             go_signal->kernel_config.dispatch_core_x = this->dispatch_core.x;
             go_signal->kernel_config.dispatch_core_y = this->dispatch_core.y;
+            go_signal->kernel_config.host_assigned_op_id = program.get_global_id();
         }
     }
 }

@@ -197,6 +197,10 @@ def append_device_data(ops, deviceLogFolder):
                 cores = set()
                 for timeID, ts, statData, risc, core in deviceOpTime["timeseries"]:
                     if "zone_name" in timeID.keys() and "FW" in timeID["zone_name"]:
+                        if "op_id" in timeID.keys():
+                            assert (
+                                timeID["op_id"] == deviceOp["global_call_count"]
+                            ), f"op id {timeID['op_id']} reproted by device is not matching assigned op id {deviceOp['global_call_count']}"
                         if core not in cores:
                             cores.add(core)
                 deviceOp["core_usage"] = {"count": len(cores), "cores": [str(core) for core in cores]}

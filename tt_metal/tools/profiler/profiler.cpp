@@ -88,6 +88,7 @@ void DeviceProfiler::readRiscProfilerResults(
             uint32_t riscNumRead = 0;
             uint32_t coreFlatIDRead = 0;
             uint32_t runCounterRead = 0;
+            uint32_t runHostCounterRead = 0;
 
             bool newRunStart = false;
 
@@ -108,7 +109,8 @@ void DeviceProfiler::readRiscProfilerResults(
                     //TODO(MO): Cleanup magic numbers
                     riscNumRead = profile_buffer[index] & 0x7;
                     coreFlatIDRead = (profile_buffer[index] >> 3) & 0xFF;
-                    runCounterRead = profile_buffer[index + 1];
+                    runCounterRead = profile_buffer[index + 1] & 0xFFFF;
+                    runHostCounterRead = (profile_buffer[index + 1] >> 16 ) & 0xFFFF;
 
                 }
                 else
@@ -149,6 +151,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
                             dumpResultToFile(
                                     runCounterRead,
+                                    runHostCounterRead,
                                     device_id,
                                     worker_core,
                                     coreFlatID,
@@ -167,6 +170,7 @@ void DeviceProfiler::readRiscProfilerResults(
                         uint32_t time_L = opTime_L;
                         dumpResultToFile(
                                 runCounterRead,
+                                runHostCounterRead,
                                 device_id,
                                 worker_core,
                                 coreFlatID,
@@ -201,6 +205,7 @@ void DeviceProfiler::firstTimestamp(uint64_t timestamp)
 
 void DeviceProfiler::dumpResultToFile(
         uint32_t run_id,
+        uint32_t run_host_id,
         int device_id,
         CoreCoord core,
         int core_flat,
@@ -237,7 +242,7 @@ void DeviceProfiler::dumpResultToFile(
         source_line = stoi(source_line_str);
     }
 
-    tracy::TTDeviceEvent event = tracy::TTDeviceEvent(run_id, device_id, core.x, core.y, risc_num, timer_id, timestamp, source_line, source_file, zone_name, zone_phase);
+    tracy::TTDeviceEvent event = tracy::TTDeviceEvent(run_host_id, device_id, core.x, core.y, risc_num, timer_id, timestamp, source_line, source_file, zone_name, zone_phase);
 
     auto ret = device_events.insert(event);
 
@@ -249,7 +254,7 @@ void DeviceProfiler::dumpResultToFile(
     {
         log_file.open(log_path);
         log_file << "ARCH: " << get_string_lowercase(device_architecture) << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
-        log_file << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], stat value, Run ID, zone name, zone phase, source line, source file" << std::endl;
+        log_file << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], stat value, run ID, run host ID,  zone name, zone phase, source line, source file" << std::endl;
         new_log = false;
     }
     else
@@ -258,7 +263,7 @@ void DeviceProfiler::dumpResultToFile(
     }
 
     //log_file << fmt::format("{:4},{:3},{:3},{:>7},{:7},{:15},{:15},{:5},{:>25},{:>6},{:6},{}",
-    log_file << fmt::format("{},{},{},{},{},{},{},{},{},{},{},{}",
+    log_file << fmt::format("{},{},{},{},{},{},{},{},{},{},{},{},{}",
             device_id,
             core.x,
             core.y,
@@ -267,6 +272,7 @@ void DeviceProfiler::dumpResultToFile(
             timestamp,
             stat_value,
             run_id,
+            run_host_id,
             zone_name,
             magic_enum::enum_name(zone_phase),
             source_line,
