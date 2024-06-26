@@ -54,14 +54,15 @@ Example:
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor_a,
                const ttnn::Tensor& input_tensor_b,
-               const ttnn::MemoryConfig& memory_config) -> std::vector<ttnn::Tensor> {
-                return self(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+                auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
+                return self(grad_tensor, input_tensor_a, output_memory_config, input_tensor_b);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::kw_only(),
-            py::arg("memory_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG},
+            py::arg("memory_config") = std::nullopt},
 
 
         ttnn::pybind_overload_t{
@@ -90,7 +91,7 @@ Example:
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& optional_input_a_grad,
                const std::optional<ttnn::Tensor>& optional_input_b_grad,
-               const uint8_t& queue_id) -> std::vector<ttnn::Tensor> {
+               const uint8_t& queue_id) -> std::vector<optional<ttnn::Tensor>> {
                 return self(queue_id, grad_tensor, input_tensor_a, input_tensor_b, memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
             },
             py::arg("grad_tensor"),
@@ -111,7 +112,7 @@ Example:
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& optional_input_a_grad,
-               const std::optional<ttnn::Tensor>& optional_input_b_grad) -> std::vector<ttnn::Tensor> {
+               const std::optional<ttnn::Tensor>& optional_input_b_grad) -> std::vector<optional<ttnn::Tensor>> {
                 return self(grad_tensor, input_tensor_a, input_tensor_b, memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
             },
             py::arg("grad_tensor"),
@@ -133,7 +134,7 @@ Example:
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& optional_input_a_grad,
                const std::optional<ttnn::Tensor>& optional_input_b_grad,
-               const uint8_t& queue_id) -> std::vector<ttnn::Tensor> {
+               const uint8_t& queue_id) -> std::vector<optional<ttnn::Tensor>> {
                 return self(queue_id, grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
             },
             py::arg("grad_tensor"),
@@ -156,7 +157,7 @@ Example:
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& optional_input_a_grad,
-               const std::optional<ttnn::Tensor>& optional_input_b_grad) -> std::vector<ttnn::Tensor> {
+               const std::optional<ttnn::Tensor>& optional_input_b_grad) -> std::vector<optional<ttnn::Tensor>> {
                 return self(grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
             },
             py::arg("grad_tensor"),
