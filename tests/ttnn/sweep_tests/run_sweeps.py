@@ -37,6 +37,9 @@ def main():
         ttnn.close_device(device)
         print_report(table_names=table_names)
 
+    print("Exiting sweeps...")
+    exit(0)
+
 
 if __name__ == "__main__":
     main()
