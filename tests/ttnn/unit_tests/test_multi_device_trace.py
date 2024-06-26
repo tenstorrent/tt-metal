@@ -175,7 +175,12 @@ def test_multi_device_multi_trace(t3k_device_mesh, shape, use_all_gather, enable
     # Execute and verify trace against pytorch
     torch_silu = torch.nn.SiLU()
     torch_softmax = torch.nn.Softmax(dim=1)
-    for i in range(NUM_TRACE_LOOPS):
+    # Decrease loop count for larger shapes, since they time out on CI
+    num_trace_loops = NUM_TRACE_LOOPS
+    if shape == (1, 3, 1024, 1024):
+        num_trace_loops = 5
+
+    for i in range(num_trace_loops):
         # Create torch inputs
         torch_input_tensor_0 = torch.rand(
             (t3k_device_mesh.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
