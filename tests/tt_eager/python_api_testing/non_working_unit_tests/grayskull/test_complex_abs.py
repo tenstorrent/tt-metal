@@ -70,4 +70,5 @@ test_sweep_args = [
 )
 def test_complex_abs(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     random.seed(0)
-    run_complex_abs_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
+    for i in range(1, 3):
+        run_complex_abs_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
