@@ -414,6 +414,7 @@ def gen_default_dtype_layout_rm_device(
             "output_mem_config": ttl.tensor.MemoryConfig(
                 ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
             ),
+            "use_multicore": True,
         }
     ]
 
