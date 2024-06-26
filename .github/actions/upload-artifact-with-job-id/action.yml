@@ -24,8 +24,8 @@ runs:
           const runId = context.runId;
           console.log(context.runAttempt);
 
-          const { JOB_NAME, RUN_ATTEMPT } = process.env;
-          const runAttempt = RUN_ATTEMPT;
+          const { JOB_NAME, GITHUB_RUN_ATTEMPT } = process.env;
+          const runAttempt = GITHUB_RUN_ATTEMPT;
 
           const { totalCount, jobs } = await github.
             paginate(
