@@ -7,6 +7,8 @@ import torch
 import pytest
 import math
 
+import ttnn
+
 import tt_lib as ttl
 from tt_lib.utils import (
     pad_weight,
@@ -114,7 +116,7 @@ def test_softmax(device, in_dtype, causal_mask, grid_size, seq_len, scale_mask):
             subblock_w = i
             break
 
-    program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
         subblock_w=subblock_w,
         block_h=block_h,
@@ -122,11 +124,11 @@ def test_softmax(device, in_dtype, causal_mask, grid_size, seq_len, scale_mask):
     )
 
     if scale_mask:
-        tt_output_sharded = ttl.operations.primary.transformers.scale_mask_softmax_in_place(
+        tt_output_sharded = ttnn.scale_mask_softmax_in_place(
             in1_t_shard, scale, attention_mask_t, program_config=program_config, is_causal_mask=causal_mask
         )
     else:
-        tt_output_sharded = ttl.operations.primary.softmax_in_place(in1_t_shard, program_config=program_config)
+        tt_output_sharded = ttnn.softmax_in_place(in1_t_shard, program_config=program_config)
 
     tt_output = ttl.tensor.sharded_to_interleaved(tt_output_sharded, in0_mem_config)
     tt_output_tensor = tt_output.cpu().to_torch().float()

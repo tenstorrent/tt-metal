@@ -473,7 +473,7 @@ class TtFalconAttention:
             dtype=self.model_config["ATTENTION_DTYPE"],
         )
         # Softmax
-        attn_weights = ttnn.experimental.operations.primary.transformers.scale_causal_mask_hw_dims_softmax_in_place(
+        attn_weights = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
             attn_weights,
             self.scalar,
             attn_mask_slices,
@@ -631,7 +631,7 @@ class TtFalconAttention:
         softmax_progcfg = self.model_config["SOFTMAX_PROGCFG"]
         softmax_progcfg.block_w = padded_layer_past_len // 32
 
-        attn_weights = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
+        attn_weights = ttnn.scale_mask_softmax_in_place(
             attn_weights,
             self.scalar,
             attention_mask,

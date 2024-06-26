@@ -135,7 +135,7 @@ def update_model_config(config, batch_size):
             # out_data_format=ttnn.bfloat8_b,
             inplace=False,
         ),
-        "softmax_program_config": ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        "softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             subblock_w=7,
             block_h=7,

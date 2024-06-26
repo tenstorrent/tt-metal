@@ -305,7 +305,7 @@ def primary_moreh_logsoftmax_backward_3(x, y):
 
 
 def primary_scale_mask_softmax_in_place(x, y):
-    tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(x, scale=3.3, mask=y)
+    ttnn.scale_mask_softmax_in_place(x, scale=3.3, mask=y)
 
 
 def scale_mask_softmax_in_place_shape_func(input_shape):
@@ -1018,7 +1018,7 @@ all_binary_ops = [
     },
     {
         "op": primary_scale_mask_softmax_in_place,
-        "name": "tt_lib.operations.primary.transformers.scale_mask_softmax_in_place",
+        "name": "ttnn.scale_mask_softmax_in_place",
         "shape_func": scale_mask_softmax_in_place_shape_func,
     },
     {
@@ -2331,8 +2331,8 @@ all_unary_ops = [
         "name": "tt_lib.tensor.round_bw",
     },
     {
-        "op": tt_lib.operations.primary.softmax_in_place,
-        "name": "tt_lib.operations.primary.softmax_in_place",
+        "op": ttnn.softmax_in_place,
+        "name": "ttnn.softmax_in_place",
     },
     {
         "op": primary_moreh_softmax_0,

@@ -10,7 +10,7 @@
 #include "tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
 #include "tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_dnn/op_library/softmax/softmax_op.hpp"
+#include "ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_op.hpp"
 #include "ttnn/operations/core.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -268,8 +268,7 @@ struct ExecuteAttentionSoftmax {
         const ttnn::Tensor& input_tensor,
         const std::optional<int>& head_size_arg = std::nullopt,
         const std::optional<const ttnn::Tensor>& attention_mask = std::nullopt,
-        const tt::operations::primary::transformers::SoftmaxProgramConfig& program_config =
-            tt::operations::primary::transformers::SoftmaxDefaultProgramConfig{},
+        const ttnn::operations::normalization::SoftmaxProgramConfig& program_config = ttnn::operations::normalization::SoftmaxDefaultProgramConfig{},
         const std::optional<bool> causal_mask = false,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
         float head_size = head_size_arg.has_value() ? 1.0f / std::sqrt(head_size_arg.value()) : 1.0f;
@@ -278,7 +277,7 @@ struct ExecuteAttentionSoftmax {
         } else {
             if (not attention_mask.has_value()) {
                 auto output_tensor = ttnn::multiply(input_tensor, head_size);
-                return tt::tt_metal::softmax(output_tensor, memory_config.value_or(input_tensor.memory_config()));
+                return ttnn::operations::normalization::softmax(output_tensor, memory_config.value_or(input_tensor.memory_config()));
             }
         }
 
@@ -286,7 +285,7 @@ struct ExecuteAttentionSoftmax {
         auto kernel_config_val = init_device_compute_kernel_config(
             input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
         auto output_tensor = operation::run(
-                                 tt::operations::primary::Softmax{
+                                ttnn::operations::normalization::Softmax{
                                      head_size,
                                      in_place,
                                      memory_config.value_or(input_tensor.memory_config()),

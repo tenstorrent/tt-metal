@@ -6,6 +6,8 @@ import torch
 import pytest
 from loguru import logger
 
+import ttnn
+
 import tt_lib as ttl
 from tt_lib.utils import (
     is_close,
@@ -22,7 +24,7 @@ def test_softmax(shape, device):
     torch.manual_seed(1234)
     x = torch.randn(shape).bfloat16().float()
     xt = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
-    xtt = ttl.operations.primary.softmax_in_place(xt)
+    xtt = ttnn.softmax_in_place(xt)
 
     tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 

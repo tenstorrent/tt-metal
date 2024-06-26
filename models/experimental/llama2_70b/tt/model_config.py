@@ -542,18 +542,14 @@ def get_model_config(
             k_chunk_size=k_chunk_size,
         )
     if llm_mode == "decode":
-        model_config[
-            "BATCHED_SOFTMAX_PROGCFG"
-        ] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        model_config["BATCHED_SOFTMAX_PROGCFG"] = ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(8, 4),  # In-place softmax on 32 cores sharded on batch dim
             subblock_w=1,
             block_h=shard_height // 32,
             block_w=1,  # Dynamic
         )
     else:
-        model_config[
-            "BATCHED_SOFTMAX_PROGCFG"
-        ] = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        model_config["BATCHED_SOFTMAX_PROGCFG"] = ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(8, 4 if seq_len == 128 else 8),
             subblock_w=1,
             block_h=32 // 32,  # 128 * 8 // 32 cores // TILE_SIZE

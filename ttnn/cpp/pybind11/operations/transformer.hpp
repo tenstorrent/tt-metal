@@ -75,7 +75,7 @@ void py_module(py::module& module) {
             py::arg("head_size") = std::nullopt,
             py::arg("attention_mask") = std::nullopt,
             py::arg("program_config").noconvert() =
-                tt::operations::primary::transformers::SoftmaxDefaultProgramConfig{},
+                ttnn::operations::normalization::SoftmaxDefaultProgramConfig{},
             py::arg("causal_mask") = false,
             py::arg("memory_config") = std::nullopt});
 
@@ -102,7 +102,7 @@ void py_module(py::module& module) {
             py::arg("head_size") = std::nullopt,
             py::arg("attention_mask") = std::nullopt,
             py::arg("program_config").noconvert() =
-                tt::operations::primary::transformers::SoftmaxDefaultProgramConfig{},
+                ttnn::operations::normalization::SoftmaxDefaultProgramConfig{},
             py::arg("causal_mask") = false,
             py::arg("memory_config") = std::nullopt});
 

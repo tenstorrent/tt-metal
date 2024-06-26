@@ -84,9 +84,7 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
             )
             return qkt
 
-    softmax_program_config = model_config.get(
-        "OP4_SOFTMAX_CONFIG", tt_lib.operations.primary.transformers.SoftmaxDefaultProgramConfig()
-    )
+    softmax_program_config = model_config.get("OP4_SOFTMAX_CONFIG", ttnn.SoftmaxDefaultProgramConfig())
 
     def op4_scale_mask_softmax(qkt, attention_mask):
         # Attention scores computation
@@ -95,7 +93,7 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
         # No-op reshapes are handled within pre-softmax (op 7) and post-softmax bmms (op 9)
         shape = qkt.get_legacy_shape()
         qkt = qkt.reshape(shape[0], 1, shape[1] * shape[2], shape[3])
-        attention_scores = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
+        attention_scores = ttnn.scale_mask_softmax_in_place(
             qkt, freciprocal_of_sqrt_hidden_dim, attention_mask, program_config=softmax_program_config
         )
         attention_scores = attention_scores.reshape(shape)

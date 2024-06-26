@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eager/tt_dnn/op_library/softmax/softmax_op.hpp"
+#include "softmax_op.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "common/base_types.hpp"
 #include "tensor/types.hpp"
@@ -20,11 +20,8 @@
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
-using namespace tt::tt_metal;
 
-namespace tt {
-namespace operations {
-namespace primary {
+namespace ttnn::operations::normalization {
 
 void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_FATAL(input_tensors.size() == 1 and optional_input_tensors.size() <= 1, "Must have 1 or 2 input tensors");
@@ -43,7 +40,7 @@ void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vect
                 TT_FATAL(mask.get_legacy_shape() == input_tensor.get_legacy_shape());
             } else {
                 if (mask.get_layout() == Layout::ROW_MAJOR) {
-                    Shape expected_shape = {mask.get_legacy_shape()[0], 1, input_tensor.get_legacy_shape()[-1] / TILE_WIDTH, TILE_WIDTH};
+                    tt::tt_metal::Shape expected_shape = {mask.get_legacy_shape()[0], 1, input_tensor.get_legacy_shape()[-1] / TILE_WIDTH, TILE_WIDTH};
                     TT_FATAL(mask.get_legacy_shape() == expected_shape);
                 }
                 for (uint32_t i = 1; i < input_tensor.get_legacy_shape().rank() - 2; i++) {
@@ -55,12 +52,12 @@ void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vect
                 [&](const auto& program_config) {
                     using ProgramConfigType = std::decay_t<decltype(program_config)>;
                     if constexpr (
-                        std::is_same_v<ProgramConfigType, tt::operations::primary::transformers::SoftmaxDefaultProgramConfig>
+                        std::is_same_v<ProgramConfigType, SoftmaxDefaultProgramConfig>
                     ) {
                         TT_FATAL(input_tensor.get_legacy_shape()[0] == mask.get_legacy_shape()[0]);
                         TT_FATAL(!this->is_scale_causal_mask_hw_dims_softmax);
                     } else if constexpr (
-                        std::is_same_v<ProgramConfigType, tt::operations::primary::transformers::SoftmaxShardedMultiCoreProgramConfig>
+                        std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>
                     ) {
                         const auto shape = input_tensor.get_legacy_shape();
                         uint32_t M = input_tensor.volume() / shape[-1];
@@ -99,7 +96,7 @@ void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vect
     }
 }
 
-std::vector<Shape> Softmax::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::Shape> Softmax::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     return {input_tensors.at(0).get_legacy_shape()};
 }
 
@@ -126,7 +123,7 @@ operation::ProgramWithCallbacks Softmax::create_program(
         [&](const auto& program_config) -> operation::ProgramWithCallbacks {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (
-                std::is_same_v<ProgramConfigType, tt::operations::primary::transformers::SoftmaxShardedMultiCoreProgramConfig>
+                std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>
             ) {
                 return scale_mask_softmax_sharded_multi_core(
                     input_tensor,
@@ -162,11 +159,10 @@ const operation::Hash Softmax::compute_program_hash(
         this->output_mem_config);
 }
 
-Tensor softmax_in_place(Tensor& input_tensor, const transformers::SoftmaxProgramConfig& program_config, std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    return transformers::scale_mask_softmax_in_place(input_tensor, std::nullopt, std::nullopt, program_config, false, compute_kernel_config);
+Tensor softmax_in_place(Tensor& input_tensor, const SoftmaxProgramConfig& program_config, std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    return scale_mask_softmax_in_place(input_tensor, std::nullopt, std::nullopt, program_config, false, compute_kernel_config);
 }
 
-namespace transformers {
 Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const SoftmaxProgramConfig& program_config, const bool is_causal_mask, std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
@@ -191,23 +187,17 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(Tensor& input_tensor, std::opt
     return input_tensor;
 }
 
-}  // namespace transformers
-}  // namespace primary
-}  // namespace operations
-
-namespace tt_metal {
 Tensor softmax(const Tensor& input_tensor, const MemoryConfig& output_mem_config, std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    return transformers::scale_mask_softmax(input_tensor, std::nullopt, std::nullopt, output_mem_config, false, compute_kernel_config);
+    return scale_mask_softmax(input_tensor, std::nullopt, std::nullopt, output_mem_config, false, compute_kernel_config);
 }
 
-namespace transformers {
 Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const MemoryConfig& output_mem_config, const bool is_causal_mask, std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_with_autoformat(
         [scale, mask, output_mem_config, is_causal_mask, compute_kernel_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor = input_tensors.at(0);
             auto& mask = optional_input_tensors.at(0);
-            Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
+            tt::tt_metal::Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
             FormatParams input_format_params = {.pad_shape=input_pad_shape, .pad_value=-std::numeric_limits<float>::infinity(), .target_layout=Layout::TILE};
             std::optional<FormatParams> mask_format_params = std::nullopt;
             if (mask.has_value()) {
@@ -217,14 +207,13 @@ Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale
                 for (uint32_t i = 1; i < input_tensor.get_legacy_shape().rank() - 2; i++) {
                     TT_FATAL(mask.value().get_legacy_shape()[i] == 1);
                 }
-                Shape mask_pad_shape = AutoFormat::pad_to_tile_shape(mask.value().get_legacy_shape());
+                tt::tt_metal::Shape mask_pad_shape = AutoFormat::pad_to_tile_shape(mask.value().get_legacy_shape());
                 mask_format_params = {.pad_shape=mask_pad_shape, .pad_value=-std::numeric_limits<float>::infinity(), .target_layout=Layout::TILE};
             }
             auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-            return operation::run_with_autoformat(tt::operations::primary::Softmax{.scale=scale, .inplace=false, .output_mem_config=output_mem_config, .is_causal_mask=is_causal_mask, .compute_kernel_config=kernel_config_val}, {input_tensor}, {input_format_params}, {Layout::TILE}, {mask}, {mask_format_params});
+            return operation::run_with_autoformat(Softmax{.scale=scale, .inplace=false, .output_mem_config=output_mem_config, .is_causal_mask=is_causal_mask, .compute_kernel_config=kernel_config_val}, {input_tensor}, {input_format_params}, {Layout::TILE}, {mask}, {mask_format_params});
         }, {input_tensor}, output_tensors, {mask});
     return output_tensors.at(0);
 }
-}  // namespace transformers
-}  // namespace tt_metal
-}  // namespace tt
+
+}  // namespace ttnn::operations::normalization

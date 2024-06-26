@@ -15,7 +15,6 @@
 #include "pybind11/operations/kv_cache.hpp"
 #include "pybind11/operations/matmul.hpp"
 #include "pybind11/operations/maxpool2d.hpp"
-#include "pybind11/operations/normalization.hpp"
 #include "pybind11/operations/pool.hpp"
 #include "pybind11/operations/ternary.hpp"
 #include "pybind11/operations/transformer.hpp"
@@ -23,6 +22,7 @@
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
 #include "ttnn/operations/eltwise/unary/unary_pybind.hpp"
 #include "ttnn/operations/examples/examples_pybind.hpp"
+#include "ttnn/operations/normalization/normalization_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
@@ -75,11 +75,11 @@ void py_module(py::module& module) {
     auto m_maxpool2d = module.def_submodule("maxpool2d", "maxpool 2d operation");
     maxpool2d::py_module(m_maxpool2d);
 
-    auto m_transformer = module.def_submodule("transformer", "transformer operations");
-    transformer::py_module(m_transformer);
-
     auto m_normalization = module.def_submodule("normalization", "normalization operations");
     normalization::py_module(m_normalization);
+
+    auto m_transformer = module.def_submodule("transformer", "transformer operations");
+    transformer::py_module(m_transformer);
 
     auto m_reduction = module.def_submodule("reduction", "reduction operations");
     reduction::py_module(m_reduction);

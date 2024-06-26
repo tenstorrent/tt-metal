@@ -324,9 +324,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ### SOFTMAX ###
         ###############
         for i in range(self.num_devices):
-            attn_weights[i] = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
-                attn_weights[i]
-            )
+            attn_weights[i] = ttnn.scale_mask_softmax_in_place(attn_weights[i])
 
         ######################
         ### V CACHE UPDATE ###
@@ -502,7 +500,7 @@ class TtFalconAttentionPrefill(nn.Module):
             )
             ### SOFTMAX ###
             mm_slices = [
-                ttnn.experimental.operations.primary.transformers.scale_causal_mask_hw_dims_softmax_in_place(
+                ttnn.scale_causal_mask_hw_dims_softmax_in_place(
                     mm_slices[device_id],
                     self.scalar_for_optimized_prefill,
                     attention_mask[device_id][i],
@@ -846,19 +844,17 @@ class TtFalconAttentionDecode(nn.Module):
             ### SOFTMAX ###
             ###############
             for i in range(self.num_devices):
-                attn_weights[i] = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
-                    attn_weights[i]
-                )
+                attn_weights[i] = ttnn.scale_mask_softmax_in_place(attn_weights[i])
         else:
             ###############
             ### SOFTMAX ###
             ###############
             for i in range(self.num_devices):
-                attn_weights[i] = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
+                attn_weights[i] = ttnn.scale_mask_softmax_in_place(
                     attn_weights[i],
                     scale=self.scale,
                     mask=attention_mask[i],
-                    program_config=ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+                    program_config=ttnn.SoftmaxShardedMultiCoreProgramConfig(
                         compute_with_storage_grid_size=(8, 4),
                         subblock_w=1,
                         block_h=self.padded_local_heads // 32,
