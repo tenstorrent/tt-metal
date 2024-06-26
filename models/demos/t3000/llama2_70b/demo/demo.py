@@ -191,9 +191,9 @@ def run_decode(args, model, tokenizer, prompt_tokens, prompts, return_logits=Fal
         latencies.append(time() - start)
 
         # Decode the entire sequence generated so far and log it
-        for user_id in range(max(0, bsz - 3), bsz):
-            text = tokenizer.decode(tokens[user_id, : cur_pos + 1].tolist())
-            logger.info(f"Loop {cur_pos} user {user_id}: {text}\n")
+        # for user_id in range(max(0, bsz - 3), bsz):
+        #     text = tokenizer.decode(tokens[user_id, : cur_pos + 1].tolist())
+        #     logger.info(f"Loop {cur_pos} user {user_id}: {text}\n")
 
         if return_full_logits:
             full_logits.append(logits.clone().detach())
