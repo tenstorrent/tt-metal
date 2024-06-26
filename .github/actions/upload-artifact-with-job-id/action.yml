@@ -1,0 +1,42 @@
+name: "Upload artifact with current job ID appended"
+description: "Upload artifact with current job ID appended to the end"
+
+inputs:
+  prefix:
+    description: 'Artifact name prefix'
+    default: "artifact_"
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/github-script@v7
+      id: get-current-job-id
+      with:
+        result-encoding: string
+        retries: 3
+        env:
+          JOB_NAME: ${{ github.job }}
+        script: |
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+
+          const runId = context.runId;
+          const runAttempt = context.runAttempt;
+
+          const { JOB_NAME } = process.env;
+
+          const { totalCount, jobs } = await octokit
+            .paginate(
+              "GET /repos/{owner}/{repo}/actions/runs/{runId}/attempts/{runAttempt}/jobs",
+              { owner, repo, runId, runAttempt },
+          );
+
+          const matchingJobs = jobs.filter(job => job.name == JOB_NAME);
+
+          if (matchingJobs.length !== 1) {
+            throw new Error(`Expected exactly one matching job, but found ${matchingJobs.length}`);
+          }
+
+          return matchingJobs[0].id;
+    - name: Get artifact name result
+      run: echo "${{ inputs.prefix }}${{ steps.get-current-job-id.outputs.result }}"
