@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import tt_lib
+import ttnn
 from loguru import logger
 from pathlib import Path
 from models.utility_functions import is_wormhole_b0
@@ -197,7 +198,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
     elif model_config_str == "BFLOAT8_B-L1" or model_config_str == "BFLOAT8_B-DRAM":
         grid_size = [12, batch]
         new_config_values = {
-            "OP3_PRE_SOFTMAX_BMM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            "OP3_PRE_SOFTMAX_BMM_CONFIG": ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 in0_block_w=2,
                 out_subblock_h=1,
@@ -205,7 +206,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 per_core_M=12,
                 per_core_N=12,
             ),
-            "OP5_POST_SOFTMAX_BMM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            "OP5_POST_SOFTMAX_BMM_CONFIG": ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 in0_block_w=12,
                 out_subblock_h=4,
@@ -213,7 +214,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 per_core_M=12,
                 per_core_N=2,
             ),
-            "OP7_SELFOUT_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            "OP7_SELFOUT_CONFIG": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 in0_block_w=4,
                 out_subblock_h=2,
@@ -223,7 +224,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 transpose_mcast=False,
                 fused_activation=None,
             ),
-            "OP9_FF1_MM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            "OP9_FF1_MM_CONFIG": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 in0_block_w=4,
                 out_subblock_h=1,
@@ -233,7 +234,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 transpose_mcast=False,
                 fused_activation=(tt_lib.tensor.FusibleActivation.GELU, True),
             ),
-            "OP10_FF2_MM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            "OP10_FF2_MM_CONFIG": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 in0_block_w=16,
                 out_subblock_h=2,
@@ -326,7 +327,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
             "OP11_LAYERNORM_GAMMA_MEMCFG": DRAM_MEMCFG,
             "OP11_LAYERNORM_BETA_MEMCFG": DRAM_MEMCFG,
             "RESERVE_SPLIT_HEADS_SHAPE": [1, 1, 1, 153 * 1024 // 2],
-            "OP1_FUSED_QKV_MM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            "OP1_FUSED_QKV_MM_CONFIG": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 in0_block_w=4,
                 out_subblock_h=1,
@@ -336,7 +337,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 transpose_mcast=transpose_mm_mcast,
                 fused_activation=None,
             ),
-            "OP3_PRE_SOFTMAX_BMM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            "OP3_PRE_SOFTMAX_BMM_CONFIG": ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 in0_block_w=2,
                 out_subblock_h=1,
@@ -344,7 +345,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 per_core_M=24,
                 per_core_N=12,
             ),
-            "OP5_POST_SOFTMAX_BMM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseProgramConfig(
+            "OP5_POST_SOFTMAX_BMM_CONFIG": ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 in0_block_w=12,
                 out_subblock_h=4,
@@ -352,7 +353,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 per_core_M=24,
                 per_core_N=2,
             ),
-            "OP7_SELFOUT_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            "OP7_SELFOUT_CONFIG": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 in0_block_w=4,
                 out_subblock_h=2,
@@ -362,7 +363,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 transpose_mcast=transpose_mm_mcast,
                 fused_activation=None,
             ),
-            "OP9_FF1_MM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            "OP9_FF1_MM_CONFIG": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 in0_block_w=4,
                 out_subblock_h=1,
@@ -372,7 +373,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 transpose_mcast=transpose_mm_mcast,
                 fused_activation=(tt_lib.tensor.FusibleActivation.GELU, True),
             ),
-            "OP10_FF2_MM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            "OP10_FF2_MM_CONFIG": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 in0_block_w=16,
                 out_subblock_h=2,

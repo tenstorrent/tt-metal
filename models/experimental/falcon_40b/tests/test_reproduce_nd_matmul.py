@@ -6,6 +6,7 @@ from loguru import logger
 import pytest
 
 import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_pcc, tt2torch_tensor, torch2tt_tensor
 import torch
 
@@ -52,7 +53,7 @@ def test_reproduce_matmul_1d(
     a_t = torch2tt_tensor(A, device, ttl.tensor.Layout.TILE, in0_mem_config, in0_dtype)
     b_t = torch2tt_tensor(B, device, ttl.tensor.Layout.TILE, in1_mem_config, in1_dtype)
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 8),
         in0_block_w=in_block_w,
         out_subblock_h=out_subblock_h,
@@ -154,7 +155,7 @@ def test_reproduce_matmul_2d(
     a_t = torch2tt_tensor(A, device, ttl.tensor.Layout.TILE, in0_mem_config, in0_dtype)
     b_t = torch2tt_tensor(B, device, ttl.tensor.Layout.TILE, in1_mem_config, in1_dtype)
 
-    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(8, 8),
         in0_block_w=in_block_w,
         out_subblock_h=out_subblock_h,

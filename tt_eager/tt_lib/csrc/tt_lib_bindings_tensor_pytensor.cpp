@@ -56,11 +56,19 @@ Tensor convert_torch_tensor_to_tt_tensor(
     }  else if (torch_dtype.equal(torch.attr("int16"))) {
         // TODO(arakhmati): add DataType::INT16?
         data_type = DataType::UINT16;
+    }  else if (torch_dtype.equal(torch.attr("uint8"))) {
+        data_type = DataType::UINT8;
     } else {
         TT_THROW(fmt::format("Unsupported DataType: {}", py::repr(torch_dtype)));
     }
 
     switch (data_type) {
+        case DataType::UINT8: {
+            if (not torch_dtype.equal(torch.attr("uint8"))) {
+                contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("uint8"));
+            }
+            break;
+        }
         case DataType::UINT16: {
             if (not torch_dtype.equal(torch.attr("int16"))) {
                 contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("int16"));
@@ -100,6 +108,16 @@ Tensor convert_torch_tensor_to_tt_tensor(
     auto num_elements = py::cast<std::size_t>(contiguous_torch_tensor.attr("numel")());
     auto torch_data_ptr = py::cast<std::size_t>(contiguous_torch_tensor.attr("data_ptr")());
     switch (data_type) {
+        case DataType::UINT8: {
+            auto data_ptr = reinterpret_cast<uint8_t *>(torch_data_ptr);
+            if (enable_borrow) {
+                auto storage = BorrowedStorage(
+                    borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
+                return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+            } else {
+                return create_owned_tensor(data_ptr, num_elements, shape, data_type, Layout::ROW_MAJOR);
+            }
+        }
         case DataType::UINT16: {
             auto data_ptr = reinterpret_cast<uint16_t *>(torch_data_ptr);
             if (enable_borrow) {
@@ -205,11 +223,19 @@ Tensor convert_numpy_tensor_to_tt_tensor(
     } else if (np_dtype.equal(np.attr("int32"))) {
         // TODO(arakhmati): add DataType::INT32?
         data_type = DataType::UINT32;
+    } else if (np_dtype.equal(np.attr("ubyte"))) {
+        data_type = DataType::UINT8;
     } else {
         TT_THROW(fmt::format("Unsupported DataType: {}", py::repr(np_dtype)));
     }
 
     switch (data_type) {
+        case DataType::UINT8: {
+            if (not np_dtype.equal(np.attr("ubyte"))) {
+                contiguous_np_tensor = contiguous_np_tensor.attr("astype")(np.attr("ubyte"));
+            }
+            break;
+        }
         case DataType::UINT16: {
             if (not np_dtype.equal(np.attr("int32"))) {
                 contiguous_np_tensor = contiguous_np_tensor.attr("astype")(np.attr("int16"));
@@ -253,6 +279,12 @@ Tensor convert_numpy_tensor_to_tt_tensor(
         py::cast<py::tuple>(py::cast<py::dict>(contiguous_np_tensor.attr("__array_interface__"))[py::str("data")])[0]);
 
     switch (data_type) {
+        case DataType::UINT8: {
+            auto data_ptr = reinterpret_cast<uint8_t *>(np_data_ptr);
+            auto storage = BorrowedStorage(
+                borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
+            return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+        }
         case DataType::UINT16: {
             auto data_ptr = reinterpret_cast<uint16_t *>(np_data_ptr);
             auto storage = BorrowedStorage(
@@ -409,6 +441,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         }
 
         const auto tt_dtype_to_torch_dtype = std::map<DataType, py::object> {
+            {DataType::UINT8, torch.attr("uint8")},
             {DataType::UINT16, torch.attr("int16")}, // TODO(arakhmati): add DataType::INT16
             {DataType::INT32, torch.attr("int32")},
             {DataType::UINT32, torch.attr("int32")}, // TODO(arakhmati): add DataType::INT32
@@ -471,6 +504,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         }
 
         const auto tt_dtype_to_np_dtype = std::map<DataType, py::object>{
+            {DataType::UINT8, np.attr("ubyte")},
             {DataType::UINT16, np.attr("int16")},  // TODO(arakhmati): add DataType::INT16
             {DataType::INT32, np.attr("int32")},
             {DataType::UINT32, np.attr("int32")},  // TODO(arakhmati): add DataType::INT32

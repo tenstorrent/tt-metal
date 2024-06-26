@@ -1,12 +1,12 @@
 ### Ticket
-- Link to Github Issue.
+Link to Github Issue
 
 ### Problem description
-- Provide context for the problem.
+Provide context for the problem.
 
 ### What's changed
-- Describe the approach used to solve the problem.
-- Summarize the changes made and its impact.
+Describe the approach used to solve the problem.
+Summarize the changes made and its impact.
 
 ### Checklist
 - [ ] Post commit CI passes

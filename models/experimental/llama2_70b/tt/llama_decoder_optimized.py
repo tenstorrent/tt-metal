@@ -25,7 +25,6 @@ class TtLlamaDecoder_optimized:
         layer_num,
         model_config,
         configuration,
-        batch,
         transformation_mats,
         cache_path=None,
         read_cache=False,

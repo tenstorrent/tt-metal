@@ -143,6 +143,9 @@ OwnedStorage load_owned_storage(ifstream& input_stream, DataType data_type) {
     } else if (data_type == DataType::INT32) {
         using T = std::int32_t;
         return load_owned_storage<T>(input_stream);
+    } else if (data_type == DataType::UINT8) {
+        using T = std::uint8_t;
+        return load_owned_storage<T>(input_stream);
     } else if (data_type == DataType::UINT16) {
         using T = std::uint16_t;
         return load_owned_storage<T>(input_stream);

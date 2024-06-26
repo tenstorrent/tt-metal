@@ -32,7 +32,6 @@ class TtLlamaModel_optimized:
         n_layers,
         model_config,
         configuration,
-        batch,
         cache_path=None,
         read_cache=False,
     ):
@@ -75,7 +74,6 @@ class TtLlamaModel_optimized:
                 layer_num,
                 model_config,
                 configuration,
-                batch,
                 transformation_mats,
                 cache_path=cache_path,
                 read_cache=read_cache,

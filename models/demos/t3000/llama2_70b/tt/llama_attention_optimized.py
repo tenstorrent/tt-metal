@@ -649,11 +649,11 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         if self.emulated:
             attn_output = tt_all_gather_torch(attn_output, dim=-1)
         else:
-            attn_output = ttnn.all_gather(
+            attn_output = tt_lib.tensor.all_gather(
                 attn_output,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                memory_config=self.model_config["L1_MEMCFG"],
+                output_mem_config=self.model_config["L1_MEMCFG"],
             )
 
         for i in range(len(attn_output)):
@@ -911,11 +911,11 @@ class TtLlamaAttention_optimized(torch.nn.Module):
         if self.emulated:
             attn_output = tt_all_gather_torch(attn_output, dim=-1)
         else:
-            attn_output = ttnn.all_gather(
+            attn_output = tt_lib.tensor.all_gather(
                 attn_output,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                memory_config=self.model_config["DRAM_MEMCFG"],
+                output_mem_config=self.model_config["DRAM_MEMCFG"],
             )
 
         for i in range(len(attn_output)):

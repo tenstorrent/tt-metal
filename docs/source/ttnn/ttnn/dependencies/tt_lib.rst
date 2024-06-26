@@ -405,6 +405,10 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.heaviside
 
+.. autofunction:: tt_lib.tensor.bitwise_xor
+
+.. autofunction:: tt_lib.tensor.bitwise_not
+
 .. autofunction:: tt_lib.tensor.right_shift
 
 .. autofunction:: tt_lib.tensor.left_shift
@@ -412,6 +416,10 @@ Tensor elementwise operations
 .. autofunction:: tt_lib.tensor.unary_remainder
 
 .. autofunction:: tt_lib.tensor.remainder
+    
+.. autofunction:: tt_lib.tensor.unary_fmod
+
+.. autofunction:: tt_lib.tensor.fmod
 
 .. autofunction:: tt_lib.tensor.atan
 

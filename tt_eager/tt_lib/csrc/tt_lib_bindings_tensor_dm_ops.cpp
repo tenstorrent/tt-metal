@@ -61,7 +61,7 @@ namespace tt::tt_metal::detail{
 
                 Input tensors must be on device, in ROW MAJOR or TILE layout, and have matching data type.
 
-                Datatype must be one ofthe following types BFLOAT16,BFLOAT8_B,BFLOAT4_B,UINT32,INT32 and UINT16.
+                Datatype must be one of the following types BFLOAT16, BFLOAT8_B, BFLOAT4_B, UINT32, INT32, UINT16 and UINT8.
 
                 Output tensor will be on device, in same layout, and have the given data type.
 
@@ -553,7 +553,11 @@ namespace tt::tt_metal::detail{
         );
 
         // ---------- Multi-Device ops ----------
-        // Line All Gather
+        // All Gather
+        m_tensor.def("all_gather", &all_gather,
+            py::arg("input_tensors"), py::arg("dim"), py::arg("num_links") = 1, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            R"doc(Performs all gather on a list of tensors that form one tensor that is distributed across devices. The output is a list of a tensor which has been duplciated across the input devices.)doc"
+        );
         m_tensor.def("line_all_gather", &line_all_gather,
             py::arg("input_tensors"), py::arg("dim"), py::arg("num_links") = 1, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             R"doc(Performs all gather on a list of tensors that form one tensor that is distributed across devices. The output is a list of a tensor which has been duplciated across the input devices.)doc"

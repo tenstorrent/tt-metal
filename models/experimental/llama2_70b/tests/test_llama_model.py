@@ -108,7 +108,6 @@ def run_test_LlamaModel_inference(
         n_layers,
         model_config,
         configuration,
-        batch,
         cache_path=cache_path,
     )
 
@@ -207,15 +206,15 @@ def run_test_LlamaModel_inference(
     pytorch_layer_present = [
         pytorch_model.model.layers[0]
         .attention.cache_k.clone()
-        .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+        .permute(0, 2, 1, 3)[:batch, ...],  # [batch, n_kv_heads, seq, head_dim]
         pytorch_model.model.layers[0]
         .attention.cache_v.clone()
-        .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+        .permute(0, 2, 1, 3)[:batch, ...],  # [batch, n_kv_heads, seq, head_dim]
     ]
 
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past]
     tt_layer_present_all = [
-        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)
+        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)[:batch, ...]
         for lp in tt_layer_present_all
     ]
 

@@ -368,11 +368,11 @@ class TtLlamaModel_optimized(nn.Module):
         if self.emulated:
             xs = tt_all_gather_torch(xs, dim=-1)
         else:
-            xs = ttnn.all_gather(
+            xs = tt_lib.tensor.all_gather(
                 xs,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                memory_config=self.model_config["L1_MEMCFG"],
+                output_mem_config=self.model_config["L1_MEMCFG"],
             )
 
         ## Duplicate layernorm
@@ -492,11 +492,11 @@ class TtLlamaModel_optimized(nn.Module):
         if self.emulated:
             xs = tt_all_gather_torch(xs, dim=-1)
         else:
-            xs = ttnn.all_gather(
+            xs = tt_lib.tensor.all_gather(
                 xs,
                 dim=3,
                 num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-                memory_config=self.model_config["DRAM_MEMCFG"],
+                output_mem_config=self.model_config["DRAM_MEMCFG"],
             )
 
         ## Duplicate layernorm

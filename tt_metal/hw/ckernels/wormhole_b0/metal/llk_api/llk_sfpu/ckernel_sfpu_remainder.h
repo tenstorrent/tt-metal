@@ -11,7 +11,6 @@
 #include "ckernel_sfpu_recip.h"
 
 using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 

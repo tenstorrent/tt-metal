@@ -103,7 +103,7 @@ class geglu:
         if size == 512:
             out_subblock_h = 1
             out_subblock_w = 1
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
@@ -133,7 +133,7 @@ class geglu:
         if hidden_states.shape[-2] == 8192:
             proj = ttnn.reallocate(proj)
 
-        program_config = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,

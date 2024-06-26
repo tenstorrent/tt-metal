@@ -74,9 +74,9 @@ void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size
          .compute_grid_size = this->compute_with_storage_grid_size()});
     TT_FATAL(config.l1_small_size < config.l1_bank_size, "Reserved size must be less than bank size");
     TT_FATAL(
-        config.l1_small_size % ADDRESS_ALIGNMENT == 0,
-        "Reserved size must be aligned to ADDRESS_ALIGNMENT",
-        ADDRESS_ALIGNMENT);
+        config.l1_small_size % ALLOCATOR_ALIGNMENT == 0,
+        "Reserved size must be aligned to ALLOCATOR_ALIGNMENT {}",
+        ALLOCATOR_ALIGNMENT);
     // Initialize dram_offsets from soc_descriptor
     for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));

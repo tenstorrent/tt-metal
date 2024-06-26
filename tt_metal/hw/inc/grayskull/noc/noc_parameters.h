@@ -21,8 +21,11 @@
 #define NOC_XY_ADDR2(xy, addr) ((((uint64_t)(xy)) << NOC_ADDR_LOCAL_BITS) | ((uint64_t)(addr)))
 
 // Alignment restrictions
-#define NOC_L1_ALIGNMENT_BYTES   16
-#define NOC_PCIE_ALIGNMENT_BYTES 32
-#define NOC_DRAM_ALIGNMENT_BYTES 32
+#define NOC_L1_READ_ALIGNMENT_BYTES       16
+#define NOC_L1_WRITE_ALIGNMENT_BYTES      16
+#define NOC_PCIE_READ_ALIGNMENT_BYTES     32
+#define NOC_PCIE_WRITE_ALIGNMENT_BYTES    16
+#define NOC_DRAM_READ_ALIGNMENT_BYTES     32
+#define NOC_DRAM_WRITE_ALIGNMENT_BYTES    16
 
 #endif

@@ -64,10 +64,13 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
         output_buffer_address > input_buffer_address,
         "Expected output buffer to be allocated at a higher address than input buffer");
     uint32_t move_chunk_size_bytes = output_buffer_address - input_buffer_address;
+    TT_FATAL(input.buffer()->alignment() == output.buffer()->alignment(),
+        "Expected input buffer alignment ({} B) and output buffer alignment ({} B) to be equal",
+        input.buffer()->alignment(), output.buffer()->alignment());
     TT_FATAL(
-        move_chunk_size_bytes % ADDRESS_ALIGNMENT == 0,
+        move_chunk_size_bytes % input.buffer()->alignment() == 0,
         "Expected chunk size bytes to move to be {} byte aligned.",
-        ADDRESS_ALIGNMENT);
+        input.buffer()->alignment());
     uint32_t num_chunks = total_size_bytes / move_chunk_size_bytes;
     uint32_t remainder_chunk_size_bytes = total_size_bytes % move_chunk_size_bytes;
 
