@@ -11,11 +11,11 @@ runs:
   steps:
     - uses: actions/github-script@v7
       id: get-current-job-id
+      env:
+        JOB_NAME: "${{ github.job }}"
       with:
         result-encoding: string
         retries: 3
-        env:
-          JOB_NAME: "${{ github.job }}"
         script: |
           const owner = context.repo.owner;
           const repo = context.repo.repo;
