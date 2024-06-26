@@ -28,7 +28,6 @@
 #include "tt_dnn/op_library/rotary_embedding/rotary_embedding_llama_op.hpp"
 #include "tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
 #include "tt_dnn/op_library/scan/scan_op.hpp"
-#include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_dnn/op_library/update_cache/update_cache_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"

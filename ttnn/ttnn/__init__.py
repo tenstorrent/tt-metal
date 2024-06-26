@@ -303,6 +303,9 @@ from ttnn.operations.matmul import (
 )
 
 from ttnn.operations.normalization import (
+    SoftmaxProgramConfig,
+    SoftmaxDefaultProgramConfig,
+    SoftmaxShardedMultiCoreProgramConfig,
     create_group_norm_weight_bias_rm,
     create_group_norm_input_mask,
     determine_expected_group_norm_sharded_config_and_grid_size,

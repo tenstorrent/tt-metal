@@ -324,9 +324,7 @@ class cross_attention:
                 mcast_in0=False,
             )
 
-            self.program_configs[
-                "tsa_softmax"
-            ] = ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+            self.program_configs["tsa_softmax"] = ttnn.SoftmaxShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=self.tsa_grid_size,
                 subblock_w=1,
                 block_h=mm_output_height_shard_spec[0] // 32,
@@ -393,7 +391,7 @@ class cross_attention:
 
                 use_mask = False
                 if use_mask:
-                    mm_slice = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
+                    mm_slice = ttnn.scale_mask_softmax_in_place(
                         mm_slice,
                         1 / math.sqrt(head_size),
                         attention_mask,
@@ -409,7 +407,7 @@ class cross_attention:
                         output_mem_config=self.height_sharded_memory_config,
                         in_place=True,
                     )
-                    mm_slice = ttnn.experimental.operations.primary.softmax_in_place(
+                    mm_slice = ttnn.softmax_in_place(
                         mm_slice,
                         program_config=self.program_configs["tsa_softmax"],
                     )
@@ -523,7 +521,7 @@ class cross_attention:
             output_mem_config,
         )
         # attention_scores = ttnn.experimental.tensor.move_sharded(attention_scores)
-        softmax_program_config = ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=compute_with_storage_grid_size,
             subblock_w=1,
             block_h=height_per_core // 32,
@@ -531,7 +529,7 @@ class cross_attention:
         )
         use_mask = attn_type == "cross"
         if use_mask:
-            attention_scores = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
+            attention_scores = ttnn.scale_mask_softmax_in_place(
                 attention_scores,
                 1 / math.sqrt(head_size),
                 attention_mask,
@@ -547,7 +545,7 @@ class cross_attention:
                 output_mem_config=attention_scores.memory_config(),
                 in_place=True,
             )
-            attention_scores = ttnn.experimental.operations.primary.softmax_in_place(
+            attention_scores = ttnn.softmax_in_place(
                 attention_scores,
                 program_config=softmax_program_config,
             )
