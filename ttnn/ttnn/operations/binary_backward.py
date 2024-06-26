@@ -297,5 +297,11 @@ ttnn.attach_golden_function(
     ),
 )
 
+ttnn.attach_golden_function(
+    ttnn.binary_remainder_bw,
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.remainder, grad, a, b, *args, **kwargs
+    ),
+)
 
 __all__ = []

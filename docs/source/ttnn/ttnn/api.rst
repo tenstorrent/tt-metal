@@ -336,6 +336,7 @@ Pointwise Binary
    ttnn/min_bw
    ttnn/max_bw
    ttnn/lerp_bw
+   ttnn/binary_remainder_bw
 
 Pointwise Ternary
 =================

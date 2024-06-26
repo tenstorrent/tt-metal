@@ -762,6 +762,11 @@ void py_module(py::module& module) {
         |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
         +----------------------------+---------------------------------+-------------------+)doc");
 
+    detail::bind_binary_backward_ops(
+        module,
+        ttnn::binary_remainder_bw,
+        R"doc(Performs backward operations for remainder of :attr:`input_tensor_a` and attr:`input_tensor_b` with given attr:`grad_tensor`.)doc");
+
     detail::bind_binary_backward_int_default(
         module,
         ttnn::concat_bw,
