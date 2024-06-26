@@ -13,6 +13,7 @@ runs:
       id: get-current-job-id
       env:
         JOB_NAME: "${{ github.job }}"
+        GITHUB_RUN_ATTEMPT: "${{ env.GITHUB_RUN_ATTEMPT }}"
       with:
         result-encoding: string
         retries: 3
@@ -21,9 +22,10 @@ runs:
           const repo = context.repo.repo;
 
           const runId = context.runId;
-          const runAttempt = context.runAttempt;
+          console.log(context.runAttempt);
 
-          const { JOB_NAME } = process.env;
+          const { JOB_NAME, RUN_ATTEMPT } = process.env;
+          const runAttempt = RUN_ATTEMPT;
 
           const { totalCount, jobs } = await github.
             paginate(
