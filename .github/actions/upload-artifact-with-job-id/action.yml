@@ -2,9 +2,15 @@ name: "Upload artifact with current job ID appended"
 description: "Upload artifact with current job ID appended to the end"
 
 inputs:
+  path:
+    description: "Paths to pass to upload-artifact and upload"
+    required: true
   prefix:
-    description: 'Artifact name prefix'
+    description: "Artifact name prefix"
     default: "artifact_"
+  run-attempt:
+    description: "Run attempt for workflow"
+    default: "${{ github.run_attempt || 1 }}"
 
 runs:
   using: "composite"
@@ -13,7 +19,7 @@ runs:
       id: get-current-job-id
       env:
         JOB_NAME: "${{ github.job }}"
-        GITHUB_RUN_ATTEMPT: "${{ env.GITHUB_RUN_ATTEMPT || 1 }}"
+        GITHUB_RUN_ATTEMPT: "${{ inputs.run-attempt }}"
       with:
         result-encoding: string
         retries: 3
@@ -43,3 +49,7 @@ runs:
     - name: Get artifact name result
       shell: bash
       run: echo "${{ inputs.prefix }}${{ steps.get-current-job-id.outputs.result }}"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: "${{ inputs.prefix }}${{ steps.get-current-job-id.outputs.result }}"
+        path: ${{ inputs.path }}
