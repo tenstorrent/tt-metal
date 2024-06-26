@@ -29,7 +29,12 @@ void kernel_main() {
         //Need to signal completion to dispatcher before hanging so that
         //Dispatcher Kernel is able to finish.
         //Device Close () requires fast dispatch kernels to finish.
-        uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
+#if defined(COMPILE_FOR_ERISC)
+        tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
+#else
+        tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
+#endif
+        uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(mailboxes->launch.dispatch_core_x), NOC_Y(mailboxes->launch.dispatch_core_y), DISPATCH_MESSAGE_ADDR);
         noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31, false);
 #endif
 

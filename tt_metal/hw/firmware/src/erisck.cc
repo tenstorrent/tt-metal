@@ -33,7 +33,7 @@ void __attribute__((section("erisc_l1_code"))) kernel_launch() {
 
     kernel_main();
     mailboxes->launch.run = RUN_MSG_DONE;
-    uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
+    uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(mailboxes->launch.dispatch_core_x), NOC_Y(mailboxes->launch.dispatch_core_y), DISPATCH_MESSAGE_ADDR);
     if (routing_info->routing_enabled and mailboxes->launch.mode == DISPATCH_MODE_DEV) {
         internal_::notify_dispatch_core_done(dispatch_addr);
     }

@@ -400,7 +400,7 @@ int main() {
             // Notify dispatcher core that it has completed
             if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
                 uint64_t dispatch_addr =
-                    NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
+                    NOC_XY_ADDR(NOC_X(mailboxes->launch.dispatch_core_x), NOC_Y(mailboxes->launch.dispatch_core_y), DISPATCH_MESSAGE_ADDR);
                 DEBUG_SANITIZE_NOC_ADDR(dispatch_addr, 4);
                 noc_fast_atomic_increment(
                     noc_index,

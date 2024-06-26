@@ -294,6 +294,7 @@ class EnqueueProgramCommand : public Command {
     NOC noc_index;
     Program& program;
     SystemMemoryManager& manager;
+    CoreCoord dispatch_core;
     CoreType dispatch_core_type;
     uint32_t expected_num_workers_completed;
 
@@ -303,8 +304,9 @@ class EnqueueProgramCommand : public Command {
         std::vector<HostMemDeviceCommand> runtime_args_command_sequences;
         uint32_t runtime_args_fetch_size_bytes;
         HostMemDeviceCommand program_command_sequence;
-        std::vector<uint32_t *> cb_configs_payloads;
+        std::vector<uint32_t*> cb_configs_payloads;
         std::vector<std::vector<std::shared_ptr<CircularBuffer>>> circular_buffers_on_core_ranges;
+        std::vector<launch_msg_t*> go_signals;
     };
     thread_local static std::unordered_map<uint64_t, CachedProgramCommandSequence> cached_program_command_sequences;
 
@@ -313,6 +315,7 @@ class EnqueueProgramCommand : public Command {
         Device* device,
         NOC noc_index,
         Program& program,
+        CoreCoord& dispatch_core,
         SystemMemoryManager& manager,
         uint32_t expected_num_workers_completed);
 
@@ -490,6 +493,7 @@ class HWCommandQueue {
 
     ~HWCommandQueue();
 
+    CoreCoord physical_enqueue_program_dispatch_core;
     CoreCoord completion_queue_writer_core;
     NOC noc_index;
     volatile bool is_dprint_server_hung();
