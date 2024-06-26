@@ -1851,10 +1851,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
                 "reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp";
             writer_mcast_sender_kernel =
                 "tt_eager/tt_dnn/op_library/conv/kernels/"
-                "writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
+                "writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks_new.cpp";
             writer_mcast_receiver_kernel =
                 "tt_eager/tt_dnn/op_library/conv/kernels/"
-                "writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
+                "writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks_new.cpp";
             act_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
             act_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 

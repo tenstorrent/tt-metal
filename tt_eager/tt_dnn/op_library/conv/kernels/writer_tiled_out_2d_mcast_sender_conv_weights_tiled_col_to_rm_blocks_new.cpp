@@ -59,7 +59,13 @@ void kernel_main() {
     constexpr uint32_t out_width_num_tiles = get_compile_time_arg_val(28);
 
     constexpr uint32_t out_addr = get_compile_time_arg_val(29);
-
+    // unused args 30-31 // todo cleanup host code
+    #ifdef UNPAD_UNTILIZE_OUT
+    constexpr uint32_t out_block_width_ntiles = get_compile_time_arg_val(32);
+    constexpr uint32_t out_block_width_padded_bytes = get_compile_time_arg_val(33);
+    constexpr uint32_t out_block_width_bytes = get_compile_time_arg_val(34);
+    constexpr uint32_t untilized_padded_out_cb = get_compile_time_arg_val(35);
+    #endif
     uint32_t i = 0;
     i+=1;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
@@ -71,7 +77,6 @@ void kernel_main() {
     uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i); i+=1;
     i+=9;
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i); i += 1;
-
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
     if(noop) {
         return;
@@ -141,7 +146,6 @@ void kernel_main() {
     uint32_t out_block_w_start_tile_id = out_start_tile_id;
     uint32_t out_block_w_start_tile_id_w = out_start_tile_id_w;
     uint32_t weight_start_tile_id = out_start_tile_id_w;
-    uint32_t weight_inner_block_stride_h = weight_next_block_stride_h / weight_block_height_num_outer; // TODO: Pass as args
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         uint32_t out_block_h_start_tile_id = out_block_w_start_tile_id;
         uint32_t out_block_h_start_tile_id_h = out_start_tile_id_h;
@@ -150,40 +154,32 @@ void kernel_main() {
             // read weight blocks inner dim
             // read weight slice - 1 block of weights in width dim and full weight matrix height
             // read slice only once for all activation blocks
-            uint32_t weight_h_offset = 0;
+            uint32_t weight_current_block_start_tile_id = weight_start_tile_id;
             for(uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer; weight_tile_h_outer_i++) {
-                uint32_t weight_current_block_start_tile_id = weight_start_tile_id;
                 cb_reserve_back(cb_id_weight, weight_block_num_tiles);
                 uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
 
                 // mcast args
                 uint32_t weights_start_address = weight_write_l1_addr;
                 uint32_t weights_block_size_bytes = 0;
-
-                for(uint32_t block_weight_h = 0; block_weight_h < num_blocks_weight_h; block_weight_h++) { // TODO: 9
-                    uint32_t weight_row_start_tile_id = weight_current_block_start_tile_id + weight_h_offset;
+                // loop over weight block tiles along h
+                for(uint32_t block_weight_h = 0; block_weight_h < num_blocks_weight_h * weight_block_height_ntiles; block_weight_h++) { // TODO: 9
 
                     // mcast args
                     //uint32_t weights_start_address = weight_write_l1_addr;
                     //uint32_t weights_block_size_bytes = 0;
 
-                    // loop over weight block tiles along h
-                    for(uint32_t weight_tile_h_i = 0; weight_tile_h_i < weight_block_height_ntiles; ++weight_tile_h_i) { // TODO: 2
-                        uint32_t weight_tile_id = weight_row_start_tile_id;
-                        // loop over weight block tiles along w
-                        for(uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
-                            s_weight.noc_async_read_tile(weight_tile_id, weight_write_l1_addr);
-                            weight_write_l1_addr += weight_tile_nbytes;
-                            weights_block_size_bytes += weight_tile_nbytes;
-                            weight_tile_id += 1;
-                        } // for weight_block_w
-                        weight_row_start_tile_id += weight_stride_h;
-                    } // for weight_block_h
-                    weight_current_block_start_tile_id += weight_next_block_stride_h;
+                    uint32_t weight_tile_id = weight_current_block_start_tile_id;
+                    // loop over weight block tiles along w
+                    for(uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
+                        s_weight.noc_async_read_tile(weight_tile_id, weight_write_l1_addr);
+                        weight_write_l1_addr += weight_tile_nbytes;
+                        weights_block_size_bytes += weight_tile_nbytes;
+                        weight_tile_id += 1;
+                    } // for weight_block_w
+                    weight_current_block_start_tile_id += weight_stride_h;
                 }
-
                 noc_async_read_barrier();
-
                 #ifndef SKIP_MCAST
                     // wait until all weights mcast destinations have atomically incremented the weights semaphore_addr (i.e. its value should be weights_mcast_num_dests), then reset
                     // the semaphore_addr value back to zero for the next block
@@ -207,9 +203,7 @@ void kernel_main() {
                     // num_dests must not include source, since we are NOT really doing a local copy!
                     noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores, false, false);
                 #endif
-
                 cb_push_back(cb_id_weight, weight_block_num_tiles);
-                weight_h_offset += weight_inner_block_stride_h;
             } // for weight_block_height_num_outer
 
 
@@ -252,53 +246,11 @@ void kernel_main() {
                     // num_dests must not include source, since we are NOT really doing a local copy!
                     noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores, false, false);
                 #endif
-
                 cb_push_back(bias_cb_id, bias_ntiles);
                 load_bias = false;
             }
             #endif
 
-            #ifndef SHARDED_OUT
-            uint32_t out_sbh_start_tile_id = out_block_h_start_tile_id;
-            uint32_t out_sbh_start_tile_id_h = out_block_h_start_tile_id_h; //
-            for(uint32_t sbh = 0; sbh < out_num_subblocks_h; sbh++) {
-                uint32_t out_sbw_start_tile_id = out_sbh_start_tile_id;
-                uint32_t out_sbw_start_tile_id_w = out_block_w_start_tile_id_w;
-                for(uint32_t sbw = 0; sbw < out_num_subblocks_w; sbw++) {
-                    uint32_t out_sb_row_start_tile_id = out_sbw_start_tile_id;
-                    // wait for one subblock worth tiles
-                    cb_wait_front(cb_id_out0, out_subblock_tile_count);
-                    uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-                    for(uint32_t h = 0; h < out_subblock_h; h++) {
-                        uint32_t out_tile_id = out_sb_row_start_tile_id;
-                        uint32_t out_tile_id_h = out_sbh_start_tile_id_h + h;
-                        if (out_tile_id_h >= out_height_num_tiles) { // block shape height padding
-                            break;
-                        }
-                        for(uint32_t w = 0; w < out_subblock_w; w++) {
-                            uint32_t out_tile_id_w = out_sbw_start_tile_id_w + w;
-                            if (out_tile_id_w >= out_width_num_tiles) { // block shape width padding
-                                l1_read_addr += tile_nbytes;
-                            } else {
-                                uint64_t out_tile_noc_addr = get_noc_addr(out_tile_id, s);
-                                noc_async_write(l1_read_addr, out_tile_noc_addr, tile_nbytes);
-                                l1_read_addr += tile_nbytes;
-                                out_tile_id += out_next_tile_stride_w;
-                            }
-                        } // out_subblock_w (ntiles)
-                        out_sb_row_start_tile_id += out_next_tile_stride_h;
-                    } // out_subblock_h (ntiles)
-                    noc_async_write_barrier();
-                    cb_pop_front(cb_id_out0, out_subblock_tile_count);
-                    out_sbw_start_tile_id += out_next_subblock_stride_w;
-                    out_sbw_start_tile_id_w += out_subblock_w;
-                } // out_num_subblocks_w
-                out_sbh_start_tile_id += out_next_subblock_stride_h;
-                out_sbh_start_tile_id_h += out_subblock_h;
-            } // out_num_subblocks_h
-            out_block_h_start_tile_id += out_next_block_stride_h;
-            out_block_h_start_tile_id_h += out_block_height_num_tiles;
-            #endif
         } // out_num_blocks_h
         out_block_w_start_tile_id += out_next_block_stride_w;
         out_block_w_start_tile_id_w += weight_block_width_ntiles;
@@ -307,6 +259,24 @@ void kernel_main() {
         weight_start_tile_id += weight_next_block_stride_w;
     } // out_num_blocks_w
     #ifdef SHARDED_OUT
+    #ifdef UNPAD_UNTILIZE_OUT
+    uint32_t src_cb_addr = get_read_ptr(untilized_padded_out_cb);
+    uint32_t dst_cb_addr = get_write_ptr(cb_id_out0);
+    for (uint32_t nbw = 0; nbw < out_num_blocks_w; nbw++) {
+        for(uint32_t nbh = 0; nbh < out_num_blocks_h; nbh++) {
+            for (uint32_t bh = 0; bh < out_block_height_num_tiles; bh++) {
+                cb_wait_front(untilized_padded_out_cb, out_block_width_ntiles);
+                for (uint32_t r = 0; r < 32; r++) {
+                    noc_async_read(get_noc_addr(src_cb_addr), dst_cb_addr, out_block_width_bytes);
+                    noc_async_read_barrier();
+                    src_cb_addr += out_block_width_padded_bytes;
+                    dst_cb_addr += out_block_width_bytes;
+                }
+            }
+        }
+    }
+    #else
     cb_wait_front(cb_id_out0, out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
+    #endif
     #endif
 }

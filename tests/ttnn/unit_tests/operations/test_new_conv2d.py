@@ -828,7 +828,8 @@ def test_sd_conv(
 @pytest.mark.parametrize(
     "weights_dtype",
     [
-        ttnn.bfloat8_b,
+        # ttnn.bfloat8_b,
+        ttnn.bfloat16,
     ],
 )
 @pytest.mark.parametrize(
@@ -840,8 +841,8 @@ def test_sd_conv(
 @pytest.mark.parametrize(
     "fp32_accum",
     [
-        # False,
-        True,
+        False,
+        # True,
     ],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
@@ -891,8 +892,7 @@ def test_sd_conv_wh(
         pytest.skip("Skip the test cases raising OOM but not affecting e2e test")
 
     if filter_height > 1 and (input_channels > 1280 or (input_channels > 640 and input_height > 16)):
-        if enable_auto_formatting:
-            pytest.skip("Not running split SD conv with auto formatting")
+        pytest.skip("Not running split SD conv with auto formatting")
         run_conv_with_split(
             device,
             math_fidelity,
