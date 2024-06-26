@@ -10,7 +10,7 @@
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_dnn/op_library/operation.hpp"
-#include "tt_dnn/op_library/softmax/softmax_op.hpp"
+#include "ttnn/cpp/ttnn/operations/normalization/softmax/softmax.hpp"
 #include "tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
@@ -61,7 +61,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     key.deallocate();
 
 
-    pre_softmax_bmm_matmul = tt::operations::primary::transformers::scale_mask_softmax_in_place(pre_softmax_bmm_matmul, 1.0f / std::sqrt(head_size), attention_mask);
+    pre_softmax_bmm_matmul = ttnn::scale_mask_softmax_in_place(pre_softmax_bmm_matmul, 1.0f / std::sqrt(head_size), attention_mask);
 
 
     auto post_softmax_bmm_program_config = tt::operations::primary::MatmulMultiCoreReuseProgramConfig{

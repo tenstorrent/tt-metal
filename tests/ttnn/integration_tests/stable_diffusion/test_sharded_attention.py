@@ -180,7 +180,7 @@ def test_time_sharded_attnention_hwb(
         )
         mm_slice = ttl.tensor.move_sharded(mm_slice)
 
-        softmax_program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=grid_size,
             subblock_w=1,
             block_h=mm_output_height_shard_spec[0] // 32,
@@ -188,7 +188,7 @@ def test_time_sharded_attnention_hwb(
         )
         # print(program_config)
 
-        mm_slice = ttl.operations.primary.softmax_in_place(mm_slice, program_config=softmax_program_config)
+        mm_slice = ttnn.softmax_in_place(mm_slice, program_config=softmax_program_config)
         # mmt = tt2torch_tensor(mm_slice)
         # passed, message = comp_pcc(mmt, attn_weights_torch_sm[:, i * heads_per_slice : (i + 1) * heads_per_slice, :, :])
         # print(message)
@@ -365,14 +365,14 @@ def test_time_sharded_attnention(
         k_slice.deallocate()
         slice.deallocate()
 
-        softmax_program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=grid_size,
             subblock_w=1,
             block_h=mm_output_height_shard_spec[0] // 32,
             block_w=mm_output_height_shard_spec[1] // 32,
         )
 
-        mm_slice = ttl.operations.primary.softmax_in_place(mm_slice, program_config=softmax_program_config)
+        mm_slice = ttnn.softmax_in_place(mm_slice, program_config=softmax_program_config)
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -418,7 +418,7 @@ def test_time_sharded_attnention(
     attn_weights = ttnn.matmul(
         reference_query_layer, reference_key_layer_transposed, memory_config=dram_interleaved_memory_config
     )
-    attn_weights = ttl.operations.primary.softmax_in_place(attn_weights)
+    attn_weights = ttnn.softmax_in_place(attn_weights)
     attn_weights = ttnn.matmul(attn_weights, reference_value_layer, memory_config=dram_interleaved_memory_config)
 
     attn_weights_torch = tt2torch_tensor(attn_weights)
@@ -566,23 +566,23 @@ def test_cross_attnention(
                 mm_slice,
                 output_mem_config,
             )
-        softmax_program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             subblock_w=1,
             block_h=32,
             block_w=3,
         )
-        mm_slice = ttl.operations.primary.softmax_in_place(mm_slice, program_config=softmax_program_config)
+        mm_slice = ttnn.softmax_in_place(mm_slice, program_config=softmax_program_config)
         mm_slice = ttl.tensor.reshard(mm_slice, orig_mem_config)
 
     else:
-        softmax_program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=grid_size,
             subblock_w=1,
             block_h=seq_len // 32,
             block_w=kv_len // 32,
         )
-        mm_slice = ttl.operations.primary.softmax_in_place(mm_slice, program_config=softmax_program_config)
+        mm_slice = ttnn.softmax_in_place(mm_slice, program_config=softmax_program_config)
 
     v_sharded = ttl.tensor.interleaved_to_sharded(
         reference_value_layer,
@@ -751,13 +751,13 @@ def test_attention(
                 ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttl.tensor.ShardOrientation.ROW_MAJOR,
             )
-            softmax_program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+            softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 subblock_w=1,
                 block_h=height_per_core // 32,
                 block_w=seq_len // 32,
             )
-            mm_slice = ttl.operations.primary.softmax_in_place(mm_slice, program_config=softmax_program_config)
+            mm_slice = ttnn.softmax_in_place(mm_slice, program_config=softmax_program_config)
             mm_slice = ttl.tensor.sharded_to_interleaved(mm_slice, l1_interleaved_memory_config)
             mm_slice = ttl.tensor.interleaved_to_sharded(
                 mm_slice,
@@ -781,23 +781,23 @@ def test_attention(
                 mm_slice,
                 output_mem_config,
             )
-            softmax_program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+            softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 subblock_w=1,
                 block_h=height_per_core // 32,
                 block_w=seq_len // 32,
             )
-            mm_slice = ttl.operations.primary.softmax_in_place(mm_slice, program_config=softmax_program_config)
+            mm_slice = ttnn.softmax_in_place(mm_slice, program_config=softmax_program_config)
             mm_slice = ttl.tensor.reshard(mm_slice, orig_mem_config)
     else:
-        softmax_program_config = ttl.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=grid_size,
             subblock_w=1,
             block_h=seq_len // 32,
             block_w=seq_len // 32,
         )
         print(softmax_program_config)
-        mm_slice = ttl.operations.primary.softmax_in_place(mm_slice, program_config=softmax_program_config)
+        mm_slice = ttnn.softmax_in_place(mm_slice, program_config=softmax_program_config)
 
     v_sharded = ttl.tensor.interleaved_to_sharded(
         reference_value_layer,

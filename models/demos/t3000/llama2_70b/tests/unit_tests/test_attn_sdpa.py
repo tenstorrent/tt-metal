@@ -74,7 +74,7 @@ class TtLlamaSDPA(torch.nn.Module):
         # attn_mask = torch2tt_tensor(attn_mask, self.device)
 
         attn = ttnn.add(attn, attn_mask)
-        attn = tt_lib.tensor.softmax(attn)
+        attn = ttnn.softmax(attn)
         return attn
 
     def forward(self, xq, keys, values, attn_mask):
@@ -95,7 +95,7 @@ class TtLlamaSDPA(torch.nn.Module):
         # TODO: This op expects attn_mask to be sharded such that each core has 1 head
         # This is illegal on single chip since we need 8x8 coregrid to shard
         # 64 heads on. Until we fracture on multi-chip, we can't use this op.
-        # attn = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
+        # attn = ttnn.scale_mask_softmax_in_place(
         #         attn,
         #         1 / math.sqrt(self.head_dim),
         #         attn_mask,

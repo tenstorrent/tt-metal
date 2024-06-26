@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,13 +13,8 @@
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_dnn/op_library/compute_kernel_config.hpp"
 
-namespace tt {
-namespace operations {
-namespace primary {
+namespace ttnn::operations::normalization {
 
-using namespace tt_metal;
-
-namespace transformers {
 struct SoftmaxDefaultProgramConfig{
     tt::stl::reflection::Attributes attributes() const { return {}; };
 };
@@ -44,19 +39,17 @@ using SoftmaxProgramConfig = std::variant<
     SoftmaxShardedMultiCoreProgramConfig
 >;
 
-}  // namespace transformers
-
 struct Softmax {
     const std::optional<float> scale;
     const bool inplace;
     const MemoryConfig output_mem_config;
-    const tt::operations::primary::transformers::SoftmaxProgramConfig program_config;
+    const SoftmaxProgramConfig program_config;
     const bool is_causal_mask;
     const DeviceComputeKernelConfig compute_kernel_config;
     const bool is_scale_causal_mask_hw_dims_softmax;
 
     void validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,
@@ -114,10 +107,11 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     DeviceComputeKernelConfig compute_kernel_config
 );
 
+// softmax
+Tensor softmax(const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 // const ref prevents in-place
-Tensor softmax_in_place(Tensor& input_tensor, const transformers::SoftmaxProgramConfig& program_config = transformers::SoftmaxDefaultProgramConfig{}, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+Tensor softmax_in_place(Tensor& input_tensor, const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{}, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
-namespace transformers {
 // computes
 // tmp1 = bcast_hw_mul(scale, x)  ; shape of scale is [1,1,32,32]
 // tmp2 = bcast_add_w->h(tmp1, mask) ; shape of attn mask is [1,N,32,W]
@@ -131,17 +125,7 @@ Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> sc
 // 3. Attention mask must be interleaved and be of this shape [1, 1, H, W]
 // 4. Causal mask argument is set to true.
 Tensor scale_causal_mask_hw_dims_softmax_in_place(Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const SoftmaxProgramConfig& program_config = SoftmaxShardedMultiCoreProgramConfig{}, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-}  // namespace transformers
 
-}  // namespace primary
-}  // namespace operations
-
-namespace tt_metal {
-Tensor softmax(const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-
-namespace transformers {
 Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const bool is_causal_mask = false, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-}  // namespace transformers
-}  // namespace tt_metal
 
-}  // namespace tt
+}  // namespace ttnn::operations::normalization

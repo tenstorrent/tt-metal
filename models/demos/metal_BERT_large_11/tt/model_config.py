@@ -244,7 +244,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 transpose_mcast=False,
                 fused_activation=None,
             ),
-            "OP4_SOFTMAX_CONFIG": tt_lib.operations.primary.transformers.SoftmaxDefaultProgramConfig(),
+            "OP4_SOFTMAX_CONFIG": ttnn.SoftmaxDefaultProgramConfig(),
             "OP8_LAYERNORM_CONFIG": tt_lib.operations.primary.LayerNormDefaultProgramConfig(),
             "OP11_LAYERNORM_CONFIG": tt_lib.operations.primary.LayerNormDefaultProgramConfig(),
         }
@@ -397,7 +397,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
                 block_w=4,
                 inplace=True,
             ),
-            "OP4_SOFTMAX_CONFIG": tt_lib.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+            "OP4_SOFTMAX_CONFIG": ttnn.SoftmaxShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=grid_size,
                 subblock_w=6,
                 block_h=24,

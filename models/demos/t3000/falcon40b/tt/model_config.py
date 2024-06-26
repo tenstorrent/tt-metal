@@ -526,9 +526,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
         )
         model_config["K_TRANSPOSED_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
         model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
-        model_config[
-            "SOFTMAX_PROGCFG"
-        ] = ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        model_config["SOFTMAX_PROGCFG"] = ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(8, 2),
             subblock_w=1,
             block_h=row_height // 32,
@@ -835,9 +833,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         fused_activation=None,
         mcast_in0=False,
     )
-    model_config[
-        "SOFTMAX_PROGCFG"
-    ] = ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+    model_config["SOFTMAX_PROGCFG"] = ttnn.SoftmaxShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=attention_mm_grid_size,
         subblock_w=1,
         block_h=attetnion_mm_M,

@@ -403,7 +403,7 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
 
     model_config[
         "SOFTMAX_OPTIMIZED_PROGCFG"
-    ] = lambda grid_size, subblock_w, block_h, block_w: ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+    ] = lambda grid_size, subblock_w, block_h, block_w: ttnn.SoftmaxShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
         subblock_w=subblock_w,
         block_h=block_h,

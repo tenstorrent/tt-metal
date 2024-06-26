@@ -180,7 +180,7 @@ class TtModelArgs:
         )
 
         self.model_config["ATTN_BATCHED_SOFTMAX_PROGCFG"] = cached_lambda(
-            lambda padded_layer_past_len: ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+            lambda padded_layer_past_len: ttnn.SoftmaxShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=(8, 4),  # In-place softmax on 32 cores sharded on batch dim
                 subblock_w=1,
                 block_h=1,  # Shard_height // 32,
