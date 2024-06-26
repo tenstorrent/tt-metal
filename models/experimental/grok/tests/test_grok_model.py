@@ -21,7 +21,7 @@ from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
 from models.experimental.grok.tt.grok_common import prepare_inputs_ttnn, prepare_rotation_mat_ttnn
 from models.experimental.grok.tt.grok_model import TtTransformer
-from models.experimental.grok.reference.model import Transformer
+from models.experimental.grok.reference.model import Grok1ModelForCausalLM as Transformer
 from models.experimental.grok.reference.tokenizer import Tokenizer
 from models.experimental.grok.tt.model_config import TtModelArgs
 from models.utility_functions import comp_pcc, comp_allclose
@@ -42,7 +42,7 @@ class Emb(torch.nn.Module):
 )
 @pytest.mark.parametrize(
     "n_layers",
-    (1, 32),
+    (1, 2, 16),
 )
 @pytest.mark.parametrize(
     "iterations",
@@ -67,8 +67,8 @@ def test_grok_model_inference(t3k_device_mesh, use_program_cache, reset_seeds, i
         reference_model.eval()
 
     # Embedding on host
-    embd = Emb()
-    embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
+    embd = torch.nn.Embedding(model_args.vocab_size, model_args.hidden_dim)
+    embd.load_state_dict({"weight": state_dict["model.embed_tokens.weight"]})
 
     # Load TTNN model
     tt_model = TtTransformer(

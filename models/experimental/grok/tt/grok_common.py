@@ -14,44 +14,43 @@ class LightweightModule:
         return self.forward(*args, **kwargs)
 
 
-def precompute_freqs(dim: int, end: int, theta: float = 1000000.0):
+def precompute_freqs(dim: int, end: int, theta: float = 10000.0):
     """
-    Precompute the frequency tensor for sine and cosine values with given dimensions.
+    Precompute the frequency tensor for sine and cosine values with given dimensions, grok-style.
 
     Args:
         dim (int): Dimension of the frequency tensor.
         end (int): End index for precomputing frequencies.
-        theta (float, optional): Scaling factor for frequency computation. Defaults to 10000.0.
+        theta (float, optional): Scaling factor for frequency computation. Grok-1 uses 10000.
 
     Returns:
         Tuple[torch.Tensor, torch.Tensor]: Tensors containing cosine and sine values.
     """
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
     t = torch.arange(end)
     freqs = torch.outer(t, freqs).float()
-    return torch.cos(freqs), torch.sin(freqs)
+    emb = torch.cat((freqs, freqs), dim=-1)
+    cos, sin = torch.cos(emb), torch.sin(emb)
+    return cos, sin
 
 
-def freqs_to_rotation_matrix(cos_freqs, sin_freqs):
+def freq_row_to_rotation_matrix(cos_row, sin_row):
     """
-    Transform cos/sin frequencies to a rotation matrix.
+    Transform cos/sin frequency rows to a dim x dim rotation matrix
+    that implements cos + rotate_half * sin
     """
-    emb_size, emb_dim = cos_freqs.shape
-    dhead = emb_dim * 2
-    rot_emb_matrix = torch.zeros(emb_size, dhead, dhead)
-    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
-    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
-    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
-    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
 
-    rot_emb_matrix = rot_emb_matrix.transpose(-1, -2)  # Necessary for correct rotation when applied as (x @ R)
-    return rot_emb_matrix, emb_size
+    d = len(sin_row)
+    m_cos = torch.diag(cos_row)
+    m_sin = torch.diag(sin_row)
+    d = len(sin_row)
+    m_rot_sin = torch.cat([m_sin[d // 2 :], -m_sin[: d // 2]])
+    return m_cos + m_rot_sin
 
 
 def get_rotation_mat(dhead, end):
     cos, sin = precompute_freqs(dhead, end)
-    rot_mat, emb_size = freqs_to_rotation_matrix(cos, sin)
-    rot_mat = [rot_mat[i, :, :] for i in range(emb_size)]
+    rot_mat = [freq_row_to_rotation_matrix(c, s) for c, s in zip(cos, sin)]
     return rot_mat
 
 
@@ -120,7 +119,7 @@ def prepare_rotation_mat_ttnn(head_dim, max_seq_len, device_mesh):
         ttnn.from_torch(
             rot_mat_i.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
             device=device_mesh,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ReplicateTensorToMesh(device_mesh),
         )

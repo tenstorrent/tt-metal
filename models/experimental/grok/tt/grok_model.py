@@ -24,6 +24,7 @@ class TtTransformer(LightweightModule):
         self.n_layers = args.n_layers
         self.device_mesh = device_mesh
         self.model_config = args.get_model_config()
+        self.output_multiplier_scale = args.output_multiplier_scale
         assert self.vocab_size > 0
 
         self.layers = [
@@ -42,7 +43,7 @@ class TtTransformer(LightweightModule):
             args=args,
             dtype=ttnn.bfloat16,
             layer_num=None,
-            weight_key="norm",
+            weight_key="model.norm",
         )
 
         self.state_dict = state_dict
@@ -53,7 +54,7 @@ class TtTransformer(LightweightModule):
             output_cache_name = args.weight_cache_path(dtype) / "output_multidevice_4d.weight"
 
         self.output_weight = ttnn.as_tensor(
-            self.state_dict["output.weight"].permute(1, 0).unsqueeze(0).unsqueeze(0),
+            self.state_dict["lm_head.weight"].permute(1, 0).unsqueeze(0).unsqueeze(0),
             device=device_mesh,
             layout=self.model_config["OUTPUT_W_LAYOUT_TILE"],
             dtype=dtype,
@@ -80,10 +81,12 @@ class TtTransformer(LightweightModule):
         outputs = ttnn.experimental.operations.primary.matmul(
             x_norm,
             self.output_weight,
-            # compute_with_storage_grid_size=(8, 8),
+            # compute_with_storage_grid_size=(8, 8), # FIXME: from Mixtral, presumably dI/dT workaround?
             program_config=self.model_config["OUTPUT_MM_PROGCFG"],
             output_mem_config=self.model_config["OUTPUT_MM_MEMCFG"],
             compute_kernel_config=self.compute_kernel,
         )
+
+        outputs = outputs * self.output_multiplier_scale
 
         return outputs

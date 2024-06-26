@@ -29,7 +29,7 @@ def test_grok_decoder_inference(t3k_device_mesh, use_program_cache, reset_seeds)
     s: sequence length
     h: hidden size
     """
-    pcc = 0.985  # FIXME: debug why this is not .99
+    pcc = 0.99
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
@@ -68,7 +68,7 @@ def test_grok_decoder_inference(t3k_device_mesh, use_program_cache, reset_seeds)
 
     ref_past_key_value = None
     generation_start_pos = 0
-    generation_length = 1
+    generation_length = 10
     all_tests_pass = True
 
     seqlen = 1
@@ -98,9 +98,11 @@ def test_grok_decoder_inference(t3k_device_mesh, use_program_cache, reset_seeds)
         )
 
         # Reference model
+        positions = torch.LongTensor([current_pos])
         ref_output_bsh, ref_past_key_value = reference_model(
             pt_decode_input_bsh,
             past_key_value=ref_past_key_value,
+            position_ids=positions,
             use_cache=True,
         )
 

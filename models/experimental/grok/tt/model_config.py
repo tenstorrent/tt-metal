@@ -138,7 +138,7 @@ class TtModelArgs:
         # Create sharded memory configs for different ops
         self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
             shape=(32, 32),
-            core_grid=ttnn.CoreGrid(y=4, x=6),
+            core_grid=ttnn.CoreGrid(y=4, x=8),
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -354,14 +354,14 @@ class TtModelArgs:
         )
 
         self.compute_kernel_attn_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,  # HiFi2
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
         # Create Compute kernel configs
         self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,  # Highest fidelity
+            math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,

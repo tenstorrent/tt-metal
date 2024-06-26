@@ -30,6 +30,7 @@ def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seed
     pcc = 0.99
     dtype = ttnn.bfloat8_b
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -58,7 +59,7 @@ def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seed
     )
 
     generation_start_pos = 0  # Ref model can only start from pos 0
-    generation_length = 2
+    generation_length = 10
     ref_past_key_value = None
     all_tests_pass = True
 
@@ -89,12 +90,12 @@ def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seed
             .view(batch, 1, -1)
         )  # [ batch, seq, hidden_dim]
 
-        # positions = torch.LongTensor(range(generation_start_pos, start_pos+1))
+        positions = torch.LongTensor([start_pos])
         reference_output, _, ref_past_key_value = reference_model(
             pt_attention_input,
             # attention_mask=None,
             past_key_value=ref_past_key_value,
-            # position_ids=positions,
+            position_ids=positions,
             use_cache=True,
         )
 

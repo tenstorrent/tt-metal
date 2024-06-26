@@ -17,13 +17,14 @@ class TtGrokAttention(LightweightModule):
         self.device_mesh = device_mesh
         self.model_args = args
 
-        self.hidden_size = args.dim
+        self.hidden_size = args.hidden_size
         self.n_heads = args.num_attention_heads
         self.head_dim = args.head_dim
         self.max_seq_len = args.max_seq_len
         self.max_batch_size = args.max_batch_size
         self.n_kv_heads = args.num_key_value_heads
         self.max_attn_value = args.max_attn_value
+        self.attn_output_multiplier = args.attn_output_multiplier
 
         self.n_local_heads = self.n_heads // self.num_devices
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices
@@ -127,8 +128,6 @@ class TtGrokAttention(LightweightModule):
             for lp in layer_past
         ]
 
-        self.scale = self.head_dim**-0.5
-
         self.compute_kernel = self.model_args.get_compute_kernel_config()
         self.compute_kernel_attn = self.model_args.get_compute_kernel_attn_config()
 
@@ -190,6 +189,7 @@ class TtGrokAttention(LightweightModule):
             output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
         )
         xqkv_fused.deallocate(True)
+        # new_key_states = ttnn.to_torch(k_heads_1B1D, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))
 
         ###
         # Rotary embeddings
@@ -214,6 +214,8 @@ class TtGrokAttention(LightweightModule):
             output_mem_config=self.k_mem_config,
             compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
         )
+        # rotmat_key_states = ttnn.to_torch(k_heads_1B1D, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))
+        # rotmat = ttnn.to_torch(rot_mat, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))[0]
 
         ###
         # KV update
@@ -229,6 +231,9 @@ class TtGrokAttention(LightweightModule):
         keys_1BPD = ttnn.experimental.tensor.nlp_kv_cache_load_slice(
             keys_1BPD, seq_len_start=0, seq_len_end=padded_layer_past_len
         )
+
+        # query_states = ttnn.to_torch(q_heads_1B4D, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=-2))
+        # key_states = ttnn.to_torch(keys_1BPD, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))
 
         ###
         # Attention
@@ -257,22 +262,39 @@ class TtGrokAttention(LightweightModule):
 
         # Softmax and scaling
         # FIXME: ttnn.mul does not seem to respect sharding even when it is manually specified
+        # FIXME: LOLLLL and it produces bad PCC on some rows (here row 8 for input 10) but not others (row 0)
         # hence the interleaved_to_sharded workaround here
+
+        attn_1B4P = ttnn.experimental.tensor.sharded_to_interleaved(attn_1B4P, output_mem_config=ttnn.L1_MEMORY_CONFIG)
+
+        # pre_scale = ttnn.to_torch(attn_1B4P, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=-2))[0]
+        # OK HERE
+
+        attn_1B4P = attn_1B4P * self.attn_output_multiplier
+
+        # pre_tanh = ttnn.to_torch(attn_1B4P, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=-2))[0]
+
         attn_1B4P = self.max_attn_value * ttnn.tanh(attn_1B4P * (1.0 / self.max_attn_value))
+
+        # BAD HERE - looks like maybe tanh is doing something bad on step 10, batch index 8
+        # pre_softmax = ttnn.to_torch(attn_1B4P, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=-2))[0]
         attn_1B4P = ttnn.experimental.tensor.interleaved_to_sharded(attn_1B4P, sharded_mem_config=attn_1B4P_memconfig)
         attn_1B4P = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
             attn_1B4P,
-            self.scale,
+            1.0,
             attn_mask_1B4P,
             program_config=self.model_config["ATTN_BATCHED_SOFTMAX_PROGCFG"](padded_layer_past_len),
             is_causal_mask=True,
         )
+        # post_softmax = ttnn.to_torch(attn_1B4P, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=-2))[0]
 
         # values matmul
         values_1BPD = ttnn.experimental.tensor.nlp_kv_cache_load_slice(
             values_1BPD, seq_len_start=0, seq_len_end=padded_layer_past_len
         )
 
+        # value_states = ttnn.to_torch(values_1BPD, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))
+        # x = ttnn.to_torch(x_11BH, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))[0]
         attn_output_1B4D = ttnn.experimental.operations.primary.matmul(
             attn_1B4P,
             values_1BPD,
@@ -283,6 +305,8 @@ class TtGrokAttention(LightweightModule):
         )
         attn_1B4P.deallocate(True)
         values_1BPD.deallocate(True)
+
+        # value_output = ttnn.to_torch(attn_output_1B4D, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))[0]
 
         attn_output_11BH = ttnn.experimental.tensor.nlp_concat_heads_decode(
             attn_output_1B4D,
@@ -310,6 +334,26 @@ class TtGrokAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel,
             output_dtype=ttnn.bfloat8_b,
         )
+
+        # attn_output = ttnn.to_torch(dense_outputs_11BH, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))[0]
+        # attn_mask = ttnn.to_torch(attn_mask_1B4P, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))[0]
+
+        # torch.save({'x': x,
+        #             'query_states': query_states,
+        #             'rotmat': rotmat,
+        #             'rotmat_key_states': rotmat_key_states,
+        #             'new_key_states': new_key_states,
+        #             'key_states': key_states,
+        #             'value_states': value_states,
+        #             'attn_mask': attn_mask,
+        #             'pre_scale': pre_scale,
+        #             'attn_output_multiplier': self.attn_output_multiplier,
+        #             'pre_tanh': pre_tanh,
+        #             'pre_softmax': pre_softmax,
+        #             'post_softmax': post_softmax,
+        #             'value_output': value_output,
+        #             'attn_output': attn_output,
+        # }, 'our.pt')
 
         dense_outputs_11BH_gathered.deallocate(True)
         return dense_outputs_11BH
