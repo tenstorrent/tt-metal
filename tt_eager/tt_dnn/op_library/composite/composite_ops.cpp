@@ -1790,15 +1790,30 @@ Tensor sfpu_eps(const Shape shape, Layout layout, Device* device, const MemoryCo
 }
 
 // tril : select lower triangular region of input matrix
-Tensor _tril(const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_config) {
+Tensor _tril(uint8_t queue_id, const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_config, std::optional<Tensor> output_tensor) {
     Tensor index_l = tt::numpy::index_tril<bfloat16>(input_a.get_legacy_shape(), diag, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config);
-    return ttnn::multiply(input_a, index_l, std::nullopt, output_mem_config);
+    if (output_tensor.has_value()) {
+        ttnn::multiply(queue_id, input_a, index_l, std::nullopt, std::nullopt, output_tensor);
+        return output_tensor.value();
+    }
+    return ttnn::multiply(queue_id, input_a, index_l, std::nullopt, output_mem_config);
 }
 Tensor tril(
     const Tensor& input_a,
-    int32_t dim /* = -1 */,
-    const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    return operation::decorate_as_composite(__func__, _tril)(input_a, dim, output_mem_config);
+    int32_t diag /* = -1 */,
+    const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */,
+    std::optional<Tensor> output_tensor) {
+    uint8_t default_queue_id = 0;
+    return operation::decorate_as_composite(__func__, _tril)(default_queue_id, input_a, diag, output_mem_config, output_tensor);
+}
+
+Tensor tril(
+    uint8_t queue_id,
+    const Tensor& input_a,
+    int32_t diag /* = -1 */,
+    const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */,
+    std::optional<Tensor> output_tensor) {
+    return operation::decorate_as_composite(__func__, _tril)(queue_id, input_a, diag, output_mem_config, output_tensor);
 }
 
 // triu : select upper triangular region of input matrix

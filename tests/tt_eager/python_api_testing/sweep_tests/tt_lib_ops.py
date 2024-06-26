@@ -1076,6 +1076,50 @@ def eltwise_div(
 
 
 @setup_host_and_device
+def eltwise_tril(
+    x,
+    y,
+    *args,
+    diag,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttl.tensor.tril(t0, diag, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
+def eltwise_tril_optional(
+    x,
+    y,
+    *args,
+    diag,
+    device,
+    dtype,
+    layout,
+    queue_id,
+    input_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    cq_id = 0
+
+    if queue_id:
+        ttl.tensor.tril(t0, diag, output_tensor=t1, queue_id=cq_id)
+    else:
+        ttl.tensor.tril(t0, diag, output_tensor=t1)
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
 def eltwise_floor_div(
     x,
     y,

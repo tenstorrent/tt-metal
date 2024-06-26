@@ -111,6 +111,50 @@ std::vector<std::optional<Tensor>> add_bw(
         queue_id, grad, input, other, 1, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 
+std::vector<std::optional<Tensor>> _tril_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    int32_t diag,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> result;
+
+    if (are_required_outputs.at(0)) {
+        if(input_grad.has_value()){
+            tril(queue_id, grad, diag, output_mem_config, input_grad);
+        } else {
+            input_grad = tril(queue_id, grad, diag, output_mem_config);
+        }
+        result.emplace_back(input_grad);
+    } else {
+        result.emplace_back(std::nullopt);
+    }
+
+    return std::move(result);
+}
+std::vector<std::optional<Tensor>> tril_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    int32_t diag,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad) {
+    return operation::decorate_as_composite(__func__, _tril_bw)(queue_id, grad, input, diag, output_mem_config,  are_required_outputs, input_grad);
+}
+std::vector<std::optional<Tensor>> tril_bw(
+    const Tensor& grad,
+    const Tensor& input,
+    int32_t diag,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad) {
+    uint8_t default_queue_id = 0;
+    return operation::decorate_as_composite(__func__, _tril_bw)(default_queue_id, grad, input, diag, output_mem_config,  are_required_outputs, input_grad);
+}
+
 std::vector<Tensor> _unary_mul_bw(
     const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
