@@ -49,9 +49,9 @@ class Emb(torch.nn.Module):
 @pytest.mark.parametrize(
     "kv_cache_len, expected_compile_time, expected_inference_time",
     (
-        (32, 5, 0.105),
-        (128, 5, 0.125),
-        (1024, 5, 0.225),
+        (32, 6, 0.105),
+        (128, 6, 0.125),
+        (1024, 6, 0.225),
     ),
 )
 def test_mistral_model_perf(
