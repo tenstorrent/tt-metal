@@ -99,7 +99,7 @@ class MambaTT(torch.nn.Module):
         self.lm_head_weights = load_fn(
             "lm_head.weight",
             lambda x: x.transpose(-1, -2),
-            tt_dtype=ttnn.bfloat16,
+            tt_dtype=ttnn.bfloat8_b,
         )
         self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
             math_fidelity=ttl.tensor.MathFidelity.HiFi2,
