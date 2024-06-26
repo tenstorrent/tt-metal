@@ -193,7 +193,7 @@ void debug_sanitize_noc_and_worker_addr(
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_FROM_STATE(noc_id)                                   \
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(                                                         \
         ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID) << 32) |   \
-            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO) << 32), \
+            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO)), \
         NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO),                        \
         NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));                      \
     debug_insert_delay((uint8_t)TransactionRead);

@@ -17,14 +17,10 @@
 #include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 
-// XXXX
-// TODO(PGK): including wormhole in grayskull build is dangerous
-// Include noc/noc_parameters.h here so that including it from wormhole
-// doesn't pull in the wrong file!
 // clang-format off
 #include "dev_mem_map.h"
 #include "noc/noc_parameters.h"
-#include "tt_metal/third_party/umd/src/firmware/riscv/wormhole/eth_interface.h"
+#include "eth_interface.h"
 #include "dev_msgs.h"
 // clang-format on
 
