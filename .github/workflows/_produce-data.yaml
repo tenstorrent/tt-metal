@@ -103,3 +103,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/upload-artifact-with-job-id
+        with:
+          path: |
+            infra/VERSION
+          prefix: "test_artifact_"
