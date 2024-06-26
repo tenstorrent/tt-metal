@@ -31,14 +31,8 @@ Device::Device(
     chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal, uint32_t worker_core) :
     id_(device_id), worker_thread_core(worker_core), work_executor(worker_core, device_id) {
     ZoneScoped;
-    TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");
+    TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs <= Device::max_num_hw_cqs, "num_hw_cqs can be between 1 and {}", Device::max_num_hw_cqs);
     this->build_key_ = tt::Cluster::instance().get_harvesting_mask(device_id);
-    if (!this->is_mmio_capable()) {
-        //Remote device Vs MMIO Device need to be unique even if they have same harvesting mask because
-        //dispatch cores are allocated differently on two types of devices.
-        //harvest mask is 12-bit mask so adding 100000 should not alias with any possible harvest mask value.
-        this->build_key_ += 100000;
-    }
     tunnel_device_dispatch_workers_ = {};
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
 }
@@ -1900,12 +1894,23 @@ uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& ph
 
 uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& physical_cores) const {
     const auto& grid_size = tt::Cluster::instance().get_soc_desc(this->id()).grid_size;
-    return NOC_MULTICAST_ENCODING(
-        NOC_0_X(noc_index, grid_size.x, physical_cores.start.x),
-        NOC_0_Y(noc_index, grid_size.y, physical_cores.start.y),
-        NOC_0_X(noc_index, grid_size.x, physical_cores.end.x),
-        NOC_0_Y(noc_index, grid_size.y, physical_cores.end.y)
-    );
+
+    // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
+    if (noc_index == 0) {
+        return NOC_MULTICAST_ENCODING(
+            NOC_0_X(noc_index, grid_size.x, physical_cores.start.x),
+            NOC_0_Y(noc_index, grid_size.y, physical_cores.start.y),
+            NOC_0_X(noc_index, grid_size.x, physical_cores.end.x),
+            NOC_0_Y(noc_index, grid_size.y, physical_cores.end.y)
+        );
+    } else {
+        return NOC_MULTICAST_ENCODING(
+            NOC_0_X(noc_index, grid_size.x, physical_cores.end.x),
+            NOC_0_Y(noc_index, grid_size.y, physical_cores.end.y),
+            NOC_0_X(noc_index, grid_size.x, physical_cores.start.x),
+            NOC_0_Y(noc_index, grid_size.y, physical_cores.start.y)
+        );
+    }
 }
 
 void Device::check_allocator_is_initialized() const {
