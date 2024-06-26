@@ -119,6 +119,15 @@ jobs:
             infra/machine_setup/scripts/setup_hugepages.py
             metal_libs-*+*.whl
           fail_on_unmatched_files: true
+  create-docker-image:
+    needs: [
+      create-tag,
+      create-and-upload-draft-release
+    ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login to GitHub Container Registry
