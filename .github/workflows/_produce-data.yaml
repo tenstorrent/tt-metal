@@ -98,3 +98,8 @@ jobs:
       - name: Show files
         shell: bash
         run: find generated/benchmark_data -type f | xargs -n 1 -I {} bash -c 'echo {} && cat {}'
+  test-get-job-id:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/upload-artifact-with-job-id
