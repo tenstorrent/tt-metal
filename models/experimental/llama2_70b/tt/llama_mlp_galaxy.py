@@ -269,7 +269,7 @@ class TtLlamaMLP_galaxy(nn.Module):
             w3_4chips = []
             for device_id in FF3_group:
                 w3_4chips.append(
-                    tt.matmul(
+                    ttnn.matmul(
                         x[device_id],
                         self.w3_list[device_id],
                         program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],

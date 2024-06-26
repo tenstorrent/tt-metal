@@ -28,7 +28,7 @@ def feed_forward(
     if "OP9_FF1_MM_CONFIG" in model_config:
 
         def op9_MM_bias_gelu(activation, ff1_weighta, ff1_biasa):
-            output_plus_bias_act = tt.linear(
+            output_plus_bias_act = ttnn.linear(
                 activation,
                 ff1_weighta,
                 bias=ff1_biasa,

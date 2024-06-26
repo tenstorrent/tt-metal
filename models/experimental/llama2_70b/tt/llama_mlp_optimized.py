@@ -200,7 +200,7 @@ class TtLlamaMLP_optimized:
             hidden_states,
             self.w2,
             program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
-            mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+            memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
             # dtype=self.model_config["BFP8_DTYPE"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
