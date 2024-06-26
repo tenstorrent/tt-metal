@@ -161,8 +161,10 @@ void kernel_main() {
             (volatile tt_l1_ptr uint32_t *const)sender_semaphores_base_address,
             (const WorkerXY *)workers_xy_list_addr,
             true);
-        if (sender_num_messages_to_send == 0) {
-            num_senders_with_no_work++;
+        if constexpr (terminate_on_worker_signal == EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
+            if (sender_num_messages_to_send == 0) {
+                num_senders_with_no_work++;
+            }
         }
     }
 
@@ -192,8 +194,10 @@ void kernel_main() {
             (const WorkerXY *)workers_xy_list_addr,
             false);
 
-        if (receiver_num_messages_to_send == 0) {
-            num_receivers_with_no_work++;
+        if constexpr (terminate_on_worker_signal == EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
+            if (receiver_num_messages_to_send == 0) {
+                num_receivers_with_no_work++;
+            }
         }
     }
 

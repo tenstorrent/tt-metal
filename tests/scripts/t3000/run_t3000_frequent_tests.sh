@@ -79,6 +79,7 @@ run_t3000_tteager_tests() {
   echo "LOG_METAL: Running run_t3000_tteager_tests"
 
   pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_all_gather.py -k post_commit
+  pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_reduce_scatter_post_commit.py
 
   # Record the end time
   end_time=$(date +%s)

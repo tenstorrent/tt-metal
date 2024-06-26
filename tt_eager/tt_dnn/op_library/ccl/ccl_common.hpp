@@ -296,88 +296,27 @@ struct InterleavedTensorWorkerSlice {
         return num_iterations;
     }
 
+    std::size_t get_worker_slice_num_pages() const {
+        return worker_slice_shape.x * worker_slice_shape.y;
+    }
+
     tt_xy_pair tensor_shape;
     tt_xy_pair tensor_slice_shape;
     tt_xy_pair worker_slice_shape;
     tt_xy_pair worker_slice_offset;
 };
 
-class InterleavedRingReduceScatterTensorSlicer : public LegacyCclTensorSlicer {
+class RingReduceScatterTensorSlicer : public LegacyCclTensorSlicer {
    public:
-    InterleavedRingReduceScatterTensorSlicer(
+    RingReduceScatterTensorSlicer(
         Tensor const& input_tensor,
         Tensor const& output_tensor,
         int slice_dim,
         uint32_t ring_index,
         uint32_t ring_size,
         uint32_t total_num_workers,
-        uint32_t max_slice_size_in_bytes) :
-        LegacyCclTensorSlicer() {
-        TT_ASSERT(max_slice_size_in_bytes > 0);
-        this->row_major = input_tensor.get_layout() == Layout::ROW_MAJOR;
-        this->slice_dim_is_width = input_tensor.get_legacy_shape().rank() - 1 == slice_dim;
-        this->is_sharded = input_tensor.is_sharded();
-
-        int32_t shard_size_in_bytes =
-            is_sharded ? (input_tensor.buffer()->page_size() * input_tensor.buffer()->shard_spec().tensor2d_shape[0] *
-                          input_tensor.buffer()->shard_spec().tensor2d_shape[1]) /
-                             input_tensor.shard_spec()->num_cores()
-                       : -1;
-        this->input_page_size = is_sharded ? shard_size_in_bytes : input_tensor.buffer()->page_size();
-        ;
-        if (row_major) {
-            this->num_cols = input_tensor.get_legacy_shape()[-1];
-            auto input_shape = input_tensor.get_legacy_shape();
-            auto output_shape = output_tensor.get_legacy_shape();
-            this->num_rows =
-                std::accumulate(input_shape.begin() + slice_dim, input_shape.end() - 1, 1, std::multiplies<uint32_t>());
-            this->row_offset =
-                std::accumulate(
-                    output_shape.begin() + slice_dim, output_shape.end() - 1, 1, std::multiplies<uint32_t>()) -
-                num_rows;
-        } else {
-            const uint32_t num_tiles_x = input_tensor.get_legacy_shape()[-1] / tt::constants::TILE_WIDTH;
-            const uint32_t num_tiles_y = input_tensor.get_legacy_shape()[-2] / tt::constants::TILE_HEIGHT;
-            TT_ASSERT(num_tiles_x >= ring_size);
-            this->tensor_slice_shape.x = slice_dim == 3 ? (num_tiles_x / ring_size) : num_tiles_x;
-            this->tensor_slice_shape.y = slice_dim != 3 ? num_tiles_y / ring_size : num_tiles_y;
-        }
-
-        // Create the worker schedule
-
-        // The `output_page_offset` will be the starting page offset for this slice index (corresponds to )
-        // ring index). Each worker will operate out of that slice and then advance to the next slice for
-        // for the next ring index/timestep
-        uint32_t slice_size_in_bytes = std::numeric_limits<uint32_t>::max();
-        if (row_major) {
-            if (slice_dim_is_width) {
-                TT_FATAL(false, "Reduce scatter row-major interleaved does not yet support a width dim");
-                this->output_addr_offset = input_page_size;
-            } else {
-                this->output_page_offset = num_rows;
-            }
-            this->worker_slice_shapes = create_worker_slice_shapes_for_row_major_layout(
-                this->tensor_slice_shape, total_num_workers, max_slice_size_in_bytes);
-        } else {
-            this->worker_slice_shapes = create_worker_slice_shapes_for_tile_layout(
-                this->tensor_slice_shape, total_num_workers, max_slice_size_in_bytes / input_page_size);
-        }
-
-        if (row_major) {
-            this->flattened_tensor_shape = tt_xy_pair{
-                input_tensor.get_legacy_shape()[3],
-                input_tensor.get_legacy_shape()[0] * input_tensor.get_legacy_shape()[1] *
-                    input_tensor.get_legacy_shape()[2]};
-        } else {
-            this->flattened_tensor_shape = tt_xy_pair{
-                input_tensor.get_legacy_shape()[3] / constants::TILE_WIDTH,
-                (input_tensor.get_legacy_shape()[0] * input_tensor.get_legacy_shape()[1] *
-                 input_tensor.get_legacy_shape()[2]) /
-                    constants::TILE_HEIGHT};
-        }
-        this->worker_slice_offsets = compute_worker_slice_offsets(this->worker_slice_shapes, this->tensor_slice_shape);
-        TT_ASSERT(this->worker_slice_offsets.size() == this->worker_slice_shapes.size());
-    }
+        uint32_t max_slice_size_in_bytes,
+        uint32_t half_cb_n_pages);
 
     ccl::InterleavedTensorWorkerSlice get_worker_slice(std::size_t global_worker_index) {
         return ccl::InterleavedTensorWorkerSlice(
@@ -393,253 +332,19 @@ class InterleavedRingReduceScatterTensorSlicer : public LegacyCclTensorSlicer {
     }
 
    public:
+    std::vector<tt_xy_pair> get_worker_slice_shapes() const { return this->worker_slice_shapes; }
     static std::vector<tt_xy_pair> compute_worker_slice_offsets(
-        std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape) {
-        std::vector<tt_xy_pair> worker_slice_offsets;
-        worker_slice_offsets.reserve(worker_slice_shapes.size());
-
-        std::size_t offset_x = 0;
-        std::size_t offset_y = 0;
-        std::size_t last_worker_size_y = worker_slice_shapes.at(0).y;  // for validation
-        bool first_in_row = true;
-        for (tt_xy_pair const& worker_slice_shape : worker_slice_shapes) {
-            worker_slice_offsets.emplace_back(offset_x, offset_y);
-
-            TT_ASSERT(offset_y < tensor_slice_shape.y);
-            offset_x += worker_slice_shape.x;
-            if (offset_x < tensor_slice_shape.x) {
-                first_in_row = false;
-            } else {
-                offset_x = 0;
-                first_in_row = true;
-                offset_y += worker_slice_shape.y;
-            }
-            TT_ASSERT(first_in_row || last_worker_size_y == worker_slice_shape.y);
-            last_worker_size_y = worker_slice_shape.y;
-        }
-
-        TT_ASSERT(worker_slice_offsets.size() == worker_slice_shapes.size());
-        return worker_slice_offsets;
-    }
+        std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape);
 
     static std::vector<tt_xy_pair> create_worker_slice_shapes_for_row_major_layout(
-        tt_xy_pair const& tensor_slice_shape_in_elems, uint32_t num_workers, uint32_t max_slice_size_in_elements) {
-        std::vector<tt_xy_pair> worker_slice_shapes;
-        worker_slice_shapes.reserve(num_workers);
+        tt_xy_pair const& tensor_slice_shape_in_elems, uint32_t num_workers, uint32_t max_slice_size_in_elements);
 
-        if (num_workers > tensor_slice_shape_in_elems.y) {
-            log_warning(
-                tt::LogOp,
-                "Reduce Scatter more workers instantiated than is work to be done. Some workers will be idle and do "
-                "nothing");
-            num_workers = tensor_slice_shape_in_elems.y;
-            for (uint32_t w = 0; w < num_workers; ++w) {
-                worker_slice_shapes.emplace_back(tensor_slice_shape_in_elems.x, 1);
-            }
-            for (uint32_t w = num_workers; w < tensor_slice_shape_in_elems.x; ++w) {
-                worker_slice_shapes.emplace_back(0, 0);
-            }
-            return worker_slice_shapes;
-        }
-
-        uint32_t num_elems_accounted_for = 0;
-        // For now we don't support row splitting but we will in the future
-        const uint32_t min_rows_per_worker = tensor_slice_shape_in_elems.y / num_workers;
-        const uint32_t num_workers_with_max_rows = tensor_slice_shape_in_elems.y % num_workers;
-        const uint32_t max_rows_per_worker =
-            num_workers_with_max_rows != 0 ? min_rows_per_worker + 1 : min_rows_per_worker;
-        for (uint32_t w = 0; w < num_workers_with_max_rows; w++) {
-            worker_slice_shapes.emplace_back(tensor_slice_shape_in_elems.x, max_rows_per_worker);
-            num_elems_accounted_for += tensor_slice_shape_in_elems.x * max_rows_per_worker;
-        }
-        for (uint32_t w = num_workers_with_max_rows; w < num_workers; w++) {
-            worker_slice_shapes.emplace_back(tensor_slice_shape_in_elems.x, min_rows_per_worker);
-            num_elems_accounted_for += tensor_slice_shape_in_elems.x * min_rows_per_worker;
-        }
-
-        TT_ASSERT(num_elems_accounted_for == tensor_slice_shape_in_elems.x * tensor_slice_shape_in_elems.y);
-        for (auto& worker_slice_shape : worker_slice_shapes) {
-            TT_ASSERT(max_slice_size_in_elements >= worker_slice_shape.x * worker_slice_shape.y);
-            TT_ASSERT(worker_slice_shape.x * worker_slice_shape.y > 0);
-        }
-        return worker_slice_shapes;
-    }
-
-    static std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
-        tt_xy_pair const& tensor_slice_shape_in_tiles, uint32_t num_workers, uint32_t max_slice_size_in_pages) {
-        TT_ASSERT(max_slice_size_in_pages > 0);
-        std::vector<tt_xy_pair> worker_slice_shapes;
-        worker_slice_shapes.reserve(num_workers);
-        const uint32_t total_num_tiles = tensor_slice_shape_in_tiles.x * tensor_slice_shape_in_tiles.y;
-        if (num_workers > total_num_tiles) {
-            log_warning(
-                tt::LogOp,
-                "Reduce Scatter more workers instantiated than is work to be done. Some workers will be idle and do "
-                "nothing");
-            num_workers = total_num_tiles;
-            for (uint32_t w = 0; w < num_workers; ++w) {
-                worker_slice_shapes.emplace_back(1, 1);
-            }
-            for (uint32_t w = num_workers; w < total_num_tiles; ++w) {
-                worker_slice_shapes.emplace_back(0, 0);
-            }
-            return worker_slice_shapes;
-        }
-
-        std::size_t max_slice_size_in_tiles = max_slice_size_in_pages;
-        TT_ASSERT(max_slice_size_in_tiles > 0);
-        std::size_t max_width_in_tiles = std::min<std::size_t>(max_slice_size_in_tiles, tensor_slice_shape_in_tiles.x);
-        std::size_t max_height_in_tiles = std::min<std::size_t>(max_slice_size_in_tiles, tensor_slice_shape_in_tiles.y);
-
-        uint32_t num_tiles_accounted_for = 0;  // for validation
-        if (tensor_slice_shape_in_tiles.y >= num_workers) {
-            // slice into rows
-            const uint32_t min_rows_per_worker = tensor_slice_shape_in_tiles.y / num_workers;
-            const uint32_t num_workers_with_max_rows = tensor_slice_shape_in_tiles.y % num_workers;
-            const uint32_t max_rows_per_worker =
-                num_workers_with_max_rows != 0 ? min_rows_per_worker + 1 : min_rows_per_worker;
-            for (uint32_t w = 0; w < num_workers_with_max_rows; w++) {
-                worker_slice_shapes.emplace_back(tensor_slice_shape_in_tiles.x, max_rows_per_worker);
-                num_tiles_accounted_for += tensor_slice_shape_in_tiles.x * max_rows_per_worker;
-            }
-            for (uint32_t w = num_workers_with_max_rows; w < num_workers; w++) {
-                worker_slice_shapes.emplace_back(tensor_slice_shape_in_tiles.x, min_rows_per_worker);
-                num_tiles_accounted_for += tensor_slice_shape_in_tiles.x * min_rows_per_worker;
-            }
-        } else if (tensor_slice_shape_in_tiles.x >= num_workers) {
-            // slice into columns
-            const uint32_t min_cols_per_worker = tensor_slice_shape_in_tiles.x / num_workers;
-            const uint32_t num_workers_with_max_cols = tensor_slice_shape_in_tiles.x % num_workers;
-            const uint32_t max_cols_per_worker =
-                num_workers_with_max_cols != 0 ? min_cols_per_worker + 1 : min_cols_per_worker;
-            for (uint32_t w = 0; w < num_workers_with_max_cols; w++) {
-                worker_slice_shapes.emplace_back(max_cols_per_worker, tensor_slice_shape_in_tiles.y);
-                num_tiles_accounted_for += max_cols_per_worker * tensor_slice_shape_in_tiles.y;
-            }
-            for (uint32_t w = num_workers_with_max_cols; w < num_workers; w++) {
-                worker_slice_shapes.emplace_back(min_cols_per_worker, tensor_slice_shape_in_tiles.y);
-                num_tiles_accounted_for += min_cols_per_worker * tensor_slice_shape_in_tiles.y;
-            }
-
-        } else {
-            const uint32_t min_num_workers_per_row = num_workers / tensor_slice_shape_in_tiles.y;
-            const uint32_t num_rows_with_max_workers = tensor_slice_shape_in_tiles.y % num_workers;
-            const uint32_t max_num_workers_per_row =
-                num_rows_with_max_workers != 0 ? min_num_workers_per_row + 1 : min_num_workers_per_row;
-
-            // 4 "quadrants" to the worker slicing:
-            // 1. Row with max num workers and max columns wide per worker (first part of rows with max num workers)
-            // 2. Row with max num workers and min columns wide per worker (second part of rows with max num workers)
-            // 3. Row with min num workers and max columns wide per worker (first part of rows with min num workers)
-            // 4. Row with min num workers and min columns wide per worker (second part of rows with min num workers)
-            // Depending on specific numbers, some of the above "quadrants" might be 0 sized
-            const uint32_t max_workers_row_min_cols_per_worker =
-                tensor_slice_shape_in_tiles.x / max_num_workers_per_row;
-            const uint32_t max_workers_row_max_col_worker_count =
-                tensor_slice_shape_in_tiles.x % max_num_workers_per_row;
-            const uint32_t max_workers_row_max_cols_per_worker = max_workers_row_max_col_worker_count != 0
-                                                                     ? max_workers_row_min_cols_per_worker + 1
-                                                                     : max_workers_row_min_cols_per_worker;
-            TT_ASSERT(max_workers_row_min_cols_per_worker > 0);
-            TT_ASSERT(max_workers_row_max_cols_per_worker >= max_workers_row_min_cols_per_worker);
-            for (uint32_t w_r = 0; w_r < num_rows_with_max_workers; w_r++) {
-                for (uint32_t w_c = 0; w_c < max_workers_row_max_cols_per_worker; w_c++) {
-                    worker_slice_shapes.emplace_back(max_workers_row_max_cols_per_worker, 1);
-                    num_tiles_accounted_for += max_workers_row_max_cols_per_worker;
-                }
-                for (uint32_t w_c = max_workers_row_max_col_worker_count; w_c < max_num_workers_per_row; w_c++) {
-                    worker_slice_shapes.emplace_back(max_workers_row_min_cols_per_worker, 1);
-                    num_tiles_accounted_for += max_workers_row_min_cols_per_worker;
-                }
-            }
-
-            const uint32_t min_workers_row_min_cols_per_worker =
-                tensor_slice_shape_in_tiles.x / min_num_workers_per_row;
-            const uint32_t min_workers_row_max_col_worker_count =
-                tensor_slice_shape_in_tiles.x % min_num_workers_per_row;
-            const uint32_t min_workers_row_max_cols_per_worker = min_workers_row_max_col_worker_count != 0
-                                                                     ? min_workers_row_min_cols_per_worker + 1
-                                                                     : min_workers_row_min_cols_per_worker;
-
-            for (uint32_t w_r = num_rows_with_max_workers; w_r < tensor_slice_shape_in_tiles.y; w_r++) {
-                for (uint32_t w_c = 0; w_c < min_workers_row_max_cols_per_worker; w_c++) {
-                    worker_slice_shapes.emplace_back(min_workers_row_max_cols_per_worker, 1);
-                    num_tiles_accounted_for += min_workers_row_max_cols_per_worker;
-                }
-                for (uint32_t w_c = min_workers_row_max_col_worker_count; w_c < min_num_workers_per_row; w_c++) {
-                    worker_slice_shapes.emplace_back(min_workers_row_min_cols_per_worker, 1);
-                    num_tiles_accounted_for += min_workers_row_max_cols_per_worker;
-                }
-            }
-        }
-
-        // For now we do something a little naive - since this becomes an optimization problem otherwise, and the
-        // benefits to nailing it are marginal we expect uniform chunk sizes and just truncate the largest chunk to fit
-        // the max size and then apply that shape to all workers slice shapes
-        tt_xy_pair largest_worker_slice_shape = {0, 0};
-        for (auto const& worker_slice_shape : worker_slice_shapes) {
-            if (largest_worker_slice_shape.x * largest_worker_slice_shape.y <
-                worker_slice_shape.x * worker_slice_shape.y) {
-                largest_worker_slice_shape = worker_slice_shape;
-            }
-        }
-        bool do_truncation = largest_worker_slice_shape.x * largest_worker_slice_shape.y > max_slice_size_in_tiles;
-        if (do_truncation) {
-            log_trace(tt::LogOp, "Truncating worker slice shapes to fit max slice size in tiles");
-        }
-        log_trace(
-            tt::LogOp,
-            "largest_worker_slice_shape: x={}, y={}",
-            largest_worker_slice_shape.x,
-            largest_worker_slice_shape.y);
-        log_trace(tt::LogOp, "max_slice_size_in_tiles={}", max_slice_size_in_tiles);
-        while (largest_worker_slice_shape.x * largest_worker_slice_shape.y > max_slice_size_in_tiles) {
-            log_trace(tt::LogOp, "Loop Head");
-            // truncate the largest dim first
-            uint32_t delta = (largest_worker_slice_shape.x * largest_worker_slice_shape.y) - max_slice_size_in_tiles;
-            log_trace(tt::LogOp, "-- delta: {}", delta);
-            uint32_t cols_removed_if_x_truncated = std::max<uint32_t>(1, largest_worker_slice_shape.x / delta);
-            uint32_t tiles_removed_if_x_truncated = cols_removed_if_x_truncated * largest_worker_slice_shape.y;
-            uint32_t rows_removed_if_y_truncated = std::max<uint32_t>(1, largest_worker_slice_shape.y / delta);
-            uint32_t tiles_removed_if_y_truncated = rows_removed_if_y_truncated * largest_worker_slice_shape.x;
-            uint32_t difference_x = tiles_removed_if_x_truncated > delta ? tiles_removed_if_x_truncated - delta
-                                                                         : delta - tiles_removed_if_x_truncated;
-            uint32_t difference_y = tiles_removed_if_y_truncated > delta ? tiles_removed_if_y_truncated - delta
-                                                                         : delta - tiles_removed_if_y_truncated;
-            log_trace(tt::LogOp, "-- cols_removed_if_x_truncated: {}", cols_removed_if_x_truncated);
-            log_trace(tt::LogOp, "-- tiles_removed_if_x_truncated: {}", tiles_removed_if_x_truncated);
-            log_trace(tt::LogOp, "-- rows_removed_if_y_truncated: {}", rows_removed_if_y_truncated);
-            log_trace(tt::LogOp, "-- tiles_removed_if_y_truncated: {}", tiles_removed_if_y_truncated);
-            log_trace(tt::LogOp, "-- difference_x: {}", difference_x);
-            log_trace(tt::LogOp, "-- difference_y: {}", difference_y);
-            if (difference_x < difference_y) {
-                largest_worker_slice_shape.x -= cols_removed_if_x_truncated;
-            } else {
-                largest_worker_slice_shape.y -= rows_removed_if_y_truncated;
-            }
-            log_trace(
-                tt::LogOp,
-                "-- new largest_worker_slice_shape: x={}, y={}",
-                largest_worker_slice_shape.x,
-                largest_worker_slice_shape.y);
-        }
-        if (do_truncation) {
-            log_trace(
-                tt::LogOp,
-                "Truncated worker slice shape to fit max slice size in tiles: ({},{})",
-                largest_worker_slice_shape.x,
-                largest_worker_slice_shape.y);
-            TT_ASSERT(largest_worker_slice_shape.x * largest_worker_slice_shape.y > 0);
-            for (auto& worker_slice_shape : worker_slice_shapes) {
-                worker_slice_shape = largest_worker_slice_shape;
-            }
-        }
-
-        TT_ASSERT(
-            num_tiles_accounted_for == total_num_tiles, "All tiles must be accounted for in the worker slice shapes");
-        TT_ASSERT(worker_slice_shapes.size() == num_workers, "Worker slice shapes must match the number of workers");
-        return worker_slice_shapes;
-    }
+    std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
+        Shape const& tensor_shape,
+        tt_xy_pair const& tensor_slice_shape_in_tiles,
+        uint32_t num_workers,
+        uint32_t max_slice_size_in_pages,
+        uint32_t half_cb_n_pages);
 
     void create_worker_slice_shape_for_row_major_layout(tt_xy_pair const& tensor_slice_shape, uint32_t num_workers) {
         TT_FATAL("Row major interleaved not supported by Reduce Scatter");

@@ -115,13 +115,13 @@ class ChannelBuffer final {
         is_sender_side(is_sender_side) {
         clear_local_semaphore();
 
-        if (total_num_messages_to_move != 0 ||
-            TERMINATION_MODE != EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
+        if (TERMINATION_MODE != tt::tt_metal::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED || total_num_messages_to_move != 0) {
             if (is_sender_side) {
                 // Tell the sender side workers that we're ready to accept data on this channel
                 increment_worker_semaphores();
             }
         } else {
+            ASSERT(TERMINATION_MODE != tt::tt_metal::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED);
             goto_state(STATE::DONE);
         }
     };
@@ -287,10 +287,6 @@ FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, 
     reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[6] = 0x1c0ffee1;
     reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[7] = 0x1c0ffee2;
 
-    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[8] = 0;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[9] = 0;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[10] = 0x4c0ffee1;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[11] = 0x5c0ffee2;
     erisc_info->channels[0].receiver_ack = 0;
     for (uint32_t i = 1; i < eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS; i++) {
         erisc_info->channels[i].bytes_sent = 0;
@@ -456,15 +452,6 @@ FORCE_INLINE bool receiver_eth_accept_payload_sequence(
     uint32_t eth_transaction_ack_word_addr) {
     bool did_something = false;
 
-    if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::WORKER_INITIATED) {
-        if (*buffer_channel.local_semaphore_address == EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY) {
-            buffer_channel.clear_local_semaphore();
-            buffer_channel.goto_state(ChannelBuffer<EDM_CONFIG>::DONE);
-            num_receivers_complete++;
-            return true;
-        }
-    }
-
     if (buffer_channel.eth_bytes_are_available_on_channel()) {
         if (!eth_txq_is_busy()) {
             eth_receiver_channel_ack(buffer_channel.get_eth_transaction_channel(), eth_transaction_ack_word_addr);
@@ -513,7 +500,7 @@ FORCE_INLINE bool receiver_noc_read_worker_completion_check_sequence(
             if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
                 channel_done = buffer_channel.all_messages_moved();
             } else if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::WORKER_INITIATED) {
-                // Do nothing
+                channel_done = (*buffer_channel.local_semaphore_address == EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
             } else {
                 ASSERT(false);
             }
