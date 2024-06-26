@@ -43,5 +43,9 @@ class TtResidualBlock(torch.nn.Module):
         mamba_x = self.tt_mamba_block(mamba_x)
 
         return ttnn.add(
-            residual, mamba_x, dtype=self.configs["dtype"]["activations"], memory_config=ttnn.L1_MEMORY_CONFIG
+            residual,
+            mamba_x,
+            dtype=self.configs["dtype"]["activations"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            output_tensor=mamba_x,
         )

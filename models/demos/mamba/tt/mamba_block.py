@@ -150,7 +150,7 @@ class TtMambaBlock(torch.nn.Module):
         conv_out_after_silu = ttnn.silu(conv_out_with_bias_l1, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(conv_out_with_bias_l1)
 
-        ssm_output = self.tt_ssm(conv_out_after_silu)
+        out = self.tt_ssm(conv_out_after_silu)
 
         residual = ttnn.linear(
             residual_connection,
@@ -163,14 +163,14 @@ class TtMambaBlock(torch.nn.Module):
         )
         ttnn.deallocate(residual_connection)
 
-        out = ttnn.mul(
-            ssm_output,
+        out = ttnn.multiply(
+            out,
             residual,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=self.configs["dtype"]["activations"],
+            output_tensor=out,
         )
         ttnn.deallocate(residual)
-        ttnn.deallocate(ssm_output)
 
         out_proj = ttnn.linear(
             out,
