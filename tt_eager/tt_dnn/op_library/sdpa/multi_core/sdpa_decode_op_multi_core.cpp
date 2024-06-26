@@ -105,6 +105,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     auto out0_buffer = output_tensor.buffer();
 
+    // Parallelization scheme
+    // We will assign cores to batches
+    // Split to cores
     CoreCoord grid_size;
 
     std::visit([&](auto&& program_config) {
@@ -119,14 +122,21 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     }, program_config);
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-    uint32_t num_cores = grid_size.x * grid_size.y;
+    uint32_t num_cores_available = grid_size.x * grid_size.y;
 
-    TT_FATAL(num_cores <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
+    TT_FATAL(num_cores_available <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
 
-    // Parallelization scheme
-    // We will assign cores to batches
-    // Split to cores
-    uint32_t num_cores_per_batch = num_cores / B;
+    // balance the number of cores to use based on batch and num_chunks
+    // only do this when num_cores_available_per_batch is greater than 6 cores because that's when diminishing return happens
+    uint32_t num_cores_available_per_batch = num_cores_available / B;
+    uint32_t num_cores_per_batch = num_cores_available_per_batch;
+    uint32_t chunks_per_core_ceil = ceil((double) num_chunks / (double) num_cores_available_per_batch);
+    if (num_cores_available_per_batch > 6) {
+        num_cores_per_batch = num_chunks / chunks_per_core_ceil;
+        while (num_cores_per_batch > num_cores_available_per_batch) {
+            num_cores_per_batch /= 2;
+        }
+    }
     uint32_t num_active_cores = num_cores_per_batch * B;
 
     // Sequence length assignment
@@ -172,6 +182,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     }
 
     log_debug("Parallelization scheme:");
+    log_debug("num_cores_available: {}", num_cores_available);
+    log_debug("num_cores_available_per_batch: {}", num_cores_available_per_batch);
+    log_debug("chunks_per_core_ceil: {}", chunks_per_core_ceil);
     log_debug("num_cores_per_batch: {}", num_cores_per_batch);
     log_debug("num_active_cores: {}", num_active_cores);
     log_debug("num_chunks: {}", num_chunks);
@@ -406,7 +419,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     std::vector<uint32_t> reader_compile_time_args_common = {
         // interleaved accessor args
-        B, PNHt, PSt, St, DHt, Sk_chunk_t, num_chunks, num_cores
+        B, PNHt, PSt, St, DHt, Sk_chunk_t, num_chunks, num_active_cores
     };
 
     std::vector<uint32_t> writer_reducer_compile_time_args_common = {
