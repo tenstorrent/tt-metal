@@ -31,6 +31,7 @@ runs:
           console.log(context.runAttempt);
 
           const { JOB_NAME, GITHUB_RUN_ATTEMPT } = process.env;
+          console.log(JOB_NAME);
           const runAttempt = GITHUB_RUN_ATTEMPT;
 
           const jobs = await github.
