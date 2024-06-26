@@ -26,7 +26,7 @@ runs:
           const { JOB_NAME } = process.env;
 
           const { totalCount, jobs } = await github.
-            .paginate(
+            paginate(
               "GET /repos/{owner}/{repo}/actions/runs/{runId}/attempts/{runAttempt}/jobs",
               { owner, repo, runId, runAttempt },
           );
