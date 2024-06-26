@@ -380,6 +380,10 @@ class Operation:
     is_cpp_function: bool
     is_experimental: bool
 
+    @property
+    def __name__(self):
+        return self.python_fully_qualified_name
+
     def __gt__(self, other):
         return self.python_fully_qualified_name < other.python_fully_qualified_name
 
@@ -748,6 +752,18 @@ def register_operation(
         global OPERATION_TO_GOLDEN_FUNCTION
         global OPERATION_TO_FALLBACK_FUNCTION
 
+        is_cpp_function = hasattr(function, "__ttnn__")
+
+        python_fully_qualified_name = name
+        if is_cpp_function:
+            if doc is not None:
+                raise RuntimeError(f"Registering {name}: documentation for C++ function has to be set from C++")
+            if python_fully_qualified_name is not None:
+                raise RuntimeError(f"Registering {name}: name is not allowed for ttnn functions")
+            python_fully_qualified_name = function.python_fully_qualified_name  # Replace C++ name with python
+        elif not is_experimental:
+            logger.warning(f"{name} should be migrated to C++!")
+
         def fallback_function(*function_args, **function_kwargs):
             preprocess_inputs = preprocess_golden_function_inputs or default_preprocess_golden_function_inputs
             postprocess_outputs = postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
@@ -759,19 +775,21 @@ def register_operation(
             return output
 
         if ttnn.CONFIG.enable_fast_runtime_mode:
+
+            def name_decorator(function):
+                @wraps(function)
+                def wrapper(*args, **kwargs):
+                    return function(*args, **kwargs)
+
+                return wrapper
+
+            function = name_decorator(function)
+            function.__name__ = python_fully_qualified_name
+
             OPERATION_TO_GOLDEN_FUNCTION[function] = golden_function
             OPERATION_TO_FALLBACK_FUNCTION[function] = fallback_function
+
             return function
-
-        is_cpp_function = hasattr(function, "__ttnn__")
-
-        python_fully_qualified_name = name
-        if is_cpp_function:
-            if doc is not None:
-                raise RuntimeError(f"Registering {name}: documentation for C++ functiomn has to be set from C++")
-            if python_fully_qualified_name is not None:
-                raise RuntimeError(f"Registering {name}: name is not allowed for ttnn functions")
-            python_fully_qualified_name = function.python_fully_qualified_name  # Replace C++ name with python
 
         # Wrap functions before attaching documentation to avoid errors
         if doc is not None:
