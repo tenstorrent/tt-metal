@@ -72,8 +72,6 @@ ParallelConfig determine_parallel_config(
     Device& device,
     ShardOrientation block_shard_orientation,
     bool is_out_tiled) {
-    //is_out_tiled = true;
-    cout << "out tiled = " << is_out_tiled << endl;
     uint32_t conv_out_2d_matrix_height = batch_size * output_height * output_width;
     // pad height to 32
     conv_out_2d_matrix_height = round_up(conv_out_2d_matrix_height, 32);
@@ -124,7 +122,6 @@ ParallelConfig determine_parallel_config(
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_channels : num_cores_nhw;
             CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
             CoreRangeSet grid = CoreRangeSet({core_range});
-            cout << "cores_x = " << cores_x << " cores_y = " << cores_y << endl;
             return grid;
         }
     };
@@ -192,7 +189,6 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     TT_ASSERT(channels % num_cores_channels == 0);
     uint32_t channel_shard = channels / num_cores_channels;
     auto shard_spec = ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
-    cout << "nhw_shard = " << nhw_shard << " channel_shard = " << channel_shard << endl;
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
 }
 
@@ -201,7 +197,6 @@ tt::tt_metal::OptimizedConvParallelizationConfigNew determine_conv_op_parallel_c
     TT_ASSERT(conv_output_mem_config.shard_spec.has_value());
     const auto& shard_spec = conv_output_mem_config.shard_spec.value();
     const auto& shard_shape = shard_spec.shape;
-    cout << "shard height = " << shard_shape[0] << " shard width = " << shard_shape[1] << endl;
     TT_ASSERT(shard_shape[0] % 32 == 0);
     //TT_ASSERT(shard_shape[1] % 32 == 0);
     return {
@@ -276,11 +271,6 @@ tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(
         out_subblock_h_ntiles = act_block_h_ntiles / 2;
         TT_ASSERT((out_subblock_h_ntiles * out_subblock_w_ntiles) <= 8);
     }
-    cout << "act_block_h_override = " << act_block_h_override << " act_block_h_ntiles = " << act_block_h_ntiles << " act_block_w_ntiles = " << act_block_w_ntiles
-        << " act_block_w = " << act_block_w
-         << " act_c_num_blocks = " << act_c_num_blocks << " out_block_h_ntiles = " << out_block_h_ntiles
-         << " out_subblock_h_ntiles = " << out_subblock_h_ntiles << " out_subblock_w_ntiles = " << out_subblock_w_ntiles
-         << endl;
     return {
         .act_block_h_ntiles = act_block_h_ntiles,
         .act_block_w_ntiles = act_block_w_ntiles,
@@ -694,13 +684,6 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         // call conv micro op
         std::vector<int> conv_params = {
             (int)kernel_size[0], (int)kernel_size[1], (int)stride[0], (int)stride[1], (int)padding[0], (int)padding[1]};
-        // // hack to support non tile multiple shard width. Remove this hack when new tensor shape infra adds support for shard tile-padding
-        // cout << "conv_out_memory_config.shard_spec.value().shape[0] = " << conv_out_memory_config.shard_spec.value().shape[0] << " conv_out_memory_config.shard_spec.value().shape[1] = " << conv_out_memory_config.shard_spec.value().shape[1] << endl;
-        // uint32_t actual_output_shard_width = conv_out_memory_config.shard_spec.value().shape[1];
-        // uint32_t actual_output_shard_height = conv_out_memory_config.shard_spec.value().shape[1];
-        // conv_out_memory_config.shard_spec.value().shape[1] = round_up(conv_out_memory_config.shard_spec.value().shape[1], 32) * conv_out_memory_config.shard_spec.value().shape[0];
-        // conv_out_memory_config.shard_spec.value().shape[0] = 1;
-        // cout << "conv_out_memory_config.shard_spec.value().shape[0] = " << conv_out_memory_config.shard_spec.value().shape[0] << " conv_out_memory_config.shard_spec.value().shape[1] = " << conv_out_memory_config.shard_spec.value().shape[1] << endl;
 
         auto conv_output = tt::tt_metal::optimized_conv_new(
             halo_output,

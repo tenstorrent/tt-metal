@@ -350,7 +350,6 @@ std::vector<Shape> OptimizedConvNew::compute_output_shapes(const std::vector<Ten
     auto padded_shape_c = round_up(this->output_channels, TILE_WIDTH);
     auto output_padding = Padding(
         {{0, 0}, {0, 0}, {0, (padded_shape_w - shape_w)}, {0, (padded_shape_c - shape_c)}}, Padding::PadValue::Zero);
-    cout << "output shape H = " << shape_w << " padded output shape H = " << padded_shape_w << " output shape W = " << shape_c << " padded output shape W = " << padded_shape_c << endl;
     auto output_tensor_shape = Shape({1, 1, padded_shape_w, padded_shape_c}, output_padding);
     return {output_tensor_shape};
 }
