@@ -17,7 +17,7 @@ if os.getenv("CI") == "true":
     os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ConcatMeshToTensor
 
 from models.experimental.grok.tt.grok_common import prepare_inputs_ttnn, prepare_rotation_mat_ttnn
 from models.experimental.grok.tt.grok_model import TtTransformer
@@ -25,15 +25,8 @@ from models.experimental.grok.reference.model import Grok1ModelForCausalLM as Tr
 from models.experimental.grok.reference.tokenizer import Tokenizer
 from models.experimental.grok.tt.model_config import TtModelArgs
 from models.utility_functions import comp_pcc, comp_allclose
-
-
-class Emb(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.emb = torch.nn.Embedding(32000, 4096)
-
-    def forward(self, x):
-        return self.emb(x)
+from transformers import AutoTokenizer
+from models.experimental.grok.reference.configuration_grok1 import Grok1Config
 
 
 @pytest.mark.parametrize(
@@ -57,17 +50,21 @@ def test_grok_model_inference(t3k_device_mesh, use_program_cache, reset_seeds, i
 
     state_dict = model_args.load_state_dict()
 
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    # tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = AutoTokenizer.from_pretrained("hpcai-tech/grok-1", trust_remote_code=True)
+
     prompts = ["Once"] * 32
     encoded_prompts = [tokenizer.encode(prompt) for prompt in prompts]
 
     if validation_type == "pcc":
-        reference_model = Transformer(args=model_args)
+        grok1_config = Grok1Config.from_json_file("models/experimental/grok/reference/config.json")
+        grok1_config.num_hidden_layers = model_args.n_layers
+        reference_model = Transformer(config=grok1_config)
         reference_model.load_state_dict(state_dict)
         reference_model.eval()
 
     # Embedding on host
-    embd = torch.nn.Embedding(model_args.vocab_size, model_args.hidden_dim)
+    embd = torch.nn.Embedding(model_args.vocab_size, model_args.hidden_size)
     embd.load_state_dict({"weight": state_dict["model.embed_tokens.weight"]})
 
     # Load TTNN model
@@ -97,30 +94,28 @@ def test_grok_model_inference(t3k_device_mesh, use_program_cache, reset_seeds, i
     pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
 
     tt_decode_input = pt_decode_input
-    ref_tokens = []
+    ref_past_key_values = None
     tt_tokens = []
 
     for i in range(generation_length):
         logger.info(f"[Decode] Generating token {i}")
 
-        start_pos = generation_start_pos + i
-        current_pos = start_pos % model_args.sliding_window
+        current_pos = generation_start_pos + i
 
         decode_input, attn_mask = prepare_inputs_ttnn(
             tt_decode_input,
             model_args.dim,
-            start_pos,
-            model_args.sliding_window,
+            current_pos,
             tt_model.device_mesh,
         )
 
         # Run TT model
-        tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask, rot_mat)
+        tt_multidevice_out = tt_model(decode_input, current_pos, attn_mask, rot_mat)
         # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
         del decode_input, attn_mask
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
+            ttnn.to_torch(tt_multidevice_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=-1))
             .squeeze(1)
             .view(batch, seqlen, -1)
             .detach()
@@ -129,8 +124,15 @@ def test_grok_model_inference(t3k_device_mesh, use_program_cache, reset_seeds, i
 
         # Measure PCC
         if validation_type == "pcc":
-            positions = torch.LongTensor([start_pos])
-            ref_output = reference_model(pt_decode_input, positions).detach().float()
+            positions = torch.LongTensor([current_pos])
+            ref_output, ref_past_key_values = reference_model(
+                inputs_embeds=pt_decode_input,
+                past_key_values=ref_past_key_values,
+                position_ids=positions,
+                use_cache=True,
+                return_dict=False,
+            )
+            ref_output = ref_output.detach().float()
 
             passing, pcc_message = comp_pcc(
                 ref_output.view(batch, seqlen, -1), tt_output_torch.view(batch, seqlen, -1), pcc

@@ -5,7 +5,6 @@
 import ttnn
 from models.experimental.grok.tt.grok_decoder import TtTransformerBlock
 from models.experimental.grok.tt.grok_rms_norm import TtRMSNormSharded, TtRMSNorm
-from ttnn import ReplicateTensorToMesh
 from models.experimental.grok.tt.grok_common import LightweightModule
 
 
@@ -60,7 +59,7 @@ class TtTransformer(LightweightModule):
             dtype=dtype,
             memory_config=self.model_config["OUTPUT_WEIGHTS_MEMCFG"],
             cache_file_name=output_cache_name,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device_mesh, dim=-1),
         )
 
         self.compute_kernel = self.args.get_compute_kernel_config()
@@ -68,17 +67,16 @@ class TtTransformer(LightweightModule):
     def forward(
         self,
         x,
-        start_pos,
         current_pos,
         attn_masks,
         rot_mats,
     ):
         for i, layer in enumerate(self.layers):
-            x = layer(x, start_pos, current_pos, attn_masks, rot_mats)
+            x = layer(x, current_pos, attn_masks, rot_mats)
         attn_masks.deallocate(True)
 
         x_norm = self.norm(x)
-        outputs = ttnn.experimental.operations.primary.matmul(
+        multidevice_outputs = ttnn.experimental.operations.primary.matmul(
             x_norm,
             self.output_weight,
             # compute_with_storage_grid_size=(8, 8), # FIXME: from Mixtral, presumably dI/dT workaround?
@@ -87,6 +85,6 @@ class TtTransformer(LightweightModule):
             compute_kernel_config=self.compute_kernel,
         )
 
-        outputs = outputs * self.output_multiplier_scale
+        multidevice_outputs = multidevice_outputs * self.output_multiplier_scale
 
-        return outputs
+        return multidevice_outputs

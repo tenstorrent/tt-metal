@@ -66,19 +66,19 @@ def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seed
     for i in range(generation_length):
         pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
         tt_attention_input = pt_attention_input
-        start_pos = generation_start_pos + i
+        current_pos = generation_start_pos + i
 
         attention_input, attn_mask = prepare_inputs_ttnn(
             tt_attention_input,
             # tt_model.hidden_size,
             model_args.dim,
-            start_pos,
+            current_pos,
             tt_model.device_mesh,
         )
 
         tt_out = tt_model(
             attention_input,
-            start_pos,
+            current_pos,
             attn_mask,
             rot_mat,
         )
@@ -90,7 +90,7 @@ def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seed
             .view(batch, 1, -1)
         )  # [ batch, seq, hidden_dim]
 
-        positions = torch.LongTensor([start_pos])
+        positions = torch.LongTensor([current_pos])
         reference_output, _, ref_past_key_value = reference_model(
             pt_attention_input,
             # attention_mask=None,
@@ -105,9 +105,9 @@ def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seed
         logger.info(pcc_message)
 
         if passing:
-            logger.info(f"[start_pos={start_pos}] Mistral_Attention Passed!")
+            logger.info(f"[current_pos={current_pos}] Mistral_Attention Passed!")
         else:
-            logger.warning(f"[start_pos={start_pos}] Mistral_Attention Failed!")
+            logger.warning(f"[current_pos={current_pos}] Mistral_Attention Failed!")
             all_tests_pass = False
     if all_tests_pass:
         logger.info("Mistral Attention output Passed!")
