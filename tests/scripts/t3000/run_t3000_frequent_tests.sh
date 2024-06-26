@@ -124,7 +124,7 @@ run_t3000_tests() {
   #run_t3000_ethernet_tests
 
   # Run tteager tests
-  #run_t3000_tteager_tests
+  run_t3000_tteager_tests
 
   # Run trace tests
   run_t3000_trace_stress_tests
