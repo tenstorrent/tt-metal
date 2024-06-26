@@ -67,7 +67,7 @@ def test_mamba_ssm_inference(
     model = TtMambaSSM(reference_model.args, device, config, loader.get_tensor_loader(LAYER_NUM))
     tt_input = input.view(1, 1, batch, d_in)
     tt_input = ttnn.to_device(
-        ttnn.from_torch(tt_input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),
+        ttnn.from_torch(tt_input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b),
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
