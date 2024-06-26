@@ -393,10 +393,10 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     // cb_out_final
     auto c_out4_config = CircularBufferConfig(out0_t * out_tile_size, {{CB::c_out4, out_df}}).set_page_size(CB::c_out4, out_tile_size);
-    auto cb_out4_id = CreateCircularBuffer(program, core_grid, c_out4_config);
     if (is_output_sharded) {
         c_out4_config.set_globally_allocated_address(*out0_buffer);
     }
+    auto cb_out4_id = CreateCircularBuffer(program, core_grid, c_out4_config);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     bfloat16 bfloat_identity_scalar = bfloat16(1.0f);
@@ -493,7 +493,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         uintptr_t writer_kernels_id;
         std::vector<uint32_t> writer_compile_time_args = do_reduce ? writer_reducer_compile_time_args_common : writer_worker_compile_time_args_common;
         if (do_reduce) {
-            writer_compile_time_args.insert(writer_compile_time_args.end(), {in0_mcast_reducer_semaphore, cur_batch, num_chunks, k_chunk_start, k_chunk_end});
+            writer_compile_time_args.insert(writer_compile_time_args.end(), {in0_mcast_reducer_semaphore, cur_batch, num_chunks, k_chunk_start, k_chunk_end, is_output_sharded});
             writer_kernels_id = CreateKernel(
                 program,
                 "tt_eager/tt_dnn/op_library/sdpa/kernels/dataflow/writer_decode_reducer_interleaved.cpp",
