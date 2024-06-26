@@ -63,7 +63,12 @@ inline void llk_pack_hw_configure(const llk_pack_params_t *pack_params) {
     );
 }
 
-template <bool untilize = false, bool is_fp32_dest_acc_en = false, ReluType relu_type = ReluType::NO_RELU, std::uint32_t relu_threshold = 0>
+template <
+    bool untilize = false,
+    bool is_fp32_dest_acc_en = false,
+    ReluType relu_type = ReluType::NO_RELU,
+    std::uint32_t relu_threshold = 0,
+    bool tilize = false/*unused*/>
 inline void llk_pack_hw_configure_disaggregated(std::uint32_t pack_output) {
     llk_pack_params_t llk_pack_params = {
         .pack_output = pack_output, .relu_config = {.f = {.ApplyRelu = (std::uint32_t)relu_type, .Threshold = relu_threshold,}}};
@@ -99,7 +104,10 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
     llk_pack_reduce_hw_configure<untilize, type, dim, is_fp32_dest_acc_en>(&llk_pack_params);
 }
 
-template <bool untilize = false, bool zero_output = false>
+template <
+    bool untilize = false,
+    bool zero_output = false,
+    bool tilize = false/*unused*/>
 inline void llk_pack_init(const std::uint32_t pack_output = 16) {
 
     const std::uint32_t output_id = get_output_id(pack_output);
