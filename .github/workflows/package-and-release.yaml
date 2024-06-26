@@ -74,9 +74,6 @@ jobs:
       environment: dev
       os: ${{ matrix.os }}
       arch: ${{ matrix.arch }}
-  release-run-frequent-fast-dispatch:
-    uses: ./.github/workflows/fast-dispatch-full-regressions-and-models.yaml
-    secrets: inherit
   # Candidate for breaking up
   create-and-upload-draft-release:
     needs: [
@@ -113,7 +110,8 @@ jobs:
         with:
           tag_name: ${{ needs.create-tag.outputs.version }}
           name: ${{ needs.create-tag.outputs.version }}
-          draft: true
+          draft: false
+          prerelease: true
           body_path: CHANGELOG.txt
           files: |
             VERSION
