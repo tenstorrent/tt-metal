@@ -5,6 +5,7 @@ import tt_lib
 from typing import Optional
 from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm, tt2torch_tensor
 import torch
+import ttnn
 
 
 def Linear(
@@ -35,7 +36,7 @@ def Linear(
 
     def linear_(activation):
         assert activation.get_legacy_shape()[-1] == in_features, "activation tensor do not have the expected shape"
-        output = tt_lib.tensor.matmul(activation, weight_T, output_mem_config)
+        output = ttnn.matmul(activation, weight_T, output_mem_config)
 
         if bias is not None:
             output_plus_bias = tt_lib.tensor.bcast(

@@ -210,12 +210,12 @@ class TtLlamaAttention_optimized:
         rot_mats,
     ):
         # Fused QKV
-        fused_query_key_value = tt_lib.operations.primary.matmul_1d(
+        fused_query_key_value = ttnn.matmul(
             xs,
             self.qkv,
             program_config=self.model_config["FUSED_QKV_MM_PROGCFG"],
-            output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-            output_dtype=ttnn.bfloat16,
+            memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
         xs.deallocate(True)
@@ -236,20 +236,20 @@ class TtLlamaAttention_optimized:
 
         # ROTARY EMBEDDINGS
         # Q Rotary Embeddings
-        query_layer = tt_lib.operations.primary.matmul(
+        query_layer = ttnn.matmul(
             query_layer,
             rot_mats,
             program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
-            output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
             compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"]
             # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_heads, bsz, head_dim]
         )
 
-        key_layer = tt_lib.operations.primary.matmul(
+        key_layer = ttnn.matmul(
             key_layer,
             rot_mats,
             program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
-            output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
             compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
         )
 
@@ -295,12 +295,12 @@ class TtLlamaAttention_optimized:
         attn_output_memcfg = self.model_config["ATTN_BATCHED_MM_OUTPUT_MEMCFG"]
         attn_output_memcfg.shard_spec.shape[1] = padded_layer_past_len
 
-        attn_weights = tt_lib.operations.primary.matmul(
+        attn_weights = ttnn.matmul(
             query_layer,
             key_layer_transposed,
             program_config=attn_prog_config,
-            output_mem_config=attn_output_memcfg,
-            output_dtype=ttnn.bfloat16,
+            memory_config=attn_output_memcfg,
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
 
@@ -330,12 +330,12 @@ class TtLlamaAttention_optimized:
         # POST-SOFTMAX MM
         scores_prog_config = self.model_config["SCORES_BATCHED_MM_PROGCFG_LAMBDA"](padded_layer_past_len // 32)
 
-        attn_output = tt_lib.operations.primary.matmul(
+        attn_output = ttnn.matmul(
             attn_weights,
             value_layer,
             program_config=scores_prog_config,
-            output_mem_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
-            output_dtype=ttnn.bfloat16,
+            memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
         attn_weights.deallocate(True)
@@ -361,12 +361,12 @@ class TtLlamaAttention_optimized:
             memory_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
         )
 
-        attn_output = tt_lib.operations.primary.matmul_1d(
+        attn_output = ttnn.matmul(
             attn_output,
             self.wo,
             program_config=self.model_config["SELFOUT_MM_PROGCFG"],
-            output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-            output_dtype=ttnn.bfloat8_b,
+            memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+            dtype=ttnn.bfloat8_b,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )  # seqlen, 1, batch, hidden_size
 
@@ -398,12 +398,12 @@ class TtLlamaAttention_optimized:
         xs = ttnn.reshape(xs, (1, batch_dim, seq_len // batch_dim, -1))
 
         # Fused QKV
-        fused_query_key_value = tt_lib.operations.primary.matmul(
+        fused_query_key_value = ttnn.matmul(
             xs,
             self.qkv,
             program_config=self.model_config["FUSED_QKV_MM_PROGCFG"],
-            output_mem_config=self.model_config["DRAM_MEMCFG"],
-            output_dtype=ttnn.bfloat16,
+            memory_config=self.model_config["DRAM_MEMCFG"],
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
         fused_query_key_value = ttnn.reshape(fused_query_key_value, (1, 1, seq_len, -1))
@@ -499,12 +499,12 @@ class TtLlamaAttention_optimized:
         batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
         attn_output = ttnn.reshape(attn_output, (1, batch_dim, seq_len // batch_dim, -1))
 
-        attn_output = tt_lib.operations.primary.matmul(
+        attn_output = ttnn.matmul(
             attn_output,
             self.wo,
             program_config=self.model_config["SELFOUT_MM_PROGCFG"],
-            output_mem_config=self.model_config["DRAM_MEMCFG"],
-            output_dtype=ttnn.bfloat16,
+            memory_config=self.model_config["DRAM_MEMCFG"],
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )  # seqlen, 1, batch, hidden_size
 

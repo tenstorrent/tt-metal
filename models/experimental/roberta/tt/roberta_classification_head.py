@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 
 import tt_lib
+import ttnn
 
 from models.helper_funcs import Linear as TTLinear
 from models.utility_functions import tt2torch_tensor, pad_by_zero
@@ -48,7 +49,7 @@ class TtRobertaClassificationHead(nn.Module):
 
     def linear(self, x, weight, bias):
         weight = tt_lib.tensor.transpose(weight, -2, -1)
-        x = tt_lib.tensor.matmul(x, weight, output_mem_config=self.mem_config)
+        x = ttnn.matmul(x, weight, memory_config=self.mem_config)
         x = tt_lib.tensor.bcast(
             x,
             bias,

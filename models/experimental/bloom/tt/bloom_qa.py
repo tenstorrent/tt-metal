@@ -4,6 +4,7 @@
 
 import torch
 import tt_lib
+import ttnn
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_model as bloom_model
 from typing import Optional
@@ -62,7 +63,7 @@ class TtBloomForQuestionAnswering:
 
         sequence_output = outputs[0]
 
-        logits = tt_lib.tensor.matmul(sequence_output, self.qa_outputs_weight, output_mem_config=self.mem_config)
+        logits = ttnn.matmul(sequence_output, self.qa_outputs_weight, output_mem_config=self.mem_config)
         logits = tt_lib.tensor.bcast(
             logits,
             self.qa_outputs_bias,

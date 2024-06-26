@@ -9,6 +9,7 @@ import torch.nn as nn
 from typing import Optional, Tuple
 
 import tt_lib
+import ttnn
 
 from tt_lib.fallback_ops import fallback_ops
 from models.helper_funcs import Linear as TTLinear
@@ -88,7 +89,7 @@ class TtRobertaSelfAttention(nn.Module):
 
     def linear(self, x, weight, bias):
         weight = tt_lib.tensor.transpose(weight, -2, -1)
-        x = tt_lib.tensor.matmul(x, weight, output_mem_config=self.mem_config)
+        x = ttnn.matmul(x, weight, memory_config=self.mem_config)
         x = tt_lib.tensor.bcast(
             x,
             bias,

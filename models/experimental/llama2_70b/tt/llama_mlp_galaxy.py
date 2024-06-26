@@ -237,12 +237,12 @@ class TtLlamaMLP_galaxy(nn.Module):
             for device_id in FF1_group:
                 # logger.info(f"FF1 matmul on device {device_id} for chips {FF1_group}")
                 w1_4chips.append(
-                    tt_lib.operations.primary.matmul(
+                    ttnn.matmul(
                         x[device_id],
                         self.w1_list[device_id],
                         program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
-                        output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                        output_dtype=self.model_config["PADDED_FF1_MM_OUTPUT_DTYPE"],
+                        memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+                        dtype=self.model_config["PADDED_FF1_MM_OUTPUT_DTYPE"],
                         compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                     )
                 )
@@ -269,12 +269,12 @@ class TtLlamaMLP_galaxy(nn.Module):
             w3_4chips = []
             for device_id in FF3_group:
                 w3_4chips.append(
-                    tt_lib.operations.primary.matmul(
+                    tt.matmul(
                         x[device_id],
                         self.w3_list[device_id],
                         program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
-                        output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                        output_dtype=self.model_config["PADDED_FF3_MM_OUTPUT_DTYPE"],
+                        memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+                        dtype=self.model_config["PADDED_FF3_MM_OUTPUT_DTYPE"],
                         compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                     )
                 )
@@ -334,12 +334,12 @@ class TtLlamaMLP_galaxy(nn.Module):
             for j in range(len(hidden_states_32chips[i])):
                 device_id = self.FF2_groups[i][j]
                 # logger.info(f"FF2 matmul on device {device_id} for chips {self.FF2_groups[i]}")
-                hidden_states_32chips[i][j] = tt_lib.operations.primary.matmul(
+                hidden_states_32chips[i][j] = ttnn.matmul(
                     hidden_states_32chips[i][j],
                     self.w2_list[device_id],
                     program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
-                    output_mem_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-                    output_dtype=self.model_config["PADDED_FF2_MM_OUTPUT_DTYPE"],
+                    memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+                    dtype=self.model_config["PADDED_FF2_MM_OUTPUT_DTYPE"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                 )
 

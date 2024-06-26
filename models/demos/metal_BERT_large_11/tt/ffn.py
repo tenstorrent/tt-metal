@@ -6,6 +6,7 @@
 import torch
 
 import tt_lib
+import ttnn
 from tt_lib.utils import pad_weight
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
 
@@ -27,13 +28,13 @@ def feed_forward(
     if "OP9_FF1_MM_CONFIG" in model_config:
 
         def op9_MM_bias_gelu(activation, ff1_weighta, ff1_biasa):
-            output_plus_bias_act = tt_lib.operations.primary.matmul(
+            output_plus_bias_act = tt.linear(
                 activation,
                 ff1_weighta,
                 bias=ff1_biasa,
                 program_config=model_config["OP9_FF1_MM_CONFIG"],
-                output_mem_config=model_config["OP9_FF1_MM_OUTPUT_MEMCFG"],
-                output_dtype=model_config["OP9_FF1_MM_OUTPUT_DTYPE"],
+                memory_config=model_config["OP9_FF1_MM_OUTPUT_MEMCFG"],
+                dtype=model_config["OP9_FF1_MM_OUTPUT_DTYPE"],
             )
             return output_plus_bias_act
 
@@ -53,13 +54,13 @@ def feed_forward(
     if "OP10_FF2_MM_CONFIG" in model_config:
 
         def op10_MM_bias(activation, ff2_weighta, ff2_biasa):
-            output_plus_bias = tt_lib.operations.primary.matmul(
+            output_plus_bias = ttnn.linear(
                 activation,
                 ff2_weighta,
                 bias=ff2_biasa,
                 program_config=model_config["OP10_FF2_MM_CONFIG"],
-                output_mem_config=model_config["OP10_FF2_MM_OUTPUT_MEMCFG"],
-                output_dtype=model_config["OP10_FF2_MM_OUTPUT_DTYPE"],
+                memory_config=model_config["OP10_FF2_MM_OUTPUT_MEMCFG"],
+                dtype=model_config["OP10_FF2_MM_OUTPUT_DTYPE"],
             )
             return output_plus_bias
 

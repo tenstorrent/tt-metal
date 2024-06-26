@@ -79,12 +79,12 @@ class TtLlamaQKV(torch.nn.Module):
         fused_query_key_value = []
         for i in range(len(xs)):
             fused_query_key_value.append(
-                tt_lib.operations.primary.matmul(
+                ttnn.matmul(
                     xs[i],
                     self.qkv_list[i],
                     program_config=self.model_config["FUSED_QKV_MM_PROGCFG"],
-                    # output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-                    # output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
+                    # memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+                    # dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                 )
             )

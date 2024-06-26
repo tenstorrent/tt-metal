@@ -7,6 +7,7 @@ import torch
 import warnings
 from torch import nn
 import tt_lib
+import ttnn
 import json
 from typing import Optional, Tuple
 
@@ -260,7 +261,7 @@ class TtT5ForConditionalGeneration(nn.Module):
             sequence_output = sequence_output * (self.model_dim**-0.5)
             sequence_output = torch2tt_tensor(sequence_output, self.device)
 
-        lm_logits = tt_lib.tensor.matmul(sequence_output, self.lm_head_weights)
+        lm_logits = ttnn.matmul(sequence_output, self.lm_head_weights)
         loss = None
 
         # Back to torch

@@ -9,6 +9,7 @@ from typing import Optional, Tuple, Union
 from dataclasses import dataclass
 
 import tt_lib
+import ttnn
 
 from models.experimental.roberta.tt.roberta_model import TtRobertaModel
 from tt_lib.fallback_ops import fallback_ops
@@ -54,7 +55,7 @@ class TtRobertaForMultipleChoice(nn.Module):
 
     def linear(self, x, weight, bias):
         weight = tt_lib.tensor.transpose(weight, -2, -1)
-        x = tt_lib.tensor.matmul(x, weight, output_mem_config=self.mem_config)
+        x = ttnn.matmul(x, weight, memory_config=self.mem_config)
         if bias is not None:
             x = tt_lib.tensor.bcast(
                 x,
