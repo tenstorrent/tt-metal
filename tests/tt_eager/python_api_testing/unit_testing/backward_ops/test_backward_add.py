@@ -4,7 +4,6 @@
 
 import torch
 import pytest
-import tt_lib
 import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
@@ -45,8 +44,7 @@ def test_bw_add(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-# @pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
-@pytest.mark.parametrize("are_required_outputs", [[True, True]])
+@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True], [False, False]])
 def test_bw_add_with_opt_output(input_shapes, device, are_required_outputs):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)

@@ -56,8 +56,7 @@ std::vector<ttnn::Tensor> _embedding_bw(
     return grad_tensor;
 }
 
-//TODO: std::vector<std::optional<Tensor>> _addalpha_bw(
-std::vector<ttnn::Tensor> _addalpha_bw(
+std::vector<std::optional<ttnn::Tensor>> _addalpha_bw(
     uint8_t queue_id,
     const Tensor& grad,
     const Tensor& input,
@@ -67,7 +66,7 @@ std::vector<ttnn::Tensor> _addalpha_bw(
     const std::vector<bool>& are_required_outputs,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-    std::vector<Tensor> result;
+    std::vector<std::optional<Tensor>> result;
 
     if (are_required_outputs.at(0)) {
         if(input_grad.has_value()){
@@ -75,9 +74,9 @@ std::vector<ttnn::Tensor> _addalpha_bw(
         } else {
             input_grad = grad;
         }
-        result.emplace_back(std::move(input_grad.value()));
+        result.emplace_back(input_grad);
     } else {
-        result.emplace_back();
+        result.emplace_back(std::nullopt);
     }
     if (are_required_outputs.at(1)) {
         if(other_grad.has_value()){
@@ -85,21 +84,35 @@ std::vector<ttnn::Tensor> _addalpha_bw(
         } else {
             other_grad = ttnn::multiply(queue_id, grad, alpha, std::nullopt, output_mem_config);
         }
-        result.emplace_back(std::move(other_grad.value()));
+        result.emplace_back(other_grad);
     } else {
-        result.emplace_back();
+        result.emplace_back(std::nullopt);
     }
+
     return std::move(result);
 
 }
 
 std::vector<ttnn::Tensor> _addalpha_bw_inter(
     const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const MemoryConfig& output_mem_config) {
-    return _addalpha_bw(0, grad, input, other, alpha, output_mem_config, {true, true}, std::nullopt, std::nullopt);
+
+    auto result = _addalpha_bw(0, grad, input, other, alpha, output_mem_config, {true, true}, std::nullopt, std::nullopt);
+
+    std::vector<ttnn::Tensor> output_tensors;
+    output_tensors.reserve(result.size());
+
+    for (const auto& opt_tensor : result) {
+        if (opt_tensor) {
+            output_tensors.emplace_back(*opt_tensor);
+        } else {
+            output_tensors.emplace_back();
+        }
+    }
+    return output_tensors;
 }
 
-//TODO: std::vector<std::optional<Tensor>> _addalpha_bw_overload(
-std::vector<ttnn::Tensor> _addalpha_bw_overload(
+
+std::vector<std::optional<Tensor>> _addalpha_bw_overload(
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -126,8 +139,7 @@ std::vector<ttnn::Tensor> _sub_bw(
     return _subalpha_bw(grad, input, other, 1.0, output_mem_config);
 }
 
-//TODO: std::vector<std::optional<Tensor>> _add_bw(
-std::vector<Tensor> _add_bw(
+std::vector<std::optional<Tensor>> _add_bw(
     uint8_t queue_id,
     const Tensor& grad,
     const Tensor& input,
@@ -141,11 +153,21 @@ std::vector<Tensor> _add_bw(
 
 std::vector<ttnn::Tensor> _add_bw_inter(
     const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    return _add_bw(0, grad, input, other, output_mem_config, {true, true}, std::nullopt, std::nullopt);
+    auto result =  _add_bw(0, grad, input, other, output_mem_config, {true, true}, std::nullopt, std::nullopt);
+    std::vector<ttnn::Tensor> output_tensors;
+    output_tensors.reserve(result.size());
+
+    for (const auto& opt_tensor : result) {
+        if (opt_tensor) {
+            output_tensors.emplace_back(*opt_tensor);
+        } else {
+            output_tensors.emplace_back();
+        }
+    }
+    return output_tensors;
 }
 
-//TODO: std::vector<std::optional<Tensor>> _add_bw(
-std::vector<Tensor> _add_bw_overload(
+std::vector<std::optional<Tensor>> _add_bw_overload(
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -312,7 +334,7 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
     }
 }
 
-std::function<std::vector<ttnn::Tensor>(uint8_t , const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type2(BinaryBackwardOpType OpType){
+std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type2(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ADDALPHA_BW:
             return _addalpha_bw;
@@ -322,7 +344,7 @@ std::function<std::vector<ttnn::Tensor>(uint8_t , const Tensor&, const Tensor&, 
     }
 }
 
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type2_wo_qid(BinaryBackwardOpType OpType){
+std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tensor&, const Tensor&, float, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type2_wo_qid(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ADDALPHA_BW:
             return _addalpha_bw_overload;
@@ -332,7 +354,7 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
     }
 }
 
-std::function<std::vector<ttnn::Tensor>(uint8_t , const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type3(BinaryBackwardOpType OpType){
+std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type3(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ADD_BW:
             return _add_bw;
@@ -342,7 +364,7 @@ std::function<std::vector<ttnn::Tensor>(uint8_t , const Tensor&, const Tensor&, 
     }
 }
 
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type3_wo_qid(BinaryBackwardOpType OpType){
+std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> get_function_type3_wo_qid(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ADD_BW:
             return _add_bw_overload;

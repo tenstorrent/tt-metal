@@ -47,7 +47,7 @@ struct ExecuteBinaryBackward {
                 false}};
     }
 
-    static inline std::vector<Tensor> create_async_output_tensors(
+    static inline std::vector<ttnn::Tensor> create_async_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
         const auto& input_tensor = input_tensors.at(0);
         return {Tensor(operation::get_workers_for_op_output({input_tensor})),
@@ -63,11 +63,10 @@ struct ExecuteBinaryBackward {
     static std::vector<ttnn::Tensor> execute_on_worker_thread(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
-        const Tensor &input_tensor_b_arg,
-        const MemoryConfig &memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+        const MemoryConfig &memory_config,
+        const Tensor &input_tensor_b_arg) {
 
         auto op_type = utils::get_function_type1(binary_backward_op_type);
-        // auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
         return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, memory_config);
         }
 
@@ -93,7 +92,7 @@ struct ExecuteBinaryBackward {
         return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b);
     }
 
-    static std::vector<ttnn::Tensor> execute_on_worker_thread(
+    static std::vector<std::optional<ttnn::Tensor>> execute_on_main_thread(
         uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
@@ -114,7 +113,7 @@ struct ExecuteBinaryBackward {
         return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b);
     }
 
-    static std::vector<ttnn::Tensor> execute_on_worker_thread(
+    static std::vector<std::optional<ttnn::Tensor>> execute_on_main_thread(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
@@ -134,7 +133,7 @@ struct ExecuteBinaryBackward {
         return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b);
     }
 
-    static std::vector<ttnn::Tensor> execute_on_worker_thread(
+    static std::vector<std::optional<ttnn::Tensor>> execute_on_main_thread(
         uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
@@ -156,7 +155,7 @@ struct ExecuteBinaryBackward {
         return std::forward_as_tuple(grad_tensor, input_tensor_a, input_tensor_b);
     }
 
-    static std::vector<ttnn::Tensor> execute_on_worker_thread(
+    static std::vector<std::optional<ttnn::Tensor>> execute_on_main_thread(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
