@@ -207,6 +207,15 @@ install(TARGETS tt_eager
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT tt_build_artifacts
 )
+install(TARGETS ttnn_lib
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT tt_build_artifacts
+)
+install(TARGETS ttnn
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT tt_build_artifacts
+)
 if(WITH_PYTHON_BINDINGS)
     install(TARGETS tt_lib
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -223,15 +232,6 @@ if(WITH_PYTHON_BINDINGS)
     COMPONENT tt_pybinds
     )
 endif()
-install(TARGETS ttnn_lib
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    COMPONENT tt_build_artifacts
-)
-install(TARGETS ttnn
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    COMPONENT tt_build_artifacts
-)
 
 # Temporary workaround for Issue #8767
 install(DIRECTORY ${PROJECT_BINARY_DIR}/hw/toolchain
