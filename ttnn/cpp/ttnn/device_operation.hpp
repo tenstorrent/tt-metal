@@ -15,6 +15,7 @@
 #include "tt_stl/concepts.hpp"
 #include "tt_stl/reflection.hpp"
 #include "tt_stl/unique_any.hpp"
+#include <reflect>
 
 namespace ttnn {
 
