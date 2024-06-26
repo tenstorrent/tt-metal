@@ -65,6 +65,18 @@ inline void llk_math_eltwise_unary_sfpu_typecast(uint dst_index, int vector_mode
             dst_index,
             vector_mode);
     }
+    else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Float32 && OUT_DTYPE == (uint32_t)DataFormat::Int32) {
+        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+            ckernel::sfpu::calculate_typecast_fp16b_to_int32<APPROXIMATE,8>,
+            dst_index,
+            vector_mode);
+    }
+    else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Int32 && OUT_DTYPE == (uint32_t)DataFormat::Float32) {
+        llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+            ckernel::sfpu::calculate_typecast_int32_to_fp32<APPROXIMATE,8>,
+            dst_index,
+            vector_mode);
+    }
 }
 
 template <bool APPROXIMATE>
