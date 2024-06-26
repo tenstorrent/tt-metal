@@ -25,7 +25,7 @@ runs:
 
           const { JOB_NAME } = process.env;
 
-          const { totalCount, jobs } = await octokit
+          const { totalCount, jobs } = await github.
             .paginate(
               "GET /repos/{owner}/{repo}/actions/runs/{runId}/attempts/{runAttempt}/jobs",
               { owner, repo, runId, runAttempt },
