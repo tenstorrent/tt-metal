@@ -28,6 +28,7 @@ void kernel_main() {
     constexpr uint32_t k_num_chunks = get_compile_time_arg_val(11);  // number of chunks in K, where k_num_chunks*Sk_chunk_t = PSt
     constexpr uint32_t k_chunk_start = get_compile_time_arg_val(12);
     constexpr uint32_t k_chunk_end = get_compile_time_arg_val(13);
+    constexpr bool is_out_sharded = get_compile_time_arg_val(14);
 
     const uint32_t out_addr  = get_arg_val<uint32_t>(0);
 
@@ -127,15 +128,16 @@ void kernel_main() {
     cb_wait_front(cb_out, out_chunk_tiles);
 
     // DPRINT << "[Writer Reducer] recieved output chunk from reduce compute" << ENDL();
-
-    uint32_t l1_read_addr = get_read_ptr(cb_out);
-    for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
-        noc_async_write_tile(out_tile_id, out_writer, l1_read_addr);
-        ++out_tile_id;
-        l1_read_addr += tile_bytes;
-        if (++barrier_count == barrier_threshold) {
-            noc_async_writes_flushed();
-            barrier_count = 0;
+    if (! is_out_sharded){
+        uint32_t l1_read_addr = get_read_ptr(cb_out);
+        for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
+            noc_async_write_tile(out_tile_id, out_writer, l1_read_addr);
+            ++out_tile_id;
+            l1_read_addr += tile_bytes;
+            if (++barrier_count == barrier_threshold) {
+                noc_async_writes_flushed();
+                barrier_count = 0;
+            }
         }
     }
     noc_async_write_barrier();

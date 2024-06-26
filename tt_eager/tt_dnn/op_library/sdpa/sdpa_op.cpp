@@ -263,13 +263,6 @@ void ScaledDotProductAttentionDecode::validate(
     const auto v_shape = input_tensors.at(2).get_legacy_shape();
     const auto mask_shape = mask.get_legacy_shape();
 
-    // // assert all dataformats are the same
-    // TT_FATAL(
-    //     input_tensors.at(0).get_dtype() == input_tensors.at(1).get_dtype() &&
-    //     input_tensors.at(0).get_dtype() == input_tensors.at(2).get_dtype() &&
-    //     input_tensors.at(0).get_dtype() == mask.get_dtype());
-
-
     // Input 0 must be sharded by height or DRAM interleaved. All other inputs must be in DRAM.
     const auto Q_memcfg = input_tensors.at(0).memory_config();
     if (input_tensors.at(0).is_sharded()){
@@ -282,9 +275,10 @@ void ScaledDotProductAttentionDecode::validate(
     for (std::size_t i = 1; i < input_tensors.size(); i++) {
         TT_FATAL(input_tensors.at(i).buffer()->buffer_type() == tt_metal::BufferType::DRAM);
     }
-    // Output memconfig must be height sharded, same as input
-    // TT_FATAL(this->output_mem_config.is_sharded());
-    // TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+    // Output memconfig must be height sharded or DRAM
+    if (this->output_mem_config.is_sharded()){
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+    }
 
     // Assert we are in decode mode if not causal
     // Q: [1, B, NH, D]
@@ -337,13 +331,6 @@ void ScaledDotProductAttentionDecode::validate(
                 TT_FATAL(q_chunk_size == q_shape[-2], "Non-causal SDPA must have q_chunk_size == q_shape[-2]");
                 TT_FATAL(this->valid_seq_len.value() % k_chunk_size == 0, "valid_seq_len must be divisible by k_chunk_size");
 
-                // For now, assert that chunk sizes are the same
-                // TT_FATAL(q_chunk_size == k_chunk_size);
-
-                // Ensure that batch * num_heads divides the number of cores
-                // auto b_nh = q_shape[-4] * q_shape[-3];
-                // auto num_cores = program_config.compute_with_storage_grid_size.x *
-                // program_config.compute_with_storage_grid_size.y; TT_FATAL((num_cores / b_nh) * b_nh == num_cores);
             } else {
                 TT_FATAL(false, "Non-causal SDPA must use multi-core program config");
             }
@@ -406,7 +393,6 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         this->valid_seq_len);
 }
 
-// What is this?
 tt::stl::reflection::Attributes ScaledDotProductAttentionDecode::attributes() const {
     // fill out with everything in struct
     return {
