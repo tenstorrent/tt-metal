@@ -211,16 +211,11 @@ void Device::initialize_and_launch_firmware() {
     CoreCoord grid_size = this->logical_grid_size();
     std::unordered_set<CoreCoord> not_done_cores;
 
-    // Clear Profiler Buffer L1 in Tensix and Eth cores
-    std::vector<uint32_t> zero_vec_tensix_profiler_buffer((PROFILER_L1_END_ADDRESS - PROFILER_L1_BUFFER_BR) / sizeof(uint32_t), 0);
-    std::vector<uint32_t> zero_vec_eth_profiler_buffer((eth_l1_mem::address_map::PROFILER_L1_BUFFER_CONTROL - eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER) / sizeof(uint32_t), 0);
-
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
             if (!this->storage_only_cores_.count(logical_core)) {
                 CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
-                detail::WriteToDeviceL1(this, logical_core, PROFILER_L1_BUFFER_BR, zero_vec_tensix_profiler_buffer);
                 this->initialize_firmware(worker_core, &launch_msg);
                 not_done_cores.insert(worker_core);
             }
@@ -246,13 +241,11 @@ void Device::initialize_and_launch_firmware() {
     // Load erisc app base FW to eth cores
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
-        llrt::write_hex_vec_to_core(this->id(), phys_eth_core, zero_vec_eth_profiler_buffer, eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER);
         this->initialize_firmware(phys_eth_core, &launch_msg);
     }
 
     for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
-        llrt::write_hex_vec_to_core(this->id(), phys_eth_core, zero_vec_eth_profiler_buffer, eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER);
         this->initialize_firmware(phys_eth_core, &launch_msg);
         not_done_cores.insert(phys_eth_core);
     }

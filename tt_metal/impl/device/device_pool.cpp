@@ -106,6 +106,7 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
 DevicePool* DevicePool::_inst = nullptr;
 
 void DevicePool::initialize_device(Device* dev) const {
+    detail::ClearProfilerControlBuffer(dev);
     // TODO: as optimization, investigate removing all thisi call for already initialized devivces
     dev->initialize_and_launch_firmware();
 
@@ -123,6 +124,7 @@ void DevicePool::initialize_device(Device* dev) const {
         dev->initialize_synchronous_sw_cmd_queue();
         TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
+    detail::InitDeviceProfiler(dev);
 }
 
 void DevicePool::activate_device(chip_id_t id) {
@@ -210,7 +212,6 @@ void DevicePool::init_firmware_on_active_devices() const {
 
         auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
         this->initialize_device(dev);
-        detail::InitDeviceProfiler(dev);
         if (not this->skip_remote_devices) {
             for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
                 // Need to create devices from farthest to the closest.
@@ -218,7 +219,6 @@ void DevicePool::init_firmware_on_active_devices() const {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     log_debug(tt::LogMetal, "Tunnel {} Device {} Tunnel Stop: {}", t, mmio_controlled_device_id, ts);
                     this->initialize_device(this->devices[mmio_controlled_device_id].get());
-                    detail::InitDeviceProfiler(this->devices[mmio_controlled_device_id].get());
                 }
             }
         }
