@@ -15,7 +15,7 @@ runs:
         result-encoding: string
         retries: 3
         env:
-          JOB_NAME: ${{ github.job }}
+          JOB_NAME: "${{ github.job }}"
         script: |
           const owner = context.repo.owner;
           const repo = context.repo.repo;
@@ -39,4 +39,5 @@ runs:
 
           return matchingJobs[0].id;
     - name: Get artifact name result
+      shell: bash
       run: echo "${{ inputs.prefix }}${{ steps.get-current-job-id.outputs.result }}"
