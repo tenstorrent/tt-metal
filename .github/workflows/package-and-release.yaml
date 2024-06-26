@@ -113,7 +113,8 @@ jobs:
         with:
           tag_name: ${{ needs.create-tag.outputs.version }}
           name: ${{ needs.create-tag.outputs.version }}
-          draft: true
+          draft: false
+          prerelease: true
           body_path: CHANGELOG.txt
           files: |
             VERSION
