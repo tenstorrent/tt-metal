@@ -32,7 +32,7 @@ struct EriscDatamoverConfig {
 
     static uint32_t get_edm_handshake_address() { return usable_l1_base_address; }
     static uint32_t get_semaphores_base_address(std::size_t num_edm_channels) {
-        return usable_l1_base_address + handshake_location_size + edm_receiver_first_level_ack_source_word_size;
+        return usable_l1_base_address + (handshake_location_size * 3) + edm_receiver_first_level_ack_source_word_size;
     }
     static uint32_t get_buffers_base_address(std::size_t num_edm_channels) {
         uint32_t base_address = round_up(
@@ -231,6 +231,7 @@ class EriscDatamoverBuilder {
         log_trace(tt::LogOp, "\tis_sender: {}", active_channels.back().is_sender ? 1 : 0);
         log_trace(tt::LogOp, "\tbuffer_address: {}", local_buffer_addresses.at(channel));
         log_trace(tt::LogOp, "\tsemaphore_address: {}", local_semaphore_addresses.at(channel));
+        log_trace(tt::LogOp, "\tnum_workers: {}", worker_coords.size());
 
         return ChannelBufferInterface{channel, local_buffer_addresses.at(channel), local_semaphore_addresses.at(channel)};
     }
@@ -256,6 +257,7 @@ class EriscDatamoverBuilder {
         log_trace(tt::LogOp, "\tworker_semaphore_address: {}", active_channels.back().worker_semaphore_address);
         log_trace(tt::LogOp, "\tnum_eth_messages_to_forward: {}", active_channels.back().num_eth_messages_to_forward);
         log_trace(tt::LogOp, "\tchannel: {}", active_channels.back().channel);
+        log_trace(tt::LogOp, "\tnum_workers: {}", worker_coords.size());
         log_trace(tt::LogOp, "\tis_sender: {}", active_channels.back().is_sender ? 1 : 0);
         return ChannelBufferInterface{channel, local_buffer_addresses.at(channel), local_semaphore_addresses.at(channel)};
     }
