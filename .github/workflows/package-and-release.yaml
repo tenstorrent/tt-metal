@@ -119,3 +119,21 @@ jobs:
             infra/machine_setup/scripts/setup_hugepages.py
             metal_libs-*+*.whl
           fail_on_unmatched_files: true
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        env: 
+          TT_METAL_DOCKER_IMAGE: tt-metalium/ubuntu-20.04-amd64
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-20.04-amd64:${{ needs.create-tag.outputs.version }}-dev
+          context: .
+          file: dockerfile/ubuntu-20.04-amd64.Dockerfile
+          
