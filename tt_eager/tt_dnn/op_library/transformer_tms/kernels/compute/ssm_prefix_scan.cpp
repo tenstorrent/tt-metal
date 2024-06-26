@@ -26,6 +26,8 @@ constexpr uint32_t cb_out = get_compile_time_arg_val(8);
 
 constexpr uint32_t cb_zeros = get_compile_time_arg_val(9);
 
+constexpr uint32_t cb_h_acc = get_compile_time_arg_val(10);
+
 // This function relies on untilizing NUM_TILES_IN_TILIZED_CHUNK tiles so we pad up to that amount
 FORCE_INLINE void pack_block_rows_into_tiles(uint32_t cb_in, uint32_t cb_out, uint32_t num_tiles) {
     unpack_reconfig_data_format_srca(cb_in);
@@ -126,11 +128,6 @@ FORCE_INLINE void copy(uint32_t cb_in, uint32_t cb_out) {
     cb_push_back(cb_out, 1);
 }
 
-FORCE_INLINE void setup_cb_zeros() {
-    cb_reserve_back(cb_zeros, 1);
-    cb_push_back(cb_zeros, 1);
-}
-
 FORCE_INLINE void fill_tile_zeros(uint32_t cb_id) { copy(cb_zeros, cb_id); }
 
 FORCE_INLINE void compute_ht(uint32_t cb_a, uint32_t cb_bx, uint32_t cb_out, uint32_t num_tiles) {
@@ -141,6 +138,8 @@ FORCE_INLINE void compute_ht(uint32_t cb_a, uint32_t cb_bx, uint32_t cb_out, uin
         copy(cb_h, cb_out);  // TODO: Get rid of this extraneous copy
         cb_pop_front(cb_h, 1);
     }
+    copy(cb_h_prev, cb_h_acc);  // Store the last row of this tile for the next iteration
+
     // Make sure to remove the last hidden state
     cb_wait_front(cb_h_prev, 1);
     cb_pop_front(cb_h_prev, 1);
@@ -158,12 +157,17 @@ void MAIN {
     untilize_init(cb_a_in);
     binary_op_init_common(cb_a_in, cb_bx_in);
 
-    setup_cb_zeros();
+    // Fill initial hidden states with zeros
+    for (uint32_t tilized_chunk_idx = 0; tilized_chunk_idx < num_tilize_per_row; tilized_chunk_idx++) {
+        fill_tile_zeros(cb_h_acc);
+    }
 
     // For each row of tiles we want to tilize chunks of 32 tiles to pack the rows into tiles
     for (uint32_t row_idx = 0; row_idx < total_tiles_per_col; row_idx++) {
         for (uint32_t tilized_chunk_idx = 0; tilized_chunk_idx < num_tilize_per_row; tilized_chunk_idx++) {
-            fill_tile_zeros(cb_h_prev);
+            // Load the last row from the hidden state above this row
+            copy(cb_h_acc, cb_h_prev);
+            cb_pop_front(cb_h_acc, 1);
 
             // If we don't have a full chunk (NUM_TILES_IN_TILIZED_CHUNK tiles) we should figure out how many tiles we
             // have left. This only runs 2-3 tiles per shard so no need to unroll.
