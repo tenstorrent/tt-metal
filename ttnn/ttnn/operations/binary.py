@@ -49,7 +49,6 @@ def register_ttl_binary_function(name, ttl_binary_function, doc):
         return output_tensor
 
     if isinstance(binary_function, ttnn.decorators.Operation):
-        binary_function.__name__ = f"ttnn.{name}"
         binary_function.decorated_function.__doc__ = doc + (
             binary_function.__doc__ if binary_function.__doc__ is not None else ""
         )
@@ -348,7 +347,6 @@ def register_ttl_elt_binary_function(name, ttl_elt_binary_function, op_name):
         return output_tensor
 
     if isinstance(elt_binary_function, ttnn.decorators.Operation):
-        elt_binary_function.__name__ = f"ttnn.{name}"
         elt_binary_function.decorated_function.__doc__ = f"""{name}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
             Performs eltwise-binary {op_name} operation on two tensors :attr:`input_a` and :attr:`input_b`.

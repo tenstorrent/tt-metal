@@ -260,7 +260,6 @@ def register_ttl_unary_function_with_float(name, ttl_unary_function, param):
         return output_tensor
 
     if isinstance(unary_function, ttnn.decorators.Operation):
-        unary_function.__name__ = f"ttnn.{(name)}"
         unary_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
             Applies the {name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
@@ -346,7 +345,6 @@ def register_ttl_activation_function_with_float(name, ttl_activation_function, p
         return output_tensor
 
     if isinstance(activation_function, ttnn.decorators.Operation):
-        activation_function.__name__ = f"ttnn.{(name)}"
         activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
             Applies the {name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param}` parameter.
@@ -430,7 +428,6 @@ def register_ttl_activation_function_with_two_float_params(name, ttl_activation_
         return output_tensor
 
     if isinstance(activation_function, ttnn.decorators.Operation):
-        activation_function.__name__ = f"ttnn.{(name)}"
         activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, parameter, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
             Applies the {name} function to the elements of the input tensor :attr:`input_tensor` with :attr:`{param1_name}` and :attr:`{param2_name}`  parameters.
@@ -550,7 +547,6 @@ def register_ttl_activation_function_glu(name, ttl_activation_function, param):
         return output_tensor
 
     if isinstance(activation_function, ttnn.decorators.Operation):
-        activation_function.__name__ = f"ttnn.{(name)}"
         activation_function.decorated_function.__doc__ = f"""{(name)}(input_tensor: ttnn.Tensor, dim: int = -1, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
             Applies the {name} function to the elements of the input tensor :attr:`input_tensor` split along :attr:`{param}`.
