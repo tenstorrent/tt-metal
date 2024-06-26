@@ -1057,15 +1057,24 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
 
     m_tensor.def(
         "addcmul",
-        &addcmul,
-        py::arg("input").noconvert(),
-        py::arg("tensor1").noconvert(),
-        py::arg("tensor2").noconvert(),
-        py::arg("value"),
+        [](const Tensor& input_a,
+           const Tensor& input_b,
+           const Tensor& input_c,
+           const float value,
+           const MemoryConfig& output_mem_config,
+           std::optional<Tensor> output_tensor,
+           uint8_t queue_id) {
+            return addcmul(queue_id, input_a, input_b, input_c, value, output_mem_config, output_tensor);
+        },
+        py::arg("input_a").noconvert(),
+        py::arg("input_b").noconvert(),
+        py::arg("input_c").noconvert(),
+        py::arg("value") = 1.0f,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("output_tensor").noconvert() = std::nullopt,
+        py::arg("queue_id").noconvert() = 0,
         R"doc(
-            Performs the element-wise multiplication of tensor1 ``tensor1`` by tensor2 ``tensor2``, multiplies the result
-            by the scalar value ``value`` and adds it to input ``input``.
+            Performs the element-wise multiplication of ``input_b`` by ``input_c``, multiplies the result by the scalar value and adds it to ``input_a``
 
             Input tensor must have BFLOAT16 data type.
 
@@ -1074,11 +1083,13 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-                "input", "Tensor addcmul is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "tensor1", "First Tensor to multiply", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "tensor2", "Second tensor to multiply", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "value", "Value to be multiplied", "float", "", "Yes"
+                "input_a", "Tensor addcmul is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_b", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_c", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "value", "value", "float", "default to 1.0f", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
+                "queue_id", "Command queue id", "integer", "default to 0", "No"
         )doc");
 
     m_tensor.def(

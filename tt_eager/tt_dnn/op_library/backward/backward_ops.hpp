@@ -44,17 +44,39 @@ std::vector<Tensor> addcmul_bw(
     float value,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> unary_mul_bw(
+std::vector<std::optional<Tensor>> unary_mul_bw(
     const Tensor& grad,
     const Tensor& input,
     float scalar,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
 
-std::vector<Tensor> unary_add_bw(
+std::vector<std::optional<Tensor>> unary_mul_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    float scalar,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
+
+std::vector<std::optional<Tensor>> unary_add_bw(
     const Tensor& grad,
     const Tensor& input,
     float alpha,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
+
+std::vector<std::optional<Tensor>> unary_add_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    float alpha,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
 
 std::vector<Tensor> unary_pow_bw(
     const Tensor& grad,
@@ -218,10 +240,20 @@ std::vector<Tensor> sub_bw(
     const Tensor& other,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> unary_sub_bw(
+std::vector<std::optional<Tensor>> unary_sub_bw(
     const Tensor& grad,
     const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
+
+std::vector<std::optional<Tensor>> unary_sub_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::vector<bool>& are_required_outputs = std::vector<bool>{true},
+    std::optional<Tensor> input_grad = std::nullopt);
 
 std::vector<Tensor> rsub_bw(
     const Tensor& grad,
