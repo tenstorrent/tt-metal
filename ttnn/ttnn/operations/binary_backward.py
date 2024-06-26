@@ -8,122 +8,11 @@ import sys
 
 import ttnn
 
-import tt_lib as ttl
+import torch
 
 THIS_MODULE = sys.modules[__name__]
 
 __all__ = []
-
-
-def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    pyt_y = torch.atan2(input_tensor_a, input_tensor_b)
-    input_tensor_a.retain_grad()
-    input_tensor_b.retain_grad()
-
-    pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
-    return golden_tensor
-
-
-atan2_bw = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary_backward.atan2_bw)
-
-
-def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    pyt_y = torch.xlogy(input_tensor_a, input_tensor_b)
-    input_tensor_a.retain_grad()
-    input_tensor_b.retain_grad()
-
-    pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
-    return golden_tensor
-
-
-xlogy_bw = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary_backward.xlogy_bw)
-
-
-def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    pyt_y = torch.hypot(input_tensor_a, input_tensor_b)
-    input_tensor_a.retain_grad()
-    input_tensor_b.retain_grad()
-
-    pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
-    return golden_tensor
-
-
-hypot_bw = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary_backward.hypot_bw)
-
-
-def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    pyt_y = torch.ldexp(input_tensor_a, input_tensor_b)
-    input_tensor_a.retain_grad()
-    input_tensor_b.retain_grad()
-
-    pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
-    return golden_tensor
-
-
-ldexp_bw = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary_backward.ldexp_bw)
-
-
-def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    pyt_y = torch.logaddexp(input_tensor_a, input_tensor_b)
-    input_tensor_a.retain_grad()
-    input_tensor_b.retain_grad()
-
-    pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
-    return golden_tensor
-
-
-logaddexp_bw = ttnn.register_operation(golden_function=_golden_function)(
-    ttnn._ttnn.operations.binary_backward.logaddexp_bw
-)
-
-
-def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    pyt_y = torch.logaddexp2(input_tensor_a, input_tensor_b)
-    input_tensor_a.retain_grad()
-    input_tensor_b.retain_grad()
-
-    pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
-    return golden_tensor
-
-
-logaddexp2_bw = ttnn.register_operation(golden_function=_golden_function)(
-    ttnn._ttnn.operations.binary_backward.logaddexp2_bw
-)
-
-
-def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    pyt_y = torch.square(torch.sub(input_tensor_a, input_tensor_b))
-    input_tensor_a.retain_grad()
-    input_tensor_b.retain_grad()
-
-    pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
-    return golden_tensor
-
-
-squared_difference_bw = ttnn.register_operation(golden_function=_golden_function)(
-    ttnn._ttnn.operations.binary_backward.squared_difference_bw
-)
 
 
 def _golden_function(grad_tensor, input_tensor, weight_tensor, *args, **kwargs):
@@ -159,56 +48,87 @@ embedding_bw = ttnn.register_operation(golden_function=_golden_function)(
 )
 
 
-def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    pyt_y = torch.add(input_tensor_a, input_tensor_b, alpha=alpha)
+def _golden_function_backward(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
+    if torch_op == torch.squared_difference:
+        pyt_y = torch.square(torch.sub(input_tensor_a, input_tensor_b))
+    else:
+        pyt_y = torch_op(input_tensor_a, input_tensor_b)
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
     return golden_tensor
 
 
-addalpha_bw = ttnn.register_operation(golden_function=_golden_function)(
-    ttnn._ttnn.operations.binary_backward.addalpha_bw
-)
-
-
-def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    pyt_y = torch.add(input_tensor_a, input_tensor_b, alpha=alpha)
+def _golden_function_backward_with_float(torch_op, grad_tensor, input_tensor_a, input_tensor_b, alpha, *args, **kwargs):
+    pyt_y = torch_op(input_tensor_a, input_tensor_b, alpha=alpha)
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
     return golden_tensor
 
 
-subalpha_bw = ttnn.register_operation(golden_function=_golden_function)(
-    ttnn._ttnn.operations.binary_backward.subalpha_bw
-)
+sub_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.sub, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.sub_bw)
 
+add_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.add, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.add_bw)
 
-def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
+atan2_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.atan2, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.atan2_bw)
 
-    pyt_y = torch.sub(input_tensor_a, input_tensor_b)
-    pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
-    return golden_tensor
+xlogy_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.xlogy, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.xlogy_bw)
 
+hypot_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.hypot, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.hypot_bw)
 
-sub_bw = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary_backward.sub_bw)
+ldexp_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.ldexp, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.ldexp_bw)
 
+logaddexp_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.logaddexp, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.logaddexp_bw)
 
-def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
+logaddexp2_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.logaddexp2, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.logaddexp2_bw)
 
-    pyt_y = torch.add(input_tensor_a, input_tensor_b)
-    pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
-    return golden_tensor
+squared_difference_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.squared_difference, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.squared_difference_bw)
 
+subalpha_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, alpha, *args, **kwargs: _golden_function_backward_with_float(
+        torch.sub, grad, a, b, alpha, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.subalpha_bw)
 
-add_bw = ttnn.register_operation(golden_function=_golden_function)(ttnn._ttnn.operations.binary_backward.add_bw)
-
+addalpha_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, alpha, *args, **kwargs: _golden_function_backward_with_float(
+        torch.add, grad, a, b, alpha, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.addalpha_bw)
 
 __all__ = []
