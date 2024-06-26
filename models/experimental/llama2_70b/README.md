@@ -27,23 +27,33 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
 2. **Set up environment:**
     Follow the Wormhole [installation instructions](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md).
 
+    Then export either the Llama2-70B or Llama3-70B checkpoint directory, the tokenizer path, and the weight cache directory.
     ```bash
-    export LLAMA_CKPT_DIR=<repacked_output_dir>
-    export LLAMA_TOKENIZER_PATH=<path_to_checkpoint_dir>
-    export LLAMA_CACHE_PATH=<weight_cache_dir>
+    # Llama2-70B requires the following environment variables:
+    export LLAMA2_CKPT_DIR=<repacked_output_dir>
+    export LLAMA2_TOKENIZER_PATH=<path_to_checkpoint_dir>
+    export LLAMA2_CACHE_PATH=<weight_cache_dir>
+
+    # Llama3-70B requires the following environment variables:
+    export LLAMA3_CKPT_DIR=<repacked_output_dir>
+    export LLAMA3_TOKENIZER_PATH=<path_to_checkpoint_dir>
+    export LLAMA3_CACHE_PATH=<weight_cache_dir>
 
     export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
     export TIKTOKEN_CACHE_DIR=""
 
     pip install -r models/experimental/llama2_70b/reference/llama/requirements.txt
-    pip install blobfile
     ```
 
 3. **Run the demo:**
     The first run will take quite a while to cache the weights. Weight caching tilizes and converts Llama weights to our internal format, stored in `LLAMA_CACHE_PATH`.
     Subsequent runs will load cached weights much faster.
     ```bash
-    pytest -svv models/experimental/llama2_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-greedy-tt-70b-T3000-80L-decode_only]
+    # Llama3-70B
+    pytest -svv models/experimental/llama2_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-check_disabled-greedy-tt-70b-T3000-80L-decode_only-text_completion-llama3]
+
+    # Llama2-70B
+    pytest -svv models/experimental/llama2_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-check_disabled-greedy-tt-70b-T3000-80L-decode_only-text_completion-llama2]
     ```
 
 4. **Run the performance test:**

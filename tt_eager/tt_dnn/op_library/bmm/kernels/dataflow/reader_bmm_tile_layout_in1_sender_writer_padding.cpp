@@ -163,11 +163,13 @@ void kernel_main() {
 
     #ifdef IN1_DRAM_SHARDED
     constexpr uint32_t in1_dram_block_size_bytes = in1_dram_block_num_tiles * in1_single_tile_size_bytes;
-    uint32_t l1_read_addr_in1_offset = 0;
     uint32_t in1_block_w_bytes = in1_block_w * in1_single_tile_size_bytes;
     #endif
 
     for (uint32_t b = 0; b < batch; ++b) {
+        #ifdef IN1_DRAM_SHARDED
+        uint32_t l1_read_addr_in1_offset = 0;
+        #endif
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
         for (uint32_t block = 0; block < num_blocks; ++block) {
 

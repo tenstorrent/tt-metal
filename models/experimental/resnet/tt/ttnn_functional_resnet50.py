@@ -11,7 +11,7 @@ from models.utility_functions import (
 )
 
 hardcoded_matmul_config_linear = {
-    8: ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    8: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
         in0_block_w=2,
         out_subblock_h=1,
@@ -22,7 +22,7 @@ hardcoded_matmul_config_linear = {
         fused_activation=None,
         mcast_in0=True,
     ),
-    16: ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    16: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
         in0_block_w=2,
         out_subblock_h=1,
@@ -33,7 +33,7 @@ hardcoded_matmul_config_linear = {
         fused_activation=None,
         mcast_in0=True,
     ),
-    20: ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    20: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
         in0_block_w=2,
         out_subblock_h=1,

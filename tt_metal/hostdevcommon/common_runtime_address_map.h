@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "common_values.hpp"
 #include "dev_mem_map.h"
+#include "noc/noc_parameters.h"
 
 /*
 * This file contains addresses that are visible to both host and device compiled code.
@@ -25,7 +26,7 @@ constexpr static std::uint32_t PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT = 2;
 constexpr static std::uint32_t PROFILER_L1_VECTOR_SIZE = (PROFILER_L1_OPTIONAL_MARKER_COUNT + PROFILER_L1_GUARANTEED_MARKER_COUNT + PROFILER_L1_PROGRAM_ID_COUNT) * PROFILER_L1_MARKER_UINT32_SIZE;
 constexpr static std::uint32_t PROFILER_L1_BUFFER_SIZE = PROFILER_L1_VECTOR_SIZE  * sizeof(uint32_t);
 
-constexpr static std::uint32_t PROFILER_L1_BUFFER_BR = 88 * 1024;
+constexpr static std::uint32_t PROFILER_L1_BUFFER_BR = MEM_MAP_END;
 constexpr static std::uint32_t PROFILER_L1_BUFFER_NC = PROFILER_L1_BUFFER_BR + PROFILER_L1_BUFFER_SIZE;
 constexpr static std::uint32_t PROFILER_L1_BUFFER_T0 = PROFILER_L1_BUFFER_NC + PROFILER_L1_BUFFER_SIZE;
 constexpr static std::uint32_t PROFILER_L1_BUFFER_T1 = PROFILER_L1_BUFFER_T0 + PROFILER_L1_BUFFER_SIZE;
@@ -40,16 +41,18 @@ constexpr static std::uint32_t PROFILER_RISC_COUNT = 5;
 
 static_assert (PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC > PROFILER_L1_BUFFER_SIZE);
 
-constexpr static std::uint32_t L1_KERNEL_CONFIG_BASE = 98 * 1024;
+constexpr static std::uint32_t L1_KERNEL_CONFIG_BASE = PROFILER_L1_END_ADDRESS;
+constexpr static std::uint32_t L1_KERNEL_CONFIG_SIZE = 3 * 1024;
+
 constexpr static std::uint32_t IDLE_ERISC_L1_KERNEL_CONFIG_BASE = 32 * 1024;
 
-constexpr static std::uint32_t L1_ALIGNMENT = 16;
+constexpr static std::uint32_t L1_ALIGNMENT = NOC_L1_READ_ALIGNMENT_BYTES >= NOC_L1_WRITE_ALIGNMENT_BYTES ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES;
 
 // config for 32 L1 buffers is at addr BUFFER_CONFIG_BASE
 // 12 bytes for each buffer: (addr, size, size_in_tiles)
 // addr and size are in 16B words (byte address >> 4)
 // this is a total of 32 * 3 * 4 = 384B
-constexpr static std::uint32_t CIRCULAR_BUFFER_CONFIG_BASE = 103 * 1024;
+constexpr static std::uint32_t CIRCULAR_BUFFER_CONFIG_BASE = L1_KERNEL_CONFIG_BASE + L1_KERNEL_CONFIG_SIZE;
 constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
 constexpr static std::uint32_t UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG = 4;
 constexpr static std::uint32_t CIRCULAR_BUFFER_CONFIG_SIZE = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
@@ -86,7 +89,7 @@ constexpr static std::uint32_t ERISC_L1_UNRESERVED_BASE = L1_UNRESERVED_BASE; //
 // Reserved DRAM addresses
 // Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been committed
 constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
-constexpr static std::uint32_t DRAM_ALIGNMENT = 32;
+constexpr static std::uint32_t DRAM_ALIGNMENT = NOC_DRAM_READ_ALIGNMENT_BYTES >= NOC_DRAM_WRITE_ALIGNMENT_BYTES ? NOC_DRAM_READ_ALIGNMENT_BYTES : NOC_DRAM_WRITE_ALIGNMENT_BYTES;
 constexpr static std::uint32_t DRAM_BARRIER_SIZE = ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 constexpr static std::uint32_t DRAM_UNRESERVED_BASE = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE; // Start of unreserved space
 

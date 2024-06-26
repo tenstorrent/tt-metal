@@ -43,7 +43,7 @@ void Concat::validate(const std::vector<Tensor> &input_tensors) const {
         TT_FATAL(curr_shape == shape_first, "concat tensors differ in shape across non-concat dimensions.");
         if (in_ref.get_layout() == Layout::ROW_MAJOR && this->dim == shape_first.rank() - 1) {
             TT_FATAL(
-                (in_ref.get_legacy_shape()[this->dim] * in_ref.element_size()) % ADDRESS_ALIGNMENT == 0,
+                (in_ref.get_legacy_shape()[this->dim] * in_ref.element_size()) % in_ref.buffer()->alignment() == 0,
                 "Current concat implementation requires aligned last dim when concatting on last dim");
         }
         TT_FATAL(in_ref.is_sharded() == shard_first, "All tensors must be sharded or all must be interleaved");
@@ -114,7 +114,7 @@ Tensor concat(std::vector<Tensor> &input_tensors, const std::int64_t dim, const 
                 if (input_tensors[0].get_layout() == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
                     for (const auto &input_tensor : input_tensors) {
                         TT_FATAL(
-                            (input_tensor.get_legacy_shape()[dim] * input_tensor.element_size()) % ADDRESS_ALIGNMENT ==
+                            (input_tensor.get_legacy_shape()[dim] * input_tensor.element_size()) % input_tensor.buffer()->alignment() ==
                                 0,
                             "Current concat implementation requires aligned last dim when concatting on last dim");
                     }

@@ -13,31 +13,25 @@ import tt_lib
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
 
-
 from models.experimental.llama2_70b.reference.llama.llama import Llama
 
 from models.experimental.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
-from models.experimental.llama2_70b.tt.model_config import (
-    get_model_config,
+from models.experimental.llama2_70b.tt.llama_common import (
+    setup_llama_env,
+    check_device_mesh,
+    MAX_SEQ_LEN,
+    BASE_URL,
+    load_llama_state_dict,
+    should_skip_model_load,
 )
-from models.experimental.llama2_70b.tt.llama_common import get_llama_path, MAX_SEQ_LEN, BASE_URL, load_llama_state_dict
 from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
     profiler,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     disable_compilation_reports,
-    nearest_32,
     skip_for_grayskull,
-    get_devices_for_t3000,
 )
 from models.perf.perf_utils import prep_perf_report
-
-if os.getenv("CI") == "true":
-    os.environ["LLAMA_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/llama-2/llama-2-70b-repacked/"
-    os.environ["LLAMA_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/llama-2/tokenizer.model"
-    os.environ["LLAMA_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/llama-2/llama-data-cache/weights-cache-2"
 
 
 def load_prompts_file(tokenizer, prefill_length, generation_length, gap=64):
@@ -147,9 +141,13 @@ def run_test_LlamaModel_end_to_end(
     generation_length,
     expected_compile_time,
     expected_inference_time,
-    emulated,
+    ckpt_dir,
+    tokenizer_path,
+    cache_path,
 ):
-    device_mesh, ckpt_dir, tokenizer_path, cache_path = get_llama_path(device_mesh, model_config, n_devices, emulated)
+    # Prepare paths and devices
+    skip_model_load = should_skip_model_load()
+
     logger.info(f"Running num_layer: {n_layers}")
 
     generator = Llama.build(
@@ -158,7 +156,7 @@ def run_test_LlamaModel_end_to_end(
         max_seq_len=MAX_SEQ_LEN,
         max_batch_size=batch,
         n_layers=1,
-        skip_model_load=False,
+        skip_model_load=skip_model_load,
     )
     hugging_face_reference_model, tokenizer = generator.model, generator.tokenizer
     hugging_face_reference_model.eval()
@@ -186,10 +184,8 @@ def run_test_LlamaModel_end_to_end(
         n_layers,
         model_config,
         configuration,
-        batch,
-        emulated=emulated,
         cache_path=cache_path,
-        read_cache=False,
+        read_cache=True,
     )
 
     for i in device_mesh.get_device_ids():
@@ -258,27 +254,26 @@ def test_Llama_perf_host(
     expected_compile_time,
     expected_inference_time,
     t3k_device_mesh,
+    use_program_cache,
     n_layers=80,
     n_devices=8,
-    emulated=False,
 ):
     if generation_length == 2048:
         pytest.skip("Skipping 2048 test for now. segfault issue #8637")
-    batch = 32
-    seq_len = 1
-    model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
 
-    if t3k_device_mesh.get_num_devices() < n_devices and not emulated:
-        pytest.skip(f"Requires at {n_devices} devices to run")
+    batch, seq_len = 32, 1
 
-    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
-    if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
-        pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
+    model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
+        batch=batch,
+        seq_len=seq_len,
+    )
 
-    for i in t3k_device_mesh.get_device_ids():
-        device = t3k_device_mesh.get_device(i)
-        device.enable_program_cache()
-        device.enable_async(True)
+    check_device_mesh(t3k_device_mesh, model_config)
+
+    # for i in t3k_device_mesh.get_device_ids():
+    #     device = t3k_device_mesh.get_device(i)
+    #     device.enable_async(True)
+
     disable_compilation_reports()
 
     run_test_LlamaModel_end_to_end(
@@ -291,5 +286,7 @@ def test_Llama_perf_host(
         generation_length,
         expected_compile_time,
         expected_inference_time,
-        emulated,
+        ckpt_dir,
+        tokenizer_path,
+        cache_path,
     )

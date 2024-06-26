@@ -267,7 +267,7 @@ def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
 
         model_config[
             "ATTN_BATCHED_MM_PROGCFG"
-        ] = lambda block_w, per_core_M, per_core_N: ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        ] = lambda block_w, per_core_M, per_core_N: ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=[8, 4],
             in0_block_w=block_w,
             out_subblock_h=1,  # TODO: Maximize
@@ -326,7 +326,7 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
         )
     model_config["MLP_KERNEL_CONFIG"] = default_kernel_config
 
-    mm_h_to_4h_prog_cfg = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    mm_h_to_4h_prog_cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=model_config["MLP_GRID_SIZE"],
         in0_block_w=3,
         out_subblock_h=1,
@@ -338,7 +338,7 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
     )
     model_config["DENSE_H_TO_4H_MM_PROGCFG"] = mm_h_to_4h_prog_cfg
 
-    mm_4h_to_h_prog_cfg = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    mm_4h_to_h_prog_cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=model_config["MLP_GRID_SIZE"],
         in0_block_w=8,
         out_subblock_h=1,
@@ -352,9 +352,7 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
     model_config["MLP_INTERLEAVED_TO_SHARDED_MEM_CFG"] = dram_memcfg
 
     model_config["FUSED_QKV_MM_OPTIMIZED_MEMCFG"] = dram_memcfg
-    model_config[
-        "FUSED_QKV_MM_OPTIMIZED_PROGCFG"
-    ] = ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+    model_config["FUSED_QKV_MM_OPTIMIZED_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(8, 8),
         in0_block_w=2,
         per_core_M=8,
@@ -380,7 +378,7 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
 
     model_config[
         "QKT_OPTIMIZED_PROGCFG"
-    ] = lambda tiles_per_shard, seq_len, subblock_h, subblock_w: ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    ] = lambda tiles_per_shard, seq_len, subblock_h, subblock_w: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=model_config["ATTN_OPTIMIZED_GRID_SIZE"],
         in0_block_w=2,
         per_core_M=tiles_per_shard,
@@ -414,7 +412,7 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
 
     model_config[
         "QKTV_MM_OPTIMIZED_PROGCFG"
-    ] = lambda tiles_per_shard, seq_len, subblock_h: ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    ] = lambda tiles_per_shard, seq_len, subblock_h: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=model_config["ATTN_OPTIMIZED_GRID_SIZE"],
         in0_block_w=seq_len // 32,
         per_core_M=tiles_per_shard,

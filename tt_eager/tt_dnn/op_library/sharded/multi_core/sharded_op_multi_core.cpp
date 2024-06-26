@@ -82,7 +82,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         // TODO: Use a different variable name. Units refers to pages, but this is being used as size
         num_units_per_shard_width_last =
             input_unit_size - (round_up(num_units_per_row, input_unit_size) - num_units_per_row);
-        padded_offset_bytes = align(input_unit_size, ADDRESS_ALIGNMENT);
+        padded_offset_bytes = align(input_unit_size, input.buffer()->alignment());
     }
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
@@ -98,10 +98,10 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     uint32_t scratch_cb_index = CB::c_in1;
     uint32_t out_cb_index = input_cb_index;
     uint32_t num_input_units = num_units_per_shard;
-    uint32_t output_page_size = align(output_unit_size, ADDRESS_ALIGNMENT);
+    uint32_t output_page_size = align(output_unit_size, dst_buffer->alignment());
     if (convert_df) {
         out_cb_index = CB::c_out0;
-        uint32_t input_page_size = align(input_unit_size, ADDRESS_ALIGNMENT);
+        uint32_t input_page_size = align(input_unit_size, src_buffer->alignment());
         tt_metal::CircularBufferConfig input_cb_out_config =
             tt_metal::CircularBufferConfig(num_input_units * input_page_size, {{input_cb_index, input_cb_data_format}})
                 .set_page_size(input_cb_index, input_page_size);
@@ -379,7 +379,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     uint32_t src0_cb_index = CB::c_in0;
     uint32_t out_cb_index = src0_cb_index;
     uint32_t num_input_units = num_units_per_shard;
-    uint32_t input_page_size = align(input_unit_size, ADDRESS_ALIGNMENT);
+    uint32_t input_page_size = align(input_unit_size, input.buffer()->alignment());
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_units * input_page_size, {{src0_cb_index, input_cb_data_format}})
             .set_page_size(src0_cb_index, input_page_size)
@@ -387,7 +387,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
     if (convert_df) {
         out_cb_index = CB::c_out0;
-        uint32_t output_page_size = align(output_unit_size, ADDRESS_ALIGNMENT);
+        uint32_t output_page_size = align(output_unit_size, output.buffer()->alignment());
         tt_metal::CircularBufferConfig output_cb_out_config =
             tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
                 .set_page_size(out_cb_index, output_page_size);
@@ -450,7 +450,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     uint32_t curr_idx_w = 0;
 
     const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
-    uint32_t padded_shard_width = align(output_unit_size, ADDRESS_ALIGNMENT);
+    uint32_t padded_shard_width = align(output_unit_size, dst_buffer->alignment());
     for (const auto& core : cores) {
         if (input.get_layout() == Layout::TILE) {
             uint32_t shard_height = num_units_per_shard_height;

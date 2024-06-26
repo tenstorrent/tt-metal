@@ -21,7 +21,7 @@ from models.experimental.llama2_70b.tt.model_config import (
 
 
 class TtLlamaModelForGeneration:
-    def __init__(self, configuration, state_dict, device_mesh, n_devices, n_layers, batch, cache_path=None):
+    def __init__(self, configuration, state_dict, device_mesh, n_devices, n_layers, cache_path=None):
         ## Get state dict
         configuration = copy.deepcopy(configuration)
 
@@ -39,9 +39,8 @@ class TtLlamaModelForGeneration:
             n_layers,
             model_config,
             configuration,
-            batch,
             cache_path=cache_path,
-            read_cache=True,
+            read_cache=False,
         )
         self.params = configuration
         self.device_mesh = device_mesh
@@ -137,7 +136,7 @@ class TtLlamaModelForGeneration:
                 tt_logits, device=self.device_mesh, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=3)
             )
             logits = logits.squeeze(1)
-            logits = logits[..., : self.params.vocab_size].float()  # [batch, 1, vocab_size]
+            logits = logits[..., : self.params.vocab_size].float()  # [batch, seq_len, vocab_size]
             del tt_logits
 
             output_logits[user_id] = logits[:, :seq_len, :]

@@ -42,6 +42,23 @@ def load_llama_state_dict(ckpt_dir, n_layers, start_layer_idx=0):
     return checkpoint
 
 
+# string similarity score in percentage of two strings based on words in the same order
+def string_similarity_score(ground_truths, predictions):
+    scores = []
+    for ground_truth, prediction in zip(ground_truths, predictions):
+        ground_truth = ground_truth.split()
+        prediction = prediction.split()
+        if len(ground_truth) == 0:
+            return 0
+        score = 0
+        for i in range(len(ground_truth)):
+            if i < len(prediction) and ground_truth[i] == prediction[i]:
+                score += 1
+        scores.append(score / len(ground_truth))
+
+    return scores
+
+
 def should_skip_model_load():
     skip_model_load = bool(os.environ.get("LLAMA_SKIP_MODEL_LOAD", 0))
     if skip_model_load:
@@ -49,10 +66,8 @@ def should_skip_model_load():
     return skip_model_load
 
 
-def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, max_batch_size=32, max_context_len=2048):
+def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, max_batch_size=32, max_context_len=4096):
     if os.getenv("CI") == "true":
-        os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
-
         if llama_version == "llama3":
             ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-3/llama-3-70b-repacked/"
             tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama-3/tokenizer.model"
@@ -63,23 +78,23 @@ def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, ma
             cache_path = Path("/mnt/MLPerf/tt_dnn-models/llama-2/llama-data-cache/weights-cache-2")
     else:
         if llama_version == "llama3":
-            ckpt_dir = os.getenv("LLAMA_CKPT_DIR", "/home/llama3-data-repacked/llama-3-70b/")
-            tokenizer_path = os.getenv("LLAMA_TOKENIZER_PATH", "/home/llama3-data/Meta-Llama-3-70B/tokenizer.model")
-            cache_path = Path(os.getenv("LLAMA_CACHE_PATH", "/home/llama3-data-cache/weights-cache"))
+            ckpt_dir = os.getenv("LLAMA3_CKPT_DIR", "/home/llama3-data-repacked/llama-3-70b/")
+            tokenizer_path = os.getenv("LLAMA3_TOKENIZER_PATH", "/home/llama3-data/Meta-Llama-3-70B/tokenizer.model")
+            cache_path = Path(os.getenv("LLAMA3_CACHE_PATH", "/home/llama3-data-cache/weights-cache"))
         else:
-            ckpt_dir = os.getenv("LLAMA_CKPT_DIR", "/home/llama-data-repacked-2/llama-2-70b/")
-            tokenizer_path = os.getenv("LLAMA_TOKENIZER_PATH", "/home/llama-data/tokenizer.model")
-            cache_path = Path(os.getenv("LLAMA_CACHE_PATH", "/home/llama-data-cache/weights-cache-2"))
+            ckpt_dir = os.getenv("LLAMA2_CKPT_DIR", "/home/llama-data-repacked-2/llama-2-70b/")
+            tokenizer_path = os.getenv("LLAMA2_TOKENIZER_PATH", "/home/llama-data/tokenizer.model")
+            cache_path = Path(os.getenv("LLAMA2_CACHE_PATH", "/home/llama-data-cache/weights-cache-2"))
 
-    assert os.path.exists(
-        ckpt_dir
-    ), f"Checkpoint directory {ckpt_dir} does not exist, please use export LLAMA_CKPT_DIR=..."
-    assert os.path.exists(
-        tokenizer_path
-    ), f"Tokenizer file {tokenizer_path} does not exist, please use export LLAMA_TOKENIZER_PATH=..."
-    assert os.path.exists(
-        cache_path
-    ), f"Cache directory {cache_path} does not exist, please use export LLAMA_CACHE_PATH=..."
+        assert os.path.exists(
+            ckpt_dir
+        ), f"Checkpoint directory {ckpt_dir} does not exist, please use export {llama_version.upper()}_CKPT_DIR=..."
+        assert os.path.exists(
+            tokenizer_path
+        ), f"Tokenizer file {tokenizer_path} does not exist, please use export {llama_version.upper()}_TOKENIZER_PATH=..."
+        assert os.path.exists(
+            cache_path
+        ), f"Cache directory {cache_path} does not exist, please use export {llama_version.upper()}_CACHE_PATH=..."
 
     logger.info(f"Checkpoint directory: {ckpt_dir}")
     logger.info(f"Tokenizer file: {tokenizer_path}")
@@ -400,22 +415,3 @@ def check_kv_cache(pt_cache_all, tt_cache_all, generation_start_pos, generation_
             logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
             test_passed = False
     return test_passed
-
-
-def get_flash_decode_chunk_size(token_idx):
-    # Not sure if optimal
-    if token_idx <= 32:
-        return 32
-    if token_idx <= 64:
-        return 64
-    if token_idx <= 128:
-        return 128
-    if token_idx <= 256:
-        return 256
-    if token_idx <= 2048:
-        return 512
-    return 1024
-
-
-def get_padded_layer_len(token_idx, chunk_size):
-    return ((token_idx + chunk_size - 1) // chunk_size) * chunk_size

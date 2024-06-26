@@ -77,39 +77,19 @@ static uint32_t cmd_ptr;   // walks through pages in cb cmd by cmd
 
 static uint32_t downstream_cb_data_ptr = downstream_cb_base;
 
-constexpr uint32_t l1_to_local_cache_copy_chunk = 6;
-constexpr uint32_t max_write_packed_cores =
-    108;  // GS 120 - 1 row TODO: this should be a compile time arg passed in from host
-constexpr uint32_t l1_cache_size =
-    ((max_write_packed_cores + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
+// For packed write on GS, below must be>= 120 - 1. TODO: this should be a compile time arg passed in from host
+// For packed_write_large, must match CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS
+constexpr uint32_t max_write_packed_cores = 108;
+constexpr uint32_t max_write_packed_large_cmd =
+    CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS *
+    sizeof(CQDispatchWritePackedLargeSubCmd) / sizeof(uint32_t);
+constexpr uint32_t l1_cache_elements = (max_write_packed_cores > max_write_packed_large_cmd) ?
+    max_write_packed_cores : max_write_packed_large_cmd;
+constexpr uint32_t l1_cache_elements_rounded =
+    ((l1_cache_elements + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
     l1_to_local_cache_copy_chunk;
 
-static uint32_t l1_cache[l1_cache_size];
-
-// NOTE: CAREFUL USING THIS FUNCTION
-// It is call "careful_copy" because you need to be careful...
-// It copies beyond count by up to 5 elements make sure src and dst addresses are safe
-FORCE_INLINE
-void careful_copy_from_l1_to_local_cache(volatile uint32_t tt_l1_ptr *l1_ptr, uint32_t count) {
-    uint32_t n = 0;
-    ASSERT(l1_to_local_cache_copy_chunk == 6);
-    ASSERT(count <= l1_cache_size);
-    while (n < count) {
-        uint32_t v0 = l1_ptr[n + 0];
-        uint32_t v1 = l1_ptr[n + 1];
-        uint32_t v2 = l1_ptr[n + 2];
-        uint32_t v3 = l1_ptr[n + 3];
-        uint32_t v4 = l1_ptr[n + 4];
-        uint32_t v5 = l1_ptr[n + 5];
-        l1_cache[n + 0] = v0;
-        l1_cache[n + 1] = v1;
-        l1_cache[n + 2] = v2;
-        l1_cache[n + 3] = v3;
-        l1_cache[n + 4] = v4;
-        l1_cache[n + 5] = v5;
-        n += 6;
-    }
-}
+static uint32_t l1_cache[l1_cache_elements_rounded];
 
 FORCE_INLINE volatile uint32_t *get_cq_completion_read_ptr() {
     return reinterpret_cast<volatile uint32_t *>(CQ_COMPLETION_READ_PTR);
@@ -555,8 +535,8 @@ void process_write_packed(uint32_t flags) {
     ASSERT(count <= (mcast ? max_write_packed_cores / 2 : max_write_packed_cores));
     constexpr uint32_t sub_cmd_size = sizeof(WritePackedSubCmd);
     // Copying in a burst is about a 30% net gain vs reading one value per loop below
-    careful_copy_from_l1_to_local_cache(
-        (volatile uint32_t tt_l1_ptr *)(cmd_ptr + sizeof(CQDispatchCmd)), count * sub_cmd_size / sizeof(uint32_t));
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
+        (volatile uint32_t tt_l1_ptr *)(cmd_ptr + sizeof(CQDispatchCmd)), count * sub_cmd_size / sizeof(uint32_t), l1_cache);
 
     uint32_t xfer_size = cmd->write_packed.size;
     uint32_t dst_addr = cmd->write_packed.addr;
@@ -564,9 +544,9 @@ void process_write_packed(uint32_t flags) {
     ASSERT(xfer_size <= dispatch_cb_page_size);
 
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd) + count * sizeof(WritePackedSubCmd);
-    data_ptr = round_up_pow2(data_ptr, L1_NOC_ALIGNMENT);
+    data_ptr = round_up_pow2(data_ptr, L1_ALIGNMENT);
     uint32_t stride =
-        (flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE) ? 0 : round_up_pow2(xfer_size, L1_NOC_ALIGNMENT);
+        (flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE) ? 0 : round_up_pow2(xfer_size, L1_ALIGNMENT);
     DPRINT << data_ptr << " " << cmd_ptr << " " << xfer_size << " " << dispatch_cb_page_size << ENDL();
     ASSERT(stride != 0 || data_ptr - cmd_ptr + xfer_size <= dispatch_cb_page_size);
 
@@ -649,6 +629,137 @@ void process_write_packed(uint32_t flags) {
         upstream_dispatch_cb_sem_id,
         dispatch_cb_blocks,
         dispatch_cb_pages_per_block>(block_noc_writes_to_clear, wr_block_idx);
+
+    cmd_ptr = data_ptr;
+}
+
+// This routine below can be implemented to either prefetch sub_cmds into local memory or leave them in L1
+// Prefetching into local memory limits the number of sub_cmds (used as kernel writes) in one cmd
+// Leaving in L1 limits the number of bytes of data in one cmd (whole command must fit in CB)
+//
+// The code below prefetches sub_scmds into local cache because:
+//  - it is likely faster (not measured yet, but base based on write_packed)
+//  - allows pages to be released as they are processed (since prefetcher won't overwrite the sub-cmds)
+//  - can presently handle 36 subcmds, or 7 5-processor kernels
+// Without prefetching:
+//  - cmd size is limited to CB size which is 128K and may go to 192K
+//  - w/ 4K kernel binaries, 192K is 9 5-processor kernels, 128K is 6
+//  - utilizing the full space creates a full prefetcher stall as all memory is tied up
+//  - so a better practical full size is 3-4 full sets of 4K kernel binaries
+// May eventually want a separate implementation for tensix vs eth dispatch
+void process_write_packed_large() {
+    volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
+
+    uint32_t count = cmd->write_packed_large.count;
+    uint32_t alignment = cmd->write_packed_large.alignment;
+    uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd) + count * sizeof(CQDispatchWritePackedLargeSubCmd);
+    data_ptr = round_up_pow2(data_ptr, L1_ALIGNMENT);
+
+    cq_noc_async_write_init_state<CQ_NOC_sndl, true>(0, 0);
+
+    constexpr uint32_t sub_cmd_size = sizeof(CQDispatchWritePackedLargeSubCmd);
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
+        (volatile uint32_t tt_l1_ptr *)(cmd_ptr + sizeof(CQDispatchCmd)), count * sub_cmd_size / sizeof(uint32_t), l1_cache);
+
+    uint32_t writes = 0;
+    uint32_t mcasts = noc_nonposted_writes_acked[noc_index];
+    CQDispatchWritePackedLargeSubCmd *sub_cmd_ptr = (CQDispatchWritePackedLargeSubCmd *)l1_cache;
+
+    while (count != 0) {
+        uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
+        uint32_t dst_addr = sub_cmd_ptr->addr;
+        uint32_t length = sub_cmd_ptr->length;
+        uint32_t num_dests = sub_cmd_ptr->num_mcast_dests;
+        uint32_t pad_size = align(length, alignment) - length;
+
+        sub_cmd_ptr++;
+
+        uint64_t dst = get_noc_addr_helper(dst_noc, dst_addr);
+        // Note: expect to only have 1 or a few pages, so this doesn't optimize writing length
+        cq_noc_async_write_with_state<CQ_NOC_sNdl, CQ_NOC_WAIT, CQ_NOC_send>(0, dst);
+
+        while (length != 0) {
+            uint32_t xfer_size = (length > dispatch_cb_page_size) ? dispatch_cb_page_size : length;
+
+            // Get a page if needed
+            if (data_ptr + xfer_size > cb_fence) {
+                // Check for block completion
+                if (cb_fence == block_next_start_addr[rd_block_idx]) {
+                    // Check for dispatch_cb wrap
+                    if (rd_block_idx == dispatch_cb_blocks - 1) {
+                        ASSERT(cb_fence == dispatch_cb_end);
+                        uint32_t orphan_size = cb_fence - data_ptr;
+                        if (orphan_size != 0) {
+                            cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, dst, orphan_size, num_dests);
+                            writes++;
+                            mcasts += num_dests;
+                            length -= orphan_size;
+                            xfer_size -= orphan_size;
+                            dst_addr += orphan_size;
+                        }
+                        cb_fence = dispatch_cb_base;
+                        data_ptr = dispatch_cb_base;
+                        dst = get_noc_addr_helper(dst_noc, dst_addr);
+                    }
+
+                    block_noc_writes_to_clear[rd_block_idx] += writes;
+                    noc_nonposted_writes_num_issued[noc_index] += writes;
+                    writes = 0;
+                    move_rd_to_next_block<dispatch_cb_blocks>(block_noc_writes_to_clear, rd_block_idx);
+                }
+
+                // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
+                uint32_t n_pages = cb_acquire_pages<my_noc_xy, my_dispatch_cb_sem_id, dispatch_cb_log_page_size>(
+                    cb_fence, block_next_start_addr, rd_block_idx);
+                cb_fence += n_pages * dispatch_cb_page_size;
+            }
+
+            cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, dst, xfer_size, num_dests);
+            writes++;
+            mcasts += num_dests;
+            length -= xfer_size;
+            data_ptr += xfer_size;
+            dst_addr += xfer_size;
+            dst = get_noc_addr_helper(dst_noc, dst_addr);
+        }
+
+        // Release pages for prefetcher
+        // Releasing here requires the sub_cmds to be read into local memory above
+        block_noc_writes_to_clear[rd_block_idx] += writes;
+        noc_nonposted_writes_num_issued[noc_index] += writes;
+        writes = 0;
+
+        // Handle padded size and potential wrap
+        if (data_ptr + pad_size > cb_fence) {
+            // Check for block completion
+            if (cb_fence == block_next_start_addr[rd_block_idx]) {
+                // Check for dispatch_cb wrap
+                if (rd_block_idx == dispatch_cb_blocks - 1) {
+                    ASSERT(cb_fence == dispatch_cb_end);
+                    uint32_t orphan_size = cb_fence - data_ptr;
+                    cb_fence = dispatch_cb_base;
+                    data_ptr = dispatch_cb_base;
+                    pad_size -= orphan_size;
+                }
+                move_rd_to_next_block<dispatch_cb_blocks>(block_noc_writes_to_clear, rd_block_idx);
+            }
+
+            // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
+            uint32_t n_pages = cb_acquire_pages<my_noc_xy, my_dispatch_cb_sem_id, dispatch_cb_log_page_size>(
+                cb_fence, block_next_start_addr, rd_block_idx);
+            cb_fence += n_pages * dispatch_cb_page_size;
+        }
+        data_ptr += pad_size;
+
+        cb_block_release_pages<
+            upstream_noc_xy,
+            upstream_dispatch_cb_sem_id,
+            dispatch_cb_blocks,
+            dispatch_cb_pages_per_block>(block_noc_writes_to_clear, wr_block_idx);
+
+        count--;
+    }
+    noc_nonposted_writes_acked[noc_index] = mcasts;
 
     cmd_ptr = data_ptr;
 }
@@ -775,6 +886,11 @@ re_run_command:
                 process_write_packed<false, CQDispatchWritePackedUnicastSubCmd>(flags);
             }
         } break;
+
+        case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE:
+            DPRINT << "cmd_write_packed_large" << ENDL();
+            process_write_packed_large();
+            break;
 
         case CQ_DISPATCH_CMD_WAIT:
             DPRINT << "cmd_wait" << ENDL();

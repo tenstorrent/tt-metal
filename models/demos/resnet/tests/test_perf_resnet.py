@@ -336,8 +336,8 @@ def run_perf_resnet(
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     (
-        (16, 0.007, 16),
-        (20, 0.007, 16),
+        (16, 0.0055, 16),
+        (20, 0.006, 16),
     ),
 )
 def test_perf_bare_metal(
@@ -361,7 +361,7 @@ def test_perf_bare_metal(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((20, 0.008, 16),),
+    ((20, 0.0063, 16),),
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_perf_trace_bare_metal(

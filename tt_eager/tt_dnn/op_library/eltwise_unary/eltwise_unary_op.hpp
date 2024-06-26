@@ -79,10 +79,13 @@ enum class UnaryOpType {
     UNARY_LT,
     TILED_PROD,
     TYPECAST,
+    BITWISE_XOR,
+    BITWISE_NOT,
     RIGHT_SHIFT,
     FLOOR,
     LEFT_SHIFT,
-    REMAINDER
+    REMAINDER,
+    FMOD
 };
 
 template <typename T>
@@ -110,9 +113,12 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::UNARY_GT:
         case UnaryOpType::UNARY_LT:
         case UnaryOpType::TYPECAST:
+        case UnaryOpType::BITWISE_XOR:
+        case UnaryOpType::BITWISE_NOT:
         case UnaryOpType::RIGHT_SHIFT:
         case UnaryOpType::LEFT_SHIFT:
-        case UnaryOpType::REMAINDER: return true;
+        case UnaryOpType::REMAINDER:
+        case UnaryOpType::FMOD: return true;
         default: return false;
     }
     return false;
@@ -212,6 +218,7 @@ inline Tensor run_eltwise_unary_with_output_tensor(
         preserve_fp32_precision or
         output_dtype == DataType::UINT32 or
         output_dtype == DataType::INT32 or
+        output_dtype == DataType::FLOAT32 or
         input_tensor.get_dtype() == DataType::UINT32 or
         input_tensor.get_dtype() ==
             DataType::INT32;  // MT: Currently only uint32/int32 is moved to DST directly, fp32 is converted to fp16b
@@ -270,6 +277,7 @@ inline Tensor run_eltwise_unary(
         preserve_fp32_precision or
         output_dtype == DataType::UINT32 or
         output_dtype == DataType::INT32 or
+        output_dtype == DataType::FLOAT32 or
         input_tensor.get_dtype() == DataType::UINT32 or
         input_tensor.get_dtype() ==
             DataType::INT32;  // MT: Currently only uint32/int32 is moved to DST directly, fp32 is converted to fp16b
@@ -415,9 +423,12 @@ constexpr auto leaky_relu = make_eltwise_unary_with_param<UnaryOpType::LEAKY_REL
 constexpr auto prelu = leaky_relu;
 constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
+constexpr auto bitwise_xor = make_eltwise_unary_with_param<UnaryOpType::BITWISE_XOR>{};
+constexpr auto bitwise_not = make_eltwise_unary_with_param<UnaryOpType::BITWISE_NOT>{};
 constexpr auto right_shift = make_eltwise_unary_with_param<UnaryOpType::RIGHT_SHIFT>{};
 constexpr auto left_shift = make_eltwise_unary_with_param<UnaryOpType::LEFT_SHIFT>{};
 constexpr auto unary_remainder = make_eltwise_unary_with_param<UnaryOpType::REMAINDER>{};
+constexpr auto unary_fmod = make_eltwise_unary_with_param<UnaryOpType::FMOD>{};
 constexpr auto unary_ne = make_eltwise_unary_with_param<UnaryOpType::UNARY_NE>{};
 constexpr auto rsub = make_eltwise_unary_with_param<UnaryOpType::RSUB>{};
 constexpr auto silu = make_eltwise_unary<UnaryOpType::SILU>{};

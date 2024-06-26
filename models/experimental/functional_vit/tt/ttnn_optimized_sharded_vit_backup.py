@@ -39,7 +39,7 @@ def update_model_config(config, batch_size):
                 False,
             ),
         ),
-        "embedding_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        "embedding_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=3,
             out_subblock_h=1,
@@ -49,7 +49,7 @@ def update_model_config(config, batch_size):
             transpose_mcast=False,
             fused_activation=None,
         ),
-        "query_key_value_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=2,
             out_subblock_h=1,
@@ -59,7 +59,7 @@ def update_model_config(config, batch_size):
             transpose_mcast=False,
             fused_activation=None,
         ),
-        "query_by_key_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        "query_by_key_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=2,
             out_subblock_h=1,
@@ -67,7 +67,7 @@ def update_model_config(config, batch_size):
             per_core_M=7,
             per_core_N=7,
         ),
-        "attention_probabilities_by_value_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        "attention_probabilities_by_value_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=7,
             out_subblock_h=1,
@@ -75,7 +75,7 @@ def update_model_config(config, batch_size):
             per_core_M=7,
             per_core_N=2,
         ),
-        "self_output_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        "self_output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=2,
             out_subblock_h=7,
@@ -85,7 +85,7 @@ def update_model_config(config, batch_size):
             transpose_mcast=False,
             fused_activation=None,
         ),
-        "ff1_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=2,
             out_subblock_h=1,
@@ -95,7 +95,7 @@ def update_model_config(config, batch_size):
             transpose_mcast=False,
             fused_activation=(ttnn.experimental.tensor.FusibleActivation.GELU, True),
         ),
-        "ff2_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=8,
             out_subblock_h=7,
@@ -105,7 +105,7 @@ def update_model_config(config, batch_size):
             transpose_mcast=False,
             fused_activation=None,
         ),
-        "classifer_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        "classifer_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=2,
             out_subblock_h=1,
