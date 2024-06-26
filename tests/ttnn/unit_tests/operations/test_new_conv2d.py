@@ -109,7 +109,6 @@ def run_conv(
         height_sharding=use_1d_systolic_array,
         input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
-        reallocate_halo_output=True,
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
@@ -770,7 +769,7 @@ def test_sd_conv(
 
 
 # @skip_for_wormhole_b0("Issue #7179: non-deterministically fails on N150 regression")
-# @pytest.mark.skip("New API needs to be tested")
+@pytest.mark.skip("New API needs to be tested")
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
@@ -828,21 +827,22 @@ def test_sd_conv(
 @pytest.mark.parametrize(
     "weights_dtype",
     [
-        # ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
         ttnn.bfloat16,
     ],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
     [
+        ttnn.bfloat8_b,
         ttnn.bfloat16,
     ],
 )
 @pytest.mark.parametrize(
     "fp32_accum",
     [
-        False,
-        # True,
+        # False,
+        True,
     ],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])

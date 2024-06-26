@@ -317,7 +317,6 @@ Tensor to_bias_tile_layout_block_sharded(
     TT_FATAL(b_shape[0] == 1 && b_shape[1] == 1 && b_shape[2] == 1);
     auto compute = [&b_shape, &num_channel_shards, &output_dtype](const auto& input_buffer) {
         auto bias_matrix_cols = b_shape[3];
-        cout << "bias size = " << bias_matrix_cols << endl;
         TT_FATAL(bias_matrix_cols % num_channel_shards == 0);
         auto conv_output_shard_width = bias_matrix_cols / num_channel_shards;
         auto conv_output_shard_width_padded = (uint32_t)std::ceil((double)conv_output_shard_width / (double)constants::TILE_WIDTH) * constants::TILE_WIDTH;
