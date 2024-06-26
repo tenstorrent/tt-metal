@@ -269,7 +269,7 @@ class TtMixtralAttention(LightweightModule):
 
         # Softmax and scaling
 
-        attn_1B4P = ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place(
+        attn_1B4P = ttnn.scale_mask_softmax_in_place(
             attn_1B4P,
             self.scale,
             attn_mask_1B4P,

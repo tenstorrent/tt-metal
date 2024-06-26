@@ -478,6 +478,13 @@ from ttnn.operations.ternary import (
 
 from ttnn.operations.normalization import (
     softmax,
+    scale_mask_softmax,
+    softmax_in_place,
+    scale_mask_softmax_in_place,
+    scale_causal_mask_hw_dims_softmax_in_place,
+    SoftmaxProgramConfig,
+    SoftmaxDefaultProgramConfig,
+    SoftmaxShardedMultiCoreProgramConfig,
     layer_norm,
     rms_norm,
     group_norm,

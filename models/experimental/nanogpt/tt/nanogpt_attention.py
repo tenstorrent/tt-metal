@@ -112,9 +112,7 @@ class TtCausalSelfAttention(nn.Module):
 
         tt_att = torch_to_tt_tensor_rm(att, self.device, put_on_device=False)
 
-        tt_att = tt_lib.tensor.softmax(
-            tt_att
-        )  # Using tt_lib.tensor.softmax reduces pcc from 0.99 to 0.98 for whole model
+        tt_att = ttnn.softmax(tt_att)  # Using ttnn.softmax reduces pcc from 0.99 to 0.98 for whole model
 
         tt_y = tt_lib.tensor.bmm(tt_att, v)
 

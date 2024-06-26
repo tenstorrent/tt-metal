@@ -255,8 +255,6 @@ autofunction:: tt_lib.operations.primary.matmul
 
 .. autofunction:: tt_lib.operations.primary.add_layernorm
 
-.. autofunction:: tt_lib.operations.primary.softmax_in_place
-
 .. autofunction:: tt_lib.operations.primary.moreh_softmax
 
 .. autofunction:: tt_lib.operations.primary.moreh_softmax_backward
@@ -268,8 +266,6 @@ autofunction:: tt_lib.operations.primary.matmul
 .. autofunction:: tt_lib.operations.primary.moreh_logsoftmax
 
 .. autofunction:: tt_lib.operations.primary.moreh_logsoftmax_backward
-
-.. autofunction:: tt_lib.operations.primary.transformers.scale_mask_softmax_in_place
 
 .. autofunction:: tt_lib.operations.primary.moreh_mean
 
@@ -414,7 +410,7 @@ Tensor elementwise operations
 .. autofunction:: tt_lib.tensor.unary_remainder
 
 .. autofunction:: tt_lib.tensor.remainder
-    
+
 .. autofunction:: tt_lib.tensor.unary_fmod
 
 .. autofunction:: tt_lib.tensor.fmod

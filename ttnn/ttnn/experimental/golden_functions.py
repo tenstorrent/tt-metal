@@ -93,7 +93,7 @@ if not ttnn.CONFIG.enable_fast_runtime_mode:
         ret = torch.softmax(input_tensor, dim=-1)
         return ret
 
-    attach_golden(ttnn.experimental.operations.primary.transformers.scale_mask_softmax_in_place, _golden_function)
+    attach_golden(ttnn.scale_mask_softmax_in_place, _golden_function)
 
     def _golden_function(input_tensor, *args, **kwargs):
         import torch
