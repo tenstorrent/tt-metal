@@ -66,12 +66,15 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
     (
         (32, 32, 32, 1),
         (32, 64, 32, 1),
+        (64, 32, 32, 1),
+        (64, 64, 32, 1),
         (32, 2560, 32, 32),
         (32, 5120, 32, 40),
-        # (32, 5120, 32, 64) -> 8x8 grid not supported on CI
+        # (32, 5120, 32, 64), #-> 8x8 grid not supported on CI
+        # (64, 5120, 32, 64) #-> 8x8 grid not supported on CI
     ),
 )
-def test_ssm_reduce(L: int, E: int, N: int, num_cores: int, dtype, device):
+def test_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
     run_ssm_prefix_scan(L, E, N, num_cores, dtype, device)
 
 
