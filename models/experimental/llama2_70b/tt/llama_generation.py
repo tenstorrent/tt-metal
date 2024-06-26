@@ -21,7 +21,7 @@ from models.experimental.llama2_70b.tt.model_config import (
 
 
 class TtLlamaModelForGeneration:
-    def __init__(self, configuration, state_dict, device_mesh, n_devices, n_layers, batch, cache_path=None):
+    def __init__(self, configuration, state_dict, device_mesh, n_devices, n_layers, cache_path=None):
         ## Get state dict
         configuration = copy.deepcopy(configuration)
 
@@ -39,7 +39,6 @@ class TtLlamaModelForGeneration:
             n_layers,
             model_config,
             configuration,
-            batch,
             cache_path=cache_path,
             read_cache=False,
         )

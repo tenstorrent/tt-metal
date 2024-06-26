@@ -8,7 +8,7 @@ from tqdm import tqdm
 import torch
 import ttnn.experimental as tt_lib
 import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 
 
 from models.utility_functions import nearest_32, profiler
@@ -20,8 +20,6 @@ from models.experimental.llama2_70b.tt.llama_common import (
     precompute_freqs,
     gather_cos_sin,
     get_rot_transformation_mat,
-    get_flash_decode_chunk_size,
-    get_padded_layer_len,
 )
 
 
@@ -163,9 +161,6 @@ class TtLlamaModel_optimized:
 
         if self.model_config["LLM_MODE"] == "decode":
             inp_ids = inp_ids.reshape(seq_len, 1, 1, batch)
-            # Pad small batches to 32
-            inp_ids = torch.nn.functional.pad(inp_ids, (0, 32 - batch))
-
         else:
             inp_ids = inp_ids.reshape(batch, 1, 1, seq_len)
 
@@ -177,6 +172,7 @@ class TtLlamaModel_optimized:
             memory_config=self.model_config["DRAM_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
         )
+        x = ttnn.to_device(x, self.device_mesh)
 
         xs = self.tt_embd(x)
 
@@ -239,7 +235,7 @@ class TtLlamaModel_optimized:
 
         elif self.model_config["LLM_MODE"] == "decode":
             assert seq_len == 1, "Decode mode only supports seq_len=1"
-            assert xs.shape == (seq_len, 1, 32, self.hidden_size // self.num_devices)
+            assert xs.shape == (seq_len, 1, batch, self.hidden_size // self.num_devices)
 
             xs = tt_lib.tensor.interleaved_to_sharded(
                 xs, sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
@@ -253,7 +249,7 @@ class TtLlamaModel_optimized:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device_mesh,
-                cache_file_name=cache_name(f"rot_mat_decode_b{batch}_{start_pos}"),
+                cache_file_name=cache_name(f"rot_mat_decode_{start_pos}"),
                 memory_config=self.model_config["DRAM_MEMCFG"],
                 mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
             )
@@ -263,15 +259,16 @@ class TtLlamaModel_optimized:
                 rot_mats, sharded_mem_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"]
             )
 
-            k_chunk_size = get_flash_decode_chunk_size(start_pos + 1)
-            padded_layer_past_len = get_padded_layer_len(start_pos + 1, k_chunk_size)
+            padded_layer_past_len = nearest_32(start_pos + 1)
+
+            padded_layer_past_len = nearest_32(start_pos + 1)
             attn_mask_shape = (seq_len, 1, self.padded_local_heads, padded_layer_past_len)
             attn_mask = torch.zeros(*attn_mask_shape)
             attn_mask[:, :, :, start_pos + 1 :] = torch.finfo(attn_mask.dtype).min
 
             attn_masks = ttnn.as_tensor(
                 attn_mask,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=cache_name(f"attn_masks_decode_{start_pos}"),
                 memory_config=self.model_config["DRAM_MEMCFG"],
@@ -284,6 +281,16 @@ class TtLlamaModel_optimized:
             attn_masks = tt_lib.tensor.repeat(
                 attn_masks, repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
             )
+            # Put attn_mask on the device with the sharded config
+            attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
+            if attention_mask_memconfig.is_sharded():
+                attn_mask_shard_shape = attention_mask_memconfig.shard_spec.shape
+                attn_mask_shard_shape[-1] = padded_layer_past_len
+                attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
+
+                attn_masks = tt_lib.tensor.interleaved_to_sharded(
+                    attn_masks, sharded_mem_config=attention_mask_memconfig
+                )
 
         return (
             xs,

@@ -92,7 +92,6 @@ def build_generator(args):
             device_mesh=args.device_mesh,
             n_devices=args.n_devices,
             n_layers=args.num_layers,
-            batch=args.max_batch_size,
             cache_path=args.cache_path,
         )
     return generator
@@ -140,7 +139,7 @@ def prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token):
     return tokens, eos_reached, prev_pos
 
 
-def run_decode(args, model, tokenizer, prompt_tokens, seq_len, prompts, return_logits=False, return_full_logits=False):
+def run_decode(args, model, tokenizer, prompt_tokens, prompts, return_logits=False, return_full_logits=False):
     """
     return_logits: return the logits for the last token
     return_full_logits: return the logits for all tokens
@@ -153,8 +152,10 @@ def run_decode(args, model, tokenizer, prompt_tokens, seq_len, prompts, return_l
     max_gen_len = args.num_tokens
     args.greedy = args.top_k == 1  # greedy decoding is top-k with k=1
 
-    min_prompt_len = min(min(len(t) for t in prompt_tokens) if not args.decode_only else 1, seq_len)
-    max_prompt_len = min(max(len(t) for t in prompt_tokens), seq_len)
+    min_prompt_len = min(len(t) for t in prompt_tokens) if not args.decode_only else 1
+    min_prompt_len = min(min_prompt_len, args.sample_len) if args.sample_len else min_prompt_len
+    max_prompt_len = max(len(t) for t in prompt_tokens)
+    max_prompt_len = min(max_prompt_len, args.sample_len) if args.sample_len else max_prompt_len
     assert max_prompt_len <= model_args.max_seq_len
     total_len = min(model_args.max_seq_len, max_gen_len + max_prompt_len)
     assert total_len <= model_args.max_seq_len
@@ -191,7 +192,7 @@ def run_decode(args, model, tokenizer, prompt_tokens, seq_len, prompts, return_l
         latencies.append(time() - start)
 
         # Decode the entire sequence generated so far and log it
-        for user_id in range(bsz):
+        for user_id in range(max(0, bsz - 3), bsz):
             text = tokenizer.decode(tokens[user_id, : cur_pos + 1].tolist())
             logger.info(f"Loop {cur_pos} user {user_id}: {text}\n")
 
@@ -288,6 +289,7 @@ class Args:
         temperature=1.0,
         chat=False,
         ground_truth=None,
+        sample_len=None,
         # TT args
         device_mesh=None,
         n_devices=8,
@@ -309,6 +311,7 @@ class Args:
         self.temperature = temperature
         self.chat = chat
         self.ground_truth = ground_truth
+        self.sample_len = sample_len
         self.device_mesh = device_mesh
         self.n_devices = n_devices
         self.cache_path = cache_path
@@ -395,6 +398,10 @@ def test_LlamaModel_demo(
     )
 
     check_device_mesh(t3k_device_mesh, model_config)
+
+    for i in t3k_device_mesh.get_device_ids():
+        device = t3k_device_mesh.get_device(i)
+        device.enable_async(True)
 
     args = construct_arg(
         implementation=implementation,

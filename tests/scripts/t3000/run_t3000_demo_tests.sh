@@ -67,6 +67,11 @@ run_t3000_tests() {
 }
 
 main() {
+  if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    echo "Script is being sourced, not executing main function"
+    return 0
+  fi
+
   if [[ -z "$TT_METAL_HOME" ]]; then
     echo "Must provide TT_METAL_HOME in environment" 1>&2
     exit 1

@@ -67,6 +67,7 @@ class DeviceData {
     // Some tests write to the same address across multiple cores
     // This takes those core types and pads any that are "behind" with invalid data
     void relevel(CoreType core_type);
+    void relevel(CoreRange range);
 
     // Clear data between tests
     void reset();
@@ -278,6 +279,28 @@ void DeviceData::relevel(CoreType core_type) {
                 one_core_data.data.resize(max);
                 one_core_data.valid.resize(max); // fills with false
             }
+        }
+    }
+}
+
+void DeviceData::relevel(CoreRange range) {
+    size_t max = 0;
+
+    constexpr uint32_t bank = 0;
+    for (uint32_t y = range.start.y; y <= range.end.y; y++) {
+        for (uint32_t x = range.start.x; x <= range.end.x; x++) {
+            CoreCoord core = {x, y};
+            if (this->all_data[core][bank].data.size() > max) {
+                max = this->all_data[core][bank].data.size();
+            }
+        }
+    }
+
+    for (uint32_t y = range.start.y; y <= range.end.y; y++) {
+        for (uint32_t x = range.start.x; x <= range.end.x; x++) {
+            CoreCoord core = {x, y};
+            this->all_data[core][bank].data.resize(max);
+            this->all_data[core][bank].valid.resize(max);
         }
     }
 }
@@ -616,6 +639,34 @@ inline void generate_random_packed_payload(vector<uint32_t>& cmds,
     }
 }
 
+inline void generate_random_packed_large_payload(vector<uint32_t>& generated_data,
+                                                 CoreRange range,
+                                                 DeviceData& data,
+                                                 uint32_t size_words) {
+
+    static uint32_t coherent_count = 0;
+    const uint32_t bank_id = 0; // No interleaved pages here.
+
+    bool first_core = true;
+    CoreCoord first_worker = range.start;
+    uint32_t data_base = generated_data.size();
+    for (uint32_t i = 0; i < size_words; i++) {
+        uint32_t datum = (use_coherent_data_g) ? ((first_worker.x << 16) | (first_worker.y << 24) | coherent_count++) : std::rand();
+        generated_data.push_back(datum);
+    }
+    generated_data.resize(padded_size(generated_data.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
+
+    for (uint32_t y = range.start.y; y <= range.end.y; y++) {
+        for (uint32_t x = range.start.x; x <= range.end.x; x++) {
+            CoreCoord core = {x, y};
+            for (uint32_t i = 0; i < size_words; i++) {
+                data.push_one(core, bank_id, generated_data[data_base + i]);
+            }
+            data.pad(core, bank_id, 16); // L1_ALIGNMENT16
+        }
+    }
+}
+
 inline void add_bare_dispatcher_cmd(vector<uint32_t>& cmds,
                                     CQDispatchCmd cmd) {
     static_assert(sizeof(CQDispatchCmd) % sizeof(uint32_t) == 0, "CQDispatchCmd size must be a multiple of uint32_t size");
@@ -871,7 +922,7 @@ inline void gen_dispatcher_packed_write_cmd(Device *device,
     cmd.write_packed.addr = device_data.get_result_data_addr(worker_cores[0]);
     cmd.write_packed.size = size_words * sizeof(uint32_t);
 
-    uint32_t sub_cmds_size = padded_size(worker_cores.size() * sizeof(uint32_t), sizeof(CQDispatchCmd));
+    uint32_t sub_cmds_size = padded_size(worker_cores.size() * sizeof(CQDispatchWritePackedUnicastSubCmd), sizeof(CQDispatchCmd));
     TT_FATAL(repeat == false || size_words * sizeof(uint32_t) + sizeof(CQDispatchCmd) + sub_cmds_size <= dispatch_buffer_page_size_g);
 
     add_dispatcher_packed_cmd(device, cmds, worker_cores, device_data, cmd, size_words, repeat);
@@ -920,6 +971,84 @@ inline void gen_rnd_dispatcher_packed_write_cmd(Device *device,
 
     gen_dispatcher_packed_write_cmd(device, cmds, gets_data, device_data,
                                     xfer_size_bytes / sizeof(uint32_t), repeat);
+}
+
+inline bool gen_rnd_dispatcher_packed_write_large_cmd(Device *device,
+                                                      CoreRange workers,
+                                                      vector<uint32_t>& cmds,
+                                                      DeviceData& device_data,
+                                                      uint32_t space_available) {
+
+    int ntransactions = perf_test_g ? (CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS / 2) :
+        ((std:: rand() % CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS) + 1);
+
+    vector<uint32_t> sizes;
+    for (int i = 0; i < ntransactions; i++) {
+        constexpr uint32_t max_pages = 4;
+        uint32_t xfer_size_16b = (std::rand() % (dispatch_buffer_page_size_g * max_pages / 16)) + 1; // XXXXX L1_ALIGNMENT16
+        uint32_t xfer_size_words = xfer_size_16b * 4;
+        uint32_t xfer_size_bytes = xfer_size_words * sizeof(uint32_t);
+        if (perf_test_g) {
+            TT_ASSERT(max_xfer_size_bytes_g <= dispatch_buffer_page_size_g);
+            if (xfer_size_bytes > max_xfer_size_bytes_g) xfer_size_bytes = max_xfer_size_bytes_g;
+            if (xfer_size_bytes < min_xfer_size_bytes_g) xfer_size_bytes = min_xfer_size_bytes_g;
+        }
+
+        if (xfer_size_bytes > space_available) {
+            if (ntransactions == 0) {
+                return true;
+            }
+            ntransactions = i;
+            break;
+        }
+
+        sizes.push_back(xfer_size_bytes);
+        space_available -= xfer_size_bytes;
+    }
+
+    CQDispatchCmd cmd;
+    memset(&cmd, 0, sizeof(CQDispatchCmd));
+    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED_LARGE;
+    cmd.write_packed_large.count = ntransactions;
+    cmd.write_packed_large.alignment = L1_ALIGNMENT;
+    add_bare_dispatcher_cmd(cmds, cmd);
+
+    vector<uint32_t> data;
+    for (int i = 0; i < ntransactions; i++) {
+        uint32_t xfer_size_bytes = sizes[i];
+
+        CoreRange range = workers;
+        if (!perf_test_g) {
+            // Not random, but gives some variation
+            uint32_t span = workers.end.x - workers.start.x + 1;
+            range.end.x = std::rand() % span + range.start.x;
+            span = workers.end.y - workers.start.y + 1;
+            range.end.y = std::rand() % span + range.start.y;
+        }
+
+        device_data.relevel(range);
+
+        CQDispatchWritePackedLargeSubCmd sub_cmd;
+        CoreCoord physical_start = device->physical_core_from_logical_core(range.start, CoreType::WORKER);
+        CoreCoord physical_end = device->physical_core_from_logical_core(range.end, CoreType::WORKER);
+        sub_cmd.noc_xy_addr = NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
+        sub_cmd.addr = device_data.get_result_data_addr(range.start);
+        sub_cmd.length = xfer_size_bytes;
+        sub_cmd.num_mcast_dests = (range.end.x - range.start.x + 1) * (range.end.y - range.start.y + 1);
+
+        for (uint32_t i = 0; i < sizeof(CQDispatchWritePackedLargeSubCmd) / sizeof(uint32_t); i++) {
+            cmds.push_back(((uint32_t *)&sub_cmd)[i]);
+        }
+
+        generate_random_packed_large_payload(data, range, device_data, xfer_size_bytes / sizeof(uint32_t));
+    }
+    cmds.resize(padded_size(cmds.size(), 4)); // XXXXX L1_ALIGNMENT16/sizeof(uint)
+
+    for (uint32_t datum : data) {
+        cmds.push_back(datum);
+    }
+
+    return false;
 }
 
 inline void gen_dispatcher_host_write_cmd(vector<uint32_t>& cmds,

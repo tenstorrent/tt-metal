@@ -12,8 +12,6 @@ from models.utility_functions import nearest_32
 from models.experimental.llama2_70b.tt.llama_common import (
     MAX_SEQ_LEN,
     MAX_SEQ_LEN_LLAMA3,
-    get_padded_layer_len,
-    get_flash_decode_chunk_size,
 )
 
 
@@ -28,6 +26,7 @@ class TtLlamaAttention_optimized:
         configuration,
         transformation_mats,
         cache_path=None,
+        batch_size=None,
         read_cache=False,
     ):
         self.state_dict = state_dict
@@ -40,7 +39,7 @@ class TtLlamaAttention_optimized:
         self.n_heads = configuration.n_heads
         self.n_kv_heads = configuration.n_kv_heads
         self.head_dim = self.hidden_size // self.n_heads
-        self.max_kv_context_len = model_config["MAX_CONTEXT_LEN"]
+        self.max_seq_len = configuration.max_seq_len
         self.max_batch_size = model_config["MAX_BATCH_SIZE"]
         self.llama3 = configuration.vocab_size == 128256
         self.scale = 1 / math.sqrt(self.head_dim)
@@ -71,7 +70,8 @@ class TtLlamaAttention_optimized:
             (
                 self.n_kv_heads,
                 self.max_batch_size,
-                self.max_kv_context_len,
+                # self.max_seq_len,
+                self.model_config["MAX_CONTEXT_LEN"],
                 self.head_dim,
             )
         )
@@ -79,7 +79,8 @@ class TtLlamaAttention_optimized:
             (
                 self.n_kv_heads,
                 self.max_batch_size,
-                self.max_kv_context_len,
+                # self.max_seq_len,
+                self.model_config["MAX_CONTEXT_LEN"],
                 self.head_dim,
             )
         )
@@ -219,11 +220,6 @@ class TtLlamaAttention_optimized:
         )
         xs.deallocate(True)
 
-        # Reshape such that true unpadded batch is tracked in shape
-        fqkv_shape = fused_query_key_value.shape
-        fused_query_key_value = ttnn.reshape(
-            fused_query_key_value, ttnn.Shape((1, 1, self.max_batch_size, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
-        )
         # Split QKV
         (
             query_layer,  # [seqlen, n_local_heads, bsz, head_dim]
@@ -245,7 +241,7 @@ class TtLlamaAttention_optimized:
             rot_mats,
             program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
             output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
-            compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
+            compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"]
             # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_heads, bsz, head_dim]
         )
 
@@ -268,36 +264,82 @@ class TtLlamaAttention_optimized:
         attn_masks,
         batch_offset: int = 0,
     ):
+        padded_layer_past_len = nearest_32(start_pos + 1)
+
+        # K Cache Update
+        kv_cache_memcfg = self.model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"]
+        if kv_cache_memcfg.is_sharded():
+            kv_cache_shard_shape = kv_cache_memcfg.shard_spec.shape
+            kv_cache_shard_shape[0] = self.layer_past[0].shape[0] * padded_layer_past_len
+            kv_cache_memcfg.shard_spec.shape = kv_cache_shard_shape
+
         keys = self.layer_past[0]
         tt_lib.tensor.update_cache(keys, key_layer, start_pos, batch_offset=batch_offset)
         key_layer.deallocate(True)
+
+        # key and value layers will have kv_seq_len padded to nearest 32
+        keys = self.layer_past[0]
+        key_layer = tt_lib.tensor.nlp_kv_cache_load_slice(keys, 0, padded_layer_past_len)
+
+        # PRE-SOFTMAX MM
+        key_layer_transposed = tt_lib.tensor.transpose(
+            key_layer,
+            -2,
+            -1,
+            output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+        )
+
+        key_layer.deallocate(True)
+
+        attn_prog_config = self.model_config["ATTN_BATCHED_MM_PROGCFG_LAMBDA"](padded_layer_past_len // 32)
+        attn_output_memcfg = self.model_config["ATTN_BATCHED_MM_OUTPUT_MEMCFG"]
+        attn_output_memcfg.shard_spec.shape[1] = padded_layer_past_len
+
+        attn_weights = tt_lib.operations.primary.matmul(
+            query_layer,
+            key_layer_transposed,
+            program_config=attn_prog_config,
+            output_mem_config=attn_output_memcfg,
+            output_dtype=ttnn.bfloat16,
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+        )
+
+        query_layer.deallocate(True)
+        key_layer_transposed.deallocate(True)
+
+        # SOFTMAX
+        softmax_progcfg = self.model_config["BATCHED_SOFTMAX_PROGCFG"]
+        softmax_progcfg.block_w = padded_layer_past_len // 32
+
+        attn_weights = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
+            attn_weights,
+            self.scale,
+            attn_masks,
+            program_config=self.model_config["BATCHED_SOFTMAX_PROGCFG"],
+            is_causal_mask=True,
+        )
 
         # V CACHE UPDATE
         values = self.layer_past[1]
         tt_lib.tensor.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
         value_layer.deallocate(True)
 
-        k_chunk_size = get_flash_decode_chunk_size(start_pos + 1)
-        padded_layer_past_len = get_padded_layer_len(start_pos + 1, k_chunk_size)
+        values = self.layer_past[1]
+        value_layer = tt_lib.tensor.nlp_kv_cache_load_slice(values, 0, padded_layer_past_len)
 
-        program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[8, 7],
-            q_chunk_size=self.padded_local_heads,
-            k_chunk_size=k_chunk_size,
-        )
+        # POST-SOFTMAX MM
+        scores_prog_config = self.model_config["SCORES_BATCHED_MM_PROGCFG_LAMBDA"](padded_layer_past_len // 32)
 
-        attn_output = tt_lib.operations.primary.transformers.scaled_dot_product_attention(
-            query_layer,
-            keys,
-            values,
-            attn_masks,
-            is_causal=False,
-            scale=self.scale,
-            program_config=program_config,
-            valid_seq_len=padded_layer_past_len,
-            compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_KERNEL_CONFIG"],
-            output_mem_config=self.model_config["SDPA_DECODE_OUTPUT_MEMCFG"],
+        attn_output = tt_lib.operations.primary.matmul(
+            attn_weights,
+            value_layer,
+            program_config=scores_prog_config,
+            output_mem_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
+            output_dtype=ttnn.bfloat16,
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
+        attn_weights.deallocate(True)
+        value_layer.deallocate(True)
 
         return attn_output
 
@@ -315,6 +357,7 @@ class TtLlamaAttention_optimized:
             attn_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+            # memory_config=self.model_config["L1_MEMCFG"],
             memory_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
         )
 
@@ -409,17 +452,13 @@ class TtLlamaAttention_optimized:
         # FILL K CACHE
         keys = self.layer_past[0]
         # Fill cache expects batch in dim0
-        keys_reshaped = ttnn.reshape(
-            keys, [self.max_batch_size, self.n_local_kv_heads, self.max_kv_context_len, self.head_dim]
-        )
+        keys_reshaped = ttnn.reshape(keys, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
         tt_lib.tensor.fill_cache(keys_reshaped, tt_lib.tensor.typecast(key_layer, ttnn.bfloat8_b), user_id)
 
         # FILL V CACHE
         values = self.layer_past[1]
         # Fill cache expects batch in dim0
-        values_reshaped = ttnn.reshape(
-            values, [self.max_batch_size, self.n_local_kv_heads, self.max_kv_context_len, self.head_dim]
-        )
+        values_reshaped = ttnn.reshape(values, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
         tt_lib.tensor.fill_cache(values_reshaped, tt_lib.tensor.typecast(value_layer, ttnn.bfloat8_b), user_id)
 
         # SPDA

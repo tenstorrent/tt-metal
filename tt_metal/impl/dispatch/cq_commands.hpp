@@ -18,13 +18,14 @@ enum CQPrefetchCmdId : uint8_t {
     CQ_PREFETCH_CMD_ILLEGAL = 0,              // common error value
     CQ_PREFETCH_CMD_RELAY_LINEAR = 1,         // relay banked/paged data from src_noc to dispatcher
     CQ_PREFETCH_CMD_RELAY_PAGED = 2,          // relay banked/paged data from src_noc to dispatcher
-    CQ_PREFETCH_CMD_RELAY_INLINE = 3,         // relay (inline) data from CmdDatQ to dispatcher
-    CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH = 4, // same as above, but doesn't flush the page to dispatcher
-    CQ_PREFETCH_CMD_EXEC_BUF = 5,             // execute commands from a buffer
-    CQ_PREFETCH_CMD_EXEC_BUF_END = 6,         // finish executing commands from a buffer (return), payload like relay_inline
-    CQ_PREFETCH_CMD_STALL = 7,                // drain pipe through dispatcher
-    CQ_PREFETCH_CMD_DEBUG = 8,                // log waypoint data to watcher, checksum
-    CQ_PREFETCH_CMD_TERMINATE = 9,            // quit
+    CQ_PREFETCH_CMD_RELAY_PAGED_PACKED = 3,   // relay banked/paged data from multiple srcs to dispacher
+    CQ_PREFETCH_CMD_RELAY_INLINE = 4,         // relay (inline) data from CmdDatQ to dispatcher
+    CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH = 5, // same as above, but doesn't flush the page to dispatcher
+    CQ_PREFETCH_CMD_EXEC_BUF = 6,             // execute commands from a buffer
+    CQ_PREFETCH_CMD_EXEC_BUF_END = 7,         // finish executing commands from a buffer (return), payload like relay_inline
+    CQ_PREFETCH_CMD_STALL = 8,                // drain pipe through dispatcher
+    CQ_PREFETCH_CMD_DEBUG = 9,                // log waypoint data to watcher, checksum
+    CQ_PREFETCH_CMD_TERMINATE = 10,           // quit
 };
 
 // Dispatcher CMD ID enums
@@ -35,13 +36,14 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST = 3,// like write, dedicated to writing to host
     CQ_DISPATCH_CMD_WRITE_PAGED = 4,        // write banked/paged data from dispatcher to dst_noc
     CQ_DISPATCH_CMD_WRITE_PACKED = 5,       // write to multiple noc addresses with packed data
-    CQ_DISPATCH_CMD_WAIT = 6,               // wait until workers are done
-    CQ_DISPATCH_CMD_GO = 7,                 // send go message
-    CQ_DISPATCH_CMD_SINK = 8,               // act as a data sink (for testing)
-    CQ_DISPATCH_CMD_DEBUG = 9,              // log waypoint data to watcher, checksum
-    CQ_DISPATCH_CMD_DELAY = 10,             // insert delay (for testing)
-    CQ_DISPATCH_CMD_EXEC_BUF_END = 11,      // dispatch_d notify prefetch_h that exec_buf has completed
-    CQ_DISPATCH_CMD_TERMINATE = 12,         // quit
+    CQ_DISPATCH_CMD_WRITE_PACKED_LARGE = 6, // write to multiple noc/dst addresses and varying lengnths w/ packed data
+    CQ_DISPATCH_CMD_WAIT = 7,               // wait until workers are done
+    CQ_DISPATCH_CMD_GO = 8,                 // send go message
+    CQ_DISPATCH_CMD_SINK = 9,               // act as a data sink (for testing)
+    CQ_DISPATCH_CMD_DEBUG = 10,             // log waypoint data to watcher, checksum
+    CQ_DISPATCH_CMD_DELAY = 11,             // insert delay (for testing)
+    CQ_DISPATCH_CMD_EXEC_BUF_END = 12,      // dispatch_d notify prefetch_h that exec_buf has completed
+    CQ_DISPATCH_CMD_TERMINATE = 13,         // quit
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -82,6 +84,23 @@ struct CQPrefetchRelayPagedCmd {
     uint32_t pages;
 } __attribute__((packed));
 
+struct CQPrefetchRelayPagedPackedCmd {
+    uint8_t pad1;
+    uint16_t count;
+    uint32_t total_length;      // aggregate length of all sub-read-cmds
+    uint32_t stride;            // stride to start of next cmd
+} __attribute__((packed));
+
+struct CQPrefetchRelayPagedPackedSubCmd {
+    uint16_t start_page;        // 0..nbanks-1
+    uint16_t log_page_size;
+    uint32_t base_addr;
+    uint32_t length;            // multiple of DRAM alignment, <= half scratch_db_size
+} __attribute__((packed));
+
+// Current implementation limit is based on size of the l1_cache which stores the sub_cmds
+constexpr uint32_t CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS = 35;
+
 struct CQPrefetchRelayInlineCmd {
     uint8_t pad1;
     uint16_t pad2;
@@ -102,6 +121,7 @@ struct CQPrefetchCmd {
     union {
         CQPrefetchRelayLinearCmd relay_linear;
         CQPrefetchRelayPagedCmd relay_paged;
+        CQPrefetchRelayPagedPackedCmd relay_paged_packed;
         CQPrefetchRelayInlineCmd relay_inline;
         CQPrefetchExecBufCmd exec_buf;
         CQGenericDebugCmd debug;
@@ -158,6 +178,28 @@ struct CQDispatchWritePackedMulticastSubCmd {
     uint32_t num_mcast_dests;
 } __attribute__((packed));
 
+struct CQDispatchWritePackedLargeSubCmd {
+    uint32_t noc_xy_addr;
+    uint32_t addr;
+    uint16_t length;          // multiples of L1 cache line alignment
+    uint16_t num_mcast_dests;
+} __attribute__((packed));
+
+// Current implementation limit is based on size of the l1_cache which stores the sub_cmds
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS = 35;
+
+// More flexible/slower than WritePacked
+// Removes size constraints
+// Implicitly mcast
+struct CQDispatchWritePackedLargeCmd {
+    uint8_t pad1;
+    uint16_t count;           // number of sub-cmds
+    uint16_t alignment;
+    uint16_t pad2;
+    uint32_t pad3;
+    uint32_t pad4;
+} __attribute__((packed));
+
 struct CQDispatchWaitCmd {
     uint8_t barrier;          // if true, issue write barrier
     uint8_t notify_prefetch;  // if true, inc prefetch sem
@@ -183,6 +225,7 @@ struct CQDispatchCmd {
         CQDispatchWriteHostCmd write_linear_host;
         CQDispatchWritePagedCmd write_paged;
         CQDispatchWritePackedCmd write_packed;
+        CQDispatchWritePackedLargeCmd write_packed_large;
         CQDispatchWaitCmd wait;
         CQGenericDebugCmd debug;
         CQDispatchDelayCmd delay;

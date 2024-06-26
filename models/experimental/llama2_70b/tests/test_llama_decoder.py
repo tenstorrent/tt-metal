@@ -282,7 +282,6 @@ def run_test_LlamaDecoder_inference(
         UNIT_TEST_LAYER_NUM,
         model_config,
         configuration,
-        batch,
         transformation_mats,
         cache_path=cache_path,
     )
@@ -349,18 +348,18 @@ def run_test_LlamaDecoder_inference(
     # Check kv cache
     # PyTorch output --------------------------------------------------------------------
     pytorch_layer_present = [
-        pytorch_LlamaDecoder_model.decoder.attention.cache_k.clone().permute(
-            0, 2, 1, 3
-        ),  # [batch, n_kv_heads, seq, head_dim]
-        pytorch_LlamaDecoder_model.decoder.attention.cache_v.clone().permute(
-            0, 2, 1, 3
-        ),  # [batch, n_kv_heads, seq, head_dim]
+        pytorch_LlamaDecoder_model.decoder.attention.cache_k.clone().permute(0, 2, 1, 3)[
+            :batch, ...
+        ],  # [batch, n_kv_heads, seq, head_dim]
+        pytorch_LlamaDecoder_model.decoder.attention.cache_v.clone().permute(0, 2, 1, 3)[
+            :batch, ...
+        ],  # [batch, n_kv_heads, seq, head_dim]
     ]
     # TT hardware output -----------------------------------------------------------------
 
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_LlamaDecoder_model.attention.layer_past]
     tt_layer_present_all = [
-        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)
+        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)[:batch, ...]
         for lp in tt_layer_present_all
     ]
 

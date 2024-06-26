@@ -68,6 +68,14 @@
 #include "compute_kernel_api/eltwise_unary/typecast.h"
 #endif
 
+#if SFPU_OP_BITWISE_XOR_INCLUDE
+#include "compute_kernel_api/eltwise_unary/bitwise_xor.h"
+#endif
+
+#if SFPU_OP_BITWISE_NOT_INCLUDE
+#include "compute_kernel_api/eltwise_unary/bitwise_not.h"
+#endif
+
 #if SFPU_OP_RIGHT_SHIFT_INCLUDE
 #include "compute_kernel_api/eltwise_unary/right_shift.h"
 #endif
@@ -82,6 +90,10 @@
 
 #if SFPU_OP_REMAINDER_INCLUDE
 #include "compute_kernel_api/eltwise_unary/remainder.h"
+#endif
+
+#if SFPU_OP_FMOD_INCLUDE
+#include "compute_kernel_api/eltwise_unary/fmod.h"
 #endif
 
 #if SFPU_OP_BINOP_WITH_SCALAR_INCLUDE

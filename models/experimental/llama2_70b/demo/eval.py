@@ -115,7 +115,6 @@ def calculate_perplexity(args, model, tokenizer, seq_len, max_len, stride, encod
                 model=model,
                 tokenizer=tokenizer,
                 prompt_tokens=tokens,
-                seq_len=seq_len,
                 prompts=None,
                 return_full_logits=True,
             )
@@ -319,6 +318,10 @@ def test_LlamaModel_demo(
     )
 
     check_device_mesh(t3k_device_mesh, model_config)
+
+    for i in t3k_device_mesh.get_device_ids():
+        device = t3k_device_mesh.get_device(i)
+        device.enable_async(True)
 
     args = construct_arg(
         implementation=implementation,
