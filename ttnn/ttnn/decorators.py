@@ -694,9 +694,6 @@ class Operation:
             OPERATION_CALL_STACK.pop()
         return output
 
-    def __eq__(self, other: callable):
-        return self.decorated_function == other
-
     __name__ = property(lambda self: self.python_fully_qualified_name)
     __doc__ = property(lambda self: self.decorated_function.__doc__)
 
