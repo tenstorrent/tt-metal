@@ -1608,7 +1608,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     //uint32_t num_blocks_act_h = act_matrix_height_ntiles / act_block_h_ntiles;
     //uint32_t num_blocks_out_h = act_matrix_height_ntiles / out_block_h_ntiles;
     uint32_t num_blocks_act_w = a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ? 1 : weight_size_h;
-    uint32_t num_blocks_weight_h = a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ? weight_size_h * weight_size_w : num_blocks_act_w;
+    uint32_t num_blocks_weight_h = num_blocks_act_w;
     //uint32_t num_blocks_weight_w = weight_matrix_width_ntiles / weight_block_w_ntiles;
 
     // act block info
@@ -1623,7 +1623,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     uint32_t weight_block_w_datums = weight_block_w_ntiles * TILE_WIDTH;
     assert(weight_block_w_ntiles % out_subblock_w_ntiles == 0);
     uint32_t weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
-    uint32_t weight_block_h_ntiles = a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ? input_channels_padded / TILE_HEIGHT : act_block_w_ntiles;
+    uint32_t weight_block_h_ntiles = act_block_w_ntiles;
     uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles;
 
     //uint32_t num_groups = num_blocks_act_h * num_blocks_act_w * num_blocks_weight_w;
@@ -1852,7 +1852,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
     }
 
     bool read_window_in_inner_loop = false;
-    uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles / conv_act_c_blocks;
+    uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles;
     bool fully_buffer_weights = false;
     uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles;
     // TODO: This flag should be set in kernel logic but need this for create_CB
@@ -1862,7 +1862,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         // pushing in reader/writer
         // TODO: Generalize this to not make this assumption
         read_window_in_inner_loop = true;
-        num_weight_cb_tiles *= weight_size_h * weight_size_w;
+        //num_weight_cb_tiles *= weight_size_h * weight_size_w;
         //num_act_cb_tiles *= weight_size_h * weight_size_w;
     } else if (num_blocks_act_h_per_core > 1) {
         fully_buffer_weights = true;
@@ -1895,7 +1895,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         (round_up(a_shard_spec.shape[1] * weight_size_w, TILE_WIDTH) - (a_shard_spec.shape[1] * weight_size_w)) * a.element_size();
     cout << "act_block_w_extra_align_bytes: " << act_block_w_extra_align_bytes << endl;
     uint32_t in0_block_w = act_block_w_ntiles; // todo (nitika): fix how this value is set in conv2d.cpp
-    uint32_t in1_block_num_tiles = weight_block_num_tiles / conv_act_c_blocks;
+    uint32_t in1_block_num_tiles = weight_block_num_tiles;
     uint32_t in0_num_blocks_w =
         num_blocks_act_w * conv_act_c_blocks;  // Fold outer c_block loop together with weight_block_num_tiles = 9
 
@@ -2019,7 +2019,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         //in0_block_w *= window_size;
         //act_block_num_tiles *= window_size;
         //act_subblock_num_tiles *= window_size;
-        in1_block_num_tiles *= window_size;
+        //in1_block_num_tiles *= window_size;
         //in0_num_blocks_w /= window_size;
     }
 
@@ -2092,7 +2092,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         num_blocks_weight_h,  // = number of blocks of weight in height dim
         in1_block_num_tiles,
         conv_act_c_blocks,
-        weight_block_h_ntiles / conv_act_c_blocks,
+        weight_block_h_ntiles,
         weight_block_w_ntiles,
         weight_matrix_width_ntiles,                          // weight_stride_h
         weight_matrix_width_ntiles * weight_block_h_ntiles,  // weight_next_block_stride_h,
@@ -2351,7 +2351,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
             num_blocks_weight_h,  // = number of blocks of weight in height dim
             in1_block_num_tiles,
             conv_act_c_blocks,
-            weight_block_h_ntiles / conv_act_c_blocks,
+            weight_block_h_ntiles,
             weight_block_w_ntiles,
             weight_matrix_width_ntiles,                          // weight_stride_h
             weight_matrix_width_ntiles * weight_block_h_ntiles,  // weight_next_block_stride_h,
@@ -2593,6 +2593,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl_new(
         log_debug(LogOp, "packer_l1_acc: {}", packer_l1_acc);
         log_debug(LogOp, "num_blocks_act_h_per_core: {}", num_blocks_act_h_per_core);
         log_debug(LogOp, "num_blocks_out_h_per_core: {}", num_blocks_out_h_per_core);
+        log_debug(LogOp, "num_blocks_weight_h: {}", num_blocks_weight_h);
     }
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};

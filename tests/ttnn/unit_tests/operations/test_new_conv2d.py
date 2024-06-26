@@ -109,7 +109,7 @@ def run_conv(
         height_sharding=use_1d_systolic_array,
         input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
-        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        # output_layout=ttnn.ROW_MAJOR_LAYOUT,
         reallocate_halo_output=True,
     )
     if config_override and "act_block_h" in config_override:
