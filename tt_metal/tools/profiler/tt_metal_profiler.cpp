@@ -20,6 +20,7 @@ namespace tt {
 namespace tt_metal {
 
 void DumpDeviceProfileResults(Device* device, const Program& program) {
+#if defined(TRACY_ENABLE)
     auto const& worker_cores_in_program =
         device->worker_cores_from_logical_cores(program.logical_cores().at(CoreType::WORKER));
     auto const& eth_cores_in_program =
@@ -31,6 +32,7 @@ void DumpDeviceProfileResults(Device* device, const Program& program) {
     std::copy(eth_cores_in_program.begin(), eth_cores_in_program.end(), std::back_inserter(cores_in_program));
 
     detail::DumpDeviceProfileResults(device, cores_in_program);
+#endif
 }
 
 namespace detail {
@@ -44,8 +46,7 @@ constexpr CoreCoord SYNC_CORE = {0,0};
 
 void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer)
 {
-//TODO: PROFILER flag is deprecating soon, please use  #if defined(TRACY_ENABLE) instead, once deprecated
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
 
     auto ethCores = soc_d.get_physical_ethernet_cores() ;
