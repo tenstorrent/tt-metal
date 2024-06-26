@@ -82,7 +82,7 @@ jobs:
     needs: [
       create-tag,
       create-changelog,
-      build-eager-package,
+      # build-eager-package,
     ]
     strategy:
       matrix:
@@ -94,33 +94,33 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Download eager Python packages
-        uses: actions/download-artifact@v4
-        with:
-          name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
-      - name: Create VERSION
-        run: echo ${{ needs.create-tag.outputs.version }} > VERSION
-      - name : Download changelog
-        uses: actions/download-artifact@v4
-        with:
-          name: changelog
-      - name: Assert wheels exist
-        run: ls -arhl metal_libs-*+*.whl
-      - name: Release
-        # A major release has not been tagged yet, so we need to do this to avoid
-        # Node 16 deprecation warning message
-        uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
-        with:
-          tag_name: ${{ needs.create-tag.outputs.version }}
-          name: ${{ needs.create-tag.outputs.version }}
-          draft: true
-          body_path: CHANGELOG.txt
-          files: |
-            VERSION
-            CHANGELOG.txt
-            infra/machine_setup/scripts/setup_hugepages.py
-            metal_libs-*+*.whl
-          fail_on_unmatched_files: true
+      # - name: Download eager Python packages
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
+      # - name: Create VERSION
+      #   run: echo ${{ needs.create-tag.outputs.version }} > VERSION
+      # - name : Download changelog
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     name: changelog
+      # - name: Assert wheels exist
+      #   run: ls -arhl metal_libs-*+*.whl
+      # - name: Release
+      #   # A major release has not been tagged yet, so we need to do this to avoid
+      #   # Node 16 deprecation warning message
+      #   uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
+      #   with:
+      #     tag_name: ${{ needs.create-tag.outputs.version }}
+      #     name: ${{ needs.create-tag.outputs.version }}
+      #     draft: true
+      #     body_path: CHANGELOG.txt
+      #     files: |
+      #       VERSION
+      #       CHANGELOG.txt
+      #       infra/machine_setup/scripts/setup_hugepages.py
+      #       metal_libs-*+*.whl
+      #     fail_on_unmatched_files: true
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login to GitHub Container Registry
