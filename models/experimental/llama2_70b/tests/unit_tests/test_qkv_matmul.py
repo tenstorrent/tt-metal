@@ -83,8 +83,6 @@ class TtLlamaQKV(torch.nn.Module):
                     xs[i],
                     self.qkv_list[i],
                     program_config=self.model_config["FUSED_QKV_MM_PROGCFG"],
-                    # memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
-                    # dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
                     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
                 )
             )
