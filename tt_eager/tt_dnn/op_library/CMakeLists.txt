@@ -215,7 +215,7 @@ set(TT_DNN_SRCS
 
 add_library(tt_dnn OBJECT ${TT_DNN_SRCS})
 
-target_link_libraries(tt_dnn PUBLIC metal_header_directories compiler_flags umd_device)
+target_link_libraries(tt_dnn PUBLIC metal_header_directories compiler_flags umd_device reflect::reflect)
 target_include_directories(tt_dnn PUBLIC
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}
