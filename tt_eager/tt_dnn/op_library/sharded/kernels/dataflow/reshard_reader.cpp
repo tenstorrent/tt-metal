@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 void kernel_main() {
 	constexpr uint32_t shard_cb = get_compile_time_arg_val(0);
@@ -21,8 +20,7 @@ void kernel_main() {
 	const uint32_t output_page_offset = get_arg_val<uint32_t>(arg_index++);
 
 
-	uint32_t l1_write_base_addr = get_write_ptr(shard_cb) + output_page_offset * page_size;
-	uint32_t l1_write_addr = l1_write_base_addr + output_page_offset * page_size;
+	uint32_t l1_write_addr = get_write_ptr(shard_cb) + output_page_offset * page_size;
 
 	uint32_t mask_byte = 0x0ff; //8 bits
 	uint32_t mask_short = 0x0ffff; //16 bits
@@ -51,23 +49,12 @@ void kernel_main() {
 		uint32_t core_id_x_index = start_x_index;
 		uint32_t core_id_y_index = start_y_index;
 
-		DPRINT << "STRIDE SIZE " << stride_size << ENDL();
-		DPRINT << "BASE INPUT SHARD ADDR " << HEX() << input_shard_addr << DEC() << ENDL();
-		DPRINT << "PAGE SIZE " << page_size << ENDL();
-		DPRINT << "SHARD CB " << shard_cb << ENDL();
-		DPRINT << "WRITE BASE ADDR " << HEX() << l1_write_base_addr << DEC() << ENDL();
-		DPRINT << "WRITE OFFSET " << HEX() << output_page_offset * page_size << DEC() << ENDL();
 		for(uint32_t stride_idx = 0; stride_idx < num_strides; stride_idx++) {
 			if(!skip) {
 				uint32_t core_id_x = get_arg_val<uint32_t>(core_id_x_index);
 				uint32_t core_id_y = get_arg_val<uint32_t>(y_offset + core_id_y_index);
 				uint64_t noc_address = get_noc_addr(core_id_x, core_id_y,
 						input_shard_addr + addr_offset);
-				DPRINT << "READING STRIDE " << stride_idx << ENDL();
-				DPRINT << "CORE_ID_X_INDEX " << core_id_x_index << " CORE_ID_Y_INDEX " << core_id_y_index << ENDL();
-				DPRINT << "CORE_ID_X " << core_id_x << " CORE_ID_Y " << core_id_y << ENDL();
-				DPRINT << "ADDR OFFSET " << HEX() << addr_offset << DEC() << ENDL();
-				DPRINT << "L1 WRITE ADDR " << HEX() << l1_write_addr << ENDL();
 				noc_async_read(noc_address, l1_write_addr, stride_size);
 				l1_write_addr+=stride_size;
 			}

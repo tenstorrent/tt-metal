@@ -54,9 +54,9 @@ struct ToMemoryConfig {
                 const auto input_memory_config = ttnn::get_memory_config(tensor);
                 const auto input_shard_spec = input_memory_config.value().shard_spec.value();
                 const auto output_shard_spec = memory_config.shard_spec.value();
-<<<<<<< HEAD
-                if (tensor.get_layout() == ttnn::TILE_LAYOUT ||
-                    input_shard_spec.shape[1] == output_shard_spec.shape[1]) {
+                if (tensor.get_layout() == ttnn::TILE_LAYOUT or
+                    (input_shard_spec.shape[0] <= 32 and output_shard_spec.shape[0] <=32)
+                    ) {
                     if (dtype.has_value()) {
                         throw runtime_error(
                             "dtype cannot be specified when converting sharded tensor to sharded tensor");
@@ -68,8 +68,7 @@ struct ToMemoryConfig {
                                {tensor}, {}, {std::nullopt})
                         .at(0);
                 } else {
-                    // for row-major tensors where shard-spec[1] is different for input shard and output shard
-
+                    // tall row-major tensors generate a lot of runtime args, can be condensed in future PR
                     TT_FATAL(memory_config.is_sharded());
                     Tensor temp = operation::run(
                                       Sharded{
@@ -87,18 +86,7 @@ struct ToMemoryConfig {
                                    .output_dtype = dtype.value_or(temp.get_dtype())},
                                {temp})
                         .at(0);
-=======
-                if (dtype.has_value()) {
-                    throw runtime_error(
-                        "dtype cannot be specified when converting sharded tensor to sharded tensor");
->>>>>>> #0: WIP diff stick lengths
                 }
-                return operation::run(
-                           Reshard{
-                               .output_mem_config = memory_config,
-                           },
-                           {tensor})
-                    .at(0);
             } else {
                 auto bbox = memory_config.shard_spec.value().grid.bounding_box();
                 CoreCoord grid_size(bbox.end.x + 1, bbox.end.y + 1);

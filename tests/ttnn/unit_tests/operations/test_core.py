@@ -163,10 +163,10 @@ from enum import Enum
         ),
         # (1, 1, 32, 1280) (8 to 1 cores width shardrd)
         (
+            1,
             32,
-            1280,
             ttnn.ROW_MAJOR_LAYOUT,
-            dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.WIDTH),
+            dict(core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.WIDTH),
             dict(core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.WIDTH),
             None,
             None,

@@ -584,93 +584,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-inline uint32_t get_greatest_common_factor(uint32_t n1, uint32_t n2) {
-   if ( n2 > n1) {
-     int temp = n2;
-     n2 = n1;
-     n1 = temp;
-   }
-   uint32_t hcf = 1;
-   for (int i = 1; i <=  n2; ++i) {
-     if (n1 % i == 0 && n2 % i ==0) {
-       hcf = i;
-     }
-   }
-   return hcf;
- }
-
-inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<PageStride>> > get_core_page_ranges(
-    const Tensor& input, Tensor& output) {
-
-    auto input_buffer = input.buffer();
-    auto output_buffer = output.buffer();
-    std::optional<std::array<std::array<uint32_t, 2>, 2 > > tensor2d_shape_page_shape_override = std::nullopt;
-    auto input_shard_spec = input_buffer->shard_spec();
-    auto output_shard_spec = output_buffer->shard_spec();
-    auto output_shard_shape = output_shard_spec.tensor_shard_spec.shape;
-    uint32_t input_num_host_pages_multiplier = 1;
-    uint32_t page_width = TILE_WIDTH;
-    uint32_t total_size =  output_shard_spec.tensor_shard_spec.numel() / TILE_HW * page_width;
-    if(input.get_layout() == Layout::ROW_MAJOR and (input_buffer->shard_spec().page_shape[1] != output_buffer->shard_spec().page_shape[1])) {
-
-        page_width = get_greatest_common_factor(input_buffer->shard_spec().page_shape[1], output_buffer->shard_spec().page_shape[1]);
-        std::array<uint32_t, 2> page_shape = {1, page_width};
-
-        auto shape = input.get_legacy_shape();
-        auto width = shape[-1];
-        auto other_dims = 1;
-        for (int i = 0; i < shape.rank() - 1; i++) {
-            other_dims *= shape[i];
-        }
-        std::array<uint32_t,2> tensor2d_size = {other_dims/page_shape[0], width/page_shape[1]};
-        tensor2d_shape_page_shape_override = {tensor2d_size, page_shape};
-        input_shard_spec = ShardSpecBuffer(input_shard_spec.tensor_shard_spec, tensor2d_shape_page_shape_override.value()[1], tensor2d_shape_page_shape_override.value()[0]);
-        output_shard_spec = ShardSpecBuffer(output_shard_spec.tensor_shard_spec, tensor2d_shape_page_shape_override.value()[1], tensor2d_shape_page_shape_override.value()[0]);
-        input_num_host_pages_multiplier = input_buffer->shard_spec().page_shape[1] / page_width;
-        total_size = output_shard_shape[0] * output_shard_shape[1];
-    }
-    else if (input.get_layout() == Layout::ROW_MAJOR){
-        page_width = input_buffer->shard_spec().page_shape[1];
-        total_size = output_shard_shape[0] * page_width ;
-    }
-
-    page_width *= output.element_size();
-    total_size *= output.element_size();
-    auto output_buffer_page_mapping = generate_buffer_page_mapping(*output_buffer, tensor2d_shape_page_shape_override);
-    auto input_buffer_page_mapping = generate_buffer_page_mapping(*input_buffer, tensor2d_shape_page_shape_override);
-
-//    std::cout << "Input Mapping " << std::endl;
-//    uint32_t dev_page_idx = 0;
-//    for(auto _host_page : input_buffer_page_mapping.dev_page_to_host_page_mapping_) {
-//        if(_host_page.has_value()) {
-//            std::cout << "dev_page [" << dev_page_idx  << "]=" << _host_page.value() << std::endl;;
-//        }
-//        else {
-//            std::cout << "dev_page [" << dev_page_idx  << "] = NULL " << std::endl;
-//        }
-//        dev_page_idx++;
-//    }
-//    uint32_t host_page_idx = 0;
-//    for(auto _dev_page : input_buffer_page_mapping.host_page_to_dev_page_mapping_) {
-//        std::cout << "host_page [" << host_page_idx  << "]=" << _dev_page << std::endl;
-//        host_page_idx++;
-//    }
-//    std::cout << "Output Mapping " << std::endl;
-//    dev_page_idx = 0;
-//    for(auto _host_page : output_buffer_page_mapping.dev_page_to_host_page_mapping_) {
-//        if(_host_page.has_value()) {
-//            std::cout << "dev_page [" << dev_page_idx  << "]=" << _host_page.value() << std::endl;;
-//        }
-//        else {
-//            std::cout << "dev_page [" << dev_page_idx  << "] = NULL " << std::endl;
-//        }
-//        dev_page_idx++;
-//    }
-//    host_page_idx = 0;
-//    for(auto _dev_page : output_buffer_page_mapping.host_page_to_dev_page_mapping_) {
-//        std::cout << "host_page [" << host_page_idx  << "]=" << _dev_page << std::endl;;
-//        host_page_idx++;
-//    }
+std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
+    BufferPageMapping  input_buffer_page_mapping, BufferPageMapping output_buffer_page_mapping) {
 
     const auto& output_shard_to_host_mapping = output_buffer_page_mapping.dev_page_to_host_page_mapping_;
     const auto& input_page_to_local_page_mapping = input_buffer_page_mapping.host_page_to_local_shard_page_mapping_;
@@ -681,9 +596,7 @@ inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<
     std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page(
         output_cores.size());
 
-    uint32_t output_dev_pages = output_buffer_page_mapping.dev_page_to_host_page_mapping_.size();
-    uint32_t output_host_pages = output_buffer_page_mapping.host_page_to_dev_page_mapping_.size();
-    for (uint32_t output_page_id = 0; output_page_id < output_dev_pages; output_page_id++) {
+    for (uint32_t output_page_id = 0; output_page_id < output_buffer_page_mapping.dev_page_to_core_mapping_.size(); output_page_id++) {
         auto output_core_id = output_buffer_page_mapping.dev_page_to_core_mapping_[output_page_id];
         TT_ASSERT(output_core_id < output_cores.size());
         auto host_page = output_shard_to_host_mapping[output_page_id];
@@ -703,9 +616,6 @@ inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<
     ret_map.reserve(output_cores.size());
 
     auto output_core_host_page_indices = output_buffer_page_mapping.core_host_page_indices_;
-    auto device = input_buffer->device();
-    auto full_grid = device->compute_with_storage_grid_size();
-    CoreCoord end_core = output_buffer_page_mapping.all_cores_[output_buffer_page_mapping.all_cores_.size() - 1];
     uint32_t output_core_id = 0;
     for (auto output_core : output_cores) {
         ret_map.try_emplace(output_core, std::vector<PageStride>{});
@@ -713,15 +623,6 @@ inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<
         const auto& input_cores_with_pages = output_core_to_vector_input_core_page[output_core_id];
         auto it = input_cores_with_pages.begin();
         const auto end = input_cores_with_pages.end();
-
-        uint32_t index = 0;
-//        std::cout << "Printing Mappings for core " << output_core.str() << std::endl;
-//        for (auto it: input_cores_with_pages) {
-//            std::cout << "Output page " << index
-//            << " maps to Core: " << it->first.str()
-//            << " and page: " << it->second << std::endl;
-//            index++;
-//        }
 
         while (it != end) {
             // hit padding, will see how many consecutive pages has padding to make a padded range
@@ -774,14 +675,14 @@ inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<
                             break;
                         }
                         // next page is padding
-                        last_it_consec = consecutive_it;
                         consecutive_it = consecutive_it + 1;
+                        last_it_consec = consecutive_it;
                     }
-                    uint32_t stride_size = std::distance(it, last_it_consec) + 1;
-                    //if (last_it_consec == it) {
-                    //    stride_size = 1;
-                    //}
-                    auto stride_it = it + (stride_size);
+                    uint32_t stride_size = std::distance(it, last_it_consec);
+                    if (last_it_consec == it) {
+                        stride_size = 1;
+                    }
+                    auto stride_it = it + stride_size;
                     auto last_it_stride = it;
 
                     // TT_ASSERT((stride_it == end) or stride_it->has_value());
@@ -799,7 +700,7 @@ inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<
                             auto prev_input_page = *(last_it_stride);
                             TT_ASSERT(prev_input_page.has_value());
                             TT_ASSERT(next_input_page.has_value());
-                            data_stride = next_input_page.value().second - prev_input_page.value().second;
+                            data_stride = next_input_page.value().second - prev_input_page.value().second - stride_size;
                             stride = Stride{.core = {0, 0}, .data = data_stride};
                         }
                         // strided core but same data
@@ -841,8 +742,6 @@ inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<
                         data_stride = 0;
                     }
 
-                    TT_ASSERT(stride.core.x < full_grid.x and stride.core.y < full_grid.y);
-                    TT_ASSERT(data_stride < output_host_pages);
                     auto stride_start = stride_it;
                     uint32_t num_strides = 1;
                     while (stride_it != end and stride_it->has_value()) {
@@ -898,24 +797,9 @@ inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<
             }
         }
         output_core_id++;
-        //std::cout << "CORE " << output_core.str() << " has " << ret_map[output_core].size() << " ranges " << std::endl;
-        //uint32_t range_idx = 0;
-        //for(auto range : ret_map.at(output_core)) {
-        //    std::cout << "RANGE " << range_idx
-        //        << " start_core_x: " << range.start_core.x
-        //        << " start_core_y: " << range.start_core.y
-        //        << " start_data: " << range.start_data
-        //        << " stride_size(pages): " << range.stride_size
-        //        << " num_reps: " << range.num_strides
-        //        << " stride_core_x:  " << range.stride.core.x
-        //        << " stride_core_y: " << range.stride.core.y
-        //        << " stride_data: " << range.stride.data
-        //        << std::endl;
-        //    range_idx++;
-        //}
     }
 
-    return {total_size, page_width, ret_map};
+    return ret_map;
 }
 
 enum class ReshardStridesInRange { ALL_STRIDES, FIRST_HALF, SECOND_HALF };
@@ -1093,9 +977,13 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
+
+
 operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, Tensor& output) {
     auto device = input.device();
-    auto [total_size, page_size, output_core_to_page_range_pair] = get_core_page_ranges(input, output);
+    auto output_buffer_page_mapping = generate_buffer_page_mapping(*output.buffer());
+    auto input_buffer_page_mapping = generate_buffer_page_mapping(*input.buffer());
+    auto output_core_to_page_range_pair = get_core_page_ranges(input_buffer_page_mapping, output_buffer_page_mapping);
 
     tt_metal::Program program{};
 
@@ -1109,110 +997,35 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     auto cores =
         corerange_to_cores(all_cores, std::nullopt, output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
+    uint32_t total_size, page_size, unit_size;
     auto output_shard_shape = output_shard_spec.shape;
     auto data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
 
-    tt_metal::KernelHandle kernel_id_0;
-    tt_metal::KernelHandle kernel_id_1;
-
-    uint32_t max_page_size = page_size;
-
-    auto input_buffer_page_mapping = generate_buffer_page_mapping(*input.buffer());
-//    std::cout << " Input Buffer Addr " << std::hex << input.buffer()->address() << std::endl;
-//    std::cout << " Input Buffer Page Size " << std::dec << input.buffer()->page_size() << std::endl;
-//    std::cout << " Input Buffer Num Dev Pages " << std::dec << input.buffer()->num_dev_pages() << std::endl;
-//    std::cout << " Input Buffer Total Size " << std::dec << input.buffer()->size() << std::endl;
-//    std::cout << " Input Buffer Num Cores " << std::dec << input.buffer()->num_cores() << std::endl;
-//    std::cout << "Input Buffer Cores: " << std::endl;
-//    for(auto core: input_buffer_page_mapping.all_cores_) {
-//        std::cout << core.str() << std::endl;
-//    }
-//    for (uint32_t dev_page_idx = 0; dev_page_idx < input.buffer()->num_dev_pages() ; dev_page_idx++)  {
-//        auto core_idx = input_buffer_page_mapping.dev_page_to_core_mapping_[dev_page_idx];
-//        std::cout << "Input Buffer Dev_page[" << dev_page_idx
-//            << "] on Core " << input_buffer_page_mapping.all_cores_[core_idx].str()
-//            <<  " with local page " << input_buffer_page_mapping.dev_page_to_local_shard_page_mapping_[dev_page_idx]
-//            << std::endl;
-//    }
-    uint32_t input_page_size = input_shard_spec.shape[1] * input.element_size();
-    uint32_t output_page_size = output_shard_spec.shape[1] * output.element_size();
-
-    if (input.layout() == Layout::ROW_MAJOR and input_shard_spec.shape[1] != output_shard_spec.shape[1]) {
-        uint32_t tmp_cb_index_0 = 8;
-        uint32_t tmp_cb_index_1 = 9;
-        max_page_size = std::max(input_page_size, output_page_size);
-        uint32_t input_rows_per_page = max_page_size/input_page_size;
-
-        uint32_t output_shard_size = output_shard_spec.shape[0] * output_shard_spec.shape[1] * output.element_size();
-        uint32_t output_rows_per_shard = div_up(div_up(output_shard_size,output_page_size),2);
-        uint32_t input_page_allignment = 0;
-        uint32_t output_page_allignment = 0;
-
-        if((input_page_size % 32 != 0) and (page_size % 32 != 0)) {
-            input_page_allignment = page_size % 32;
-        }
-
-        if((output_page_size % 32 != 0) and (page_size % 32 != 0)) {
-            output_page_allignment = page_size % 32;
-        }
-        kernel_id_0 = tt_metal::CreateKernel(
-            program,
-            "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader_stick_diff_width.cpp",
-            all_cores,
-            tt_metal::ReaderDataMovementConfig({
-                                            dst_cb_index, /*0*/
-                                            (uint32_t)grid.x, /*1*/
-                                            (uint32_t)grid.y, /*2*/
-                                            page_size, /*3*/
-                                            input_page_size, /*4*/
-                                            output_page_size, /*5*/
-                                            input_page_allignment, /*6*/
-                                            output_page_allignment, /*7*/
-                                            tmp_cb_index_0, /*8*/
-                                            }));
-
-        kernel_id_1 = tt_metal::CreateKernel(
-            program,
-            "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader_stick_diff_width.cpp",
-            all_cores,
-            tt_metal::WriterDataMovementConfig({
-                                            dst_cb_index,
-                                            (uint32_t)grid.x,
-                                            (uint32_t)grid.y,
-                                            page_size,
-                                            input_page_size,
-                                            output_page_size,
-                                            input_page_allignment, /*6*/
-                                            output_page_allignment, /*7*/
-                                            tmp_cb_index_1,
-                                            }));
-        tt_metal::CircularBufferConfig cb_tmp_config_0 =
-        tt_metal::CircularBufferConfig(total_size, {{tmp_cb_index_0, data_format}})
-            .set_page_size(tmp_cb_index_0, page_size);
-        auto cb_tmp_0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp_config_0);
-
-        tt_metal::CircularBufferConfig cb_tmp_config_1 =
-        tt_metal::CircularBufferConfig(total_size, {{tmp_cb_index_1, data_format}})
-            .set_page_size(tmp_cb_index_1, page_size);
-        auto cb_tmp_1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp_config_1);
-
+    if (input.get_layout() == Layout::TILE) {
+        page_size = tt_metal::detail::TileSize(data_format);
+        unit_size = page_size;
+        total_size = output_shard_spec.numel() / TILE_HW * unit_size;
+    } else {
+        unit_size = output_shard_spec.shape[1] * output.element_size();
+        page_size = output.get_legacy_shape()[-1] * output.element_size();
+        total_size = output_shard_shape[0] * unit_size;
     }
-    else {
-        kernel_id_0 = tt_metal::CreateKernel(
-            program,
-            "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
-            all_cores,
-            tt_metal::ReaderDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
-        kernel_id_1 = tt_metal::CreateKernel(
-            program,
-            "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
-            all_cores,
-            tt_metal::WriterDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
-    }
+
+    tt_metal::KernelHandle kernel_id_0 = tt_metal::CreateKernel(
+        program,
+        "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
+        all_cores,
+        tt_metal::ReaderDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
+
+    tt_metal::KernelHandle kernel_id_1 = tt_metal::CreateKernel(
+        program,
+        "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader.cpp",
+        all_cores,
+        tt_metal::WriterDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
 
     tt_metal::CircularBufferConfig cb_dst_config =
         tt_metal::CircularBufferConfig(total_size, {{dst_cb_index, data_format}})
-            .set_page_size(dst_cb_index, page_size)
+            .set_page_size(dst_cb_index, unit_size)
             .set_globally_allocated_address(*output.buffer());
     auto cb_dst0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
 
@@ -1275,12 +1088,200 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
+inline uint32_t get_greatest_common_factor(uint32_t n1, uint32_t n2) {
+   if ( n2 > n1) {
+     int temp = n2;
+     n2 = n1;
+     n1 = temp;
+   }
+   uint32_t hcf = 1;
+   for (int i = 1; i <=  n2; ++i) {
+     if (n1 % i == 0 && n2 % i ==0) {
+       hcf = i;
+     }
+   }
+   return hcf;
+ }
+
+
+operation::ProgramWithCallbacks reshard_multi_core_rm_diff_width(const Tensor& input, Tensor& output) {
+    auto input_shard_spec = input.shard_spec().value();
+    auto output_shard_spec = output.shard_spec().value();
+    auto output_shard_shape = output_shard_spec.shape;
+
+    auto page_size = get_greatest_common_factor(input.buffer()->shard_spec().page_shape[1], output.buffer()->shard_spec().page_shape[1]);
+    std::array<uint32_t, 2> page_shape = {1, page_size};
+    page_size *= output.element_size();
+
+    auto shape = input.get_legacy_shape();
+    uint32_t width = shape[-1];
+    uint32_t other_dims = 1;
+    for (int i = 0; i < shape.rank() - 1; i++) {
+        other_dims *= shape[i];
+    }
+    std::optional<std::array<std::array<uint32_t, 2>, 2 > > tensor2d_shape_page_shape_override = std::nullopt;
+    std::array<uint32_t,2> tensor2d_size = {other_dims/page_shape[0], width/page_shape[1]};
+    tensor2d_shape_page_shape_override = {tensor2d_size, page_shape};
+    auto total_size = output_shard_shape[0] * output_shard_shape[1] * output.element_size();
+    auto output_buffer_page_mapping = generate_buffer_page_mapping(*output.buffer(), tensor2d_shape_page_shape_override);
+    auto input_buffer_page_mapping = generate_buffer_page_mapping(*input.buffer(), tensor2d_shape_page_shape_override);
+    auto output_core_to_page_range_pair = get_core_page_ranges(input_buffer_page_mapping, output_buffer_page_mapping);
+
+    uint32_t input_page_size = input_shard_spec.shape[1] * input.element_size();
+    uint32_t output_page_size = output_shard_spec.shape[1] * output.element_size();
+
+    uint32_t dst_cb_index = 16;
+
+    uint32_t tmp_cb_index_0 = 8;
+    uint32_t tmp_cb_index_1 = 9;
+    uint32_t max_page_size = std::max(input_page_size, output_page_size);
+    uint32_t input_rows_per_page = max_page_size/input_page_size;
+
+    uint32_t output_shard_size = output_shard_spec.shape[0] * output_shard_spec.shape[1] * output.element_size();
+    uint32_t output_rows_per_shard = div_up(div_up(output_shard_size,output_page_size),2);
+    uint32_t input_page_allignment_amount = align(input_page_size, 32) - input_page_size;
+    uint32_t output_page_allignment_amount = align(output_page_size, 32) - output_page_size;
+
+
+    auto device = input.device();
+    tt_metal::Program program{};
+    auto data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    auto all_cores = output_shard_spec.grid;
+    auto cores =
+        corerange_to_cores(all_cores, std::nullopt, output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto grid = input.buffer()->buffer_type() == BufferType::DRAM ? device->dram_grid_size()
+                                                                  : device->compute_with_storage_grid_size();
+
+    auto kernel_id_0 = tt_metal::CreateKernel(
+        program,
+        "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader_stick_diff_width.cpp",
+        all_cores,
+        tt_metal::ReaderDataMovementConfig({
+                                        dst_cb_index, /*0*/
+                                        (uint32_t)grid.x, /*1*/
+                                        (uint32_t)grid.y, /*2*/
+                                        page_size, /*3*/
+                                        input_page_size, /*4*/
+                                        output_page_size, /*5*/
+                                        tmp_cb_index_0, /*6*/
+                                        input_page_allignment_amount, /*7*/
+                                        output_page_allignment_amount, /*8*/
+                                        }));
+
+    auto kernel_id_1 = tt_metal::CreateKernel(
+        program,
+        "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reshard_reader_stick_diff_width.cpp",
+        all_cores,
+        tt_metal::WriterDataMovementConfig({
+                                        dst_cb_index,
+                                        (uint32_t)grid.x,
+                                        (uint32_t)grid.y,
+                                        page_size,
+                                        input_page_size,
+                                        output_page_size,
+                                        tmp_cb_index_1,
+                                        input_page_allignment_amount,
+                                        output_page_allignment_amount,
+                                        }));
+    tt_metal::CircularBufferConfig cb_tmp_config_0 =
+    tt_metal::CircularBufferConfig(total_size, {{tmp_cb_index_0, data_format}})
+        .set_page_size(tmp_cb_index_0, page_size);
+    auto cb_tmp_0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp_config_0);
+
+    tt_metal::CircularBufferConfig cb_tmp_config_1 =
+    tt_metal::CircularBufferConfig(total_size, {{tmp_cb_index_1, data_format}})
+        .set_page_size(tmp_cb_index_1, page_size);
+    auto cb_tmp_1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp_config_1);
+
+    tt_metal::CircularBufferConfig cb_dst_config =
+        tt_metal::CircularBufferConfig(total_size, {{dst_cb_index, data_format}})
+            .set_page_size(dst_cb_index, page_size)
+            .set_globally_allocated_address(*output.buffer());
+    auto cb_dst0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
+
+    auto input_core_type = input.buffer()->core_type();
+    std::vector<uint32_t> physical_core_coords;
+    physical_core_coords.reserve(grid.x * grid.y);
+    for (uint32_t i = 0; i < grid.x; i++) {
+        auto physical_input_core = device->physical_core_from_logical_core(CoreCoord(i, 0), input_core_type);
+        physical_core_coords.push_back(physical_input_core.x);
+    }
+    for (uint32_t i = 0; i < grid.y; i++) {
+        auto physical_input_core = device->physical_core_from_logical_core(CoreCoord(0, i), input_core_type);
+        physical_core_coords.push_back(physical_input_core.y);
+    }
+
+
+
+
+    for (const auto& core : cores) {
+        auto page_stride_vector = output_core_to_page_range_pair.at(core);
+        uint32_t num_ranges = page_stride_vector.size();
+        std::vector<uint32_t> runtime_args = physical_core_coords;
+        auto runtime_args_0 = get_runtime_args_for_given_ranges(
+            physical_core_coords,
+            page_stride_vector,
+            0,
+            input.buffer()->address(),
+            0,
+            div_up(page_stride_vector.size(), 2));
+        auto output_page_offset =
+            runtime_args_0[physical_core_coords.size() + 1];  // offset is equivalent to number of pages output in
+                                                              // previous risc core
+        tt_metal::SetRuntimeArgs(program, kernel_id_0, core, runtime_args_0);
+        auto runtime_args_1 = get_runtime_args_for_given_ranges(
+            physical_core_coords,
+            page_stride_vector,
+            output_page_offset,
+            input.buffer()->address(),
+            div_up(page_stride_vector.size(), 2),
+            page_stride_vector.size());
+        tt_metal::SetRuntimeArgs(program, kernel_id_1, core, runtime_args_1);
+    }
+
+
+
+    auto override_runtime_arguments_callback = [kernel_id_0, kernel_id_1, cb_dst0, grid, cores](
+                                                   const void* operation,
+                                                   Program& program,
+                                                   const std::vector<Tensor>& input_tensors,
+                                                   const std::vector<std::optional<const Tensor>>&,
+                                                   const std::vector<Tensor>& output_tensors) {
+        const auto& input = input_tensors.at(0);
+        const auto& output = output_tensors.at(0);
+        uint32_t input_addr = input.buffer()->address();
+        auto& runtime_args_0_by_core = GetRuntimeArgs(program, kernel_id_0);
+        auto& runtime_args_1_by_core = GetRuntimeArgs(program, kernel_id_1);
+        for (auto core : cores) {
+            auto& runtime_args_0 = runtime_args_0_by_core[core.x][core.y];
+            auto& runtime_args_1 = runtime_args_1_by_core[core.x][core.y];
+            runtime_args_0[grid.x + grid.y] = input_addr;
+            runtime_args_1[grid.x + grid.y] = input_addr;
+        }
+        UpdateDynamicCircularBufferAddress(program, cb_dst0, *output.buffer());
+    };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+
+
+
+}
+
+
+
 operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& output) {
     if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
         output.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         return reshard_multi_core_same_width(input, output);
     } else {
-        return reshard_multi_core_generic(input, output);
+        auto input_shard_spec = input.shard_spec().value();
+        auto output_shard_spec = output.shard_spec().value();
+        if(input.layout() == Layout::ROW_MAJOR and input_shard_spec.shape[1] != output_shard_spec.shape[1]) {
+            return reshard_multi_core_rm_diff_width(input, output);
+        }
+        else {
+            return reshard_multi_core_generic(input, output);
+        }
     }
 }
 

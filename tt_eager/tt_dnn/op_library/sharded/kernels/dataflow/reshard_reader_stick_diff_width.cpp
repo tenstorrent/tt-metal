@@ -137,9 +137,9 @@ void kernel_main() {
 	constexpr uint32_t page_size = get_compile_time_arg_val(3);
 	constexpr uint32_t input_page_size = get_compile_time_arg_val(4);
 	constexpr uint32_t output_page_size = get_compile_time_arg_val(5);
-	constexpr uint32_t input_page_allignment = get_compile_time_arg_val(6);
-	constexpr uint32_t output_page_allignment = get_compile_time_arg_val(7);
-	constexpr uint32_t temp_cb_0 = get_compile_time_arg_val(8);
+	constexpr uint32_t temp_cb_0 = get_compile_time_arg_val(6);
+	constexpr uint32_t input_alignment_amount = get_compile_time_arg_val(7);
+	constexpr uint32_t output_alignment_amount = get_compile_time_arg_val(8);
 
 	uint32_t y_offset = num_x_cores;
 
@@ -159,8 +159,6 @@ void kernel_main() {
 
 
 
-	uint32_t input_alignment_amount = 16;
-	uint32_t input_size_per_row = page_size * 5;
 
 	uint32_t scratch_pad_addr = scratch_pad_base_addr;
 	uint32_t total_data_read = 0;
@@ -183,7 +181,6 @@ void kernel_main() {
 		const uint32_t input_addr_offset_base = ((stride_data_offset) & mask_short) * (page_size);
 		const uint32_t num_pages_per_stride = (stride_size_num_strides_skip >> 16);
 		const uint32_t stride_size = num_pages_per_stride * page_size;
-//		DPRINT << "NUM PAGES PER STRIDE " << num_pages_per_stride << ENDL();
 
 		uint32_t core_id_x_index = start_x_index;
 		uint32_t core_id_y_index = start_y_index;
@@ -192,14 +189,13 @@ void kernel_main() {
 		if(!skip) {
 			uint32_t num_input_iterations = num_strides;
 
-//			DPRINT << "TOTAL INPUT ITERATIONS " << num_input_iterations << ENDL();
 			//Reads input stride at a time into scratchpad
 			for(uint32_t stride_idx = 0; stride_idx < num_input_iterations ; stride_idx++) {
 				uint32_t core_id_x = get_arg_val<uint32_t>(core_id_x_index);
 				uint32_t core_id_y = get_arg_val<uint32_t>(y_offset + core_id_y_index);
 
 
-				read_into_scratchpad(core_id_x, core_id_y, input_shard_addr, scratch_pad_addr, input_addr_offset, stride_size, input_size_per_row, input_alignment_amount);
+				read_into_scratchpad(core_id_x, core_id_y, input_shard_addr, scratch_pad_addr, input_addr_offset, stride_size, input_page_size, input_alignment_amount);
 
 				scratch_pad_addr += stride_size;
 				if(stride_x == 0 and stride_y == 0) {
@@ -216,11 +212,10 @@ void kernel_main() {
 		}
 
 	}
-	noc_async_read_barrier();
-	//print_stride(scratch_pad_base_addr, total_data_read, 8);
 
-	write_from_scratchpad(l1_write_addr, scratch_pad_base_addr, 0, total_data_read, 8*page_size, 0);
-	noc_async_read_barrier();
-	//print_stride(l1_write_addr, total_data_read, 8);
-
+	if(total_data_read > 0) {
+		noc_async_read_barrier();
+		write_from_scratchpad(l1_write_addr, scratch_pad_base_addr, 0, total_data_read, output_page_size, output_alignment_amount);
+		noc_async_read_barrier();
+	}
 }
