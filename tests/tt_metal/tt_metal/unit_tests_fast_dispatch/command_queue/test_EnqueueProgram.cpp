@@ -340,6 +340,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
 
     vector<uint32_t> dummy_cr0_args;
     vector<uint32_t> dummy_cr1_args;
+    vector<uint32_t> dummy_common_args;
     bool terminate = false;
 
     auto it = program_config.cr_set.ranges().begin();
@@ -347,22 +348,37 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     std::advance(it, 1);
     CoreRange core_range_1 = *it;
 
-    for (uint32_t i = 0; i < num_iterations; i++) {
+    uint32_t idx = 0;
+    constexpr uint32_t num_common_runtime_args = 13;
+    for (uint32_t iter = 0; iter < num_iterations; iter++) {
         dummy_cr0_args.clear();
         dummy_cr1_args.clear();
-        uint32_t idx;
-        for (idx = 0; idx < num_runtime_args_for_cr0; idx++) {
-            dummy_cr0_args.push_back(idx * (i + 1));
+        dummy_common_args.clear();
+
+        for (uint32_t i = 0; i < num_runtime_args_for_cr0; i++) {
+            dummy_cr0_args.push_back(idx++);
         }
 
-        for (; idx < num_runtime_args_for_cr0 + num_runtime_args_for_cr1; idx++) {
-            dummy_cr1_args.push_back(idx * (i + 1));
+        for (uint32_t i = 0; i < num_runtime_args_for_cr1; i++) {
+            dummy_cr1_args.push_back(idx++);
+        }
+
+        for (uint32_t i = 0; i < num_common_runtime_args; i++) {
+            dummy_common_args.push_back(idx++);
         }
 
         CoresInCoreRangeGenerator core_range_generator_0(core_range_0, device->compute_with_storage_grid_size());
 
+        terminate = false;
+        bool first = true;
         do {
             auto [core_coord, terminate_] = core_range_generator_0();
+
+            // Don't set RTAs on all cores
+            if (first) {
+                first = false;
+                continue;
+            }
 
             SetRuntimeArgs(program, dummy_kernel0, core_coord, dummy_cr0_args);
             SetRuntimeArgs(program, dummy_kernel1, core_coord, dummy_cr0_args);
@@ -374,8 +390,15 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
         CoresInCoreRangeGenerator core_range_generator_1(core_range_1, device->compute_with_storage_grid_size());
 
         terminate = false;
+        first = true;
         do {
             auto [core_coord, terminate_] = core_range_generator_1();
+
+            // Don't set RTAs on all cores
+            if (first) {
+                first = false;
+                continue;
+            }
 
             SetRuntimeArgs(program, dummy_kernel0, core_coord, dummy_cr1_args);
             SetRuntimeArgs(program, dummy_kernel1, core_coord, dummy_cr1_args);
@@ -384,80 +407,102 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
             terminate = terminate_;
         } while (not terminate);
 
-        tt::tt_metal::detail::CompileProgram(device, program);
+        // These aren't validated yet...
+        if (iter == 0) {
+            SetCommonRuntimeArgs(program, dummy_kernel0, dummy_common_args);
+            SetCommonRuntimeArgs(program, dummy_kernel1, dummy_common_args);
+            SetCommonRuntimeArgs(program, dummy_compute_kernel, dummy_common_args);
+        }
+
         EnqueueProgram(cq, program, false);
+        Finish(cq);
+
+        terminate = false;
+        {
+            CoresInCoreRangeGenerator core_range_generator_0(core_range_0, device->compute_with_storage_grid_size());
+            CoresInCoreRangeGenerator core_range_generator_1(core_range_1, device->compute_with_storage_grid_size());
+            bool first = true;
+            do {
+                auto [core_coord, terminate_] = core_range_generator_0();
+
+                // Don't test RTAs on first cores
+                if (first) {
+                    first = false;
+                    continue;
+                }
+
+                vector<uint32_t> dummy_kernel0_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_dm0,
+                    dummy_cr0_args.size() * sizeof(uint32_t),
+                    dummy_kernel0_args_readback);
+                pass &= (dummy_cr0_args == dummy_kernel0_args_readback);
+
+                vector<uint32_t> dummy_kernel1_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_dm1,
+                    dummy_cr0_args.size() * sizeof(uint32_t),
+                    dummy_kernel1_args_readback);
+                pass &= (dummy_cr0_args == dummy_kernel1_args_readback);
+
+                vector<uint32_t> dummy_compute_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_compute,
+                    dummy_cr0_args.size() * sizeof(uint32_t),
+                    dummy_compute_args_readback);
+                pass &= (dummy_cr0_args == dummy_compute_args_readback);
+
+                terminate = terminate_;
+            } while (not terminate);
+
+            terminate = false;
+            first = true;
+            do {
+                auto [core_coord, terminate_] = core_range_generator_1();
+
+                // Don't test RTAs on first cores
+                if (first) {
+                    first = false;
+                    continue;
+                }
+
+                vector<uint32_t> dummy_kernel0_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_dm0,
+                    dummy_cr1_args.size() * sizeof(uint32_t),
+                    dummy_kernel0_args_readback);
+                pass &= (dummy_cr1_args == dummy_kernel0_args_readback);
+
+                vector<uint32_t> dummy_kernel1_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_dm1,
+                    dummy_cr1_args.size() * sizeof(uint32_t),
+                    dummy_kernel1_args_readback);
+                pass &= (dummy_cr1_args == dummy_kernel1_args_readback);
+
+                vector<uint32_t> dummy_compute_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_compute,
+                    dummy_cr1_args.size() * sizeof(uint32_t),
+                    dummy_compute_args_readback);
+                pass &= (dummy_cr1_args == dummy_compute_args_readback);
+
+                terminate = terminate_;
+            } while (not terminate);
+        }
     }
-    Finish(cq);
-
-    terminate = false;
-    CoresInCoreRangeGenerator core_range_generator_0(core_range_0, device->compute_with_storage_grid_size());
-    CoresInCoreRangeGenerator core_range_generator_1(core_range_1, device->compute_with_storage_grid_size());
-    do {
-        auto [core_coord, terminate_] = core_range_generator_0();
-
-        vector<uint32_t> dummy_kernel0_args_readback;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device,
-            core_coord,
-            rta_base_dm0,
-            dummy_cr0_args.size() * sizeof(uint32_t),
-            dummy_kernel0_args_readback);
-        pass &= (dummy_cr0_args == dummy_kernel0_args_readback);
-
-        vector<uint32_t> dummy_kernel1_args_readback;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device,
-            core_coord,
-            rta_base_dm1,
-            dummy_cr0_args.size() * sizeof(uint32_t),
-            dummy_kernel1_args_readback);
-        pass &= (dummy_cr0_args == dummy_kernel1_args_readback);
-
-        vector<uint32_t> dummy_compute_args_readback;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device,
-            core_coord,
-            rta_base_compute,
-            dummy_cr0_args.size() * sizeof(uint32_t),
-            dummy_compute_args_readback);
-        pass &= (dummy_cr0_args == dummy_compute_args_readback);
-
-        terminate = terminate_;
-    } while (not terminate);
-
-    terminate = false;
-    do {
-        auto [core_coord, terminate_] = core_range_generator_1();
-
-        vector<uint32_t> dummy_kernel0_args_readback;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device,
-            core_coord,
-            rta_base_dm0,
-            dummy_cr1_args.size() * sizeof(uint32_t),
-            dummy_kernel0_args_readback);
-        pass &= (dummy_cr1_args == dummy_kernel0_args_readback);
-
-        vector<uint32_t> dummy_kernel1_args_readback;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device,
-            core_coord,
-            rta_base_dm1,
-            dummy_cr1_args.size() * sizeof(uint32_t),
-            dummy_kernel1_args_readback);
-        pass &= (dummy_cr1_args == dummy_kernel1_args_readback);
-
-        vector<uint32_t> dummy_compute_args_readback;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device,
-            core_coord,
-            rta_base_compute,
-            dummy_cr1_args.size() * sizeof(uint32_t),
-            dummy_compute_args_readback);
-        pass &= (dummy_cr1_args == dummy_compute_args_readback);
-
-        terminate = terminate_;
-    } while (not terminate);
 
     return pass;
 }
@@ -1001,7 +1046,22 @@ TEST_F(CommandQueueSingleCardFixture, TestSendRuntimeArgsMultiCoreRange) {
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-            device, device->command_queue(), dummy_program_config, 9, 12, 1));
+            device, device->command_queue(), dummy_program_config, 12, 9, 2));
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, TestSendRuntimeArgsMultiNonOverlappingCoreRange) {
+    // Core ranges get merged in kernel groups, this one does not
+    for (Device* device : devices_) {
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+
+        CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
+        CoreRange cr1({0, 5}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRangeSet cr_set({cr0, cr1});
+
+        DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
+            device, device->command_queue(), dummy_program_config, 9, 12, 2));
     }
 }
 
@@ -1010,12 +1070,12 @@ TEST_F(CommandQueueSingleCardFixture, TestUpdateRuntimeArgsMultiCoreRange) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
-        CoreRange cr1({0, 4}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRange cr1({0, 5}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
         CoreRangeSet cr_set({cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-            device, device->command_queue(), dummy_program_config, 9, 12, 2));
+            device, device->command_queue(), dummy_program_config, 9, 31, 10));
     }
 }
 
