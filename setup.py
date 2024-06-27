@@ -174,7 +174,7 @@ class CMakeBuild(build_ext):
 # Include tt_metal_C for kernels and src/ and tools
 # And any kernels inside `tt_eager/tt_dnn. We must keep all ops kernels inside
 # tt_dnn
-packages = ["tt_lib", "tt_metal", "tt_lib.models", "tt_eager.tt_dnn", "ttnn"]
+packages = ["tt_lib", "tt_metal", "tt_lib.models", "tt_eager.tt_dnn", "ttnn", "ttnn.cpp"]
 
 # Empty sources in order to force extension executions
 eager_lib_C = Extension("tt_lib._C", sources=[])
@@ -199,6 +199,7 @@ setup(
         "tt_lib.models": "models",
         "tt_eager.tt_dnn": "tt_eager/tt_dnn",
         "ttnn": "ttnn/ttnn",
+        "ttnn.cpp": "ttnn/cpp",
     },
     include_package_data=True,
     long_description_content_type="text/markdown",
