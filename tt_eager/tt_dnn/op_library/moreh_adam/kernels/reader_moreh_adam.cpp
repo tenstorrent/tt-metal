@@ -8,10 +8,19 @@
 
 void fill_cb_with_value(uint32_t cb_id, uint32_t value) {
     cb_reserve_back(cb_id, 1);
+
+#if defined FP32_DEST_ACC_EN
+    auto ptr = reinterpret_cast<uint32_t *>(get_write_ptr(cb_id));
+    for (int j = 0; j < 1024; j++) {
+        ptr[j] = value;
+    }
+#else
     auto ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_id));
     for (int j = 0; j < 1024; j++) {
         ptr[j] = uint16_t(value >> 16);
     }
+#endif
+
     cb_push_back(cb_id, 1);
 }
 
@@ -60,9 +69,7 @@ void kernel_main() {
     constexpr bool max_exp_avg_sq_is_dram = get_compile_time_arg_val(4) == 1;
 
     const InterleavedAddrGenFast<param_is_dram> param_addrg = {
-        .bank_base_address = param_addr,
-        .page_size = param_tile_bytes,
-        .data_format = param_data_format};
+        .bank_base_address = param_addr, .page_size = param_tile_bytes, .data_format = param_data_format};
 
     const InterleavedAddrGenFast<grad_is_dram> grad_addrg = {
         .bank_base_address = grad_addr, .page_size = grad_tile_bytes, .data_format = grad_data_format};
@@ -71,7 +78,9 @@ void kernel_main() {
         .bank_base_address = exp_avg_addr, .page_size = exp_avg_tile_bytes, .data_format = exp_avg_data_format};
 
     const InterleavedAddrGenFast<exp_avg_sq_is_dram> exp_avg_sq_addrg = {
-        .bank_base_address = exp_avg_sq_addr, .page_size = exp_avg_sq_tile_bytes, .data_format = exp_avg_sq_data_format};
+        .bank_base_address = exp_avg_sq_addr,
+        .page_size = exp_avg_sq_tile_bytes,
+        .data_format = exp_avg_sq_data_format};
 
 #ifdef AMSGRAD
     constexpr uint32_t cb_id_max_exp_avg_sq = tt::CB::c_in4;
@@ -79,7 +88,9 @@ void kernel_main() {
     const uint32_t max_exp_avg_sq_tile_bytes = get_tile_size(cb_id_max_exp_avg_sq);
     const auto max_exp_avg_sq_data_format = get_dataformat(cb_id_max_exp_avg_sq);
     const InterleavedAddrGenFast<max_exp_avg_sq_is_dram> max_exp_avg_sq_addrg = {
-        .bank_base_address = max_exp_avg_sq_addr, .page_size = max_exp_avg_sq_tile_bytes, .data_format = max_exp_avg_sq_data_format};
+        .bank_base_address = max_exp_avg_sq_addr,
+        .page_size = max_exp_avg_sq_tile_bytes,
+        .data_format = max_exp_avg_sq_data_format};
 #endif
 
     fill_cb_with_value(cb_scalar_args, lr);
@@ -96,7 +107,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
     uint32_t end_id = start_id + num_tiles_per_core;
-    for (uint32_t i = start_id; i < end_id; ++ i) {
+    for (uint32_t i = start_id; i < end_id; ++i) {
         cb_reserve_back(cb_id_param, onetile);
         uint32_t param_l1_write_addr = get_write_ptr(cb_id_param);
         noc_async_read_tile(i, param_addrg, param_l1_write_addr);

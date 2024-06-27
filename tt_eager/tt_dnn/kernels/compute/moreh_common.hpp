@@ -36,7 +36,7 @@ namespace ckernel {
 ALWI void pack_tile_with_dt(uint32_t ifrom_dst, uint32_t icb)
 {
     #if defined FP32_DEST_ACC_EN
-        PACK(( pack_reconfig_data_format(icb) ));
+        pack_reconfig_data_format(icb);
     #endif
     pack_tile(ifrom_dst, icb);
 }
