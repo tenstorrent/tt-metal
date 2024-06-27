@@ -143,12 +143,12 @@ class TtLlamaMLP_optimized:
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
         )
 
-        hidden_states = tt_lib.operations.primary.matmul(
+        hidden_states = ttnn.matmul(
             hidden_states,
             self.w2,
             program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
-            output_dtype=self.model_config["BFLOAT16_DTYPE"],
+            dtype=self.model_config["BFLOAT16_DTYPE"],
         )
 
         # Prefill Reshape fix (reverse)
