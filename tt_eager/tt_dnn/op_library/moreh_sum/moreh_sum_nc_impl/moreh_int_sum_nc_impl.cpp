@@ -15,24 +15,24 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Tensor &output, int64_t dim,const DeviceComputeKernelConfig &compute_kernel_config) {
+operation::ProgramWithCallbacks moreh_sum_int_nc_impl(const Tensor &input, const Tensor &output, int64_t dim,const DeviceComputeKernelConfig &compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto *device = input.device();
-    auto program = Program();
+    tt_metal::Device *device{input.device()};
+    tt_metal::Program program{tt_metal::CreateProgram()};
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
-    const auto single_tile_size = detail::TileSize(cb_data_format);
+    const auto cb_data_format {datatype_to_dataformat_converter(output.get_dtype())};
+    const auto single_tile_size {detail::TileSize(cb_data_format)};
 
     const auto &input_shape = input.get_legacy_shape();
     const auto &input_shape_without_padding = input_shape.without_padding();
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] = extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(dim));
-    const auto num_reduce_input_tile = input_shape[dim];
-    const auto num_output_tiles = output.volume() / TILE_HW;
+    const auto num_reduce_input_tile {input_shape[dim]};
+    const auto num_output_tiles {output.volume() / TILE_HW};
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
 
     log_debug(LogOp, "reduce_tile_size {} inner_tile_size {} Ht {} Wt {}", reduce_tile_size, inner_tile_size, Ht, Wt);
@@ -46,6 +46,11 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
         fp32_dest_acc_en,
         packer_l1_acc);
 
+    if (!fp32_dest_acc_en) {
+        log_warning(LogOp, "fp32_dest_acc_en should be set for integer sum");
+        fp32_dest_acc_en = true;
+    }
+
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -53,7 +58,6 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
     const auto num_cores_y = grid.y;
 
     const uint32_t in0_t = 2;        // input
-    const uint32_t in1_t = 1;        // zero
     const uint32_t intermed0_t = 1;  // accumulated sum
     const uint32_t out0_t = 2;       // output
     const auto
@@ -73,8 +77,7 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
         cb_data_format,
         {
             {CB::c_in0, in0_t},              // input
-            {CB::c_in1, in1_t},              // zero
-            {CB::c_intermed0, intermed0_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32: cb_data_format},
+            {CB::c_intermed0, intermed0_t},  // accumulated sum
             {CB::c_out0, out0_t},            // output
         });
     ////////////////////////////////////////////////////////////////////////////
@@ -82,13 +85,11 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args =
              {static_cast<uint32_t>(is_dram(input))} ;
-    std::map<string, string> reader_defines;
-    reader_defines["USE_FPU"] = "1";
     std::vector<uint32_t> writer_compile_time_args =
              {static_cast<uint32_t>(is_dram(output))} ;
     const auto reader_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc_impl/kernels/reader_moreh_sum_nc.cpp";
     const auto writer_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc_impl/kernels/writer_moreh_sum_nc.cpp";
-    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -99,7 +100,7 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto compute_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc_impl/kernels/moreh_sum_nc.cpp";
+    const auto compute_kernel_file = "tt_eager/tt_dnn/op_library/moreh_sum/moreh_sum_nc_impl/kernels/moreh_int_sum_nc.cpp";
     const auto compute_kernel_1_id = CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines,
         math_fidelity,
@@ -164,8 +165,8 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {
         log_debug(LogOp, "{}:{} args_callback ", __func__, __LINE__);
-        const auto *input_buffer = input_tensors.at(0).buffer();
-        const auto *output_buffer = output_tensors.at(0).buffer();
+        const auto *input_buffer{input_tensors.at(0).buffer()};
+        const auto *output_buffer{output_tensors.at(0).buffer()};
         for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             {
