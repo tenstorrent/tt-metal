@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/pool/average_pool.hpp"
+#include "ttnn/cpp/ttnn/operations/pool/average_pool.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_numpy/functions.hpp"
 
