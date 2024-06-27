@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/pool/max_pool.hpp"
+#include "ttnn/operations/pool/max_pool.hpp"
 
 #include <algorithm>
 #include <cmath>
