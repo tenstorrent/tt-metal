@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from models.experimental.functional_whisper.reference import torch_functional_whisper
+from models.demos.whisper.reference import torch_functional_whisper
 import transformers
 from transformers import AutoFeatureExtractor, WhisperModel, WhisperConfig
 from datasets import load_dataset
