@@ -241,6 +241,11 @@ void py_module(py::module& module) {
         ttnn::binary_eq_bw,
         R"doc(Performs backward operations for equal to comparison on :attr:`input_tensor_b` , attr:`input_tensor_a` tensors with given attr:`grad_tensor`.
         Returns an tensor of zeros like :attr:`input_tensor_a` and :attr:`input_tensor_b` tensor.)doc");
+
+    detail::bind_binary_backward(
+        module,
+        ttnn::binary_assign_bw,
+        R"doc(Performs backward operations for binary assign on :attr:`input_tensor_b` with given attr:`grad_tensor`.)doc");
 }
 
 }  // namespace binary_backward

@@ -202,6 +202,7 @@ Pointwise Binary
    ttnn/squared_difference_bw
    ttnn/add_bw
    ttnn/binary_eq_bw
+   ttnn/binary_assign_bw
 
 Pointwise Ternary
 =================

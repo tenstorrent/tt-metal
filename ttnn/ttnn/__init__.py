@@ -467,6 +467,7 @@ from ttnn.operations.binary_backward import (
     squared_difference_bw,
     add_bw,
     binary_eq_bw,
+    binary_assign_bw,
 )
 
 from ttnn.operations.ternary import (

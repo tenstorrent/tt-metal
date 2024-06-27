@@ -351,6 +351,14 @@ std::vector<Tensor> _binary_eq_bw_overload(
     return _binary_eq_bw(default_queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 
+std::vector<Tensor> _binary_assign_bw(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    grad_tensor.emplace_back(grad);
+    return grad_tensor;
+}
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ATAN2_BW:
@@ -375,6 +383,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _add_bw_inter;
         case BinaryBackwardOpType::BINARY_EQ_BW:
             return _binary_eq_bw_inter;
+        case BinaryBackwardOpType::BINARY_ASSIGN_BW:
+            return _binary_assign_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

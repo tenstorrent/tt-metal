@@ -51,6 +51,12 @@ embedding_bw = ttnn.register_operation(golden_function=_golden_function)(
 def _golden_function_backward(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
     if torch_op == torch.squared_difference:
         pyt_y = torch.square(torch.sub(input_tensor_a, input_tensor_b))
+    elif torch_op == torch.clone:
+        pyt_y = torch.clone(input_tensor_a)
+        input_tensor_a.retain_grad()
+        pyt_y.backward(gradient=grad_tensor)
+        golden_tensor = [input_tensor_a.grad]
+        return golden_tensor
     else:
         pyt_y = torch_op(input_tensor_a, input_tensor_b)
     input_tensor_a.retain_grad()
@@ -145,5 +151,11 @@ binary_eq_bw = ttnn.register_operation(
         torch.eq, grad, a, b, *args, **kwargs
     )
 )(ttnn._ttnn.operations.binary_backward.binary_eq_bw)
+
+binary_assign_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.clone, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.binary_assign_bw)
 
 __all__ = []
