@@ -22,6 +22,7 @@ run_profiling_test() {
 
   source python_env/bin/activate
   export PYTHONPATH=$TT_METAL_HOME
+  export TT_METAL_CLEAR_L1=1
 
   pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_pcie_h2d_dram --timeout=720
   pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_pcie_d2h_dram --timeout=720
