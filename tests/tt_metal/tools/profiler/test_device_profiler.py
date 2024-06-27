@@ -145,12 +145,12 @@ def test_dispatch_cores():
     ZONE_COUNT = 37
     REF_COUNT_DICT = {
         "grayskull": {
-            "Tensix CQ Dispatch": 33,
-            "Tensix CQ Prefetch": 36,
+            "Tensix CQ Dispatch": 18,
+            "Tensix CQ Prefetch": 21,
         },
         "wormhole_b0": {
-            "Tensix CQ Dispatch": 33,
-            "Tensix CQ Prefetch": 36,
+            "Tensix CQ Dispatch": 18,
+            "Tensix CQ Prefetch": 21,
         },
     }
 

@@ -40,9 +40,9 @@ TEST_F(CommandQueueFixture, TestEventsDataMovementWrittenToCompletionQueueInOrde
             buffers.push_back(std::make_shared<Buffer>(this->device_, page_size, page_size, BufferType::DRAM));
 
             if (data_movement_mode == DataMovementMode::WRITE) {
-                EnqueueWriteBuffer(this->device_->command_queue(), buffers.back(), page, false);
+                EnqueueWriteBuffer(this->device_->command_queue(), buffers.back(), page, true);
             } else if (data_movement_mode == DataMovementMode::READ) {
-                EnqueueReadBuffer(this->device_->command_queue(), buffers.back(), page, false);
+                EnqueueReadBuffer(this->device_->command_queue(), buffers.back(), page, true);
             }
         }
         Finish(this->device_->command_queue());
@@ -280,7 +280,7 @@ TEST_F(CommandQueueFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
         EXPECT_EQ(event->event_id, cmds_issued_per_cq);
 
         std::shared_ptr<Buffer> buf = std::make_shared<Buffer>(this->device_, page_size, page_size, BufferType::DRAM);
-        EnqueueWriteBuffer(this->device_->command_queue(), buf, page, false);
+        EnqueueWriteBuffer(this->device_->command_queue(), buf, page, true);
         EnqueueWaitForEvent(this->device_->command_queue(), event);
 
         if (i % 10 == 0) {

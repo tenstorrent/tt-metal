@@ -528,6 +528,8 @@ class HWCommandQueue {
     std::condition_variable reader_thread_cv;
     std::mutex reader_thread_cv_mutex;
 
+    std::condition_variable reads_processed_cv;
+    std::mutex reads_processed_cv_mutex;
     CoreType get_dispatch_core_type();
 
     void copy_into_user_space(
