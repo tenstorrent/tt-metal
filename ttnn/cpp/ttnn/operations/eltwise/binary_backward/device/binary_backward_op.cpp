@@ -293,6 +293,63 @@ std::vector<ttnn::Tensor> _squared_difference_bw(
     return grad_tensor;
 }
 
+// std::vector<std::optional<Tensor>> _binary_eq_bw(
+std::vector<Tensor> _binary_eq_bw(
+    uint8_t cq_id,
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    //TODO: std::vector<std::optional<Tensor>> result;
+    std::vector<Tensor> result;
+
+    if (are_required_outputs.at(0)) {
+        if(input_grad.has_value()){
+            tt::tt_metal::zeros_like(cq_id, input, output_mem_config, input_grad);
+        } else {
+            input_grad = tt::tt_metal::zeros_like(cq_id, input, output_mem_config);
+        }
+        // TODO: result.emplace_back(input_grad);
+        result.emplace_back(std::move(input_grad.value()));
+    } else {
+        // TODO: result.emplace_back(std::nullopt);
+        result.emplace_back();
+    }
+    if (are_required_outputs.at(1)) {
+        if(other_grad.has_value()){
+            tt::tt_metal::zeros_like(cq_id, input, output_mem_config, other_grad);
+        } else {
+            other_grad = tt::tt_metal::zeros_like(cq_id, input, output_mem_config);
+        }
+        // TODO: result.emplace_back(other_grad);
+        result.emplace_back(std::move(other_grad.value()));
+    } else {
+        // TODO: result.emplace_back(std::nullopt);
+        result.emplace_back();
+    }
+    return std::move(result);
+}
+
+std::vector<ttnn::Tensor> _binary_eq_bw_inter(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    return _binary_eq_bw(0, grad, input, other, output_mem_config, {true, true}, std::nullopt, std::nullopt);
+}
+
+// std::vector<std::optional<Tensor>> _binary_eq_bw_overload(
+std::vector<Tensor> _binary_eq_bw_overload(
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    uint8_t default_queue_id = 0;
+    return _binary_eq_bw(default_queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
+}
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
@@ -316,6 +373,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _squared_difference_bw;
         case BinaryBackwardOpType::ADD_BW:
             return _add_bw_inter;
+        case BinaryBackwardOpType::BINARY_EQ_BW:
+            return _binary_eq_bw_inter;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
@@ -358,6 +417,8 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, 
     switch (OpType) {
         case BinaryBackwardOpType::ADD_BW:
             return _add_bw;
+        case BinaryBackwardOpType::BINARY_EQ_BW:
+            return _binary_eq_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
@@ -368,6 +429,8 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tens
     switch (OpType) {
         case BinaryBackwardOpType::ADD_BW:
             return _add_bw_overload;
+        case BinaryBackwardOpType::BINARY_EQ_BW:
+            return _binary_eq_bw_overload;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

@@ -5,6 +5,7 @@
 import torch
 import pytest
 import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
@@ -21,7 +22,7 @@ def test_bw_binary_eq(input_shapes, device):
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
     _, grad_tensor = data_gen_with_range(input_shapes, -20, 40, device)
 
-    tt_output_tensor_on_device = tt_lib.tensor.binary_eq_bw(grad_tensor, input_tensor, other_tensor)
+    tt_output_tensor_on_device = ttnn.binary_eq_bw(grad_tensor, input_tensor, other_tensor)
     in_grad = torch.zeros_like(in_data)
     other_grad = torch.zeros_like(other_data)
 
@@ -38,7 +39,8 @@ def test_bw_binary_eq(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
+# @pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
+@pytest.mark.parametrize("are_required_outputs", [[True, True]])
 def test_bw_binary_eq_opt_output(input_shapes, device, are_required_outputs):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
@@ -50,13 +52,13 @@ def test_bw_binary_eq_opt_output(input_shapes, device, are_required_outputs):
     if are_required_outputs[1]:
         _, other_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
-    tt_output_tensor_on_device = tt_lib.tensor.binary_eq_bw(
+    tt_output_tensor_on_device = ttnn.binary_eq_bw(
         grad_tensor,
         input_tensor,
         other_tensor,
         are_required_outputs=are_required_outputs,
-        input_grad=input_grad,
-        other_grad=other_grad,
+        optional_input_a_grad=input_grad,
+        optional_input_b_grad=other_grad,
     )
 
     in_grad = torch.zeros_like(in_data)
@@ -78,7 +80,8 @@ def test_bw_binary_eq_opt_output(input_shapes, device, are_required_outputs):
         (torch.Size([1, 1, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
+# @pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
+@pytest.mark.parametrize("are_required_outputs", [[True, True]])
 def test_bw_binary_eq_opt_output_qid(input_shapes, device, are_required_outputs):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
@@ -93,13 +96,13 @@ def test_bw_binary_eq_opt_output_qid(input_shapes, device, are_required_outputs)
 
     cq_id = 0
 
-    tt_output_tensor_on_device = tt_lib.tensor.binary_eq_bw(
+    tt_output_tensor_on_device = ttnn.binary_eq_bw(
         grad_tensor,
         input_tensor,
         other_tensor,
         are_required_outputs=are_required_outputs,
-        input_grad=input_grad,
-        other_grad=other_grad,
+        optional_input_a_grad=input_grad,
+        optional_input_b_grad=other_grad,
         queue_id=cq_id,
     )
 

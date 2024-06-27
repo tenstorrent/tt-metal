@@ -414,7 +414,7 @@ Tensor elementwise operations
 .. autofunction:: tt_lib.tensor.unary_remainder
 
 .. autofunction:: tt_lib.tensor.remainder
-    
+
 .. autofunction:: tt_lib.tensor.unary_fmod
 
 .. autofunction:: tt_lib.tensor.fmod
@@ -987,8 +987,6 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.selu_bw
 
 .. autofunction:: tt_lib.tensor.binary_ge_bw
-
-.. autofunction:: tt_lib.tensor.binary_eq_bw
 
 .. autofunction:: tt_lib.tensor.binary_gt_bw
 

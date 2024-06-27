@@ -495,25 +495,6 @@ std::vector<Tensor> binary_ge_bw(
     const Tensor& input,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<std::optional<Tensor>> binary_eq_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
-
-std::vector<std::optional<Tensor>> binary_eq_bw(
-    uint8_t queue_id,
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
-
 std::vector<Tensor> binary_gt_bw(
     const Tensor& grad,
     const Tensor& input,

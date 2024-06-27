@@ -65,6 +65,11 @@ def _golden_function_backward_with_float(torch_op, grad_tensor, input_tensor_a, 
     return golden_tensor
 
 
+def _golden_function_comparison_ops(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
+    golden_tensor = [torch.zeros_like(input_tensor_a), torch.zeros_like(input_tensor_b)]
+    return golden_tensor
+
+
 sub_bw = ttnn.register_operation(
     golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
         torch.sub, grad, a, b, *args, **kwargs
@@ -130,5 +135,11 @@ addalpha_bw = ttnn.register_operation(
         torch.add, grad, a, b, alpha, *args, **kwargs
     )
 )(ttnn._ttnn.operations.binary_backward.addalpha_bw)
+
+binary_eq_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
+        torch.eq, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.binary_eq_bw)
 
 __all__ = []

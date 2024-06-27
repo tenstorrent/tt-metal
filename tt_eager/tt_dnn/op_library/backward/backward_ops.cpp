@@ -1782,65 +1782,6 @@ std::vector<Tensor> binary_ge_bw(const Tensor& grad, const Tensor& input, const 
     return operation::decorate_as_composite(__func__, _binary_ge_bw)(grad, input, output_mem_config);
 }
 
-
-std::vector<std::optional<Tensor>> _binary_eq_bw(
-    uint8_t cq_id,
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    std::vector<std::optional<Tensor>> result;
-
-    if (are_required_outputs.at(0)) {
-        if(input_grad.has_value()){
-            zeros_like(cq_id, input, output_mem_config, input_grad);
-        } else {
-            input_grad = zeros_like(cq_id, input, output_mem_config);
-        }
-        result.emplace_back(input_grad);
-    } else {
-        result.emplace_back(std::nullopt);
-    }
-    if (are_required_outputs.at(1)) {
-        if(other_grad.has_value()){
-            zeros_like(cq_id, input, output_mem_config, other_grad);
-        } else {
-            other_grad = zeros_like(cq_id, input, output_mem_config);
-        }
-        result.emplace_back(other_grad);
-    } else {
-        result.emplace_back(std::nullopt);
-    }
-    return std::move(result);
-}
-std::vector<std::optional<Tensor>> binary_eq_bw(
-    uint8_t cq_id,
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    return operation::decorate_as_composite(__func__, _binary_eq_bw)(
-        cq_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
-}
-std::vector<std::optional<Tensor>> binary_eq_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    uint8_t default_queue_id = 0;
-    return operation::decorate_as_composite(__func__, _binary_eq_bw)(
-        default_queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
-}
-
 std::vector<Tensor> _binary_gt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor zero_grad = zeros_like(grad, output_mem_config);
