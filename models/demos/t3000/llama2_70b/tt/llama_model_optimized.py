@@ -343,7 +343,7 @@ class TtLlamaModel_optimized:
         )
 
         ### Each device does an LM head fracture
-        lm_head_out = tt.matmul(
+        lm_head_out = ttnn.matmul(
             norm_out_replicated,
             self.lm_head,
             program_config=self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
