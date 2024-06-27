@@ -315,7 +315,7 @@ void ScaledDotProductAttentionDecode::validate(
     TT_FATAL(valid_seq_len.value() == mask_shape[-1], "Mask sequence dim must match valid_seq_len");
     TT_FATAL(valid_seq_len.value() <= k_shape[-2], "valid_seq_len must be <= K sequence dim");
 
-
+    // Check program config
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -336,6 +336,14 @@ void ScaledDotProductAttentionDecode::validate(
             }
         },
         this->program_config);
+
+    // Check compute kernel config
+    std::visit([&](auto&& compute_kernel_config) {
+            using T = std::decay_t<decltype(compute_kernel_config)>;
+            if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+                TT_FATAL(compute_kernel_config.fp32_dest_acc_en == false, "FP32 dest acc disabled due to nd pcc and unpacker hang issue.");
+            }
+        }, this->compute_kernel_config);
 }
 
 std::vector<Shape> ScaledDotProductAttentionDecode::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
