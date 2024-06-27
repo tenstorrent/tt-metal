@@ -613,9 +613,7 @@ inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<
     uint32_t total_size =  output_shard_spec.tensor_shard_spec.numel() / TILE_HW * page_width;
     if(input.get_layout() == Layout::ROW_MAJOR and (input_buffer->shard_spec().page_shape[1] != output_buffer->shard_spec().page_shape[1])) {
 
-        std::cout << "In Diff width section with widths of input: " << input_buffer->shard_spec().page_shape[1]  << " and output: " << output_buffer->shard_spec().page_shape[1] << std::endl;
         page_width = get_greatest_common_factor(input_buffer->shard_spec().page_shape[1], output_buffer->shard_spec().page_shape[1]);
-        std::cout << "Page width returned is " << page_width << std::endl;
         std::array<uint32_t, 2> page_shape = {1, page_width};
 
         auto shape = input.get_legacy_shape();
@@ -625,12 +623,10 @@ inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<
             other_dims *= shape[i];
         }
         std::array<uint32_t,2> tensor2d_size = {other_dims/page_shape[0], width/page_shape[1]};
-        std::cout << "Tensor2D size is: " << tensor2d_size[0] << ", " << tensor2d_size[1] << std::endl;
         tensor2d_shape_page_shape_override = {tensor2d_size, page_shape};
         input_shard_spec = ShardSpecBuffer(input_shard_spec.tensor_shard_spec, tensor2d_shape_page_shape_override.value()[1], tensor2d_shape_page_shape_override.value()[0]);
         output_shard_spec = ShardSpecBuffer(output_shard_spec.tensor_shard_spec, tensor2d_shape_page_shape_override.value()[1], tensor2d_shape_page_shape_override.value()[0]);
         input_num_host_pages_multiplier = input_buffer->shard_spec().page_shape[1] / page_width;
-        std::cout << "Input num host pages multiplier is " << input_num_host_pages_multiplier << std::endl;
         total_size = output_shard_shape[0] * output_shard_shape[1];
     }
     else if (input.get_layout() == Layout::ROW_MAJOR){
@@ -643,38 +639,38 @@ inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<
     auto output_buffer_page_mapping = generate_buffer_page_mapping(*output_buffer, tensor2d_shape_page_shape_override);
     auto input_buffer_page_mapping = generate_buffer_page_mapping(*input_buffer, tensor2d_shape_page_shape_override);
 
-    std::cout << "Input Mapping " << std::endl;
-    uint32_t dev_page_idx = 0;
-    for(auto _host_page : input_buffer_page_mapping.dev_page_to_host_page_mapping_) {
-        if(_host_page.has_value()) {
-            std::cout << "dev_page [" << dev_page_idx  << "]=" << _host_page.value() << std::endl;;
-        }
-        else {
-            std::cout << "dev_page [" << dev_page_idx  << "] = NULL " << std::endl;
-        }
-        dev_page_idx++;
-    }
-    uint32_t host_page_idx = 0;
-    for(auto _dev_page : input_buffer_page_mapping.host_page_to_dev_page_mapping_) {
-        std::cout << "host_page [" << host_page_idx  << "]=" << _dev_page << std::endl;
-        host_page_idx++;
-    }
-    std::cout << "Output Mapping " << std::endl;
-    dev_page_idx = 0;
-    for(auto _host_page : output_buffer_page_mapping.dev_page_to_host_page_mapping_) {
-        if(_host_page.has_value()) {
-            std::cout << "dev_page [" << dev_page_idx  << "]=" << _host_page.value() << std::endl;;
-        }
-        else {
-            std::cout << "dev_page [" << dev_page_idx  << "] = NULL " << std::endl;
-        }
-        dev_page_idx++;
-    }
-    host_page_idx = 0;
-    for(auto _dev_page : output_buffer_page_mapping.host_page_to_dev_page_mapping_) {
-        std::cout << "host_page [" << host_page_idx  << "]=" << _dev_page << std::endl;;
-        host_page_idx++;
-    }
+//    std::cout << "Input Mapping " << std::endl;
+//    uint32_t dev_page_idx = 0;
+//    for(auto _host_page : input_buffer_page_mapping.dev_page_to_host_page_mapping_) {
+//        if(_host_page.has_value()) {
+//            std::cout << "dev_page [" << dev_page_idx  << "]=" << _host_page.value() << std::endl;;
+//        }
+//        else {
+//            std::cout << "dev_page [" << dev_page_idx  << "] = NULL " << std::endl;
+//        }
+//        dev_page_idx++;
+//    }
+//    uint32_t host_page_idx = 0;
+//    for(auto _dev_page : input_buffer_page_mapping.host_page_to_dev_page_mapping_) {
+//        std::cout << "host_page [" << host_page_idx  << "]=" << _dev_page << std::endl;
+//        host_page_idx++;
+//    }
+//    std::cout << "Output Mapping " << std::endl;
+//    dev_page_idx = 0;
+//    for(auto _host_page : output_buffer_page_mapping.dev_page_to_host_page_mapping_) {
+//        if(_host_page.has_value()) {
+//            std::cout << "dev_page [" << dev_page_idx  << "]=" << _host_page.value() << std::endl;;
+//        }
+//        else {
+//            std::cout << "dev_page [" << dev_page_idx  << "] = NULL " << std::endl;
+//        }
+//        dev_page_idx++;
+//    }
+//    host_page_idx = 0;
+//    for(auto _dev_page : output_buffer_page_mapping.host_page_to_dev_page_mapping_) {
+//        std::cout << "host_page [" << host_page_idx  << "]=" << _dev_page << std::endl;;
+//        host_page_idx++;
+//    }
 
     const auto& output_shard_to_host_mapping = output_buffer_page_mapping.dev_page_to_host_page_mapping_;
     const auto& input_page_to_local_page_mapping = input_buffer_page_mapping.host_page_to_local_shard_page_mapping_;
@@ -719,13 +715,13 @@ inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<
         const auto end = input_cores_with_pages.end();
 
         uint32_t index = 0;
-        std::cout << "Printing Mappings for core " << output_core.str() << std::endl;
-        for (auto it: input_cores_with_pages) {
-            std::cout << "Output page " << index
-            << " maps to Core: " << it->first.str()
-            << " and page: " << it->second << std::endl;
-            index++;
-        }
+//        std::cout << "Printing Mappings for core " << output_core.str() << std::endl;
+//        for (auto it: input_cores_with_pages) {
+//            std::cout << "Output page " << index
+//            << " maps to Core: " << it->first.str()
+//            << " and page: " << it->second << std::endl;
+//            index++;
+//        }
 
         while (it != end) {
             // hit padding, will see how many consecutive pages has padding to make a padded range
@@ -902,21 +898,21 @@ inline std::tuple<uint32_t, uint32_t, std::unordered_map<CoreCoord, std::vector<
             }
         }
         output_core_id++;
-        std::cout << "CORE " << output_core.str() << " has " << ret_map[output_core].size() << " ranges " << std::endl;
-        uint32_t range_idx = 0;
-        for(auto range : ret_map.at(output_core)) {
-            std::cout << "RANGE " << range_idx
-                << " start_core_x: " << range.start_core.x
-                << " start_core_y: " << range.start_core.y
-                << " start_data: " << range.start_data
-                << " stride_size(pages): " << range.stride_size
-                << " num_reps: " << range.num_strides
-                << " stride_core_x:  " << range.stride.core.x
-                << " stride_core_y: " << range.stride.core.y
-                << " stride_data: " << range.stride.data
-                << std::endl;
-            range_idx++;
-        }
+        //std::cout << "CORE " << output_core.str() << " has " << ret_map[output_core].size() << " ranges " << std::endl;
+        //uint32_t range_idx = 0;
+        //for(auto range : ret_map.at(output_core)) {
+        //    std::cout << "RANGE " << range_idx
+        //        << " start_core_x: " << range.start_core.x
+        //        << " start_core_y: " << range.start_core.y
+        //        << " start_data: " << range.start_data
+        //        << " stride_size(pages): " << range.stride_size
+        //        << " num_reps: " << range.num_strides
+        //        << " stride_core_x:  " << range.stride.core.x
+        //        << " stride_core_y: " << range.stride.core.y
+        //        << " stride_data: " << range.stride.data
+        //        << std::endl;
+        //    range_idx++;
+        //}
     }
 
     return {total_size, page_width, ret_map};
@@ -1122,22 +1118,22 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     uint32_t max_page_size = page_size;
 
     auto input_buffer_page_mapping = generate_buffer_page_mapping(*input.buffer());
-    std::cout << " Input Buffer Addr " << std::hex << input.buffer()->address() << std::endl;
-    std::cout << " Input Buffer Page Size " << std::dec << input.buffer()->page_size() << std::endl;
-    std::cout << " Input Buffer Total Size " << std::dec << input.buffer()->size() << std::endl;
-    std::cout << " Input Buffer Num Dev Pages " << std::dec << input.buffer()->num_dev_pages() << std::endl;
-    std::cout << " Input Buffer Num Cores " << std::dec << input.buffer()->num_cores() << std::endl;
-    std::cout << "Input Buffer Cores: " << std::endl;
-    for(auto core: input_buffer_page_mapping.all_cores_) {
-        std::cout << core.str() << std::endl;
-    }
-    for (uint32_t dev_page_idx = 0; dev_page_idx < input.buffer()->num_dev_pages() ; dev_page_idx++)  {
-        auto core_idx = input_buffer_page_mapping.dev_page_to_core_mapping_[dev_page_idx];
-        std::cout << "Input Buffer Dev_page[" << dev_page_idx
-            << "] on Core " << input_buffer_page_mapping.all_cores_[core_idx].str()
-            <<  " with local page " << input_buffer_page_mapping.dev_page_to_local_shard_page_mapping_[dev_page_idx]
-            << std::endl;
-    }
+//    std::cout << " Input Buffer Addr " << std::hex << input.buffer()->address() << std::endl;
+//    std::cout << " Input Buffer Page Size " << std::dec << input.buffer()->page_size() << std::endl;
+//    std::cout << " Input Buffer Num Dev Pages " << std::dec << input.buffer()->num_dev_pages() << std::endl;
+//    std::cout << " Input Buffer Total Size " << std::dec << input.buffer()->size() << std::endl;
+//    std::cout << " Input Buffer Num Cores " << std::dec << input.buffer()->num_cores() << std::endl;
+//    std::cout << "Input Buffer Cores: " << std::endl;
+//    for(auto core: input_buffer_page_mapping.all_cores_) {
+//        std::cout << core.str() << std::endl;
+//    }
+//    for (uint32_t dev_page_idx = 0; dev_page_idx < input.buffer()->num_dev_pages() ; dev_page_idx++)  {
+//        auto core_idx = input_buffer_page_mapping.dev_page_to_core_mapping_[dev_page_idx];
+//        std::cout << "Input Buffer Dev_page[" << dev_page_idx
+//            << "] on Core " << input_buffer_page_mapping.all_cores_[core_idx].str()
+//            <<  " with local page " << input_buffer_page_mapping.dev_page_to_local_shard_page_mapping_[dev_page_idx]
+//            << std::endl;
+//    }
     uint32_t input_page_size = input_shard_spec.shape[1] * input.element_size();
     uint32_t output_page_size = output_shard_spec.shape[1] * output.element_size();
 
@@ -1172,7 +1168,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
                                             output_page_size, /*5*/
                                             input_page_allignment, /*6*/
                                             output_page_allignment, /*7*/
-                                            tmp_cb_index_0 /*8*/
+                                            tmp_cb_index_0, /*8*/
                                             }));
 
         kernel_id_1 = tt_metal::CreateKernel(
@@ -1188,10 +1184,8 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
                                             output_page_size,
                                             input_page_allignment, /*6*/
                                             output_page_allignment, /*7*/
-                                            tmp_cb_index_1
+                                            tmp_cb_index_1,
                                             }));
-        std::cout << "output shard size " << output_shard_size << " output page size " << output_page_size << " output rows per shard " << output_rows_per_shard << std::endl;
-        std::cout << "Making CBs with total size " << total_size << " and page size " << page_size << std::endl;
         tt_metal::CircularBufferConfig cb_tmp_config_0 =
         tt_metal::CircularBufferConfig(total_size, {{tmp_cb_index_0, data_format}})
             .set_page_size(tmp_cb_index_0, page_size);

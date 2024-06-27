@@ -142,16 +142,9 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer, std::option
         auto tensor2d_shape = tensor2d_shape_page_shape_override.value()[0];
         shard_spec = ShardSpecBuffer(shard_spec.tensor_shard_spec, page_shape, tensor2d_shape);
         num_pages_multiplier = buffer.shard_spec().page_shape[1] / shard_spec.page_shape[1];
-        std::cout << "TENSOR OVERRIDE HAS VALUE " << std::endl;
     }
-    else {
-        std::cout << "No override " << std::endl;
-    }
+
     auto row_major = shard_spec.orientation() == ShardOrientation::ROW_MAJOR;
-    std::cout << "Generate Buffer_page mapping " << std::endl;
-    std::cout << "num_pages_multiplier " << num_pages_multiplier << std::endl;
-    std::cout << "shard_spec.page_shape " << shard_spec.page_shape[0] << " , " << shard_spec.page_shape[1] << std::endl;
-    std::cout << "shard_spec.tensor2d_shape " << shard_spec.tensor2d_shape[0] << " , " << shard_spec.tensor2d_shape[1] << std::endl;
 
     BufferPageMapping buffer_page_mapping;
     uint32_t num_cores = buffer.num_cores();
@@ -206,8 +199,6 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer, std::option
             }
         }
     }
-    std::cout << "Num host pages seen: " << num_host_pages_seen << std::endl;
-    std::cout << "Num host pages: " << num_host_pages << std::endl;
     TT_ASSERT(num_host_pages_seen == num_host_pages);
     return buffer_page_mapping;
 }

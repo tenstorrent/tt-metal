@@ -15,366 +15,279 @@ from enum import Enum
 @pytest.mark.parametrize(
     "input_height, input_width, input_memory_layout, input_sharded_memory_config_args, output_sharded_memory_config_args, input_override, output_override",
     [
-        #        (
-        #            128,
-        #            128,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=2, x=1), strategy=ttnn.ShardStrategy.HEIGHT),
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.WIDTH),
-        #            None,
-        #            None,
-        #        ),
-        #        (
-        #            128,
-        #            128,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.WIDTH),
-        #            dict(core_grid=ttnn.CoreGrid(y=2, x=1), strategy=ttnn.ShardStrategy.HEIGHT),
-        #            None,
-        #            None,
-        #        ),
-        #        (
-        #            128,
-        #            64,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=2, x=1), strategy=ttnn.ShardStrategy.HEIGHT),
-        #            dict(core_grid=ttnn.CoreGrid(y=4, x=2), strategy=ttnn.ShardStrategy.BLOCK),
-        #            None,
-        #            None,
-        #        ),
-        #        (
-        #            128,
-        #            64,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=2, x=1), strategy=ttnn.ShardStrategy.HEIGHT),
-        #            dict(core_grid=ttnn.CoreGrid(y=4, x=1), strategy=ttnn.ShardStrategy.HEIGHT),
-        #            None,
-        #            None,
-        #        ),
-        #        (
-        #            128,
-        #            64,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.WIDTH),
-        #            dict(core_grid=ttnn.CoreGrid(y=4, x=1), strategy=ttnn.ShardStrategy.HEIGHT),
-        #            None,
-        #            None,
-        #        ),
-        #        (
-        #            128,
-        #            64,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=2, x=1), strategy=ttnn.ShardStrategy.BLOCK),
-        #            dict(core_grid=ttnn.CoreGrid(y=4, x=2), strategy=ttnn.ShardStrategy.BLOCK),
-        #            None,
-        #            None,
-        #        ),
-        #        (
-        #            32,
-        #            128,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=4), strategy=ttnn.ShardStrategy.BLOCK),
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.BLOCK),
-        #            None,
-        #            None,
-        #        ),
-        #        (
-        #            32,
-        #            128,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=4), strategy=ttnn.ShardStrategy.WIDTH),
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.BLOCK),
-        #            None,
-        #            None,
-        #        ),
-        #        (
-        #            32,
-        #            16,
-        #            ttnn.ROW_MAJOR_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.BLOCK),
-        #            dict(core_grid=ttnn.CoreGrid(y=2, x=1), strategy=ttnn.ShardStrategy.BLOCK),
-        #            None,
-        #            None,
-        #        ),
-        #        (
-        #            32,
-        #            2304,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.WIDTH),
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.WIDTH),
-        #            None,
-        #            None,
-        #        ),
-        #        (
-        #            32,
-        #            1792,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=7, x=8), strategy=ttnn.ShardStrategy.WIDTH),
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.BLOCK),
-        #            [32, 32],
-        #            None,
-        #        ),
-        #        (
-        #            32,
-        #            7168,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=7, x=8), strategy=ttnn.ShardStrategy.WIDTH),
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.BLOCK),
-        #            [32, 128],
-        #            None,
-        #        ),
-        #        (
-        #            32,
-        #            320,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.BLOCK),
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=5), strategy=ttnn.ShardStrategy.BLOCK),
-        #            None,
-        #            None,
-        #        ),
-        #        (
-        #            8192,
-        #            320,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=8, x=2), strategy=ttnn.ShardStrategy.BLOCK),
-        #            dict(core_grid=ttnn.CoreGrid(y=8, x=5), strategy=ttnn.ShardStrategy.BLOCK),
-        #            None,
-        #            None,
-        #        ),
-        #        # (1, 1, 32, 8192) (32 to 8 cores width shardrd)
-        #        (
-        #            32,
-        #            8192,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=4, x=8), strategy=ttnn.ShardStrategy.WIDTH),
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.WIDTH),
-        #            (32, 256),
-        #            None,
-        #        ),
-        #        # (1, 1, 32, 8192) (64 to 8 cores width shardrd)
-        #        (
-        #            32,
-        #            8192,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=8, x=8), strategy=ttnn.ShardStrategy.WIDTH),
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.WIDTH),
-        #            (32, 128),
-        #            None,
-        #        ),
-        #        # (1, 1, 32, 1280) (8 to 1 cores width shardrd)
-        #        (
-        #            32,
-        #            1280,
-        #            ttnn.ROW_MAJOR_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.WIDTH),
-        #            dict(core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.WIDTH),
-        #            None,
-        #            None,
-        #        ),
-        #        # (1, 1, 128, 1280) (32 cores block sharded to 4 cores height sharded)
-        #        (
-        #            128,
-        #            1280,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(core_grid=ttnn.CoreGrid(y=4, x=8), strategy=ttnn.ShardStrategy.BLOCK),
-        #            dict(core_grid=ttnn.CoreGrid(y=4, x=1), strategy=ttnn.ShardStrategy.HEIGHT),
-        #            None,
-        #            None,
-        #        ),
-        #        (
-        #            160,
-        #            64,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(
-        #                core_grid=ttnn.CoreGrid(y=5, x=1),
-        #                strategy=ttnn.ShardStrategy.HEIGHT,
-        #                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        #            ),
-        #            dict(
-        #                core_grid=ttnn.CoreGrid(y=2, x=2),
-        #                strategy=ttnn.ShardStrategy.BLOCK,
-        #                orientation=ttnn.ShardOrientation.COL_MAJOR,
-        #            ),
-        #            (32, 64),
-        #            (32, 96),
-        #        ),
-        #        (
-        #            192,
-        #            128,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(
-        #                core_grid=ttnn.experimental.tensor.CoreRangeSet(
-        #                    {
-        #                        ttnn.experimental.tensor.CoreRange(
-        #                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
-        #                        ),
-        #                    }
-        #                ),
-        #                strategy=ttnn.ShardStrategy.HEIGHT,
-        #            ),
-        #            dict(
-        #                core_grid=ttnn.experimental.tensor.CoreRangeSet(
-        #                    {
-        #                        ttnn.experimental.tensor.CoreRange(
-        #                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 1)
-        #                        ),
-        #                    }
-        #                ),
-        #                strategy=ttnn.ShardStrategy.BLOCK,
-        #            ),
-        #            (96, 128),
-        #            (128, 64),
-        #        ),
-        #        (
-        #            128,
-        #            128,
-        #            ttnn.TILE_LAYOUT,
-        #            dict(
-        #                core_grid=ttnn.experimental.tensor.CoreRangeSet(
-        #                    {
-        #                        ttnn.experimental.tensor.CoreRange(
-        #                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
-        #                        ),
-        #                    }
-        #                ),
-        #                strategy=ttnn.ShardStrategy.HEIGHT,
-        #            ),
-        #            dict(
-        #                core_grid=ttnn.experimental.tensor.CoreRangeSet(
-        #                    {
-        #                        ttnn.experimental.tensor.CoreRange(
-        #                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 1)
-        #                        ),
-        #                    }
-        #                ),
-        #                strategy=ttnn.ShardStrategy.BLOCK,
-        #            ),
-        #            (64, 128),
-        #            (96, 64),
-        #        ),
-        #                (
-        #                    96,
-        #                    128,
-        #                    ttnn.TILE_LAYOUT,
-        #                    dict(
-        #                        core_grid=ttnn.experimental.tensor.CoreRangeSet(
-        #                            {
-        #                                ttnn.experimental.tensor.CoreRange(
-        #                                    ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 2)
-        #                                ),
-        #                            }
-        #                        ),
-        #                        strategy=ttnn.ShardStrategy.HEIGHT,
-        #                    ),
-        #                    dict(
-        #                        core_grid=ttnn.experimental.tensor.CoreRangeSet(
-        #                            {
-        #                                ttnn.experimental.tensor.CoreRange(
-        #                                    ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 1)
-        #                                ),
-        #                            }
-        #                        ),
-        #                        strategy=ttnn.ShardStrategy.BLOCK,
-        #                    ),
-        #                    (32, 128),
-        #                    (64, 64),
-        #                ),
-        #        (
-        #            256,
-        #            320,
-        #            ttnn.ROW_MAJOR_LAYOUT,
-        #            dict(
-        #                core_grid=ttnn.experimental.tensor.CoreRangeSet(
-        #                    {
-        #                        ttnn.experimental.tensor.CoreRange(
-        #                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(7, 7)
-        #                        ),
-        #                    }
-        #                ),
-        #                strategy=ttnn.ShardStrategy.BLOCK,
-        #                orientation=ttnn.ShardOrientation.COL_MAJOR,
-        #            ),
-        #            dict(
-        #                core_grid=ttnn.experimental.tensor.CoreRangeSet(
-        #                    {
-        #                        ttnn.experimental.tensor.CoreRange(
-        #                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(7, 4)
-        #                        ),
-        #                    }
-        #                ),
-        #                strategy=ttnn.ShardStrategy.BLOCK,
-        #                orientation=ttnn.ShardOrientation.COL_MAJOR,
-        #            ),
-        #            (40, 32),
-        #            (64, 32),
-        #        ),
-        #        (
-        #            2,
-        #            16,
-        #            ttnn.ROW_MAJOR_LAYOUT,
-        #            dict(
-        #                core_grid=ttnn.experimental.tensor.CoreRangeSet(
-        #                    {
-        #                        ttnn.experimental.tensor.CoreRange(
-        #                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
-        #                        ),
-        #                    }
-        #                ),
-        #                strategy=ttnn.ShardStrategy.BLOCK,
-        #                orientation=ttnn.ShardOrientation.COL_MAJOR,
-        #            ),
-        #            dict(
-        #                core_grid=ttnn.experimental.tensor.CoreRangeSet(
-        #                    {
-        #                        ttnn.experimental.tensor.CoreRange(
-        #                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 0)
-        #                        ),
-        #                    }
-        #                ),
-        #                strategy=ttnn.ShardStrategy.BLOCK,
-        #                orientation=ttnn.ShardOrientation.COL_MAJOR,
-        #            ),
-        #            (8, 2),
-        #            (16, 2),
-        #        ),
-        #        (
-        #            2,
-        #            16,
-        #            ttnn.ROW_MAJOR_LAYOUT,
-        #            dict(
-        #                core_grid=ttnn.experimental.tensor.CoreRangeSet(
-        #                    {
-        #                        ttnn.experimental.tensor.CoreRange(
-        #                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 0)
-        #                        ),
-        #                    }
-        #                ),
-        #                strategy=ttnn.ShardStrategy.BLOCK,
-        #                orientation=ttnn.ShardOrientation.COL_MAJOR,
-        #            ),
-        #            dict(
-        #                core_grid=ttnn.experimental.tensor.CoreRangeSet(
-        #                    {
-        #                        ttnn.experimental.tensor.CoreRange(
-        #                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
-        #                        ),
-        #                    }
-        #                ),
-        #                strategy=ttnn.ShardStrategy.BLOCK,
-        #                orientation=ttnn.ShardOrientation.COL_MAJOR,
-        #            ),
-        #            (16, 2),
-        #            (8, 2),
-        #        ),
         (
-            1,
+            128,
+            128,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=2, x=1), strategy=ttnn.ShardStrategy.HEIGHT),
+            dict(core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.WIDTH),
+            None,
+            None,
+        ),
+        (
+            128,
+            128,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.WIDTH),
+            dict(core_grid=ttnn.CoreGrid(y=2, x=1), strategy=ttnn.ShardStrategy.HEIGHT),
+            None,
+            None,
+        ),
+        (
+            128,
+            64,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=2, x=1), strategy=ttnn.ShardStrategy.HEIGHT),
+            dict(core_grid=ttnn.CoreGrid(y=4, x=2), strategy=ttnn.ShardStrategy.BLOCK),
+            None,
+            None,
+        ),
+        (
+            128,
+            64,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=2, x=1), strategy=ttnn.ShardStrategy.HEIGHT),
+            dict(core_grid=ttnn.CoreGrid(y=4, x=1), strategy=ttnn.ShardStrategy.HEIGHT),
+            None,
+            None,
+        ),
+        (
+            128,
+            64,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.WIDTH),
+            dict(core_grid=ttnn.CoreGrid(y=4, x=1), strategy=ttnn.ShardStrategy.HEIGHT),
+            None,
+            None,
+        ),
+        (
+            128,
+            64,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=2, x=1), strategy=ttnn.ShardStrategy.BLOCK),
+            dict(core_grid=ttnn.CoreGrid(y=4, x=2), strategy=ttnn.ShardStrategy.BLOCK),
+            None,
+            None,
+        ),
+        (
+            32,
+            128,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=1, x=4), strategy=ttnn.ShardStrategy.BLOCK),
+            dict(core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.BLOCK),
+            None,
+            None,
+        ),
+        (
+            32,
+            128,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=1, x=4), strategy=ttnn.ShardStrategy.WIDTH),
+            dict(core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.BLOCK),
+            None,
+            None,
+        ),
+        (
+            32,
+            16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.BLOCK),
+            dict(core_grid=ttnn.CoreGrid(y=2, x=1), strategy=ttnn.ShardStrategy.BLOCK),
+            None,
+            None,
+        ),
+        (
+            32,
+            2304,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.WIDTH),
+            dict(core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.WIDTH),
+            None,
+            None,
+        ),
+        (
+            32,
+            1792,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=7, x=8), strategy=ttnn.ShardStrategy.WIDTH),
+            dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.BLOCK),
+            [32, 32],
+            None,
+        ),
+        (
+            32,
+            7168,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=7, x=8), strategy=ttnn.ShardStrategy.WIDTH),
+            dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.BLOCK),
+            [32, 128],
+            None,
+        ),
+        (
+            32,
+            320,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.BLOCK),
+            dict(core_grid=ttnn.CoreGrid(y=1, x=5), strategy=ttnn.ShardStrategy.BLOCK),
+            None,
+            None,
+        ),
+        (
+            8192,
+            320,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=8, x=2), strategy=ttnn.ShardStrategy.BLOCK),
+            dict(core_grid=ttnn.CoreGrid(y=8, x=5), strategy=ttnn.ShardStrategy.BLOCK),
+            None,
+            None,
+        ),
+        # (1, 1, 32, 8192) (32 to 8 cores width shardrd)
+        (
+            32,
+            8192,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=4, x=8), strategy=ttnn.ShardStrategy.WIDTH),
+            dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.WIDTH),
+            (32, 256),
+            None,
+        ),
+        # (1, 1, 32, 8192) (64 to 8 cores width shardrd)
+        (
+            32,
+            8192,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=8, x=8), strategy=ttnn.ShardStrategy.WIDTH),
+            dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.WIDTH),
+            (32, 128),
+            None,
+        ),
+        # (1, 1, 32, 1280) (8 to 1 cores width shardrd)
+        (
+            32,
+            1280,
+            ttnn.ROW_MAJOR_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.WIDTH),
+            dict(core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.WIDTH),
+            None,
+            None,
+        ),
+        # (1, 1, 128, 1280) (32 cores block sharded to 4 cores height sharded)
+        (
+            128,
+            1280,
+            ttnn.TILE_LAYOUT,
+            dict(core_grid=ttnn.CoreGrid(y=4, x=8), strategy=ttnn.ShardStrategy.BLOCK),
+            dict(core_grid=ttnn.CoreGrid(y=4, x=1), strategy=ttnn.ShardStrategy.HEIGHT),
+            None,
+            None,
+        ),
+        (
+            160,
+            64,
+            ttnn.TILE_LAYOUT,
+            dict(
+                core_grid=ttnn.CoreGrid(y=5, x=1),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+            dict(
+                core_grid=ttnn.CoreGrid(y=2, x=2),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.COL_MAJOR,
+            ),
+            (32, 64),
+            (32, 96),
+        ),
+        (
+            192,
+            128,
+            ttnn.TILE_LAYOUT,
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+            ),
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 1)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.BLOCK,
+            ),
+            (96, 128),
+            (128, 64),
+        ),
+        (
+            128,
+            128,
+            ttnn.TILE_LAYOUT,
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+            ),
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 1)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.BLOCK,
+            ),
+            (64, 128),
+            (96, 64),
+        ),
+        (
+            96,
+            128,
+            ttnn.TILE_LAYOUT,
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 2)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+            ),
+            dict(
+                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                    {
+                        ttnn.experimental.tensor.CoreRange(
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 1)
+                        ),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.BLOCK,
+            ),
+            (32, 128),
+            (64, 64),
+        ),
+        (
+            256,
             320,
             ttnn.ROW_MAJOR_LAYOUT,
             dict(
                 core_grid=ttnn.experimental.tensor.CoreRangeSet(
                     {
                         ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 7)
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(7, 7)
                         ),
                     }
                 ),
@@ -385,44 +298,15 @@ from enum import Enum
                 core_grid=ttnn.experimental.tensor.CoreRangeSet(
                     {
                         ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 4)
+                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(7, 4)
                         ),
                     }
                 ),
                 strategy=ttnn.ShardStrategy.BLOCK,
                 orientation=ttnn.ShardOrientation.COL_MAJOR,
             ),
-            (40, 1),
-            (64, 1),
-        ),
-        (
-            1,
-            160,
-            ttnn.ROW_MAJOR_LAYOUT,
-            dict(
-                core_grid=ttnn.experimental.tensor.CoreRangeSet(
-                    {
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 4)
-                        ),
-                    }
-                ),
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.COL_MAJOR,
-            ),
-            dict(
-                core_grid=ttnn.experimental.tensor.CoreRangeSet(
-                    {
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 3)
-                        ),
-                    }
-                ),
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.COL_MAJOR,
-            ),
-            (32, 1),
-            (40, 1),
+            (40, 32),
+            (64, 32),
         ),
     ],
 )
@@ -436,6 +320,7 @@ def test_reshard(
     input_override,
     output_override,
 ):
+    torch.manual_seed(420)
     if isinstance(input_sharded_memory_config_args["core_grid"], (ttnn.CoreGrid)):
         if device.core_grid.y < input_sharded_memory_config_args["core_grid"].y:
             pytest.skip()
@@ -466,13 +351,13 @@ def test_reshard(
     sharded_output_tensor = ttnn.to_memory_config(sharded_input_tensor, output_shard_memory_config)
 
     output = ttnn.to_torch(sharded_output_tensor)
-    sharded_input_torch = ttnn.to_torch(sharded_input_tensor)
 
-    torch.set_printoptions(profile="full")
-    print("Input Tensor without Reshard")
-    print(sharded_input_torch)
-    print("Tensor after Reshard")
-    print(output)
+    # sharded_input_torch = ttnn.to_torch(sharded_input_tensor)
+    # torch.set_printoptions(profile="full")
+    # print("Input Tensor without Reshard")
+    # print(sharded_input_torch)
+    # print("Tensor after Reshard")
+    # print(output)
     assert_with_pcc(torch_input_tensor, output, 1.0)
 
 
