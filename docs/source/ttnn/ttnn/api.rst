@@ -189,6 +189,18 @@ Pointwise Binary
    ttnn/nextafter
    ttnn/maximum
    ttnn/minimum
+   ttnn/atan2_bw
+   ttnn/embedding_bw
+   ttnn/addalpha_bw
+   ttnn/subalpha_bw
+   ttnn/sub_bw
+   ttnn/xlogy_bw
+   ttnn/hypot_bw
+   ttnn/ldexp_bw
+   ttnn/logaddexp_bw
+   ttnn/logaddexp2_bw
+   ttnn/squared_difference_bw
+   ttnn/add_bw
 
 Pointwise Ternary
 =================

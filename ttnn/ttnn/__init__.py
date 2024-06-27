@@ -452,6 +452,22 @@ from ttnn.operations.binary import (
     divide,
 )
 
+
+from ttnn.operations.binary_backward import (
+    atan2_bw,
+    embedding_bw,
+    addalpha_bw,
+    subalpha_bw,
+    sub_bw,
+    xlogy_bw,
+    hypot_bw,
+    ldexp_bw,
+    logaddexp_bw,
+    logaddexp2_bw,
+    squared_difference_bw,
+    add_bw,
+)
+
 from ttnn.operations.ternary import (
     addcdiv,
     addcmul,

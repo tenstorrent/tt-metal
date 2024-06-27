@@ -828,8 +828,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.prod_bw
 
-.. autofunction:: tt_lib.tensor.addalpha_bw
-
 .. autofunction:: tt_lib.tensor.addcmul_bw
 
 .. autofunction:: tt_lib.tensor.addcdiv_bw
@@ -858,8 +856,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.min_bw
 
-.. autofunction:: tt_lib.tensor.add_bw
-
 .. autofunction:: tt_lib.tensor.tan_bw
 
 .. autofunction:: tt_lib.tensor.exp_bw
@@ -870,8 +866,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.unary_pow_bw
 
-.. autofunction:: tt_lib.tensor.embedding_bw
-
 .. autofunction:: tt_lib.tensor.where_bw
 
 .. autofunction:: tt_lib.tensor.tanh_bw
@@ -879,8 +873,6 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.fill_zero_bw
 
 .. autofunction:: tt_lib.tensor.fill_bw
-
-.. autofunction:: tt_lib.tensor.sub_bw
 
 .. autofunction:: tt_lib.tensor.unary_sub_bw
 
@@ -912,27 +904,13 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.binary_le_bw
 
-.. autofunction:: tt_lib.tensor.atan2_bw
-
-.. autofunction:: tt_lib.tensor.hypot_bw
-
 .. autofunction:: tt_lib.tensor.gelu_bw
 
 .. autofunction:: tt_lib.tensor.bias_gelu_bw
 
 .. autofunction:: tt_lib.tensor.bias_gelu_unary_bw
 
-.. autofunction:: tt_lib.tensor.squared_difference_bw
-
 .. autofunction:: tt_lib.tensor.lerp_bw
-
-.. autofunction:: tt_lib.tensor.ldexp_bw
-
-.. autofunction:: tt_lib.tensor.xlogy_bw
-
-.. autofunction:: tt_lib.tensor.logaddexp_bw
-
-.. autofunction:: tt_lib.tensor.logaddexp2_bw
 
 .. autofunction:: tt_lib.tensor.concat_bw
 
@@ -983,8 +961,6 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.celu_bw
 
 .. autofunction:: tt_lib.tensor.binary_lt_bw
-
-.. autofunction:: tt_lib.tensor.subalpha_bw
 
 .. autofunction:: tt_lib.tensor.log10_bw
 
