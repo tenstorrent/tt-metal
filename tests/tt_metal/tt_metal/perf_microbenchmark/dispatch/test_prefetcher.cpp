@@ -31,7 +31,7 @@ constexpr uint32_t DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_PREFETCH_Q_ENTRIES = 1024;
 constexpr uint32_t DEFAULT_CMDDAT_Q_SIZE = 128 * 1024 + 2 * sizeof(CQPrefetchCmd) + 2 * sizeof(CQDispatchCmd);
-constexpr uint32_t DEFAULT_SCRATCH_DB_SIZE = 128 * 1024;
+constexpr uint32_t DEFAULT_SCRATCH_DB_SIZE = 16 * 1024;
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 
@@ -145,7 +145,7 @@ void init(int argc, char **argv) {
     hugepage_issue_buffer_size_g = test_args::get_command_option_uint32(input_args, "-hp", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
     prefetch_q_entries_g = test_args::get_command_option_uint32(input_args, "-hq", DEFAULT_PREFETCH_Q_ENTRIES);
     cmddat_q_size_g = test_args::get_command_option_uint32(input_args, "-cs", DEFAULT_CMDDAT_Q_SIZE);
-    max_prefetch_command_size_g = cmddat_q_size_g;  // note: half this for best perf
+    max_prefetch_command_size_g = cmddat_q_size_g / 2;  // note: half this for best perf
     scratch_db_size_g = test_args::get_command_option_uint32(input_args, "-ss", DEFAULT_SCRATCH_DB_SIZE);
     use_coherent_data_g = test_args::has_command_option(input_args, "-c");
     readback_every_iteration_g = !test_args::has_command_option(input_args, "-rb");
@@ -1112,10 +1112,10 @@ void gen_smoke_test(Device *device,
     gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
 
     lengths.resize(0);
-    lengths.push_back(scratch_db_size_g / 4 + 5 * 1024 + 48);
-    lengths.push_back(scratch_db_size_g / 4 + 5 * 1024 + 48);
+    lengths.push_back(scratch_db_size_g / 4 + 2 * 1024 + 32);
+    lengths.push_back(scratch_db_size_g / 4 + 3 * 1024 + 32);
     lengths.push_back(scratch_db_size_g / 2);
-    lengths.push_back(scratch_db_size_g / 8 + 7 * 1024 + 96);
+    lengths.push_back(scratch_db_size_g / 8 + 5 * 1024 + 96);
     gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
 
     // Read from dram, write to worker
