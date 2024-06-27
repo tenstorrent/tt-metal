@@ -15,7 +15,6 @@
 #include "tt_stl/concepts.hpp"
 #include "tt_stl/reflection.hpp"
 #include "tt_stl/unique_any.hpp"
-#include <reflect>
 
 namespace ttnn {
 
@@ -94,47 +93,6 @@ template <typename... Ts>
     assert(i < sizeof...(Ts));
     static constexpr std::variant<Ts...> table[] = { Ts{ }... };
     return table[i];
-}
-
-template <typename T>
-    requires std::same_as<std::decay_t<T>, Tensor>
-constexpr auto get_first_tensor(T&& value) {
-    return std::cref(value);
-}
-
-template <typename T>
-constexpr auto get_first_tensor(const std::optional<T>& value) {
-    if (value.has_value()) {
-        const auto& tensor = value.value();
-        return get_first_tensor(tensor);
-    }
-}
-
-template <typename T>
-constexpr auto get_first_tensor(const std::vector<T>& value) {
-    for (auto& tensor : value) {
-        return get_first_tensor(tensor);
-    }
-}
-
-template <typename T, auto N>
-constexpr auto get_first_tensor(const std::array<T, N>& value) {
-    for (auto& tensor : value) {
-        return get_first_tensor(tensor);
-    }
-}
-
-template <typename... Ts>
-constexpr auto get_first_tensor(const std::tuple<Ts...>& value) {
-    constexpr auto num_attributes = sizeof...(Ts);
-    return get_first_tensor(std::get<0>(value));
-}
-
-template <typename T>
-    requires requires { std::decay_t<T>::attribute_names; } and (not std::same_as<std::decay_t<T>, Tensor>)
-constexpr auto get_first_tensor(T&& object) {
-    constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
-    return get_first_tensor(object.attribute_values());
 }
 
 inline const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
@@ -231,7 +189,8 @@ typename device_operation_t::tensor_return_value_t run(
     using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
     static_assert(not std::same_as<tensor_return_value_t, void>, "Operation cannot return type cannot be void");
 
-    auto device = get_first_tensor(tensor_args).get().device();
+    // TODO: support the case when tensor args are empty? Or add an overload for that case?
+    auto device = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args).get().device();
     auto& program_cache = device->program_cache;
 
     auto program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);

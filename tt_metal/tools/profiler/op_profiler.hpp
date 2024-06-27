@@ -5,6 +5,7 @@
 #pragma once
 
 #include <filesystem>
+#include <reflect>
 #include <tuple>
 #include <type_traits>
 
@@ -274,17 +275,12 @@ inline json get_base_json(
     j["op_code"] = opName;
 
     json attributesObj;
-    constexpr auto& attribute_names = std::decay_t<decltype(operation_attributes)>::attribute_names;
-    const auto attribute_values = operation_attributes.attribute_values();
-    [&attributesObj, &attribute_names, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
-        (
-            [&attributesObj, &attribute_names, &attribute_values] {
-                const auto& attribute_name = std::get<Ns>(attribute_names);
-                const auto& attribute = std::get<Ns>(attribute_values);
-                attributesObj[attribute_name] = fmt::format("{}", attribute);
-            }(),
-            ...);
-    }(std::make_index_sequence<std::tuple_size_v<std::decay_t<decltype(attribute_names)>>>{});
+    reflect::for_each(
+        [&attributesObj, &operation_attributes](auto I) {
+            attributesObj[std::string{reflect::member_name<I>(operation_attributes)}] =
+                fmt::format("{}", reflect::get<I>(operation_attributes));
+        },
+        operation_attributes);
     j["attributes"] = attributesObj;
 
     std::vector<json> input_tensors;
