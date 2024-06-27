@@ -185,23 +185,6 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-    m_tensor.def("binary_assign_bw", &tt::tt_metal::binary_assign_bw,
-            py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Performs backward operations for binary assign on ``other`` with given ``grad``.
-
-            Input tensors must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "input", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "other", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
     m_tensor.def("tan_bw", &tt::tt_metal::tan_bw,
             py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
                 Performs backward operations for tangent with given ``grad``
