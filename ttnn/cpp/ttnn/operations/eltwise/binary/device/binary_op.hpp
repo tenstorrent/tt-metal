@@ -65,29 +65,11 @@ struct Binary {
         const MemoryConfig memory_config;
         const DataType dtype;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
-
-        static constexpr auto attribute_names = std::forward_as_tuple(
-            "binary_op_type", "in_place", "activations", "memory_config", "dtype", "compute_kernel_config");
-        const auto attribute_values() const {
-            return std::forward_as_tuple(
-                this->binary_op_type,
-                this->in_place,
-                this->activations,
-                this->memory_config,
-                this->dtype,
-                this->compute_kernel_config);
-        }
     };
     struct tensor_args_t {
         const Tensor& input_tensor_a;
         const Tensor& input_tensor_b;
         std::optional<Tensor> output_tensor;
-
-        static constexpr auto attribute_names =
-            std::forward_as_tuple("input_tensor_a", "input_tensor_b", "output_tensor");
-        const auto attribute_values() const {
-            return std::forward_as_tuple(this->input_tensor_a, this->input_tensor_b, this->output_tensor);
-        }
     };
     using shape_return_value_t = ttnn::Shape;
     using tensor_return_value_t = Tensor;
