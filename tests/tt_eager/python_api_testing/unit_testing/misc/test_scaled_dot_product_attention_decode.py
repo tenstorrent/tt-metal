@@ -419,10 +419,10 @@ def run_test_sdpa_decode_single_iter(
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, grid_size, single_iter",
     (
-        [32, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
-        [16, 8, 1, 32768, 128, (8, 6), False],  # Llama2-70B
-        [8, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
-        [4, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
+        [32, 8, 1, 32768, 128, (8, 8), True],  # Llama2-70B
+        [16, 8, 1, 32768, 128, (8, 8), False],  # Llama2-70B
+        [8, 8, 1, 32768, 128, (8, 8), True],  # Llama2-70B
+        [4, 8, 1, 32768, 128, (8, 8), True],  # Llama2-70B
     ),
 )
 def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype, single_iter):
@@ -451,7 +451,7 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_d
 )
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, grid_size",
-    ([16, 8, 1, 32768, 128, (8, 6)],),  # Llama2-70B
+    ([16, 8, 1, 32768, 128, (8, 8)],),  # Llama2-70B
 )
 def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype):
     tt_lib.device.DisablePersistentKernelCache()
@@ -524,3 +524,137 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
         )
 
     assert device.num_program_cache_entries() == 4
+
+
+def run_test_sdpa_decode_ndpcc(
+    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype=ttnn.bfloat16, mask_dtype=ttnn.bfloat16
+):
+    padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
+    torch.manual_seed(1234)
+
+    compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+        math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    dram_memcfg = ttnn.types.MemoryConfig(ttnn.types.TensorMemoryLayout.INTERLEAVED, ttnn.types.BufferType.DRAM)
+
+    K = torch.randn(nkv, b, s, d)
+    V = torch.randn(nkv, b, s, d)
+
+    tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
+    tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
+
+    start_idx = 22222  # 16242
+
+    while start_idx < s:
+        Q = torch.randn(1, b, padded_num_heads, d)
+        prev_pcc = None
+
+        for i in range(16):
+            scale = d**-0.5
+
+            k_chunk_size = get_chunk_size(start_idx)
+            program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+                compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
+                q_chunk_size=padded_num_heads,
+                k_chunk_size=k_chunk_size,
+            )
+
+            padded_layer_len = nearest_n(start_idx, n=k_chunk_size)
+
+            # Test various sequence lengths
+            logger.info(f"Testing with sequence length: {start_idx}")
+            logger.info(f"Using chunk size: {k_chunk_size}")
+            logger.info(f"Using padded layer length: {padded_layer_len}")
+            logger.info(f"Using padded num heads: {padded_num_heads}")
+
+            attn_mask = torch.zeros((1, b, padded_num_heads, padded_layer_len))
+            # Assume all users are at same position
+            attn_mask[:, :, :, start_idx:] = torch.finfo(torch.float32).min
+
+            # Q = torch.eye(padded_num_heads, d).expand(1, b, padded_num_heads, d)
+            # Q = torch.ones(1, b, padded_num_heads, d) * 1
+
+            tt_Q = ttnn.as_tensor(
+                Q,
+                device=device,
+                dtype=q_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=dram_memcfg,  # height_sharded_memcfg
+            )
+            # print(f"Q memcfg: {tt_Q.memory_config()}")
+
+            tt_attn_mask = ttnn.as_tensor(
+                attn_mask, device=device, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg
+            )
+
+            # logger.info(f"Q shape: {Q.shape}")
+            # logger.info(f"K shape: {K.shape}")
+            # logger.info(f"V shape: {V.shape}")
+            # logger.info(f"attn_mask shape: {attn_mask.shape}")
+
+            tt_back = tt_lib.operations.primary.transformers.scaled_dot_product_attention_decode(
+                tt_Q,
+                tt_K,
+                tt_V,
+                tt_attn_mask,
+                scale=scale,
+                program_config=program_config,
+                valid_seq_len=padded_layer_len,
+                compute_kernel_config=compute_kernel_config,
+                output_mem_config=dram_memcfg,  # height_sharded_memcfg,
+            )
+
+            tt_back = ttnn.to_torch(tt_back)
+
+            tt_back = tt_back[:, :, :nh, :]
+
+            Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
+            K_slice = K[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
+            V_slice = V[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
+            attn_mask_slice = attn_mask[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, S
+
+            expect = torch.nn.functional.scaled_dot_product_attention(
+                Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
+            )  # b, nh, 1, d
+            expect = expect.squeeze().unsqueeze(0)
+
+            out_pass, out_pcc = comp_pcc(expect, tt_back, 0.85)
+
+            logger.debug(f"python vs pytorch: {out_pcc}")
+
+            if prev_pcc is not None:
+                assert out_pcc == prev_pcc, f"Iteration {i}: pcc changed from {prev_pcc} to {out_pcc}"
+
+            prev_pcc = out_pcc
+
+        start_idx += 601 if start_idx < 4096 else 3001
+
+
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.parametrize(
+    "dtype, q_dtype, mask_dtype",
+    [
+        # [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B],
+        # [tt_lib.tensor.DataType.BFLOAT4_B, tt_lib.tensor.DataType.BFLOAT4_B, tt_lib.tensor.DataType.BFLOAT8_B],
+    ],
+    ids=[
+        # "bfp16_bfp16_bfp8",
+        "bfp8_bfp8_bfp8",
+        # "bfp4_bfp4_bfp8",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size",
+    (
+        # [16, 8, 1, 32768, 128, (8, 6)],  # Llama2-70B
+        # [32, 8, 1, 32768, 128, (8, 8)],  # Llama2-70B
+        [32, 8, 1, 32768, 128, (8, 8)],
+    ),
+)
+def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype):
+    tt_lib.device.DisablePersistentKernelCache()
+    run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, mask_dtype)
