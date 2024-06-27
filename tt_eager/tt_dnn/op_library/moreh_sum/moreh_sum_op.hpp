@@ -65,6 +65,26 @@ inline std::vector<int64_t> get_dim(
     return dims;
 }
 
+inline
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const Shape& shape, uint32_t dim) {
+    const auto rank = shape.rank();
+
+    TT_FATAL(rank >= 2, "Shape must have at least two dims.");
+    uint32_t Wt = shape[-1] / TILE_WIDTH;
+    uint32_t Ht = shape[-2] / TILE_HEIGHT;
+
+    uint32_t reduce_dim = shape[dim];
+    uint32_t inner_dims_product = 1;
+    for (auto i = dim + 1; i < rank - 2; ++i) {
+        inner_dims_product *= shape[i];
+    }
+
+    uint32_t inner_tile_size = inner_dims_product * Ht * Wt;
+    uint32_t reduce_tile_size = reduce_dim * inner_tile_size;
+
+    return { Wt, Ht, inner_tile_size, reduce_tile_size};
+}
+
 
 struct MorehSum {
     int64_t dim;
@@ -89,6 +109,10 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
 // revised from reduce_op
 operation::ProgramWithCallbacks moreh_sum_w_impl(const Tensor &a, const Tensor &output, const DeviceComputeKernelConfig &compute_kernel_config);
 operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &output, const DeviceComputeKernelConfig &compute_kernel_config);
+
+operation::ProgramWithCallbacks moreh_sum_int_nc_impl(const Tensor &input, const Tensor &output, int64_t dim, const DeviceComputeKernelConfig &compute_kernel_config);
+operation::ProgramWithCallbacks moreh_sum_int_w_impl(const Tensor &input, const Tensor &output, const DeviceComputeKernelConfig &compute_kernel_config);
+operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const Tensor &output, const DeviceComputeKernelConfig &compute_kernel_config);
 
 Tensor moreh_sum(
     const Tensor &input,

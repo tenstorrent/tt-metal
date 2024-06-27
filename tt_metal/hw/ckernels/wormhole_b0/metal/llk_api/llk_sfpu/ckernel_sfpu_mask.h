@@ -33,5 +33,21 @@ inline void calculate_mask()
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS=8>
+inline void calculate_int_mask()
+{
+    const int mask_idx = 32;
+    #pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vInt mask = dst_reg[mask_idx];
+        v_if (mask == 0) {
+            dst_reg[0] = vConst0;
+        }
+        v_endif;
+        dst_reg++;
+    }
+}
+
 }  // namespace sfpu
 }  // namespace ckernel

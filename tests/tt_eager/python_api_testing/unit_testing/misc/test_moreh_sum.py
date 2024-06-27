@@ -7,7 +7,10 @@ import torch
 from loguru import logger
 
 import tt_lib as ttl
-from models.utility_functions import comp_allclose_and_pcc
+from models.utility_functions import (
+    comp_allclose_and_pcc,
+    skip_for_grayskull,
+)
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
@@ -46,11 +49,26 @@ def filter_indices_with_last_two(output_shape, dims):
     return final_output_shape
 
 
-def get_tensors(input_shape, dim, device, *, with_padding=True, use_randint=True, keep_batch_dim=False):
-    npu_dtype = ttl.tensor.DataType.BFLOAT16
-    cpu_dtype = torch.bfloat16
-    npu_layout = ttl.tensor.Layout.TILE
+def is_npu_dtype_uint32(data_type):
+    return data_type == ttl.tensor.DataType.UINT32
 
+
+def is_npu_dtype_float(data_type):
+    return data_type == ttl.tensor.DataType.FLOAT32 or data_type == ttl.tensor.DataType.BFLOAT16
+
+
+def get_tensors(
+    input_shape,
+    dim,
+    device,
+    *,
+    with_padding=True,
+    use_randint=True,
+    keep_batch_dim=False,
+    npu_dtype=ttl.tensor.DataType.BFLOAT16,
+    cpu_dtype=torch.bfloat16,
+):
+    npu_layout = ttl.tensor.Layout.TILE
     output_shape = input_shape.copy()
     if dim is None or dim == []:
         dim = list(range(len(input_shape)))
@@ -69,8 +87,11 @@ def get_tensors(input_shape, dim, device, *, with_padding=True, use_randint=True
         tt_output_shape = filter_indices_with_last_two(output_shape, dim)
 
     if use_randint:
-        torch_input = torch.randint(-2, 3, input_shape, dtype=cpu_dtype, requires_grad=True)
-        torch_output = torch.randint(-2, 3, tt_output_shape, dtype=cpu_dtype)
+        int_min = 0 if is_npu_dtype_uint32(npu_dtype) else -2
+        int_max = 10 if is_npu_dtype_uint32(npu_dtype) else 3
+        requires_grad = True if is_npu_dtype_float(npu_dtype) else False
+        torch_input = torch.randint(int_min, int_max, input_shape, dtype=cpu_dtype, requires_grad=requires_grad)
+        torch_output = torch.randint(int_min, int_max, tt_output_shape, dtype=cpu_dtype)
     else:
         torch_input = torch.rand(input_shape, dtype=cpu_dtype, requires_grad=True)
         torch_output = torch.rand(tt_output_shape, dtype=cpu_dtype)
@@ -442,7 +463,7 @@ def test_moreh_sum_backward_enable_cache(input_shape, dim, device, use_program_c
     "input_shape",
     ([2, 3, 2, 4, TILE_HEIGHT * 6 - 1, TILE_WIDTH * 6 - 1],),
     ids=[
-        "2, 3, 2, 4, TILE_HEIGHT * 4 - 1, TILE_WIDTH * 4 - 1",
+        "2, 3, 2, 4, TILE_HEIGHT * 6 - 1, TILE_WIDTH * 4 - 1",
     ],
 )
 @pytest.mark.parametrize(
@@ -492,3 +513,57 @@ def test_moreh_sum_backward_fp32_dest_acc(input_shape, dim, compute_kernel_optio
     logger.debug(f"mean={torch.abs(torch_input.grad - tt_input_grad_cpu).mean()}")
 
     assert passing
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [TILE_HEIGHT, TILE_WIDTH],
+        [3, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1],
+        [2, 2, 3, TILE_HEIGHT * 8, TILE_WIDTH * 8],
+        [3, TILE_HEIGHT * 20 - 2, TILE_WIDTH * 20 - 2],
+        [10, 3, TILE_HEIGHT * 8 - 1, TILE_WIDTH * 8 - 1],
+    ],
+    ids=[
+        "TILE_HEIGHT, TILE_WIDTH",
+        "3, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1",
+        "2, 2, 3, TILE_HEIGHT * 8, TILE_WIDTH * 8",
+        "3, TILE_HEIGHT * 20 - 2, TILE_WIDTH * 20 - 2",
+        "10, 3, TILE_HEIGHT * 8 - 1, TILE_WIDTH * 8 - 1",
+    ],
+)
+@pytest.mark.parametrize(
+    "dim",
+    [-1, -2, 0, 1],
+    ids=["dim-w", "dim-h", "dim-b0", "dim-b1"],
+)
+@pytest.mark.parametrize(
+    "data_type",
+    [ttl.tensor.DataType.INT32],
+    ids=["int32"],
+)
+def test_moreh_sum_integer(input_shape, dim, data_type, device):
+    if (dim == 0 or dim == 1) and (len(input_shape) - dim <= 2):
+        pytest.skip(f"skip sum for batch-dim with this config. {input_shape} and {dim}")
+
+    torch.manual_seed(3072)
+
+    compute_kernel_config = get_compute_kernel_options(True)
+    (tt_input, tt_output, tt_output_shape, _, torch_input) = get_tensors(
+        input_shape, dim, device, use_randint=True, keep_batch_dim=True, npu_dtype=data_type, cpu_dtype=torch.int64
+    )
+
+    normalized_dim = dim if dim >= 0 else len(input_shape) + dim
+
+    torch_output = torch.sum(torch_input, normalized_dim, True)
+    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+
+    tt_output = ttl.operations.primary.moreh_sum(
+        tt_input, dim=normalized_dim, keep_batch_dim=True, output=tt_output, compute_kernel_config=compute_kernel_config
+    )
+
+    tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(tt_output_shape).to_torch()
+    logger.debug(f"{torch.equal(torch_output, tt_output_cpu)}")
+
+    assert torch.equal(torch_output, tt_output_cpu)
