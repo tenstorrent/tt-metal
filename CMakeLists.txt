@@ -96,16 +96,6 @@ if (NOT NUMA_LIBRARY)
     message(FATAL_ERROR "NUMA library not found")
 endif()
 
-
-CPMAddPackage(
-  NAME reflect
-  GITHUB_REPOSITORY boost-ext/reflect
-  GIT_TAG v1.1.1
-)
-add_library(reflect INTERFACE)
-target_include_directories(reflect SYSTEM INTERFACE ${reflect_SOURCE_DIR})
-add_library(reflect::reflect ALIAS reflect)
-
 ############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
@@ -142,6 +132,7 @@ endif()
 
 add_library(metal_header_directories INTERFACE)
 target_include_directories(metal_header_directories INTERFACE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc)
+target_include_directories(metal_header_directories SYSTEM INTERFACE ${reflect_SOURCE_DIR})
 foreach(lib ${BoostPackages})
     target_include_directories(metal_header_directories INTERFACE ${Boost${lib}_SOURCE_DIR}/include)
 endforeach()
