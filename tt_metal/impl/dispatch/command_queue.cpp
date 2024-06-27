@@ -1537,9 +1537,6 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
         }
         if (blocking) {
             this->finish();
-        } else {
-            std::shared_ptr<Event> event = std::make_shared<Event>();
-            this->enqueue_record_event(event);
         }
     } else {
         // this is a streaming command so we don't need to break down to multiple
@@ -1564,10 +1561,6 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
             src_page_index));
         this->enqueue_command(command, blocking);
         this->increment_num_entries_in_completion_q();
-        if (not blocking) {  // should this be unconditional?
-            std::shared_ptr<Event> event = std::make_shared<Event>();
-            this->enqueue_record_event(event);
-        }
     }
 }
 
@@ -1797,9 +1790,6 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
 
     if (blocking) {
         this->finish();
-    } else {
-        std::shared_ptr<Event> event = std::make_shared<Event>();
-        this->enqueue_record_event(event);
     }
 }
 
@@ -1927,9 +1917,6 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
 
     if (blocking) {
         this->finish();
-    } else {
-        std::shared_ptr<Event> event = std::make_shared<Event>();
-        this->enqueue_record_event(event);
     }
 }
 
@@ -2184,6 +2171,10 @@ void HWCommandQueue::read_completion_queue() {
                     read_descriptor);
             }
             this->num_completed_completion_q_reads += num_events_to_read;
+            {
+                std::unique_lock<std::mutex> lock(this->reads_processed_cv_mutex);
+                this->reads_processed_cv.notify_one();
+            }
         } else if (this->exit_condition) {
             return;
         }
@@ -2210,7 +2201,10 @@ void HWCommandQueue::finish() {
             }
         }
     } else {
-        while (this->num_entries_in_completion_q > this->num_completed_completion_q_reads);
+        std::unique_lock<std::mutex> lock(this->reads_processed_cv_mutex);
+        this->reads_processed_cv.wait(lock, [this] {
+            return this->num_entries_in_completion_q == this->num_completed_completion_q_reads;
+        });
     }
 }
 
