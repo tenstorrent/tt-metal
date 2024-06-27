@@ -53,6 +53,8 @@ def _golden_function_backward(torch_op, grad_tensor, input_tensor_a, input_tenso
         pyt_y = torch.square(torch.sub(input_tensor_a, input_tensor_b))
     else:
         pyt_y = torch_op(input_tensor_a, input_tensor_b)
+    input_tensor_a.retain_grad()
+    input_tensor_b.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
     return golden_tensor
@@ -60,6 +62,8 @@ def _golden_function_backward(torch_op, grad_tensor, input_tensor_a, input_tenso
 
 def _golden_function_backward_with_float(torch_op, grad_tensor, input_tensor_a, input_tensor_b, alpha, *args, **kwargs):
     pyt_y = torch_op(input_tensor_a, input_tensor_b, alpha=alpha)
+    input_tensor_a.retain_grad()
+    input_tensor_b.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
     return golden_tensor
