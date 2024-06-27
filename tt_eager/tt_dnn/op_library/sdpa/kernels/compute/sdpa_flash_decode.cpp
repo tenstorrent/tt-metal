@@ -645,12 +645,15 @@ void MAIN {
                 // << "page_size: " << cb_interface[cb_out_accumulate_im].fifo_page_size << ", "
                 // << " }");
 
-                mul_block_bcast_cols_inplace(cb_out_accumulate_im_2, cb_exp_max_diff_2, Sq_chunk_t, DHt);
                 // DPRINT << "[C] R ckpt 3.1" << ENDL();
                 /// O_2 = torch.matmul(torch.eye(padded_num_heads) * torch.exp(m_1 - m), O_1)
                 // unpack_reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff); // DEBUG
                 // pack_reconfig_data_format(cb_out_accumulate_im);
                 mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, DHt);
+                // cb_pop_front(cb_exp_max_diff, Sq_chunk_t);
+                add_tiles_init();  // work around to nd pcc issue
+                mul_block_bcast_cols_inplace(cb_out_accumulate_im_2, cb_exp_max_diff_2, Sq_chunk_t, DHt);
+                // cb_pop_front(cb_exp_max_diff_2, Sq_chunk_t);
                 // DPRINT << "[C] R ckpt 3.2" << ENDL();
                 /// O = O_1 + O_2
                 // unpack_reconfig_data_format(cb_out_accumulate_im, cb_out_accumulate_im_2);
