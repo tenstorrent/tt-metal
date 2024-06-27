@@ -75,9 +75,23 @@ run_t3000_trace_stress_tests() {
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
+
   echo "LOG_METAL: run_t3000_trace_stress_tests $duration seconds to complete"
 }
 
+run_t3000_distributed_layernorm_tests() {
+  # Record the start time
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_distributed_layernorm_tests"
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/operations/test_distributed_layernorm.py
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_distributed_layernorm_tests $duration seconds to complete"
+}
 
 run_t3000_falcon40b_tests() {
   # Record the start time
@@ -102,6 +116,9 @@ run_t3000_tests() {
 
   # Run tteager tests
   run_t3000_tteager_tests
+
+  #Run distributed layernorm tests
+  run_t3000_distributed_layernorm_tests
 
   # Run trace tests
   run_t3000_trace_stress_tests
