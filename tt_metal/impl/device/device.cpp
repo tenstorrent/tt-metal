@@ -1552,7 +1552,7 @@ void Device::initialize_command_queue() {
     this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
     hw_command_queues_.resize(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id, static_cast<NOC>(cq_id));
+        hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id, NOC::NOC_0);
         // Need to do this since CommandQueue constructor is private
         sw_command_queues_.push_back(std::unique_ptr<CommandQueue>(new CommandQueue(this, cq_id)));
     }
