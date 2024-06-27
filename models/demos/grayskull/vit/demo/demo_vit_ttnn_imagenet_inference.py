@@ -130,9 +130,7 @@ def test_vit(device):
             position_embeddings,
             parameters=parameters,
         )
-        # output = ttnn.to_torch(output)
-        output = ttnn.from_device(output)
-        print(output.shape)
+        output = ttnn.to_torch(output)
         prediction = output[:, 0, :1000].argmax(dim=-1)
 
         for i in range(batch_size):
