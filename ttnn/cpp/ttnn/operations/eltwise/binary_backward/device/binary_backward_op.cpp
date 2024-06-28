@@ -395,6 +395,15 @@ std::vector<Tensor> _concat_bw(
     return grad_tensor;
 }
 
+std::vector<Tensor> _binary_le_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zero_grad = tt::tt_metal::zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(zero_grad);
+    Tensor zero_input = tt::tt_metal::zeros_like(input, output_mem_config);
+    grad_tensor.emplace_back(zero_input);
+    return grad_tensor;
+}
+
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
@@ -422,6 +431,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _binary_eq_bw_inter;
         case BinaryBackwardOpType::BINARY_ASSIGN_BW:
             return _binary_assign_bw;
+        case BinaryBackwardOpType::BINARY_LE_BW:
+            return _binary_le_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

@@ -164,4 +164,10 @@ concat_bw = ttnn.register_operation(
     )
 )(ttnn._ttnn.operations.binary_backward.concat_bw)
 
+binary_le_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.clone, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.binary_le_bw)
+
 __all__ = []
