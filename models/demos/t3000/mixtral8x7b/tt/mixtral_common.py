@@ -88,9 +88,9 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, model_args, device_mesh
     attn_mask[:, :, :, current_pos + 1 :] = torch.finfo(attn_mask.dtype).min
 
     if model_args.dummy_weights:
-        cache_name = lambda _: None
+        cache_name = None
     else:
-        cache_name = lambda name: model_args.weight_cache_path(ttnn.bfloat4_b) / (f"attention_mask.{current_pos}")
+        cache_name = model_args.weight_cache_path(ttnn.bfloat4_b) / (f"attention_mask.{current_pos}")
 
     attn_mask = ttnn.as_tensor(
         attn_mask,
@@ -182,9 +182,9 @@ def cache_attention(device_mesh, state_dict, model_args, current_rot_mat, rot_ma
         pos = iter
 
         if model_args.dummy_weights:
-            cache_name = lambda _: None
+            cache_name = None
         else:
-            cache_name = lambda name: model_args.weight_cache_path(ttnn.bfloat4_b) / (f"attention_mask.{pos}")
+            cache_name = model_args.weight_cache_path(ttnn.bfloat4_b) / (f"attention_mask.{pos}")
 
         padded_layer_past_len = min(nearest_32(pos + 1), model_args.sliding_window)
         attn_mask = torch.zeros(1, 32, 32, padded_layer_past_len)  # [SB4P]
