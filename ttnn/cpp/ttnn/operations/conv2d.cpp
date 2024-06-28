@@ -708,6 +708,8 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             matmul_input,
             weight_tensor_on_device,
             bias_tensor_on_device,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false,
             matmul_program_config,
             conv_out_memory_config,
             conv_config.dtype,
