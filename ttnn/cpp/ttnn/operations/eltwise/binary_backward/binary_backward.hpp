@@ -188,7 +188,7 @@ constexpr auto squared_difference_bw = ttnn::register_operation<operations::bina
 constexpr auto binary_assign_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_ASSIGN_BW>>("ttnn::binary_assign_bw");
 constexpr auto concat_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::CONCAT_BW>>("ttnn::concat_bw");
 constexpr auto binary_le_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_LE_BW>>("ttnn::binary_le_bw");
-
+constexpr auto rsub_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::RSUB_BW>>("ttnn::rsub_bw");
 
 //type 2
 constexpr auto addalpha_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::ADDALPHA_BW>>("ttnn::addalpha_bw");
