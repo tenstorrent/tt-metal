@@ -181,7 +181,6 @@ class TtFalconCausalLM(TtFalconModelShared):
                     self.lm_head_weights[device_id],
                     output_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
                     output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
-                    compute_kernel_config=self.model_config["LM_HEAD_KERNEL_CONFIG"],
                     core_grid=get_falcon_default_core_grid(hidden_states[device_id].device()),
                 )
                 for device_id in range(self.num_devices)
