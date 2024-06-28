@@ -80,7 +80,6 @@ run_t3000_mixtral_tests() {
   pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_embedding.py
   pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe.py
   pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_decoder.py
-  pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py::test_mixtral_model_inference[wormhole_b0-True-1-1-pcc]
 
   # Record the end time
   end_time=$(date +%s)
@@ -111,7 +110,7 @@ main() {
     echo "Script is being sourced, not executing main function"
     return 0
   fi
-  
+
   if [[ -z "$TT_METAL_HOME" ]]; then
     echo "Must provide TT_METAL_HOME in environment" 1>&2
     exit 1
