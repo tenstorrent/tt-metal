@@ -20,14 +20,14 @@ namespace ttnn {
 
 namespace device_operation {
 
-template <typename program_attributes_t>
+template <typename shared_variables_t>
 struct CachedProgram {
     tt::tt_metal::Program program;
-    // Cached program needs to share program_attributes between create and override_runtime_arguments functions
-    program_attributes_t program_attributes;
+    // Cached program needs to share shared_variables between create and override_runtime_arguments functions
+    shared_variables_t shared_variables;
 
-    CachedProgram(tt::tt_metal::Program&& program, program_attributes_t&& program_attributes) :
-        program{std::move(program)}, program_attributes{program_attributes} {}
+    CachedProgram(tt::tt_metal::Program&& program, shared_variables_t&& shared_variables) :
+        program{std::move(program)}, shared_variables{shared_variables} {}
 };
 
 struct CachedProgramFactory {
@@ -38,8 +38,8 @@ struct CachedProgramFactory {
     // program_factory_index is used to map a runtime value to a program factory type that is being used
     std::size_t program_factory_index;
 
-    template <typename program_attributes_t>
-    CachedProgramFactory(CachedProgram<program_attributes_t>&& cached_program, std::size_t program_factory_index) :
+    template <typename shared_variables_t>
+    CachedProgramFactory(CachedProgram<shared_variables_t>&& cached_program, std::size_t program_factory_index) :
         cached_program{std::move(cached_program)}, program_factory_index{program_factory_index} {}
 };
 
@@ -91,7 +91,7 @@ concept DeviceOperationWithCustomProgramCacheConcept = DeviceOperationConcept<de
 template <typename... Ts>
 [[nodiscard]] std::variant<Ts...> constexpr map_index_to_variant(std::size_t i, std::variant<Ts...>) {
     assert(i < sizeof...(Ts));
-    static constexpr std::variant<Ts...> table[] = { Ts{ }... };
+    static constexpr std::variant<Ts...> table[] = {Ts{}...};
     return table[i];
 }
 

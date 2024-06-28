@@ -7,174 +7,98 @@ Adding New ttnn Operation
    Not all operations may be functional on all Tenstorrent hardware (Grayskull,
    Wormhole, or others).
 
+
+What is a ttnn operation?
+-------------------------
+
+A ttnn operation is a function that takes in one or more input tensors and produces one or more output tensors. It is implemented in C++ and can be called from Python.
+
+What steps are needed to add ttnn operation in C++?
+---------------------------------------------------
+1. (Optional) Implement device operation in C++. Device operation is a struct that specifies how to create output tensors and a program to run on the device. If the ttnn operation is composed of other ttnn operations, then you can skip this step.
+2. Implement ttnn operation in C++ and register it using `ttnn::register_operation`.
+
+What steps are needed to add ttnn operation in Python?
+------------------------------------------------------
+1. Take an existing registerd C++ operation and add a Python binding for it using `ttnn::bind_registered_operation`.
+2. In python, decorate the operation using `ttnn.register_operation`. (This step will be deprecated in the future)
+
+
+
 C++ Implementation
 ------------------
 
+Step 1: Implement device operation (Optional)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Add `tt_eager/tt_dnn/op_library/<new_operation>/<new_operation>.hpp`:
+In order to add a new device operation, follow the directory structure shown below:
 
-.. code-block:: cpp
+`ttnn/cpp/ttnn/operations/<category>/<operation_name>/device/<operation_name>_device_operation.hpp`
+`ttnn/cpp/ttnn/operations/<category>/<operation_name>/device/<operation_name>_device_operation.cpp`
+`ttnn/cpp/ttnn/operations/<category>/<operation_name>/device/<program_factory_0>_program_factory.cpp`
 
-    #pragma once
+.. note::
+ Add as many program factories as needed
 
-    #include <optional>
+A concrete example of a device operation can be found in `ttnn/cpp/ttnn/operations/examples/example/device`
 
-    #include "tensor/tensor.hpp"
-    #include "tt_dnn/op_library/operation.hpp"
+`ttnn/cpp/ttnn/operations/examples/example/device/example_device_operation.hpp`:
 
-    namespace tt {
-    namespace tt_metal {
+.. literalinclude::  examples/example/device/example_device_operation.hpp
 
-    struct <NewOperation> {
-        bool some_arg;
+`ttnn/cpp/ttnn/operations/examples/example/device/example_device_operation.cpp`:
 
-        // These methods are needed if the operation takes in input tensor and produces output tensors
-        void validate(const std::vector<Tensor> &input_tensors) const;
-        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-        std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-        operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+.. literalinclude::  examples/example/device/example_device_operation.cpp
 
-        // This is needed until we get C++20
-        static constexpr auto attribute_names = std::forward_as_tuple("some_arg");
-        const auto attribute_values() const {
-            return std::forward_as_tuple(this->some_arg);
-        }
-    };
+`ttnn/cpp/ttnn/operations/examples/example/device/single_core_program_factory.cpp`:
 
-    Tensor <new_operation>(const Tensor &input_tensor, bool some_arg);
+.. literalinclude::  examples/example/device/single_core_program_factory.cpp
 
-    }  // namespace tt_metal
-    }  // namespace tt
+`ttnn/cpp/ttnn/operations/examples/example/device/multi_core_program_factory.cpp`:
+
+.. literalinclude::  examples/example/device/multi_core_program_factory.cpp
 
 
-.. note:
+Step 2: Implement the operation in C++
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    If you need optional input tensors or would like to pass in optional output tensors, then refer to :doc:`Operations </ttnn/dependencies/tt_lib>` for how to write ops that use them
+In order to add a new operation, add the following file:
 
+`ttnn/cpp/ttnn/operations/<category>/<operation_name>/<operation_name>.hpp`
 
-Add `tt_eager/tt_dnn/op_library/<new_operation>/<new_operation>.cpp`:
+A concrete example:
 
-.. code-block:: cpp
+`ttnn/cpp/ttnn/operations/examples/example/example.hpp`:
 
-    #include "tt_metal/host_api.hpp"
-    #include "tt_dnn/op_library/run_operation.hpp"
-
-    namespace tt {
-    namespace tt_metal {
+.. literalinclude::  examples/example/example.hpp
 
 
-    void <NewOperation>::validate(const std::vector<Tensor> &input_tensors) const {
-        ...
-    }
+Python Implementation
+---------------------
 
-    std::vector<Shape> <NewOperation>::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-        std::vector<Shape> output_shapes = ...;
-        return output_shapes;
-    }
+Step 1: Add Python binding
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const {
-        std::vector<Tensor> output_tensors = ...;
-        return output_tensors;
-    }
+In order to add a python binding for the operation, follow the directory structure shown below:
 
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
-        Program program = ...;
-        return operation::ProgramWithCallbacks{program};
-    }
+`ttnn/python/ttnn/operations/<category>/<operation_name>/<operation_name>_pybind.hpp`
+`ttnn/python/ttnn/operations/<category>/<category>_pybind.hpp`
 
-    };
+A concrete example:
 
-    Tensor <new_operation>(const Tensor &input_tensor, bool some_arg) {
-        std::vector<Tensor> input_tensors = {input_tensor};
-        std::vector<Tensor> output_tensors operation::run(DeviceOperation(<NewOperation>{some_arg}, {input_tensor}));
-        return output_tensors[0];
-    }
+`ttnn/python/ttnn/operations/examples/example/example_pybind.hpp`:
 
-    }  // namespace tt_metal
-    }  // namespace tt
+.. literalinclude::  examples/example/example_pybind.hpp
 
+`ttnn/python/ttnn/operations/examples/examples_pybind.hpp`:
 
-Add pybindings
---------------
+.. literalinclude::  examples/example/example_pybind.hpp
 
-In `tt_eager/tt_lib/csrc/tt_lib_bindings_tensor.cpp`, add the following lines
-
-.. code-block:: cpp
-
-    m_tensor.def("<new_operation>", &<new_operation>, py::arg("input_tensor").noconvert(), py::arg("some_arg").noconvert(), R"doc(
-        <NewOperation> runs new operation on input tensor.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input_tensor", "Input tensor", "Tensor", "Tensor of shape [W0, Z0, Y0, X0]", "Yes"
-            "some_arg", "Some arg", "bool", "Some arg to do some stuff in new operation", "Yes"
-    )doc");
+Finally, call the module defined in `examples/example/example_pybind.hpp` wherever you want it to be added.
 
 
 
-Adding a unit test
-------------------
+Step 2: Register the operation in Python
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Add `tests/ttnn/unit_tests/ttl/test_<new_operation>.py`:
-
-.. code-block:: python
-
-    import pytest
-    import torch
-    import ttnn
-
-    from tests.ttnn.utils_for_testing import assert_with_pcc
-
-    @pytest.mark.parametrize("height", [32])
-    @pytest.mark.parametrize("width", [32])
-    def test_<new_operation>(device, height, width):
-        torch.manual_seed(0)
-
-        torch_input_tensor = torch.rand(1, 1, height, width)
-        torch_output_tensor = torch.exp(torch_input_tensor)
-
-        input_tensor = ttnn.from_torch(torch_input_tensor, device=device)
-        output_tensor = ttnn.experimental.tensor.<new_operation>(input_tensor)
-
-        output_tensor = ttnn.to_torch(output_tensor)
-
-        assert_with_pcc(torch_output_tensor, output_tensor)
-
-
-
-Adding a sweep test
--------------------
-
-Add `tests/ttnn/sweep_tests/sweeps/ttl_<new_operation>.py`:
-
-.. code-block:: python
-
-    from typing import Optional, Tuples
-    import torch
-    import ttnn
-    from tests.ttnn.utils_for_testing import check_with_pcc
-
-
-    parameters = {
-        "height": [384, 1024],
-        "width": [1024, 4096],
-    }
-
-
-    def run(
-        height,
-        width,
-        *,
-        device,
-    ) -> Tuple[bool, Optional[str]]:
-
-        torch_input_tensor = torch.rand(1, 1, height, width)
-        torch_output_tensor = torch.exp(torch_input_tensor)
-
-        input_tensor = ttnn.from_torch(torch_input_tensor, device=device)
-        output_tensor = ttnn.experimental.tensor.<new_operation>(input_tensor)
-
-        output_tensor = ttnn.to_torch(output_tensor)
-
-        assert_with_pcc(torch_output_tensor, output_tensor)
+TODO: Add the description of how to register the operation in Python.
