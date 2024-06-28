@@ -108,7 +108,7 @@ def compare_pcc(tt_tensor, golden_tensor, pcc=0.99):
         logger.debug(comp_pass)
         logger.debug(comp_out)
         status = status & comp_pass
-    return True
+    return status
 
 
 def compare_all_close(tt_tensor, golden_tensor, atol=4, rtol=1e-1):
