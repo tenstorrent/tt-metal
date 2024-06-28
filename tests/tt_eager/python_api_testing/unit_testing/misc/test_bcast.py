@@ -20,23 +20,30 @@ from tt_lib.utils import (
     "input_height, input_width, num_cores, shard_grid, shard_strategy",
     (
         (2048, 320, 40, (8, 5), ttnn.ShardStrategy.BLOCK),
-        (8192, 320, 40, (8, 5), ttnn.ShardStrategy.BLOCK),
-        (2048, 640, 40, (8, 5), ttnn.ShardStrategy.BLOCK),
         (512, 640, 40, (8, 5), ttnn.ShardStrategy.BLOCK),
         (2048, 1280, 40, (8, 5), ttnn.ShardStrategy.BLOCK),
-        (512, 1280, 40, (8, 5), ttnn.ShardStrategy.BLOCK),
         (128, 1280, 40, (8, 5), ttnn.ShardStrategy.WIDTH),
+        (8192, 320, 40, (8, 5), ttnn.ShardStrategy.BLOCK),
+        (2048, 640, 40, (8, 5), ttnn.ShardStrategy.BLOCK),
+        (512, 1280, 40, (8, 5), ttnn.ShardStrategy.BLOCK),
+        (128, 1280, 32, (4, 8), ttnn.ShardStrategy.BLOCK),
+        (512, 1280, 64, (8, 8), ttnn.ShardStrategy.BLOCK),
     ),
 )
 @pytest.mark.parametrize(
-    "dtype",
+    "in0_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "in1_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize(
     "op",
     [ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpMath.MUL],
 )
-@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("in1_batch_size", [1, 2])
+@pytest.mark.parametrize("in0_batch_size", [1, 2])
 @pytest.mark.parametrize(
     "orientation",
     [ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, ttnn.experimental.tensor.ShardOrientation.COL_MAJOR],
@@ -45,13 +52,15 @@ def test_bcast(
     device,
     use_program_cache,
     orientation,
-    batch_size,
+    in0_batch_size,
+    in1_batch_size,
     input_height,
     input_width,
     num_cores,
     shard_grid,
     shard_strategy,
-    dtype,
+    in0_dtype,
+    in1_dtype,
     op,
 ):
     torch.manual_seed(0)
@@ -67,14 +76,15 @@ def test_bcast(
                 if shard_grid[0] == 8 and orientation == ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
                 else shard_grid
             )
-    input_shape = [batch_size, 1, input_height // batch_size, input_width]
+    input_shape = [in0_batch_size, 1, input_height, input_width]
     input = torch.rand(input_shape, dtype=torch.bfloat16)
 
-    tt_input = input.reshape(1, 1, input_height, input_width)
     input_tensor = ttnn.from_torch(
-        tt_input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT, dtype=dtype
+        input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT, dtype=in0_dtype
     )
-    input_2d_height = input_tensor.get_legacy_shape()[2]
+    input_2d_height = (
+        input_tensor.get_legacy_shape()[0] * input_tensor.get_legacy_shape()[1] * input_tensor.get_legacy_shape()[2]
+    )
     input_2d_width = input_tensor.get_legacy_shape()[3]
     if shard_strategy == ttnn.ShardStrategy.BLOCK:
         input_2d_height_padded = _nearest_y(input_2d_height, shard_grid[0] * 32)
@@ -108,15 +118,21 @@ def test_bcast(
 
     tt_input = ttnn.to_memory_config(input_tensor, memory_config=in_sharded_mem_config)
 
-    b_weights_shape = [batch_size, 1, 1, input_width]
+    if in0_batch_size == 1 and in1_batch_size > 1:
+        input = input.reshape(in1_batch_size, 1, input_height // in1_batch_size, input_width)
+
+    b_weights_shape = [in1_batch_size, 1, 1, input_width]
     B_pyt = torch.rand(size=b_weights_shape).bfloat16()
     if op == ttl.tensor.BcastOpMath.ADD:
         torch_ref_output = torch.add(input, B_pyt)
     elif op == ttl.tensor.BcastOpMath.MUL:
         torch_ref_output = torch.mul(input, B_pyt)
 
+    if in0_batch_size == 1 and in1_batch_size > 1:
+        torch_ref_output = torch_ref_output.reshape(1, 1, input_height, input_width)
+
     B_pyt = B_pyt.reshape(b_weights_shape)
-    tt_weight = ttnn.from_torch(B_pyt, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    tt_weight = ttnn.from_torch(B_pyt, device=device, layout=ttnn.TILE_LAYOUT, dtype=in1_dtype)
     tt_output = ttl.tensor.bcast(
         tt_input,
         tt_weight,
