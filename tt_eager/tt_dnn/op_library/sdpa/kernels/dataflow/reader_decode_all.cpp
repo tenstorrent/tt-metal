@@ -65,12 +65,12 @@ void kernel_main() {
     uint32_t barrier_count = 0;
 
     // First, read Q entirely, it could be interleaved or sharded
-    const uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
-    const uint32_t q_chunk_tiles_bytes = q_chunk_tiles * q_tile_bytes;
+    constexpr uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
+    constexpr uint32_t q_chunk_tiles_bytes = q_chunk_tiles * q_tile_bytes;
 
-    if (is_q_sharded){
+    if constexpr(is_q_sharded){
         uint64_t q_read_addr;
-        if (is_worker){
+        if constexpr(is_worker){
             q_read_addr = get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, q_addr);
         } else {
             q_read_addr = get_noc_addr(q_addr);

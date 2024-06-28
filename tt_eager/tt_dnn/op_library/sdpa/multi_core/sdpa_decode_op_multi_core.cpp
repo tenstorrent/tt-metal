@@ -95,8 +95,6 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     }, compute_kernel_config);
 
-    // TT_FATAL(!fp32_dest_acc_en, "fp32_dest_acc_en not supported yet");
-
     auto q_buffer = input_tensor_q.buffer();
     auto k_buffer = input_tensor_k.buffer();
     auto v_buffer = input_tensor_v.buffer();
@@ -495,7 +493,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         reader_compile_time_args.insert(reader_compile_time_args.end(), {cur_batch, k_chunk_start, k_chunk_end, is_q_sharded, !do_reduce, reduce_core_physical.x, reduce_core_physical.y});
         auto reader_kernels_id = CreateKernel(
             program,
-            "tt_eager/tt_dnn/op_library/sdpa/kernels/dataflow/reader_decode_interleaved.cpp",
+            "tt_eager/tt_dnn/op_library/sdpa/kernels/dataflow/reader_decode_all.cpp",
             core,
             tt_metal::ReaderDataMovementConfig(
                 reader_compile_time_args,
@@ -509,7 +507,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             writer_compile_time_args.insert(writer_compile_time_args.end(), {in0_mcast_reducer_semaphore, cur_batch, num_chunks, k_chunk_start, k_chunk_end, is_output_sharded});
             writer_kernels_id = CreateKernel(
                 program,
-                "tt_eager/tt_dnn/op_library/sdpa/kernels/dataflow/writer_decode_reducer_interleaved.cpp",
+                "tt_eager/tt_dnn/op_library/sdpa/kernels/dataflow/writer_decode_reducer.cpp",
                 core,
                 tt_metal::WriterDataMovementConfig(
                     writer_compile_time_args,

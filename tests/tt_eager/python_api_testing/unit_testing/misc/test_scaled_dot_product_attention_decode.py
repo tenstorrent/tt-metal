@@ -48,7 +48,6 @@ def num_to_corerange(x):
 
 
 def get_chunk_size(s):
-    # Got to test this!
     if s <= 32:
         return 32
     if s <= 64:
@@ -169,6 +168,12 @@ def run_test_sdpa_decode(
     sharded_in=False,
     sharded_out=False,
 ):
+    if (
+        device.compute_with_storage_grid_size().x < grid_size[0]
+        or device.compute_with_storage_grid_size().y < grid_size[1]
+    ):
+        pytest.skip("Grid size too large for device")
+
     padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
     torch.manual_seed(1234)
 
@@ -229,8 +234,6 @@ def run_test_sdpa_decode(
         attn_mask[:, :, :, start_idx:] = torch.finfo(torch.float32).min
 
         Q = torch.randn(1, b, padded_num_heads, d)
-        # Q = torch.eye(padded_num_heads, d).expand(1, b, padded_num_heads, d)
-        # Q = torch.ones(1, b, padded_num_heads, d) * 1
 
         tt_Q = ttnn.as_tensor(
             Q,
@@ -239,16 +242,10 @@ def run_test_sdpa_decode(
             layout=ttnn.TILE_LAYOUT,
             memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
         )
-        # print(f"Q memcfg: {tt_Q.memory_config()}")
 
         tt_attn_mask = ttnn.as_tensor(
             attn_mask, device=device, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg
         )
-
-        # logger.info(f"Q shape: {Q.shape}")
-        # logger.info(f"K shape: {K.shape}")
-        # logger.info(f"V shape: {V.shape}")
-        # logger.info(f"attn_mask shape: {attn_mask.shape}")
 
         tt_back = tt_lib.operations.primary.transformers.scaled_dot_product_attention_decode(
             tt_Q,
@@ -299,6 +296,12 @@ def run_test_sdpa_decode_single_iter(
     sharded_in=False,
     sharded_out=False,
 ):
+    if (
+        device.compute_with_storage_grid_size().x < grid_size[0]
+        or device.compute_with_storage_grid_size().y < grid_size[1]
+    ):
+        pytest.skip("Grid size too large for device")
+
     padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
     torch.manual_seed(1234)
 

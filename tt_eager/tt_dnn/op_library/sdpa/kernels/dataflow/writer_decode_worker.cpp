@@ -31,7 +31,7 @@ void kernel_main() {
     constexpr uint32_t k_chunk_start = get_compile_time_arg_val(14);
     constexpr uint32_t k_chunk_end = get_compile_time_arg_val(15);
 
-    if (k_chunk_start == k_chunk_end) {
+    if constexpr(k_chunk_start == k_chunk_end) {
         // DPRINT << "[Writer Worker] No computes to be done for this worker" << ENDL();
         return; // early exit because no computes needs to be done for this worker
     }

@@ -34,9 +34,9 @@ void ScaledDotProductAttention::validate(
 
 
     for (auto& input_tensor : input_tensors) {
-        TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
-        TT_FATAL(input_tensor.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
-        TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to softmax must be tilized");
+        TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
+        TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device!");
+        TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to SDPA must be tilized");
         TT_FATAL(
             input_tensor.get_dtype() == DataType::BFLOAT16 ||
             input_tensor.get_dtype() == DataType::BFLOAT8_B);
@@ -44,7 +44,7 @@ void ScaledDotProductAttention::validate(
     }
 
     auto mask = optional_input_tensors.at(0).value();
-    TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
+    TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
     TT_FATAL(input_tensors.at(0).device() == mask.device());
     TT_FATAL(mask.get_layout() == Layout::TILE);
     TT_FATAL(mask.get_dtype() == DataType::BFLOAT16 || mask.get_dtype() == DataType::BFLOAT8_B);
@@ -241,9 +241,9 @@ void ScaledDotProductAttentionDecode::validate(
 
 
     for (auto& input_tensor : input_tensors) {
-        TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
-        TT_FATAL(input_tensor.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
-        TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to softmax must be tilized");
+        TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
+        TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device!");
+        TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to SDPA must be tilized");
         TT_FATAL(
             input_tensor.get_dtype() == DataType::BFLOAT16 ||
             input_tensor.get_dtype() == DataType::BFLOAT8_B || input_tensor.get_dtype() == DataType::BFLOAT4_B);
@@ -251,7 +251,7 @@ void ScaledDotProductAttentionDecode::validate(
     }
 
     auto mask = optional_input_tensors.at(0).value();
-    TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
+    TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
     TT_FATAL(input_tensors.at(0).device() == mask.device());
     TT_FATAL(mask.get_layout() == Layout::TILE);
     TT_FATAL(mask.get_dtype() == DataType::BFLOAT16 || mask.get_dtype() == DataType::BFLOAT8_B || mask.get_dtype() == DataType::BFLOAT4_B);
@@ -269,7 +269,7 @@ void ScaledDotProductAttentionDecode::validate(
         TT_FATAL(Q_memcfg.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
     }
     else{
-        TT_FATAL(input_tensors.at(0).buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+        TT_FATAL(Q_memcfg.buffer_type == tt_metal::BufferType::DRAM);
     }
 
     for (std::size_t i = 1; i < input_tensors.size(); i++) {
