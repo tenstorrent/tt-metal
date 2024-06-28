@@ -25,7 +25,7 @@ jobs:
             const hasRequiredLabel = labels.includes(requiredLabel);
             return hasRequiredLabel;
       - name: Send Slack Notification
-        if: steps.label-check.outputs.result == 'true'
+        if: steps.label-check.outputs.result == 'false'
         uses: slackapi/slack-github-action@v1.26.0
         with:
           payload: |
