@@ -2,19 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
-
-#include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
-#include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_eager/tt_dnn/op_library/backward/backward_ops.cpp"
+#include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
+#include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "tt_eager/tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
-#include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op.hpp"
-#include "tt_eager/tt_dnn/op_library/unpad/unpad_op.hpp"
-
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn::operations::binary_backward {
 
@@ -184,7 +183,7 @@ std::vector<std::optional<Tensor>> _add_bw_overload(
 std::vector<ttnn::Tensor> _xlogy_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad1_result = log(other, output_mem_config);
+    Tensor grad1_result = ttnn::log(other, output_mem_config);
     Tensor zero_tensor = ttnn::operations::creation::zeros_like(other, other.get_dtype(), other.get_layout(), std::nullopt, output_mem_config);
     grad1_result = where(
         ttnn::logical_and(
