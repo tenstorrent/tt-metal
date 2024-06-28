@@ -377,31 +377,43 @@ inline std::string op_meta_data_serialized_json(
     const auto& operation_attributes,
     const auto& tensor_args,
     auto& tensor_return_value) {
-    auto j = get_base_json<operation_t>(operation_id, operation_attributes, tensor_args, tensor_return_value);
-    j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_device);
-    j["device_id"] = device_id;
-    j["op_hash"] = program_hash;
-    j["kernel_info"] = get_kernels_json(program);
+    const bool useCachedOps = std::getenv("TT_METAL_PROFILER_NO_CACHE_OP_INFO") == nullptr;
+    if (!useCachedOps || (cached_ops.find(device_id) == cached_ops.end()) ||
+        (cached_ops.at(device_id).find(program_hash) == cached_ops.at(device_id).end())) {
+        auto j = get_base_json<operation_t>(operation_id, operation_attributes, tensor_args, tensor_return_value);
+        j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_device);
+        j["device_id"] = device_id;
+        j["op_hash"] = program_hash;
+        j["kernel_info"] = get_kernels_json(program);
 
-    j["optional_input_tensors"] = std::vector<json>{};
+        j["optional_input_tensors"] = std::vector<json>{};
 
-    auto perfModel = [&]() {
-        if constexpr (requires { operation_t::create_op_performance_model; }) {
-            return operation_t::create_op_performance_model(operation_attributes, tensor_args, tensor_return_value);
+        auto perfModel = [&]() {
+            if constexpr (requires { operation_t::create_op_performance_model; }) {
+                return operation_t::create_op_performance_model(operation_attributes, tensor_args, tensor_return_value);
+            } else {
+                return operation::OpPerformanceModel{};
+            }
+        }();
+        j["performance_model"]["compute_ns"] = perfModel.get_compute_ns();
+        j["performance_model"]["ideal_ns"] = perfModel.get_ideal_ns();
+        j["performance_model"]["bandwidth_ns"] = perfModel.get_bandwidth_ns();
+        j["performance_model"]["input_bws"] = perfModel.get_input_bws();
+        j["performance_model"]["output_bws"] = perfModel.get_output_bws();
+
+        std::string short_str = fmt::format("`TT_DNN_DEVICE_OP: {}, {}, {}, ", j["op_code"], program_hash, device_id);
+        if (cached_ops.find(device_id) == cached_ops.end()) {
+            cached_ops.emplace(
+                device_id, (std::unordered_map<tt::tt_metal::operation::Hash, std::string>){{program_hash, short_str}});
         } else {
-            return operation::OpPerformanceModel{};
+            cached_ops.at(device_id).emplace(program_hash, short_str);
         }
-    }();
-    j["performance_model"]["compute_ns"] = perfModel.get_compute_ns();
-    j["performance_model"]["ideal_ns"] = perfModel.get_ideal_ns();
-    j["performance_model"]["bandwidth_ns"] = perfModel.get_bandwidth_ns();
-    j["performance_model"]["input_bws"] = perfModel.get_input_bws();
-    j["performance_model"]["output_bws"] = perfModel.get_output_bws();
 
-    std::string short_str = fmt::format("`TT_DNN_DEVICE_OP: {}, {}, {}, ", j["op_code"], program_hash, device_id);
-
-    std::string ser = j.dump(4);
-    return fmt::format("{}{} ->\n{}`", short_str, operation_id, ser);
+        std::string ser = j.dump(4);
+        return fmt::format("{}{} ->\n{}`", short_str, operation_id, ser);
+    } else {
+        return fmt::format("{}{}`", cached_ops.at(device_id).at(program_hash), operation_id);
+    }
 }
 
 #define TracyOpTTNNDevice(                                                                                           \
