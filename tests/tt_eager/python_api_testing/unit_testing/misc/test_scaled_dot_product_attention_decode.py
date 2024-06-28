@@ -168,11 +168,9 @@ def run_test_sdpa_decode(
     sharded_in=False,
     sharded_out=False,
 ):
-    if (
-        device.compute_with_storage_grid_size().x < grid_size[0]
-        or device.compute_with_storage_grid_size().y < grid_size[1]
-    ):
-        pytest.skip("Grid size too large for device")
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
 
     padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
     torch.manual_seed(1234)
@@ -296,11 +294,9 @@ def run_test_sdpa_decode_single_iter(
     sharded_in=False,
     sharded_out=False,
 ):
-    if (
-        device.compute_with_storage_grid_size().x < grid_size[0]
-        or device.compute_with_storage_grid_size().y < grid_size[1]
-    ):
-        pytest.skip("Grid size too large for device")
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
 
     padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
     torch.manual_seed(1234)
@@ -532,6 +528,10 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
 def run_test_sdpa_decode_ndpcc(
     device, b, nh, nkv, s, d, dtype, grid_size, q_dtype=ttnn.bfloat16, mask_dtype=ttnn.bfloat16
 ):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+
     padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
     torch.manual_seed(1234)
 
@@ -636,6 +636,7 @@ def run_test_sdpa_decode_ndpcc(
         start_idx += 601 if start_idx < 4096 else 3001
 
 
+@pytest.mark.timeout(600)
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype, mask_dtype",
