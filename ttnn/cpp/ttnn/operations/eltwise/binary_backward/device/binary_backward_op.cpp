@@ -271,6 +271,15 @@ std::vector<ttnn::Tensor> _squared_difference_bw(
     return grad_tensor;
 }
 
+std::vector<Tensor> _fmod_bw(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    Tensor result_div = div(input, other, true, "trunc");
+    Tensor grad_b = ttnn::multiply(ttnn::neg(grad), result_div, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+ }
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
@@ -294,6 +303,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _squared_difference_bw;
         case BinaryBackwardOpType::ADD_BW:
             return _add_bw_inter;
+        case BinaryBackwardOpType::FMOD_BW:
+            return _fmod_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
