@@ -76,28 +76,13 @@ def _golden_function(input_tensor: ttnn.Tensor, order: Tuple[int, ...], **_):
     return input_tensor.permute(order).contiguous().clone()
 
 
-doc = r"""
-permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor
+def _golden_function(input_tensor, dims, **_):
+    import torch
 
-Permutes :attr:`input_tensor` using :attr:`order`.
+    return torch.permute(input_tensor, dims)
 
-Args:
-    * :attr:`input_tensor`: the input tensor
-    * :attr:`order`: the desired ordering of dimensions.
 
-Example::
-
-    >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
-    >>> output = ttnn.permute(tensor, (0, 1, 3, 2))
-    >>> print(output.shape)
-    [1, 1, 32, 64]
-
-"""
-ttnn.register_python_operation(
-    name="ttnn.permute",
-    golden_function=_golden_function,
-    doc=doc,
-)(ttnn._ttnn.operations.data_movement.permute)
+ttnn.attach_golden_function(ttnn._ttnn.operations.data_movement.permute, golden_function=_golden_function)
 
 
 def _golden_function(tensors, dim=0, **_):

@@ -11,37 +11,13 @@
 #include "ttnn/operations/data_movement.hpp"
 #include "ttnn/operations/data_movement/pad/pad_pybind.hpp"
 #include "ttnn/operations/data_movement/concat/concat_pybind.hpp"
+#include "ttnn/operations/data_movement/permute/permute_pybind.hpp"
 
 namespace py = pybind11;
 
 namespace ttnn {
 namespace operations {
 namespace data_movement {
-
-void bind_permute(py::module& module) {
-const auto doc = R"doc(
-Permutes :attr:`input_tensor` using :attr:`order`.
-
-Args:
-    * :attr:`input_tensor`: the input tensor
-    * :attr:`order`: the desired ordering of dimensions.
-
-Example:
-
-    >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
-    >>> output = ttnn.permute(tensor, (0, 1, 3, 2))
-    >>> print(output.shape)
-    [1, 1, 32, 64]
-
-    )doc";
-
-    module.def(
-        "permute",
-        &permute,
-        py::arg("input_tensor"),
-        py::arg("order"),
-        doc);
-}
 
 void bind_upsample(py::module& module) {
     const auto doc = R"doc(
@@ -141,7 +117,7 @@ Example:
 
 
 void py_module(py::module& module) {
-    bind_permute(module);
+    detail::bind_permute(module);
     detail::bind_concat(module);
     bind_upsample(module);
     detail::bind_pad(module);
