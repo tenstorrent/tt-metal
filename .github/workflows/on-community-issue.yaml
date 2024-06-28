@@ -1,30 +1,48 @@
 name: "Slack Notification on Community Issue"
 
 on:
+  push:
   issues:
-    types: [opened, labeled]
+    types: [opened]
+  pull_request:
+    types: [opened]
 
 jobs:
   label-check:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Set username and number based on event type
+        id: set-variables
+        run: |
+          if [ "${{ github.event_name }}" = "issues" ]; then
+            echo "USERNAME=${{ github.event.issue.user.login }}" >> $GITHUB_ENV
+            echo "NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "USERNAME=${{ github.event.pull_request.user.login }}" >> $GITHUB_ENV
+            echo "NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+          fi
       - name: Check if organization member
         id: is_organization_member
         run: |
-          http_status=$(curl -o /dev/null -s -w '%{http_code}' "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" https://api.github.com/orgs/tenstorrent/members/${{ github.event.issue.user.login }})
-          if [ "$http_status" -eq 204 ] then
+          http_status=$(curl -o /dev/null -s -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" https://api.github.com/orgs/tenstorrent/members/${{ env.USERNAME }})
+          if [ "$http_status" -eq 204 ]; then
             echo "is_member=true" >> $GITHUB_OUTPUT
           else
             echo "is_member=false" >> $GITHUB_OUTPUT
           fi
       - name: Add community label
         if: ${{ steps.is_organization_member.outputs.result == 'false' }}
-        run: gh issue edit "$NUMBER" --add-label "$LABELS"
+        run: |
+          if [ "${{ github.event_name }}" = "issues" ]; then
+            gh issue edit $NUMBER --add-label "member"
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            gh pr edit $NUMBER --add-label "member"
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          NUMBER: ${{ github.event.issue.number }}
+          NUMBER: ${{ env.NUMBER }}
           LABELS: community
       - name: Send Slack Notification
         if: ${{ steps.is_organization_member.outputs.result == 'false' }}
