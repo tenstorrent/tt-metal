@@ -87,6 +87,23 @@ Example:
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor_a,
                const ttnn::Tensor& input_tensor_b,
+               const string value,
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+                return self(grad_tensor, input_tensor_a, value, input_tensor_b, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::arg("value"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt},
+
+
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& optional_input_a_grad,
@@ -261,6 +278,11 @@ void py_module(py::module& module) {
         module,
         ttnn::rsub_bw,
         R"doc(Performs backward operations for subraction of :attr:`input_tensor_a` from :attr:`input_tensor_b` tensors with given attr:`grad_tensor` (reversed order of subtraction operator).)doc");
+
+    detail::bind_binary_backward(
+        module,
+        ttnn::bias_gelu_bw,
+        R"doc(Performs backward operations for binary gelu of :attr:`input_tensor_a` and :attr:`input_tensor_b` tensors with given attr:`grad_tensor`.)doc");
 
 }
 

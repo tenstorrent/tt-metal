@@ -49,7 +49,7 @@ embedding_bw = ttnn.register_operation(golden_function=_golden_function)(
 
 
 def _golden_function_backward(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    if torch_op == torch.squared_difference:
+    if torch_op == squared_difference:
         pyt_y = torch.square(torch.sub(input_tensor_a, input_tensor_b))
     elif torch_op == torch.clone:
         pyt_y = torch.clone(input_tensor_a)
@@ -68,6 +68,24 @@ def _golden_function_backward(torch_op, grad_tensor, input_tensor_a, input_tenso
 
 def _golden_function_backward_with_float(torch_op, grad_tensor, input_tensor_a, input_tensor_b, alpha, *args, **kwargs):
     pyt_y = torch_op(input_tensor_a, input_tensor_b, alpha=alpha)
+    input_tensor_a.retain_grad()
+    input_tensor_b.retain_grad()
+    pyt_y.backward(gradient=grad_tensor)
+    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
+    return golden_tensor
+
+
+def _golden_function_backward_with_string(
+    torch_op, grad_tensor, input_tensor_a, input_tensor_b, value, *args, **kwargs
+):
+    if torch_op == bias_gelu:
+        sum_result = torch.add(input_tensor_a, input_tensor_b)
+        pyt_y = torch.nn.functional.gelu(sum_result)
+        sum_result.retain_grad()
+        pyt_y.backward(gradient=grad_tensor)
+        golden_tensor = [sum_result.grad, sum_result.grad]
+        return golden_tensor
+    pyt_y = torch_op(input_tensor_a, input_tensor_b, value=value)
     input_tensor_a.retain_grad()
     input_tensor_b.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
@@ -130,7 +148,7 @@ logaddexp2_bw = ttnn.register_operation(
 
 squared_difference_bw = ttnn.register_operation(
     golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        torch.squared_difference, grad, a, b, *args, **kwargs
+        squared_difference, grad, a, b, *args, **kwargs
     )
 )(ttnn._ttnn.operations.binary_backward.squared_difference_bw)
 
@@ -175,5 +193,11 @@ rsub_bw = ttnn.register_operation(
         torch.rsub, grad, a, b, *args, **kwargs
     )
 )(ttnn._ttnn.operations.binary_backward.rsub_bw)
+
+bias_gelu_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, value, *args, **kwargs: _golden_function_backward_with_string(
+        bias_gelu, grad, a, b, value, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.bias_gelu_bw)
 
 __all__ = []
