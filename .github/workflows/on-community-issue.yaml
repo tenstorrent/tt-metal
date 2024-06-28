@@ -31,7 +31,7 @@ jobs:
           payload: |
             {
               "text": "A new issue with the 'community' label has been created by `${{ github.event.sender.login }}`: ${{ github.event.issue.html_url }}",
-              "channel": ""
+              "channel": "C07AZJ5DLL8"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_CHANNEL_WEBHOOK_URL }}
