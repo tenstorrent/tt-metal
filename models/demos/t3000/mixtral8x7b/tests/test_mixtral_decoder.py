@@ -15,7 +15,7 @@ if os.getenv("CI") == "true":
     os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, prepare_rotation_mat_ttnn
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, get_single_rot_mat
 from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
 from models.demos.t3000.mixtral8x7b.reference.model import TransformerBlock, precompute_freqs_cis
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
@@ -47,9 +47,8 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
         dtype=dtype,
     )
 
-    rot_mat = prepare_rotation_mat_ttnn(
+    current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
-        model_args.max_seq_len,
         tt_model.device_mesh,
     )
 
@@ -76,7 +75,7 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
             tt_model.device_mesh,
         )
         # Run TT model
-        tt_out_b1sh = tt_model(decode_input_b1sh, start_pos, current_pos, attn_mask, rot_mat)
+        tt_out_b1sh = tt_model(decode_input_b1sh, start_pos, current_pos, attn_mask, current_rot_mat)
         # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
         del decode_input_b1sh, attn_mask
         tt_output_torch_b1h = (
@@ -100,6 +99,8 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
         else:
             logger.warning("Mistral Decoder Block Failed!")
             all_tests_pass = False
+
+        current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
 
     if all_tests_pass:
         logger.info(f"All {generation_length} Mistral decode iterations Passed!")

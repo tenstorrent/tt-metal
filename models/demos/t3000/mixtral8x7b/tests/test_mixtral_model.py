@@ -19,7 +19,7 @@ if os.getenv("CI") == "true":
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, prepare_rotation_mat_ttnn
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.reference.model import Transformer
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
@@ -81,12 +81,6 @@ def test_mixtral_model_inference(
         dtype=dtype,
     )
 
-    rot_mat = prepare_rotation_mat_ttnn(
-        model_args.head_dim,
-        model_args.max_seq_len,
-        tt_model.device_mesh,
-    )
-
     generation_start_pos = 0
     generation_length = iterations
     all_tests_pass = True
@@ -117,7 +111,7 @@ def test_mixtral_model_inference(
         )
 
         # Run TT model
-        tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask, rot_mat)
+        tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask)
         # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
         del decode_input, attn_mask
         # Convert ttnn tensor to torch tensor
