@@ -9,7 +9,7 @@ namespace tt {
 
 namespace tt_metal {
 
-void Copy::validate(const std::vector<Tensor> &input_tensors) const {
+void Copy::validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to copy need to be allocated in buffers on device!");
@@ -22,10 +22,18 @@ void Copy::validate(const std::vector<Tensor> &input_tensors) const {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == dst_tensor.memory_config().memory_layout);
         TT_FATAL(dst_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Copy does not currently support sharding");
     }
-    if (this->output_dtype != input_tensor_a.get_dtype()) {
+    DataType output_dtype = this->output_dtype;
+    if(!output_tensors.empty() && output_tensors.at(0).has_value()){
+        const auto output_shape_required = this->compute_output_shapes(input_tensors);
+        const auto& out_tensor = output_tensors.at(0).value();
+        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required.at(0), fmt::format("The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape()));
+        output_dtype = out_tensor.get_dtype();
+    }
+    if (output_dtype != input_tensor_a.get_dtype()) {
         TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Only tile layout supports dtype conversion");
     }
-    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Copy does not currently support sharding");
+    auto out_mem_config = (!output_tensors.empty() && output_tensors.at(0).has_value()) ? output_tensors.at(0).value().memory_config() : this->output_mem_config;
+    TT_FATAL(out_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
 }
 
 std::vector<Shape> Copy::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -37,7 +45,10 @@ std::vector<Shape> Copy::compute_output_shapes(const std::vector<Tensor> &input_
     }
 }
 
-std::vector<Tensor> Copy::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+std::vector<Tensor> Copy::create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    if(!output_tensors.empty() && output_tensors.at(0).has_value()){
+        return {output_tensors.at(0).value()};
+    }
     if (input_tensors.size() == 2) {
         return {input_tensors[1]};
     } else {
@@ -101,8 +112,21 @@ Tensor typecast(const Tensor& input_tensor, const DataType& dtype, const MemoryC
 }
 
 //unary assign
-Tensor assign(const Tensor& input, const MemoryConfig& output_mem_config , std::optional<const DataType> output_dtype ) {
+Tensor assign(const Tensor& input, const MemoryConfig& output_mem_config , std::optional<const DataType> output_dtype, std::optional<Tensor> output_tensor ) {
+    if (output_tensor.has_value()) {
+        operation::run(Copy{output_mem_config, output_dtype.value_or(input.get_dtype())}, {input}, {}, {output_tensor}).at(0);
+        return output_tensor.value();
+    }
     return operation::run(Copy{output_mem_config, output_dtype.value_or(input.get_dtype())}, {input}).at(0);
+}
+
+//unary assign with queue_id
+Tensor assign(uint8_t queue_id, const Tensor& input, const MemoryConfig& output_mem_config , std::optional<const DataType> output_dtype, std::optional<Tensor> output_tensor ) {
+    if (output_tensor.has_value()) {
+        operation::run(Copy{output_mem_config, output_dtype.value_or(input.get_dtype())}, {input}, {}, {output_tensor}, queue_id).at(0);
+        return output_tensor.value();
+    }
+    return operation::run(Copy{output_mem_config, output_dtype.value_or(input.get_dtype())}, {input}, {}, {}, queue_id).at(0);
 }
 
 // binary assign
