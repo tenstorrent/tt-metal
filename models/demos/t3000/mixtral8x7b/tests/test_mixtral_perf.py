@@ -43,10 +43,10 @@ class Emb(torch.nn.Module):
 @pytest.mark.parametrize(
     "generation_start_pos, expected_compile_time, expected_inference_time",
     (
-        (32, 150, 0.058),  # FIXME: Perf regression (issue #9479)
-        (128, 150, 0.058),  # FIXME: Perf regression (issue #9479)
-        (1024, 150, 0.058),  # FIXME: Perf regression (issue #9479)
-        (2048, 150, 0.058),  # FIXME: Perf regression (issue #9479)
+        (32, 150, 0.075),
+        (128, 150, 0.075),
+        (1024, 150, 0.075),
+        (2048, 150, 0.075),
     ),
 )
 def test_mixtral_model_perf(
@@ -61,7 +61,7 @@ def test_mixtral_model_perf(
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
     model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=False)
-    model_args.n_layers = 1
+    model_args.n_layers = 32
 
     # Clear global profiler state before starting measurements
     profiler.clear()
