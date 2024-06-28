@@ -17,7 +17,7 @@ jobs:
           {name: "GS", arch: grayskull, runs-on: ["perf-no-reset-grayskull", "self-reset"], machine-type: "bare_metal", model-type: "other", timeout: 40},
           # Runs on virtual machine now
           {name: "N300", arch: wormhole_b0, runs-on: ["model-runner-wormhole_b0"], machine-type: "bare_metal", model-type: "other", timeout: 30},
-          {name: "Unstable N300", arch: wormhole_b0, runs-on: ["model-runner-wormhole_b0"], machine-type: "bare_metal", model-type: "unstable_models", timeout: 15},
+          {name: "Unstable N300", arch: wormhole_b0, runs-on: ["model-runner-wormhole_b0"], machine-type: "bare_metal", model-type: "unstable_models", timeout: 25},
         ]
     name: "${{ matrix.test-info.name }} device perf"
     env:
