@@ -80,7 +80,7 @@ concept DeviceOperationConcept = requires {
 };
 
 template <typename device_operation_t>
-concept DeviceOperationConceptWithCustomProgramCacheConcept = DeviceOperationConcept<device_operation_t> and requires {
+concept DeviceOperationWithCustomProgramCacheConcept = DeviceOperationConcept<device_operation_t> and requires {
     [](auto&& program_factory,
        const typename device_operation_t::operation_attributes_t& operation_attributes,
        const typename device_operation_t::tensor_args_t& tensor_args) {
@@ -101,7 +101,7 @@ template <typename device_operation_t>
 inline auto compute_program_hash(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    if constexpr (DeviceOperationConceptWithCustomProgramCacheConcept<device_operation_t>) {
+    if constexpr (DeviceOperationWithCustomProgramCacheConcept<device_operation_t>) {
         ZoneScopedN("Compute custom program hash");
         return device_operation_t::compute_program_hash(operation_attributes, tensor_args);
     } else {
