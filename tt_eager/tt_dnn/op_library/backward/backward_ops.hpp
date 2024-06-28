@@ -280,13 +280,6 @@ std::vector<Tensor> lerp_bw(
     const Tensor& weight,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> concat_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    int dim,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> hardsigmoid_bw(
     const Tensor& grad,
     const Tensor& input,
