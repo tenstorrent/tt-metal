@@ -219,3 +219,32 @@ def cache_attention(device_mesh, state_dict, model_args, rot_emb_matrix_list, se
         # ttnn.deallocate(tt_out[0])
 
     logger.info("Attention ops cached")
+
+
+def get_single_rot_mat(dhead, device_mesh, theta: float = 1000000.0):
+    freqs = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
+    sin_freqs, cos_freqs = torch.sin(freqs), torch.cos(freqs)
+    rot_matrix = torch.zeros(dhead, dhead)
+    rot_matrix[torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
+    rot_matrix[torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
+    rot_matrix[torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
+    rot_matrix[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
+    rot_matrix = rot_matrix.transpose(-1, -2)
+
+    current_rot_mat = torch.zeros(dhead, dhead)
+    current_rot_mat[torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = 1.0
+    current_rot_mat[torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = 1.0
+
+    return ttnn.from_torch(
+        current_rot_mat.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
+        device=device_mesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+    ), ttnn.from_torch(
+        rot_matrix.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
+        device=device_mesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+    )
