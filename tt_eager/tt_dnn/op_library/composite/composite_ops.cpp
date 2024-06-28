@@ -1393,17 +1393,10 @@ Tensor hypot(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& o
 
 Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     const Shape start_index = {0, 0, 0, 0};
-    ttnn::Tensor input_tensor_4D = ttnn::unsqueeze_to_4D(input_a);        
-    auto input_shape_with_tile_padding = input_tensor_4D.get_shape().with_tile_padding();
-    auto output_padded_shape = input_b.legacy_shape();
-    std::vector<std::pair<uint32_t, uint32_t>> padding(4); 
-    for(size_t i = 0; i < padding.size(); i++) {
-        padding[i] = {0, output_padded_shape[i] - input_shape_with_tile_padding[i]};
-    }
+    ttnn::Tensor input_tensor_4D = ttnn::unsqueeze_to_4D(input_a);
 
-
-    Tensor index = ttnn::pad(ones_like(input_a, output_mem_config), padding, 0, std::nullopt);
-    Tensor temp_a = ttnn::pad(input_a, padding, 0, std::nullopt);
+    Tensor index = ttnn::pad(ones_like(input_tensor_4D, output_mem_config), input_b.shape(), ttnn::Shape(start_index), 0, std::nullopt);
+    Tensor temp_a = ttnn::pad(input_tensor_4D,input_b.shape(), ttnn::Shape(start_index), 0, std::nullopt);
     return where(index, temp_a, input_b, output_mem_config);
 }
 Tensor scatter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
