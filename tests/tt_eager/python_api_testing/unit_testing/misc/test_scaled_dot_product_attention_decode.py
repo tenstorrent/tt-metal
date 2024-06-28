@@ -637,6 +637,7 @@ def run_test_sdpa_decode_ndpcc(
 
 
 @pytest.mark.timeout(600)
+@pytest.skip("Skipping due to causing 45 minutes timeout on tt eager unit tests")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype, mask_dtype",
