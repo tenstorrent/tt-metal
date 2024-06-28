@@ -14,9 +14,10 @@ jobs:
       fail-fast: false
       matrix:
         test-info: [
-          {name: "GS", arch: grayskull, runs-on: ["perf-no-reset-grayskull", "self-reset"], machine-type: "bare_metal", timeout: 40},
+          {name: "GS", arch: grayskull, runs-on: ["perf-no-reset-grayskull", "self-reset"], machine-type: "bare_metal", model-type: "other", timeout: 40},
           # Runs on virtual machine now
-          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["model-runner-wormhole_b0"], machine-type: "bare_metal", timeout: 60},
+          {name: "N300", arch: wormhole_b0, runs-on: ["model-runner-wormhole_b0"], machine-type: "bare_metal", model-type: "other", timeout: 30},
+          {name: "Unstable N300", arch: wormhole_b0, runs-on: ["model-runner-wormhole_b0"], machine-type: "bare_metal", model-type: "unstable_models", timeout: 15},
         ]
     name: "${{ matrix.test-info.name }} device perf"
     env:
@@ -44,7 +45,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
         run: |
           source python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_device_performance_${{ matrix.test-info.machine-type }}
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ${{ matrix.test-info.model-type }}_device_performance_${{ matrix.test-info.machine-type }}
       - name: Check device perf report exists
         id: check-device-perf-report
         if: ${{ !cancelled() }}
@@ -57,5 +58,5 @@ jobs:
         if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: device-perf-report-csv-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
+          name: device-perf-report-csv-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}-${{ matrix.test-info.model-type }}
           path: "${{ steps.check-device-perf-report.outputs.device_perf_report_filename }}"
