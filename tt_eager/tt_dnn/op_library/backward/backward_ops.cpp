@@ -686,18 +686,6 @@ std::vector<Tensor> abs_bw(const Tensor& grad, const Tensor& input, const Memory
     return operation::decorate_as_composite(__func__, _abs_bw)(grad, input, output_mem_config);
 }
 
-std::vector<Tensor> _binary_le_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor zero_grad = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(zero_grad);
-    Tensor zero_input = zeros_like(input, output_mem_config);
-    grad_tensor.emplace_back(zero_input);
-    return grad_tensor;
-}
-std::vector<Tensor> binary_le_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _binary_le_bw)(grad, input, output_mem_config);
-}
-
 std::vector<Tensor> _rsqrt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor rsqrt_result = power(rsqrt(input, true, output_mem_config), 3, output_mem_config);
