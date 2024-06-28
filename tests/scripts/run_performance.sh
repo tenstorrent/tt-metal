@@ -15,6 +15,8 @@ run_perf_models_other() {
 
     env pytest tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
 
+    env pytest models/experimental/functional_squeezebert/tests/test_performance.py -m $test_marker
+
     env pytest models/demos/ttnn_falcon7b/tests -m $test_marker
 
     # Separate calls since we can't mix switching between number of cqs
@@ -78,6 +80,8 @@ run_device_perf_models() {
         env pytest "tests/ttnn/integration_tests/resnet/test_performance.py" -m $test_marker
 
         env pytest models/demos/resnet/tests -m $test_marker
+
+        env pytest models/experimental/functional_squeezebert/tests/test_perf_device_squeezebert.py -m $test_marker
     fi
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
