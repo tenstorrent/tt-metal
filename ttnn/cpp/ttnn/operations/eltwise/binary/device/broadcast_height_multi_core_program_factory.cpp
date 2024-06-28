@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "binary_op.hpp"
+#include "binary_device_operation.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
@@ -22,10 +22,11 @@ static const tt::tt_metal::BcastOpMath binary_op_type_to_bcast_op_math(const Bin
     }
 }
 
-Binary::BroadcastHeightMultiCore::cached_program_t Binary :: BroadcastHeightMultiCore::create(
-                                                                const operation_attributes_t& operation_attributes,
-                                                                const tensor_args_t& tensor_args,
-                                                                tensor_return_value_t& tensor_return_value) {
+BinaryDeviceOperation::BroadcastHeightMultiCore::cached_program_t
+BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -200,11 +201,11 @@ Binary::BroadcastHeightMultiCore::cached_program_t Binary :: BroadcastHeightMult
     };
 }
 
-void Binary :: BroadcastHeightMultiCore::override_runtime_arguments(
-                  cached_program_t& cached_program,
-                  const operation_attributes_t& operation_attributes,
-                  const tensor_args_t& tensor_args,
-                  tensor_return_value_t& tensor_return_value) {
+void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -213,7 +214,7 @@ void Binary :: BroadcastHeightMultiCore::override_runtime_arguments(
     auto& output_tensor = tensor_return_value;
 
     auto&& [binary_reader_kernel_id, unary_writer_kernel_id, bcast_kernel_id, compute_with_storage_grid_size] =
-        cached_program.program_attributes;
+        cached_program.shared_variables;
 
     auto& program = cached_program.program;
 
