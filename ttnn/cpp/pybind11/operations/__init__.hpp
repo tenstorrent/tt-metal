@@ -9,6 +9,7 @@
 
 #include "pybind11/operations/ccl.hpp"
 #include "pybind11/operations/conv2d.hpp"
+#include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
 #include "pybind11/operations/data_movement.hpp"
@@ -18,15 +19,13 @@
 #include "pybind11/operations/maxpool2d.hpp"
 #include "pybind11/operations/normalization.hpp"
 #include "pybind11/operations/pool.hpp"
-#include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/ternary.hpp"
 #include "pybind11/operations/transformer.hpp"
-
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
-#include "ttnn/operations/eltwise/unary/unary_pybind.hpp"
-#include "ttnn/operations/reduction/reduction_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
-
+#include "ttnn/operations/eltwise/unary/unary_pybind.hpp"
+#include "ttnn/operations/example/example_pybind.hpp"
+#include "ttnn/operations/reduction/reduction_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -35,6 +34,9 @@ namespace ttnn {
 namespace operations {
 
 void py_module(py::module& module) {
+    auto m_example = module.def_submodule("example", "example operation");
+    example::py_module(m_example);
+
     auto m_unary = module.def_submodule("unary", "unary operations");
     unary::py_module(m_unary);
 

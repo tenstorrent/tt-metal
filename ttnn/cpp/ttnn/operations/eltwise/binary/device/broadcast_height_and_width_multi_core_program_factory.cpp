@@ -4,7 +4,7 @@
 
 #include <optional>
 
-#include "binary_op.hpp"
+#include "binary_device_operation.hpp"
 #include "impl/buffers/buffer.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
@@ -25,7 +25,8 @@ static const tt::tt_metal::BcastOpMath binary_op_type_to_bcast_op_math(const Bin
     }
 }
 
-Binary::BroadcastHeightAndWidthMultiCore::cached_program_t Binary::BroadcastHeightAndWidthMultiCore::create(
+BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::cached_program_t
+BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -229,7 +230,7 @@ Binary::BroadcastHeightAndWidthMultiCore::cached_program_t Binary::BroadcastHeig
          cb_output}};
 }
 
-void Binary::BroadcastHeightAndWidthMultiCore::override_runtime_arguments(
+void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -241,15 +242,15 @@ void Binary::BroadcastHeightAndWidthMultiCore::override_runtime_arguments(
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     auto& output_tensor = tensor_return_value;
 
-    auto& binary_reader_kernel_id = cached_program.program_attributes.binary_reader_kernel_id;
-    auto& unary_writer_kernel_id = cached_program.program_attributes.unary_writer_kernel_id;
-    auto& bcast_kernel_id = cached_program.program_attributes.bcast_kernel_id;
-    auto& compute_with_storage_grid_size = cached_program.program_attributes.compute_with_storage_grid_size;
-    auto& cb_src0 = cached_program.program_attributes.cb_src0;
-    auto& src0_single_tile_size = cached_program.program_attributes.src0_single_tile_size;
-    auto& src1_single_tile_size = cached_program.program_attributes.src1_single_tile_size;
-    auto& dst_single_tile_size = cached_program.program_attributes.dst_single_tile_size;
-    auto& cb_output = cached_program.program_attributes.cb_output;
+    auto& binary_reader_kernel_id = cached_program.shared_variables.binary_reader_kernel_id;
+    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    auto& bcast_kernel_id = cached_program.shared_variables.bcast_kernel_id;
+    auto& compute_with_storage_grid_size = cached_program.shared_variables.compute_with_storage_grid_size;
+    auto& cb_src0 = cached_program.shared_variables.cb_src0;
+    auto& src0_single_tile_size = cached_program.shared_variables.src0_single_tile_size;
+    auto& src1_single_tile_size = cached_program.shared_variables.src1_single_tile_size;
+    auto& dst_single_tile_size = cached_program.shared_variables.dst_single_tile_size;
+    auto& cb_output = cached_program.shared_variables.cb_output;
 
     auto& program = cached_program.program;
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
