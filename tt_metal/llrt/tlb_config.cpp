@@ -109,7 +109,36 @@ static constexpr uint32_t DYNAMIC_TLB_2M_SIZE = tt::umd::blackhole::DYNAMIC_TLB_
 static constexpr uint32_t DYNAMIC_TLB_16M_SIZE = 0;
 
 int32_t get_static_tlb_index(CoreCoord target) {
-    return -1;
+    bool is_eth_location =
+        std::find(
+            std::cbegin(tt::umd::blackhole::ETH_LOCATIONS), std::cend(tt::umd::blackhole::ETH_LOCATIONS), target) !=
+        std::cend(tt::umd::blackhole::ETH_LOCATIONS);
+    bool is_tensix_location =
+        std::find(
+            std::cbegin(tt::umd::blackhole::T6_X_LOCATIONS), std::cend(tt::umd::blackhole::T6_X_LOCATIONS), target.x) !=
+            std::cend(tt::umd::blackhole::T6_X_LOCATIONS) &&
+        std::find(
+            std::cbegin(tt::umd::blackhole::T6_Y_LOCATIONS), std::cend(tt::umd::blackhole::T6_Y_LOCATIONS), target.y) !=
+            std::cend(tt::umd::blackhole::T6_Y_LOCATIONS);
+    // implementation migrated from blackhole.py in `src/t6ifc/t6py/packages/tenstorrent/chip/blackhole.py` from tensix
+    // repo (t6py-blackhole-bringup branch)
+
+    // BH worker cores are starting from y=2
+    target.y--;
+    if (is_eth_location) {
+        // TODO: Uplift this
+        return -1;
+    } else if (is_tensix_location) {
+        if (target.x >= 8) {
+            target.x -= 2;
+        }
+
+        int flat_index = target.y * 14 + target.x;
+        int tlb_index = tt::umd::blackhole::ETH_LOCATIONS.size() + flat_index;
+        return tlb_index;
+    } else {
+        return -1;
+    }
 }
 
 }  // namespace blackhole
@@ -146,8 +175,11 @@ void configure_static_tlbs(tt::ARCH arch, chip_id_t mmio_device_id, const metal_
     }
 
     auto statically_mapped_cores = sdesc.workers;
-    statically_mapped_cores.insert(
-        statically_mapped_cores.end(), sdesc.ethernet_cores.begin(), sdesc.ethernet_cores.end());
+    // TODO (#9933): Remove workaround for BH
+    if (arch != tt::ARCH::BLACKHOLE) {
+        statically_mapped_cores.insert(
+            statically_mapped_cores.end(), sdesc.ethernet_cores.begin(), sdesc.ethernet_cores.end());
+    }
     std::int32_t address = 0;
 
     // Setup static TLBs for all worker cores
@@ -155,13 +187,17 @@ void configure_static_tlbs(tt::ARCH arch, chip_id_t mmio_device_id, const metal_
         auto tlb_index = get_static_tlb_index(core);
         device_driver.configure_tlb(mmio_device_id, core, tlb_index, address);
     }
-    // Setup static TLBs for MMIO mapped data space
-    uint64_t peer_dram_offset = DEVICE_DATA.DRAM_CHANNEL_0_PEER2PEER_REGION_START;
-    for (uint32_t tlb_id = DYNAMIC_TLB_BASE_INDEX; tlb_id < DYNAMIC_TLB_BASE_INDEX + DYNAMIC_TLB_COUNT; tlb_id++) {
-        device_driver.configure_tlb(
-            mmio_device_id, CoreCoord(DEVICE_DATA.DRAM_CHANNEL_0_X, DEVICE_DATA.DRAM_CHANNEL_0_Y), tlb_id, peer_dram_offset);
-        // Align address space of 16MB TLB to 16MB boundary
-        peer_dram_offset += DYNAMIC_TLB_16M_SIZE;
+
+    // TODO (#9932): Remove workaround for BH
+    if (arch != tt::ARCH::BLACKHOLE) {
+        // Setup static TLBs for MMIO mapped data space
+        uint64_t peer_dram_offset = DEVICE_DATA.DRAM_CHANNEL_0_PEER2PEER_REGION_START;
+        for (uint32_t tlb_id = DYNAMIC_TLB_BASE_INDEX; tlb_id < DYNAMIC_TLB_BASE_INDEX + DYNAMIC_TLB_COUNT; tlb_id++) {
+            device_driver.configure_tlb(
+                mmio_device_id, CoreCoord(DEVICE_DATA.DRAM_CHANNEL_0_X, DEVICE_DATA.DRAM_CHANNEL_0_Y), tlb_id, peer_dram_offset);
+            // Align address space of 16MB TLB to 16MB boundary
+            peer_dram_offset += DYNAMIC_TLB_16M_SIZE;
+        }
     }
     device_driver.setup_core_to_tlb_map([get_static_tlb_index](CoreCoord core) { return get_static_tlb_index(core); });
 }
