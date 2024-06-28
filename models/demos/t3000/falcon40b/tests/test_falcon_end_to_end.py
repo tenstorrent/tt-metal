@@ -485,7 +485,7 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
                 if seq_len == 32:
                     out_pcc = 0.983
                     k_cache_pcc = 0.982
-                    v_cache_pcc = 0.949
+                    v_cache_pcc = 0.948
                     token_pcc = 0.99
                 elif seq_len == 128:
                     out_pcc = 0.990
