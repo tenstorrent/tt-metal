@@ -72,7 +72,7 @@ Tensor mk_filled_tensor_like(
 Tensor _softshrink(const Tensor& a, float param, const MemoryConfig& output_mem_config) {
     TT_ASSERT(param >= 0);
     Tensor t_a_plus_param = add_unary(a, param, output_mem_config);
-    Tensor t1 = ttnn::multiply(ltz(t_a_plus_param, output_mem_config), t_a_plus_param, std::nullopt, output_mem_config);
+    Tensor t1 = ttnn::multiply(ttnn::ltz(t_a_plus_param, output_mem_config), t_a_plus_param, std::nullopt, output_mem_config);
     t_a_plus_param.deallocate();
     Tensor t_a_minus_param = sub_unary(a, param, output_mem_config);
     Tensor t2 =
@@ -88,7 +88,7 @@ Tensor softshrink(const Tensor& a, float param, const MemoryConfig& output_mem_c
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.Hardshrink.html
 Tensor _hardshrink(const Tensor& a, float param, const MemoryConfig& output_mem_config) {
     TT_ASSERT(param >= 0);
-    Tensor t1 = ttnn::multiply(ltz(add_unary(a, param)), a, std::nullopt, output_mem_config);
+    Tensor t1 = ttnn::multiply(ttnn::ltz(add_unary(a, param)), a, std::nullopt, output_mem_config);
     Tensor t2 = ttnn::multiply(gtz(sub_unary(a, param)), a, std::nullopt, output_mem_config);
     return ttnn::add(t1, t2, std::nullopt, output_mem_config);
 }
@@ -120,7 +120,7 @@ Tensor softsign(const Tensor& a, const MemoryConfig& output_mem_config) {
 
 Tensor _swish(const Tensor& a, const MemoryConfig& output_mem_config) {
     // x / (1.0f + exp(-x))
-    return silu(a, output_mem_config);
+    return ttnn::silu(a, output_mem_config);
 }
 Tensor swish(const Tensor& a, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _swish)(a, output_mem_config);
@@ -139,7 +139,7 @@ Tensor log1p(const Tensor& x, const MemoryConfig& output_mem_config) {
 
 // tanhshrink(x) = x - tanh(x)
 Tensor _tanhshrink(const Tensor& x, const MemoryConfig& output_mem_config) {
-    Tensor tan_x = tanh(x, output_mem_config);
+    Tensor tan_x = ttnn::tanh(x, output_mem_config);
     Tensor result = ttnn::subtract(x, tan_x, std::nullopt, output_mem_config);
     return result;
 }
@@ -257,7 +257,7 @@ Tensor _mish(const Tensor& x, const MemoryConfig& output_mem_config) {
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& x = input_tensors.at(0);
             Tensor sp_x = softplus(x, 1.0f, 20.0f, output_mem_config);
-            Tensor tanh_x = tanh(sp_x, output_mem_config);
+            Tensor tanh_x = ttnn::tanh(sp_x, output_mem_config);
             sp_x.deallocate();
             Tensor mish_x = ttnn::multiply(x, tanh_x, std::nullopt, output_mem_config);
             return {mish_x};
@@ -298,7 +298,7 @@ Tensor _selu(const Tensor& x, const float scale, const float alpha, const Memory
 
     // term 1
     Tensor t_scale = ttnn::operations::creation::create_scalar(scale, x.get_dtype(), Layout::TILE, x.device());
-    Tensor x_relu = relu(x, output_mem_config);
+    Tensor x_relu = ttnn::relu(x, output_mem_config);
     Tensor result_term1 = ttnn::multiply(x_relu, t_scale, std::nullopt, output_mem_config);
     t_scale.deallocate();
     x_relu.deallocate();
@@ -332,7 +332,7 @@ Tensor _clip(const Tensor& a, float low, float high, const MemoryConfig& output_
     const Tensor h_const = full_like(a, high);
     Tensor a_max = tt::tt_metal::min(a, h_const, output_mem_config);
     if (low == 0.0f) {
-        return relu(a_max, output_mem_config);
+        return ttnn::relu(a_max, output_mem_config);
     } else {
         const Tensor l_const = full_like(a, low);
         return tt::tt_metal::max(a_max, l_const, output_mem_config);
@@ -484,7 +484,7 @@ Tensor _logical_andi(const Tensor& input_a, float immediate, const MemoryConfig&
     if (std::fpclassify(immediate) == FP_ZERO) {
         return full_like(input_a, immediate, output_mem_config);
     } else {
-        return nez(input_a);
+        return ttnn::nez(input_a);
     }
 }
 Tensor logical_andi(const Tensor& input_a, float immediate, const MemoryConfig& output_mem_config) {
@@ -494,7 +494,7 @@ Tensor logical_andi(const Tensor& input_a, float immediate, const MemoryConfig& 
 // sinh[x] = (exp[x] - exp[-x])/2
 Tensor _sinh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     Tensor e_pos_x = exp(input_a, output_mem_config);
-    Tensor e_neg_x = exp(neg(input_a, output_mem_config), output_mem_config);
+    Tensor e_neg_x = exp(ttnn::neg(input_a, output_mem_config), output_mem_config);
     Tensor nr_term = ttnn::subtract(e_pos_x, e_neg_x, std::nullopt, output_mem_config);
     e_pos_x.deallocate();
     e_neg_x.deallocate();
@@ -510,7 +510,7 @@ Tensor sinh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
 // cosh[x] = (exp[x] + exp[-x])/2
 Tensor _cosh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     Tensor e_pos_x = exp(input_a, output_mem_config);
-    Tensor e_neg_x = exp(neg(input_a, output_mem_config), output_mem_config);
+    Tensor e_neg_x = exp(ttnn::neg(input_a, output_mem_config), output_mem_config);
     Tensor nr_term = ttnn::add(e_pos_x, e_neg_x, std::nullopt, output_mem_config);
     e_pos_x.deallocate();
     e_neg_x.deallocate();
@@ -534,10 +534,10 @@ Tensor _asinh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
             x_sq_p1 = add_unary(x_sq, 1.0f, output_mem_config);
         }
         ln_res =
-            log(ttnn::add(x_abs, sqrt(x_sq_p1, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+            log(ttnn::add(x_abs, ttnn::sqrt(x_sq_p1, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
     }
     // input is negative, output is -asinh(input)
-    Tensor result = where(input_a, ln_res, neg(ln_res, output_mem_config), output_mem_config);
+    Tensor result = where(input_a, ln_res, ttnn::neg(ln_res, output_mem_config), output_mem_config);
     return result;
 }
 Tensor asinh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
@@ -558,7 +558,7 @@ Tensor _acosh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
                 x_sq_m1 = sub_unary(x_sq, 1.0f, output_mem_config);
             }
             ln_res = log(
-                ttnn::add(x_abs, sqrt(x_sq_m1, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+                ttnn::add(x_abs, ttnn::sqrt(x_sq_m1, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
         }
         // To handle inputs <= 1
         // input < 1, output is nan
@@ -590,7 +590,7 @@ Tensor _atanh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
             Tensor neg_x = sub_unary(input_a, 1.0f, output_mem_config);
             nr_term = log(
                 ttnn::multiply(
-                    pos_x, recip(neg(neg_x, output_mem_config), output_mem_config), std::nullopt, output_mem_config),
+                    pos_x, recip(ttnn::neg(neg_x, output_mem_config), output_mem_config), std::nullopt, output_mem_config),
                 output_mem_config);
         }
         comp_result = mul_unary(nr_term, 0.5f, output_mem_config);
@@ -599,7 +599,7 @@ Tensor _atanh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     // Input is -1 < value < 1, output is atanh(input)
     float t_nan = std::nanf("");
     Tensor abs_temp = sub_unary(abs(input_a, output_mem_config), 1.0f, output_mem_config);
-    Tensor result = where(ltz(abs_temp, output_mem_config), comp_result, t_nan, output_mem_config);
+    Tensor result = where(ttnn::ltz(abs_temp, output_mem_config), comp_result, t_nan, output_mem_config);
     return result;
 }
 Tensor atanh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
@@ -633,15 +633,15 @@ Tensor _atan2(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& 
     {
         Tensor ib_gtz = gtz(input_b, output_mem_config);
         Tensor ib_gt = gtz(input_b, output_mem_config);
-        Tensor ib_lt = ltz(input_b, output_mem_config);
+        Tensor ib_lt = ttnn::ltz(input_b, output_mem_config);
         float pi_2 = M_PI_2;
-        Tensor neg_result = neg(result, output_mem_config);
+        Tensor neg_result = ttnn::neg(result, output_mem_config);
 
         res = where(
             gtz(input_a, output_mem_config),
             where(ib_gtz, result, neg_result, output_mem_config),
             where(
-                ltz(input_a, output_mem_config),
+                ttnn::ltz(input_a, output_mem_config),
                 where(
                     ib_gt,
                     add_unary(neg_result, M_PI, output_mem_config),
@@ -672,7 +672,7 @@ Tensor lerp(
 Tensor _logical_xor(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     Tensor in_a_eq_zero = eqz(input_a, output_mem_config);
     Tensor in_b_eq_zero = eqz(input_b, output_mem_config);
-    Tensor in_b_neq_zero = nez(input_b, output_mem_config);
+    Tensor in_b_neq_zero = ttnn::nez(input_b, output_mem_config);
     Tensor result = where(in_a_eq_zero, in_b_neq_zero, in_b_eq_zero, output_mem_config);
     return result;
 }
@@ -728,7 +728,7 @@ Tensor logical_xor(const Tensor& input_a, const Tensor& input_b, const MemoryCon
 
 Tensor _logical_ori(const Tensor& input_a, float immediate, const MemoryConfig& output_mem_config) {
     if (std::fpclassify(immediate) == FP_ZERO) {
-        return nez(input_a, output_mem_config);
+        return ttnn::nez(input_a, output_mem_config);
     } else {
         return full_like(input_a, 1, output_mem_config);
     }
@@ -749,7 +749,7 @@ Tensor logical_noti(const Tensor& input_a, float immediate, const MemoryConfig& 
 // subalpha(input,other,alpha)=input-alpha*other
 Tensor _subalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config) {
     Tensor result = ttnn::add(
-        neg(mul_unary(input_b, alpha, output_mem_config), output_mem_config), input_a, std::nullopt, output_mem_config);
+        ttnn::neg(mul_unary(input_b, alpha, output_mem_config), output_mem_config), input_a, std::nullopt, output_mem_config);
     return result;
 }
 Tensor subalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config) {
@@ -918,7 +918,7 @@ Tensor _addcdiv(
                      : where(
                            eqz(input_b, output_mem_config),
                            t_nan,
-                           ttnn::multiply(t_inf, sign(input_b, output_mem_config), std::nullopt, output_mem_config),
+                           ttnn::multiply(t_inf, ttnn::sign(input_b, output_mem_config), std::nullopt, output_mem_config),
                            output_mem_config),
         result,
         output_mem_config);
@@ -954,7 +954,7 @@ Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, st
         where(
             eqz(input_a, output_mem_config),
             t_nan,
-            ttnn::multiply(t_inf, sign(input_a, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::multiply(t_inf, ttnn::sign(input_a, output_mem_config), std::nullopt, output_mem_config),
             output_mem_config),
         result,
         output_mem_config);
@@ -1055,7 +1055,7 @@ Tensor _floor_div_overload(const Tensor& input, float value, const MemoryConfig&
         return where(
             eqz(input, output_mem_config),
             t_nan,
-            ttnn::multiply(t_inf, sign(input, output_mem_config), std::nullopt, output_mem_config),
+            ttnn::multiply(t_inf, ttnn::sign(input, output_mem_config), std::nullopt, output_mem_config),
             output_mem_config);
 
     }
@@ -1090,7 +1090,7 @@ Tensor _remainder(const Tensor& input_a, const Tensor& input_b, const MemoryConf
     Tensor b = typecast(input_b, DataType::FLOAT32);
     Tensor result = ttnn::subtract(a, ttnn::multiply(b, floor_div(input_a, input_b, output_mem_config), std::nullopt, output_mem_config));
     result = where(ttnn::ge(result, b), ttnn::subtract(result, b), result);
-    result = where(ltz(b), ttnn::add(result, b), result);
+    result = where(ttnn::ltz(b), ttnn::add(result, b), result);
     result = where(ttnn::eq(a, b, std::nullopt, output_mem_config), full_like(input_a, 0.0f, output_mem_config), result, output_mem_config);
     return typecast(result, input_dtype);
 }
@@ -1115,7 +1115,7 @@ Tensor _logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_c
     Tensor t_eps = full_like(input_a, eps, output_mem_config);
     Tensor t1m_eps = full_like(input_a, (1 - eps), output_mem_config);
     Tensor logit_input = where(
-        ltz(t_eps, output_mem_config),
+        ttnn::ltz(t_eps, output_mem_config),
         input_a,
         where(
             ttnn::lt(input_a, t_eps, std::nullopt, output_mem_config),
@@ -1130,11 +1130,11 @@ Tensor _logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_c
         ttnn::multiply(logit_input, recip(linput_m1, output_mem_config), std::nullopt, output_mem_config);
     linput_m1.deallocate();
     Tensor t_inf =
-        mul_unary(sign(input_a, output_mem_config), std::numeric_limits<float>::infinity(), output_mem_config);
+        mul_unary(ttnn::sign(input_a, output_mem_config), std::numeric_limits<float>::infinity(), output_mem_config);
     Tensor logit_result = where(
         eq_unary(logit_input, 1.0, output_mem_config),
         t_inf,
-        where(ltz(log_input, output_mem_config), std::nanf(" "), log(log_input, output_mem_config), output_mem_config),
+        where(ttnn::ltz(log_input, output_mem_config), std::nanf(" "), log(log_input, output_mem_config), output_mem_config),
         output_mem_config);
     return logit_result;
 }
@@ -1169,7 +1169,7 @@ Tensor polygamma(const Tensor& input_a, uint32_t value, const MemoryConfig& outp
 // logical_xori
 Tensor _logical_xori(const Tensor& input_a, float value, const MemoryConfig& output_mem_config) {
     if (std::fpclassify(value) == FP_ZERO) {
-        return tt::tt_metal::nez(input_a);
+        return ttnn::nez(input_a);
     } else {
         return tt::tt_metal::eqz(input_a);  // eqz( input_a ) = not( nez( input_a ) )
     }
@@ -1184,7 +1184,7 @@ Tensor _xlogy(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& 
     Tensor result = ttnn::multiply(input_a, log(input_b, output_mem_config), std::nullopt, output_mem_config);
     result = where(
         ttnn::logical_or(
-            ltz(input_b, output_mem_config),
+            ttnn::ltz(input_b, output_mem_config),
             ttnn::eq(input_b, t_nan, std::nullopt, output_mem_config),
             std::nullopt,
             output_mem_config),
@@ -1330,13 +1330,13 @@ Tensor var_hw(const Tensor& y, const MemoryConfig& output_mem_config) {
 // compute standard deviation of tensor y = sqrt( E((y-<y>)^2)/ y.volume() )
 //  Ref: torch.std
 Tensor _std(const Tensor& y, const Tensor& mean_y, const MemoryConfig& output_mem_config) {
-    return sqrt(_variance_impl(y, mean_y, output_mem_config));
+    return ttnn::sqrt(_variance_impl(y, mean_y, output_mem_config));
 }
 Tensor _std(const Tensor& y, const Tensor& mean_y, Tensor& y_minus_mean_y, const MemoryConfig& output_mem_config) {
-    return sqrt(_variance_impl(y, mean_y, y_minus_mean_y, output_mem_config));
+    return ttnn::sqrt(_variance_impl(y, mean_y, y_minus_mean_y, output_mem_config));
 }
 Tensor _std_overload(const Tensor& y, const MemoryConfig& output_mem_config) {
-    return sqrt(_variance(y, output_mem_config));
+    return ttnn::sqrt(_variance(y, output_mem_config));
 }
 Tensor std_hw(const Tensor& y, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, tt::tt_metal::_std_overload)(y, output_mem_config);
@@ -1393,7 +1393,7 @@ Tensor _hypot(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& 
     Tensor c_sq = ttnn::add(a_sq, b_sq, std::nullopt, output_mem_config);
     a_sq.deallocate();
     b_sq.deallocate();
-    return sqrt(c_sq, output_mem_config);
+    return ttnn::sqrt(c_sq, output_mem_config);
 }
 Tensor hypot(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _hypot)(input_a, input_b, output_mem_config);
@@ -1487,7 +1487,7 @@ Tensor _cbrt(const Tensor& input_tensor, const MemoryConfig& output_mem_config) 
     t_ln_input.deallocate();
     Tensor t2 = exp(t1, output_mem_config);
     t1.deallocate();
-    Tensor t3 = ttnn::multiply(t2, sign(input_tensor, output_mem_config), std::nullopt, output_mem_config);
+    Tensor t3 = ttnn::multiply(t2, ttnn::sign(input_tensor, output_mem_config), std::nullopt, output_mem_config);
     return t3;
 }
 Tensor cbrt(const Tensor& input_a, const MemoryConfig& output_mem_config) {
@@ -1840,7 +1840,7 @@ Tensor _glu(
         dim = 3;
 
     std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
-    Tensor sigmoid_b = sigmoid(ab[1], output_mem_config);
+    Tensor sigmoid_b = ttnn::sigmoid(ab[1], output_mem_config);
     Tensor glu_result = ttnn::multiply(ab[0], sigmoid_b, std::nullopt, output_mem_config);
     return glu_result;
 }
@@ -1860,7 +1860,7 @@ Tensor _reglu(
     if (dim == -1)
         dim = 3;
     std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
-    Tensor relu_b = relu(ab[1], output_mem_config);
+    Tensor relu_b = ttnn::relu(ab[1], output_mem_config);
     Tensor reglu_result = ttnn::multiply(ab[0], relu_b, std::nullopt, output_mem_config);
     return reglu_result;
 }
@@ -1966,7 +1966,7 @@ Tensor _power_fp(const Tensor& input_a, float exponent, const MemoryConfig& outp
         ttnn::multiply(power(input_a, exponent_floor, output_mem_config), pow_frac, std::nullopt, output_mem_config);
     // To handle negative inputs:
     // in torch For -ve inputs with float exponent power returns nan
-    result = where(ltz(input_a, output_mem_config), t_nan, result);
+    result = where(ttnn::ltz(input_a, output_mem_config), t_nan, result);
     return result;
 }
 Tensor power_fp(
@@ -2115,7 +2115,7 @@ Tensor argmax(
 }
 
 Tensor _argmin(const Tensor& input_a, int64_t _dim, bool all, const MemoryConfig& output_mem_config) {
-    Tensor neg_input = neg(input_a, output_mem_config);
+    Tensor neg_input = ttnn::neg(input_a, output_mem_config);
     return (argmax(neg_input, _dim, all, output_mem_config));
 }
 Tensor argmin(
