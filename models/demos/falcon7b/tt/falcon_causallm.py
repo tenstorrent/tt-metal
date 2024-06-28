@@ -27,32 +27,32 @@ def falcon_lm_head_matmul(
     if seq_len > 512:
         # TODO: Review if this path is used? If not, we can delete
         return ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=output_mem_config, dtype=output_dtype)
-    else:
-        if is_grayskull():
-            compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
-            )
-        elif is_wormhole_b0():
-            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
-            )
-        else:
-            raise RuntimeError(f"Unsupported arch: {device_arch}")
 
-        return ttnn.matmul(
-            input_tensor_a,
-            input_tensor_b,
-            memory_config=output_mem_config,
-            dtype=output_dtype,
-            core_grid=core_grid,
-            compute_kernel_config=compute_kernel_config,
+    if is_grayskull():
+        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
         )
+    elif is_wormhole_b0():
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+    else:
+        compute_kernel_config = None
+
+    return ttnn.matmul(
+        input_tensor_a,
+        input_tensor_b,
+        memory_config=output_mem_config,
+        dtype=output_dtype,
+        core_grid=core_grid,
+        compute_kernel_config=compute_kernel_config,
+    )
 
 
 class TtFalconCausalLM(TtFalconModelShared):

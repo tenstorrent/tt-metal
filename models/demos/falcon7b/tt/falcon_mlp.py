@@ -34,7 +34,7 @@ def falcon_dense_4h_to_h_matmul(
             packer_l1_acc=True,
         )
     else:
-        raise RuntimeError(f"Unsupported arch: {device_arch}")
+        compute_kernel_config = None
 
     return ttnn.matmul(
         input_tensor_a,
@@ -60,33 +60,33 @@ def falcon_dense_h_to_4h_matmul(
         # TODO: Review if this path is used? If not, we can delete
         assert fused_activation == None
         return ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=output_mem_config, dtype=output_dtype)
-    else:
-        if is_grayskull():
-            compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
-            )
-        elif is_wormhole_b0():
-            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
-            )
-        else:
-            raise RuntimeError(f"Unsupported arch")
 
-        return ttnn.matmul(
-            input_tensor_a,
-            input_tensor_b,
-            memory_config=output_mem_config,
-            dtype=output_dtype,
-            core_grid=core_grid,
-            activation=fused_activation,
-            compute_kernel_config=compute_kernel_config,
+    if is_grayskull():
+        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
         )
+    elif is_wormhole_b0():
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+    else:
+        compute_kernel_config = None
+
+    return ttnn.matmul(
+        input_tensor_a,
+        input_tensor_b,
+        memory_config=output_mem_config,
+        dtype=output_dtype,
+        core_grid=core_grid,
+        activation=fused_activation,
+        compute_kernel_config=compute_kernel_config,
+    )
 
 
 class TtFalconMLPPrefill(nn.Module):
