@@ -41,6 +41,8 @@
 > [!NOTE]
 >
 > All model demos in this table function on both N150 and N300 Wormhole cards, unless otherwise stated.
+>
+> Furthermore, all performance numbers here are run or based off an N300 Wormhole card.
 
 | Model                                                                                | Gen. Token [3]     |  Batch               | End-to-end throughput [1]    | Device throughput [2]       | Target         |
 |--------------------------------------------------------------------------------------|--------------------|----------------------|------------------------------|-----------------------------|----------------|
