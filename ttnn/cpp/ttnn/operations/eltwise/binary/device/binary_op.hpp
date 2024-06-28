@@ -53,7 +53,8 @@ std::map<string, string> get_defines(
     BinaryOpType op_type,
     const std::optional<DataType> in_dtype = std::nullopt,
     const std::optional<DataType> out_dtype = std::nullopt,
-    const std::optional<FusedActivations> fused_activations = std::nullopt);
+    const std::optional<FusedActivations> fused_activations = std::nullopt,
+    const std::optional<const std::string> activation_pre_in0_0 = std::nullopt);
 
 }  // namespace utils
 
@@ -62,17 +63,19 @@ struct Binary {
         BinaryOpType binary_op_type;
         bool in_place;
         const std::optional<FusedActivations> activations;
+        const std::optional<const std::string> activation_pre_in0_0;
         const MemoryConfig memory_config;
         const DataType dtype;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
         static constexpr auto attribute_names = std::forward_as_tuple(
-            "binary_op_type", "in_place", "activations", "memory_config", "dtype", "compute_kernel_config");
+            "binary_op_type", "in_place", "activations", "activation_pre_in0_0", "memory_config", "dtype", "compute_kernel_config");
         const auto attribute_values() const {
             return std::forward_as_tuple(
                 this->binary_op_type,
                 this->in_place,
                 this->activations,
+                this->activation_pre_in0_0,
                 this->memory_config,
                 this->dtype,
                 this->compute_kernel_config);

@@ -15,7 +15,7 @@ namespace utils {
 using namespace tt::tt_metal;
 
 std::map<string, string> get_defines(
-    BinaryOpType op_type, const std::optional<DataType> input_dtype, const std::optional<DataType> output_dtype, const std::optional<std::vector<tt::tt_metal::UnaryWithParam>> fused_activations) {
+    BinaryOpType op_type, const std::optional<DataType> input_dtype, const std::optional<DataType> output_dtype, const std::optional<std::vector<tt::tt_metal::UnaryWithParam>> fused_activations, const std::optional<const std::string> activation_pre_in0_0) {
     std::map<string, string> defines;
     string op_name = "sub_tiles";
     string op_binary_type = "EltwiseBinaryType::ELWSUB";
@@ -135,6 +135,14 @@ std::map<string, string> get_defines(
             defines["PACK_RELU"] = "1";
         } else {
             defines.merge(eltwise_unary_op_utils::get_block_defines(fused_activations.value(), "0", idst));
+        }
+    }
+
+    if ((op_type == BinaryOpType::ADD or op_type == BinaryOpType::SUB or op_type == BinaryOpType::MUL) and activation_pre_in0_0.has_value() ) {
+        if (activation_pre_in0_0.value() == "silu") {
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::SILU, std::nullopt, "PRE_IN0_0"));
+        } else {
+            TT_THROW("ttnn.eltwise_binary: Unsupported pre-in0 activation function");
         }
     }
 

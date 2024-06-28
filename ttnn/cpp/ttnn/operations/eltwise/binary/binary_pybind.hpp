@@ -81,8 +81,9 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
                const std::optional<FusedActivations>& activations,
+               const std::optional<const std::string>& activation_pre_in0_0,
                const uint8_t& queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor_a, input_tensor_b, dtype, memory_config, output_tensor, activations);
+                return self(queue_id, input_tensor_a, input_tensor_b, dtype, memory_config, output_tensor, activations, activation_pre_in0_0);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
@@ -91,6 +92,7 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("activations") = std::nullopt,
+            py::arg("activation_pre_in0_0") = std::nullopt,
             py::arg("queue_id") = 0});
 }
 
