@@ -76,7 +76,7 @@ class TtTransformerBlock(LightweightModule):
         start_pos,
         current_pos,
         attn_masks,
-        rot_mats,
+        rot_mat,
     ) -> ttnn.Tensor:
         """
         Tensors are postfixed with 4 characters that represent their 4-D shape:
@@ -92,7 +92,7 @@ class TtTransformerBlock(LightweightModule):
             start_pos,
             current_pos,
             attn_masks,
-            rot_mats,
+            rot_mat,
         )
         hs_1SBH = ttnn.add(xs_1SBH, attn_1SBH)
         ffn_norm_1SBH = self.ffn_norm(hs_1SBH)

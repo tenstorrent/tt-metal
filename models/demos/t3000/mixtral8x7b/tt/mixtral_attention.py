@@ -156,7 +156,7 @@ class TtMixtralAttention(LightweightModule):
         start_pos,
         current_pos,
         attn_masks,
-        rot_mats,
+        rot_mat,
     ):
         """
         x: (seq_len, 1, batch, hidden_dim)
@@ -176,7 +176,6 @@ class TtMixtralAttention(LightweightModule):
         x_11BH = xs
         wo = self.wo
         layer_past = self.layer_past
-        rot_mat = rot_mats[start_pos]
         attn_mask_1B4P = attn_masks
         ###
         # QKV matmuls

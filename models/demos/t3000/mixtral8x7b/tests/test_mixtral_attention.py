@@ -17,7 +17,7 @@ if os.getenv("CI") == "true":
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, prepare_rotation_mat_ttnn
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, get_single_rot_mat
 from models.demos.t3000.mixtral8x7b.reference.model import Attention, precompute_freqs_cis
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.utility_functions import (
@@ -43,9 +43,8 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
 
     tt_model = TtMixtralAttention(t3k_device_mesh, state_dict, args=model_args, layer_num=0, dtype=dtype)
 
-    rot_mat = prepare_rotation_mat_ttnn(
+    current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
-        model_args.max_seq_len,
         tt_model.device_mesh,
     )
 
@@ -72,7 +71,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
             start_pos,
             current_pos,
             attn_mask,
-            rot_mat,
+            current_rot_mat,
         )
         # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
         del attention_input, attn_mask
@@ -94,6 +93,8 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
         else:
             logger.warning(f"[start_pos={start_pos}] Mistral_Attention Failed!")
             all_tests_pass = False
+
+        current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
     if all_tests_pass:
         logger.info("Mistral Attention output Passed!")
     else:
