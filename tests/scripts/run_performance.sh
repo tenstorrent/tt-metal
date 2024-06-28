@@ -60,8 +60,6 @@ run_perf_models_cnn_javelin() {
 run_device_perf_models() {
     local test_marker=$1
 
-    env pytest tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=600
-
     if [ "$tt_arch" == "grayskull" ]; then
         #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
         #Model Device perf regression tests to make sure thy run on no-soft-reset BMs
@@ -93,6 +91,14 @@ run_device_perf_models() {
     env python models/perf/merge_device_perf_results.py
 }
 
+run_unstable_device_perf_models() {
+    local test_marker=$1
+
+    env pytest tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=600
+
+    ## Merge all the generated reports
+    env python models/perf/merge_device_perf_results.py
+}
 run_device_perf_ops() {
     local test_marker=$1
 
@@ -140,7 +146,9 @@ main() {
         exit 1
     fi
 
-    if [[ "$pipeline_type" == *"device_performance"* ]]; then
+    if [[ "$pipeline_type" == "unstable_models_device_performance"* ]]; then
+        run_unstable_device_perf_models "$test_marker"
+    elif [[ "$pipeline_type" == "other_device_performance"* ]]; then
         run_device_perf_models "$test_marker"
         run_device_perf_ops "$test_marker"
     elif [[ "$pipeline_type" == "llm_javelin_models_performance"* ]]; then

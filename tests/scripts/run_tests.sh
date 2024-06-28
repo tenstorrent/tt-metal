@@ -315,7 +315,7 @@ run_pipeline_tests() {
         run_post_commit_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "frequent_api" ]]; then
         run_frequent_api_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == *"models_performance_bare_metal" || $pipeline_type == "models_device_performance_bare_metal" ]]; then
+    elif [[ $pipeline_type == *"models_performance_bare_metal" || $pipeline_type == *"device_performance_bare_metal" ]]; then
         run_models_performance_bare_metal_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "models_performance_virtual_machine" ]]; then
         run_models_performance_virtual_machine_pipeline_tests "$tt_arch" "$pipeline_type"
