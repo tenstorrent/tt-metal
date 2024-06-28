@@ -12,6 +12,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op.hpp"
+#include "tt_eager/tt_dnn/op_library/unpad/unpad_op.hpp"
 
 
 namespace ttnn::operations::binary_backward {
@@ -359,6 +360,42 @@ std::vector<Tensor> _binary_assign_bw(
     return grad_tensor;
 }
 
+std::vector<Tensor> _concat_bw(
+    const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    const tt::tt_metal::Shape start_index = {0, 0, 0, 0};
+    const tt::tt_metal::Shape end_index = {
+        input.get_legacy_shape()[0] - 1,
+        input.get_legacy_shape()[1] - 1,
+        input.get_legacy_shape()[2] - 1,
+        input.get_legacy_shape()[3] - 1};
+
+    Tensor grad_a = unpad(grad, start_index, end_index);
+    grad_tensor.emplace_back(grad_a);
+
+    tt::tt_metal::Shape start_index_2 = {0, 0, 0, 0};
+    if (dim == 0) {
+        start_index_2 = {input.get_legacy_shape()[0], 0, 0, 0};
+    } else if (dim == 1) {
+        start_index_2 = {input.get_legacy_shape()[0] - 1, input.get_legacy_shape()[1], 0, 0};
+    } else if (dim == 2) {
+        start_index_2 = {
+            input.get_legacy_shape()[0] - 1, input.get_legacy_shape()[1] - 1, input.get_legacy_shape()[2], 0};
+    } else if (dim == 3) {
+        start_index_2 = {0, 0, 0, input.get_legacy_shape()[3]};
+    }
+    const tt::tt_metal::Shape end_index_2 = {
+        grad.get_legacy_shape()[0] - 1,
+        grad.get_legacy_shape()[1] - 1,
+        grad.get_legacy_shape()[2] - 1,
+        grad.get_legacy_shape()[3] - 1};
+    Tensor grad_b = unpad(grad, start_index_2, end_index_2);
+    grad_tensor.emplace_back(grad_b);
+
+    return grad_tensor;
+}
+
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ATAN2_BW:
@@ -397,6 +434,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _subalpha_bw;
         case BinaryBackwardOpType::ADDALPHA_BW:
             return _addalpha_bw_inter;
+        case BinaryBackwardOpType::CONCAT_BW:
+            return _concat_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

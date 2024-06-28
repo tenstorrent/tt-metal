@@ -203,6 +203,7 @@ Pointwise Binary
    ttnn/add_bw
    ttnn/binary_eq_bw
    ttnn/binary_assign_bw
+   ttnn/concat_bw
 
 Pointwise Ternary
 =================
