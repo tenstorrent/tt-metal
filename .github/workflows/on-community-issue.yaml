@@ -9,13 +9,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Send Slack Notification
-        if: contains(github.event.issue.labels.*.name, 'community')
+      - name: Check if organization member
+        id: is_organization_member
+        if: github.event.action == 'opened'
+        uses: JamesSingleton/is-organization-member@1.0.0
+        with:
+          organization: tenstorrent
+          username: ${{ github.event.issue.user.login }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Send Slack Notification        
         uses: slackapi/slack-github-action@v1.26.0
         with:
           payload: |
             {
-              "text": "A new issue with the 'community' label has been created by `${{ github.event.sender.login }}`: ${{ github.event.issue.html_url }}",
+              "text": "A new issue has been created by a non-org member `${{ github.event.sender.login }}`: ${{ github.event.issue.html_url }}",
               "channel": "C07AZJ5DLL8"
             }
         env:
