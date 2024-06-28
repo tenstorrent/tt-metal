@@ -264,7 +264,6 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
     return ResNet50TestInfra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
 
 
-@skip_for_grayskull("#9168: Resnet50 performance test failing after removing 1x1s2 matmul fallback into conv")
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576}], ids=["device_params=l1_small_size_24576"], indirect=True
 )

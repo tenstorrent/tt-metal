@@ -55,10 +55,15 @@ namespace tt::tt_metal::sliding_window {
             uint32_t output_index_end = std::min(output_index_start + output_shard_h, max_index) - 1;
             uint32_t input_index_start = op_trace_metadata[output_index_start];
             uint32_t input_index_end = op_trace_metadata[output_index_end] + halo_with_pad_len;
+            if (input_index_start == 0 and output_index_start != 0) {
+                input_index_start = op_trace_metadata[output_index_end] + 1;
+                input_index_end = input_index_start - 1;
+                log_debug(LogOp, "core: {}, output_index_start: {}, output_index_end: {}, input_index_start: {}, input_index_end: {}", core, output_index_start, output_index_end, input_index_start, input_index_end);
+            }
             shard_boundaries.push_back({{output_index_start, output_index_end}, {input_index_start, input_index_end}});
-            output_index_start += output_shard_h;
+            output_index_start = output_index_end + 1;
         }
-        #if 0
+        #if 1
         for (auto [output_shard, input_shard] : shard_boundaries) {
             log_debug(LogOp, "output_shard: ({}, {}), input_shard: ({}, {})", output_shard.first, output_shard.second, input_shard.first, input_shard.second);
         }
@@ -316,7 +321,11 @@ namespace tt::tt_metal::sliding_window {
             const auto& [output_shard_start, output_shard_end] = item.first;
             const auto& [input_shard_start, input_shard_end] = item.second;
             // sanity check
-            TT_ASSERT(output_shard_start < op_trace_metadata.size());
+            if (output_shard_start >= op_trace_metadata.size()) {
+                // this core has no output
+                continue;
+            }
+            // TT_ASSERT(output_shard_start < op_trace_metadata.size());
             TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
             std::vector<uint16_t> local_top_left_indices;
             for(size_t i = output_shard_start; i < output_shard_end + 1; i++) {
