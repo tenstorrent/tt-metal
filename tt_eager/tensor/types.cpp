@@ -126,6 +126,10 @@ const Padding& Shape::padding() const {
     return this->padding_;
 }
 
+Padding& Shape::padding() {
+    return this->padding_;
+}
+
 const Shape Shape::without_padding() const {
     auto padding = this->padding_;
     std::vector<std::uint32_t> shape_without_padding;
