@@ -23,10 +23,12 @@ Args:
     * :attr:`input_tensor`: input tensor
     * :attr:`padding`: padding to apply. Each element of padding should be a tuple of 2 integers, with the first integer specifying the number of values to add before the tensor and the second integer specifying the number of values to add after the tensor.
     * :attr:`value`: value to pad with
-    * :attr:`queue_id` (Optional[uint8]): command queue id
 
 Keyword Args:
-    * :attr:`memory_config`: the memory configuration to use for the operation)doc";
+    * :attr:`memory_config`: the memory configuration to use for the operation
+    * :attr:`queue_id` (Optional[uint8]): command queue id
+    * :attr:`use_multicore` (Optional[bool]): whether or not we should use multicore. Defaults to true
+    )doc";
 
     using OperationType = decltype(ttnn::pad);
     ttnn::bind_registered_operation(
@@ -47,7 +49,8 @@ Keyword Args:
                 py::arg("value"),
                 py::kw_only(),
                 py::arg("memory_config") = std::nullopt,
-                py::arg("queue_id") = 0});
+                py::arg("queue_id") = 0,
+                });
 }
 
 }  // namespace ttnn::operations::data_movement::detail
