@@ -10,7 +10,9 @@
 
 #pragma once
 
-constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = 32; // for NOC PCIe alignemnt
+#include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
+
+constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT; // for NOC PCIe alignemnt
 constexpr uint32_t CQ_DISPATCH_CMD_SIZE = 16;          // for L1 alignment
 
 // Prefetcher CMD ID enums
@@ -238,17 +240,14 @@ struct CQDispatchCmd {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// PrefetchH to PrefetchD packet header
-struct CQPrefetchHToPrefetchDHeader {
+struct CQPrefetchHToPrefetchDHeader_s {
     uint32_t length;
-    uint32_t pad1;
-    uint32_t pad2;
-    uint32_t pad3;
-    uint32_t pad4;
-    uint32_t pad5;
-    uint32_t pad6;
-    uint32_t pad7;
 };
+
+typedef union {
+    struct CQPrefetchHToPrefetchDHeader_s header;
+    unsigned char padding[CQ_PREFETCH_CMD_BARE_MIN_SIZE];
+} CQPrefetchHToPrefetchDHeader;
 
 
 static_assert(sizeof(CQPrefetchBaseCmd) == sizeof(uint8_t)); // if this fails, padding above needs to be adjusted
