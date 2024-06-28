@@ -74,6 +74,7 @@ class TtTransformer(LightweightModule):
         attn_masks,
     ):
         if start_pos > 0:
+            # assigning to a new variable to explictly deallocate since matmul creates a new buffer for the output
             prev_rot_mat = self.current_rot_mat
             self.current_rot_mat = ttnn.linear(self.rot_matrix, prev_rot_mat)
             prev_rot_mat.deallocate(True)
