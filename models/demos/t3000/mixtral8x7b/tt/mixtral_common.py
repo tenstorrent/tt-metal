@@ -55,7 +55,7 @@ def get_rotation_mat(dhead, end):
     return rot_mat
 
 
-def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, sliding_window, device_mesh):
+def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, model_args, device_mesh):
     """
     Prepare inputs for decode mode.
     x: (batch, seq, hidden_dim)
@@ -83,40 +83,30 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, sliding_window, device_
     )
 
     # Attention mask
-    padded_layer_past_len = min(nearest_32(current_pos + 1), sliding_window)
-    current = current_pos % sliding_window
-    n_local_heads = 4  # model_args.n_heads // 8 # num_devices TODO pass the arguments instead of hard coding
-
+    padded_layer_past_len = nearest_32(current_pos + 1)
     attn_mask = torch.zeros(seq_len, 32, 32, padded_layer_past_len)  # [SB4P]
+    attn_mask[:, :, :, current_pos + 1 :] = torch.finfo(attn_mask.dtype).min
 
-    # Fill mask with -inf outside the processed tokens
-    if current_pos < sliding_window:
-        attn_mask[:, :, :, current + 1 :] = torch.finfo(attn_mask.dtype).min
+    if model_args.dummy_weights:
+        cache_name = lambda _: None
     else:
-        # TODO Double check this logic.
-        # As current position increases closer to sliding window we're masking [: curr] and [window - curr : ]
-        #  so for a window = 32, and we're on position 55, curr: 55%32=23. we're then masking [:23] and [9:] which is masking everything.
-        attn_mask[:, :, :, :current] = torch.finfo(attn_mask.dtype).min
-        attn_mask[:, :, :, sliding_window - current :] = torch.finfo(attn_mask.dtype).min
+        cache_name = lambda name: model_args.weight_cache_path(ttnn.bfloat4_b) / (f"attention_mask.{current_pos}")
 
-    attn_mask = ttnn.from_torch(
+    attn_mask = ttnn.as_tensor(
         attn_mask,
         device=device_mesh,
         dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.create_sharded_memory_config(
+            shape=(32, padded_layer_past_len),
+            core_grid=ttnn.CoreGrid(y=4, x=8),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        ),
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
+        cache_file_name=cache_name,
     )
-
-    ATTN_MASK_MEMCFG = ttnn.create_sharded_memory_config(
-        shape=(32, padded_layer_past_len),
-        core_grid=ttnn.CoreGrid(y=4, x=8),
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-    attn_mask = ttnn.experimental.tensor.interleaved_to_sharded(attn_mask, sharded_mem_config=ATTN_MASK_MEMCFG)
 
     return xs_1SBH, attn_mask
 
@@ -164,7 +154,7 @@ def sample(logits: torch.Tensor, temperature: float, top_p: float):
     return next_token
 
 
-def cache_attention(device_mesh, state_dict, model_args, rot_emb_matrix_list, seq_start, seq_len, dtype):
+def cache_attention(device_mesh, state_dict, model_args, current_rot_mat, rot_matrix, seq_start, seq_len, dtype):
     logger.info(f"Caching attention ops for iterations {seq_start} to {seq_start + seq_len}...")
     from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
 
@@ -184,20 +174,21 @@ def cache_attention(device_mesh, state_dict, model_args, rot_emb_matrix_list, se
         layer_num=0,
         dtype=dtype,
     )
+
     for iter in range(seq_start, seq_start + seq_len):
         logger.info(f"Caching iteration {iter}...")
+        if iter > 0:
+            current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         pos = iter
 
+        if model_args.dummy_weights:
+            cache_name = lambda _: None
+        else:
+            cache_name = lambda name: model_args.weight_cache_path(ttnn.bfloat4_b) / (f"attention_mask.{pos}")
+
         padded_layer_past_len = min(nearest_32(pos + 1), model_args.sliding_window)
-        attn_mask = ttnn.from_torch(
-            # torch.zeros(1, 1, 32, padded_layer_past_len),
-            torch.zeros(1, 32, 32, padded_layer_past_len),
-            device=device_mesh,
-            dtype=ttnn.bfloat4_b,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
-        )
+        attn_mask = torch.zeros(1, 32, 32, padded_layer_past_len)  # [SB4P]
+        attn_mask[:, :, :, pos + 1 :] = torch.finfo(attn_mask.dtype).min
 
         ATTN_MASK_MEMCFG = ttnn.create_sharded_memory_config(
             shape=(32, padded_layer_past_len),
@@ -206,15 +197,22 @@ def cache_attention(device_mesh, state_dict, model_args, rot_emb_matrix_list, se
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-
-        attn_mask = ttnn.experimental.tensor.interleaved_to_sharded(attn_mask, sharded_mem_config=ATTN_MASK_MEMCFG)
-
+        attn_mask = ttnn.as_tensor(
+            # torch.zeros(1, 1, 32, padded_layer_past_len),
+            attn_mask,
+            device=device_mesh,
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ATTN_MASK_MEMCFG,
+            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            cache_file_name=cache_name,
+        )
         _ = tt_attn(
             attention_inputs,
             pos,
             pos + 1,
             attn_mask,
-            rot_emb_matrix_list,
+            current_rot_mat,
         )
         # ttnn.deallocate(tt_out[0])
 

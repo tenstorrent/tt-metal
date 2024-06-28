@@ -61,7 +61,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
             # tt_model.hidden_size,
             model_args.dim,
             start_pos,
-            model_args.sliding_window,
+            model_args,
             tt_model.device_mesh,
         )
 
