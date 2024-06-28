@@ -87,29 +87,16 @@ def _permute_validate_input_tensors(operation_name, input_tensor, *args, **kwarg
     )
 
 
-doc = r"""
-permute(input_tensor: ttnn.Tensor, order: Tuple[int, ...]) -> ttnn.Tensor
+def permute_golden():
+    import torch
 
-Permutes :attr:`input_tensor` using :attr:`order`.
+    def golden_function(input_tensor: ttnn.Tensor, dims: Tuple[int], **_):
+        return torch.permute(input_tensor, dims)
 
-Args:
-    * :attr:`input_tensor`: the input tensor
-    * :attr:`order`: the desired ordering of dimensions.
+    return golden_function
 
-Example::
 
-    >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
-    >>> output = ttnn.permute(tensor, (0, 1, 3, 2))
-    >>> print(output.shape)
-    [1, 1, 32, 64]
-
-"""
-permute = ttnn.register_operation(
-    name="ttnn.permute",
-    validate_input_tensors=_permute_validate_input_tensors,
-    golden_function=_golden_function,
-    doc=doc,
-)(ttnn._ttnn.operations.data_movement.permute)
+permute = ttnn.register_operation(golden_function=permute_golden())(ttnn._ttnn.operations.data_movement.permute)
 
 
 def _golden_function(tensors, dim=0, **_):
