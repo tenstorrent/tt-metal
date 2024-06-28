@@ -11,11 +11,13 @@ jobs:
     steps:
       - name: Check if organization member
         id: is_organization_member
-        uses: JamesSingleton/is-organization-member@1.0.0
-        with:
-          organization: tenstorrent
-          username: ${{ github.event.issue.user.login }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          http_status=$(curl -o /dev/null -s -w '%{http_code}' "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" https://api.github.com/orgs/tenstorrent/members/${{ github.event.issue.user.login }})
+          if [ "$http_status" -eq 204 ] then
+            echo "is_member=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_member=false" >> $GITHUB_OUTPUT
+          fi
       - name: Add community label
         if: ${{ steps.is_organization_member.outputs.result == 'false' }}
         run: gh issue edit "$NUMBER" --add-label "$LABELS"
@@ -26,7 +28,7 @@ jobs:
           LABELS: community
       - name: Send Slack Notification
         if: ${{ steps.is_organization_member.outputs.result == 'false' }}
-        uses: slackapi/slack-github-action@v1.26.0        
+        uses: slackapi/slack-github-action@v1.26.0
         with:
           payload: |
             {
