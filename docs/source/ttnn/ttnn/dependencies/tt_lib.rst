@@ -874,8 +874,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.log_bw
 
-.. autofunction:: tt_lib.tensor.rsub_bw
-
 .. autofunction:: tt_lib.tensor.abs_bw
 
 .. autofunction:: tt_lib.tensor.complex_abs_bw

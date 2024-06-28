@@ -294,7 +294,7 @@ std::vector<ttnn::Tensor> _squared_difference_bw(
     return grad_tensor;
 }
 
-// std::vector<std::optional<Tensor>> _binary_eq_bw(
+//TODO: std::vector<std::optional<Tensor>> _binary_eq_bw(
 std::vector<Tensor> _binary_eq_bw(
     uint8_t cq_id,
     const Tensor& grad,
@@ -339,7 +339,7 @@ std::vector<ttnn::Tensor> _binary_eq_bw_inter(
     return _binary_eq_bw(0, grad, input, other, output_mem_config, {true, true}, std::nullopt, std::nullopt);
 }
 
-// std::vector<std::optional<Tensor>> _binary_eq_bw_overload(
+//TODO: std::vector<std::optional<Tensor>> _binary_eq_bw_overload(
 std::vector<Tensor> _binary_eq_bw_overload(
     const Tensor& grad,
     const Tensor& input,
@@ -404,6 +404,12 @@ std::vector<Tensor> _binary_le_bw(const Tensor& grad, const Tensor& input, const
     return grad_tensor;
 }
 
+std::vector<Tensor> _rsub_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor = _subalpha_bw(grad, input, other, 1.0f, output_mem_config);
+    std::swap(grad_tensor[0], grad_tensor[1]);
+    return grad_tensor;
+}
+
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
@@ -433,6 +439,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _binary_assign_bw;
         case BinaryBackwardOpType::BINARY_LE_BW:
             return _binary_le_bw;
+        case BinaryBackwardOpType::RSUB_BW:
+            return _rsub_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
