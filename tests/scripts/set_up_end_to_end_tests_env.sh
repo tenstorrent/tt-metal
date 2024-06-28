@@ -21,6 +21,7 @@ set_up_end_to_end_tests_env() {
   python -m pip install -r requirements.txt
   python -m pip install ../../metal_libs-*.whl
 
+  cd ../../
   rm -rf tt_metal tt_eager ttnn models
   echo "Showing current directory"
   ls -hal
