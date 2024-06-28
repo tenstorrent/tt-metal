@@ -14,6 +14,7 @@
 #include "tensor/tensor_impl.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_numpy/functions.hpp"
 
@@ -115,7 +116,7 @@ void test_raw_host_memory_pointer() {
     /*  Run and Print Start   */
     Tensor a_dev = a_cpu.to(device);
 
-    Tensor c_dev = tt::tt_metal::sqrt(a_dev);
+    Tensor c_dev = ttnn::sqrt(a_dev);
 
     tt::tt_metal::memcpy(tensor_for_printing, c_dev);
 

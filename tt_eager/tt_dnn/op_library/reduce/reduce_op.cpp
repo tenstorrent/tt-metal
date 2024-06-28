@@ -11,6 +11,8 @@
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "tt_dnn/op_library/backward/backward_ops.hpp"
 
 
 #include <limits>
@@ -139,9 +141,13 @@ ReduceOpParallelizationStrategy Reduce::get_parallelization_strategy(const std::
 //reduce min
 //reduce min = - reduce_max( -x )
 Tensor reduce_min(const Tensor &input_tensor, ReduceOpDim reduce_dim, float scaler = 1.0f, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    Tensor n_input_tensor = neg(input_tensor,output_mem_config);
+    Tensor input = input_tensor;
+    if(input.get_layout()==Layout::ROW_MAJOR && input.storage_type() == StorageType::DEVICE){
+        input = change_layout_to_tile(input, output_mem_config);
+        }
+    Tensor n_input_tensor = ttnn::neg(input,output_mem_config);
     Tensor max_reduce = reduce(n_input_tensor,ReduceOpMath::MAX,reduce_dim,scaler,output_mem_config);
-    Tensor min_tensor = neg(max_reduce,output_mem_config);
+    Tensor min_tensor = ttnn::neg(max_reduce,output_mem_config);
     return min_tensor;
 }
 
@@ -190,7 +196,7 @@ Tensor mean_hw(const Tensor& input_tensor, const MemoryConfig& output_mem_config
 }
 Tensor global_mean(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
     float inv_volume = 1.0f/input_tensor.volume();
-    return mul_unary_sfpu( inv_volume, global_sum(input_tensor,output_mem_config), output_mem_config);
+    return ttnn::mul_sfpu( inv_volume, global_sum(input_tensor,output_mem_config), output_mem_config);
 }
 Tensor mean(const Tensor& input_tensor,uint aggregate_dims /* = 2 */, const MemoryConfig& output_mem_config) {
     tt::tt_metal::Shape shape = input_tensor.get_legacy_shape();

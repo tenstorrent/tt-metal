@@ -540,6 +540,7 @@ std::vector<Tensor> unary_div_no_nan_bw(
     float scalar = 1.0f,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config);
 }  // namespace tt_metal
 
 }  // namespace tt
