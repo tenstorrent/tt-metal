@@ -1,4 +1,4 @@
-name: "Device perf regressions and output report"
+name: "(Single-card) Device perf tests"
 
 on:
   workflow_dispatch:
@@ -15,7 +15,8 @@ jobs:
       matrix:
         test-info: [
           {name: "GS", arch: grayskull, runs-on: ["perf-no-reset-grayskull", "self-reset"], machine-type: "bare_metal", timeout: 40},
-          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "self-reset"], machine-type: "bare_metal", timeout: 30},
+          # Runs on virtual machine now
+          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["model-runner-wormhole_b0"], machine-type: "bare_metal", timeout: 60},
         ]
     name: "${{ matrix.test-info.name }} device perf"
     env:
