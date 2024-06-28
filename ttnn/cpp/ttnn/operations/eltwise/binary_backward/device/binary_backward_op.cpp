@@ -8,6 +8,7 @@
 #include "tt_eager/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_eager/tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
+#include "tt_eager/tt_dnn/op_library/backward/backward_ops.cpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
@@ -294,8 +295,7 @@ std::vector<ttnn::Tensor> _squared_difference_bw(
     return grad_tensor;
 }
 
-//TODO: std::vector<std::optional<Tensor>> _binary_eq_bw(
-std::vector<Tensor> _binary_eq_bw(
+std::vector<std::optional<Tensor>> _binary_eq_bw(
     uint8_t cq_id,
     const Tensor& grad,
     const Tensor& input,
@@ -304,8 +304,7 @@ std::vector<Tensor> _binary_eq_bw(
     const std::vector<bool>& are_required_outputs,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-    //TODO: std::vector<std::optional<Tensor>> result;
-    std::vector<Tensor> result;
+    std::vector<std::optional<Tensor>> result;
 
     if (are_required_outputs.at(0)) {
         if(input_grad.has_value()){
@@ -313,11 +312,9 @@ std::vector<Tensor> _binary_eq_bw(
         } else {
             input_grad = tt::tt_metal::zeros_like(cq_id, input, output_mem_config);
         }
-        // TODO: result.emplace_back(input_grad);
-        result.emplace_back(std::move(input_grad.value()));
+        result.emplace_back(input_grad);
     } else {
-        // TODO: result.emplace_back(std::nullopt);
-        result.emplace_back();
+        result.emplace_back(std::nullopt);
     }
     if (are_required_outputs.at(1)) {
         if(other_grad.has_value()){
@@ -325,22 +322,30 @@ std::vector<Tensor> _binary_eq_bw(
         } else {
             other_grad = tt::tt_metal::zeros_like(cq_id, input, output_mem_config);
         }
-        // TODO: result.emplace_back(other_grad);
-        result.emplace_back(std::move(other_grad.value()));
+        result.emplace_back(other_grad);
     } else {
-        // TODO: result.emplace_back(std::nullopt);
-        result.emplace_back();
+        result.emplace_back(std::nullopt);
     }
     return std::move(result);
 }
 
 std::vector<ttnn::Tensor> _binary_eq_bw_inter(
     const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    return _binary_eq_bw(0, grad, input, other, output_mem_config, {true, true}, std::nullopt, std::nullopt);
+    auto result = _binary_eq_bw(0, grad, input, other, output_mem_config, {true, true}, std::nullopt, std::nullopt);
+    std::vector<ttnn::Tensor> output_tensors;
+    output_tensors.reserve(result.size());
+
+    for (const auto& opt_tensor : result) {
+        if (opt_tensor) {
+            output_tensors.emplace_back(*opt_tensor);
+        } else {
+            output_tensors.emplace_back();
+        }
+    }
+    return output_tensors;
 }
 
-//TODO: std::vector<std::optional<Tensor>> _binary_eq_bw_overload(
-std::vector<Tensor> _binary_eq_bw_overload(
+std::vector<std::optional<Tensor>> _binary_eq_bw_overload(
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -410,6 +415,20 @@ std::vector<Tensor> _rsub_bw( const Tensor& grad, const Tensor& input, const Ten
     return grad_tensor;
 }
 
+std::vector<Tensor> _bias_gelu_bw(
+    const Tensor& grad,
+    const Tensor& input_a,
+    const Tensor& input_b,
+    string approximate,
+    const MemoryConfig& output_mem_config) {
+    TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect approximation type (expected 'none', 'tanh')");
+    std::vector<Tensor> grad_tensor;
+    Tensor input = ttnn::add(input_a, input_b);
+    grad_tensor = tt::tt_metal::gelu_bw(grad, input, approximate = approximate, output_mem_config);
+    grad_tensor.emplace_back(grad_tensor[0]);
+    return grad_tensor;
+}
+
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
@@ -455,6 +474,16 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _addalpha_bw_inter;
         case BinaryBackwardOpType::CONCAT_BW:
             return _concat_bw;
+        default:
+            TT_ASSERT(false && "Undefined op type");
+            return 0;
+    }
+}
+
+std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, string, const MemoryConfig&)> get_function_type1_w_string(BinaryBackwardOpType OpType){
+    switch (OpType) {
+        case BinaryBackwardOpType::BIAS_GELU_BW:
+            return _bias_gelu_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
