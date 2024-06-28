@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "debug/pause.h"
+#include "debug/ring_buffer.h"
 
 /*
  * A test for the watcher pausing feature.
@@ -16,6 +17,7 @@ namespace NAMESPACE {
 void MAIN {
 #endif
     uint32_t wait_cycles = get_arg_val<uint32_t>(0);
+    WATCHER_RING_BUFFER_PUSH(wait_cycles);
 
     // Do a wait followed by a pause, triscs can't wait.
 #ifndef COMPILE_FOR_TRISC
