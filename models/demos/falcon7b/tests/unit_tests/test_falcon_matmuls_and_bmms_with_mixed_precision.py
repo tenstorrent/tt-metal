@@ -123,16 +123,39 @@ def run_falcon_matmul_test(
         .to(ttnn.experimental.tensor.Layout.TILE)
         .to(device, in1_mem_config)
     )
-    bias_t = None
 
-    out = ttnn.linear(
-        a_t,
-        b_t,
-        bias=bias_t,
-        memory_config=out_mem_config,
-        dtype=out_dtype,
-        core_grid=get_falcon_default_core_grid(a_t.device()),
-    )
+    default_core_grid = get_falcon_default_core_grid(device)
+    if falcon_op in ("falcon_fused_qkv_matmul", "falcon_selfout_matmul"):
+        out = ttnn.matmul(
+            a_t,
+            b_t,
+            memory_config=out_mem_config,
+            dtype=out_dtype,
+            core_grid=default_core_grid,
+        )
+    elif falcon_op == "falcon_dense_4h_to_h_matmul":
+        out = falcon_dense_4h_to_h_matmul(
+            a_t,
+            b_t,
+            core_grid=default_core_grid,
+            output_mem_config=out_mem_config,
+            output_dtype=out_dtype,
+        )
+    elif falcon_op == "falcon_dense_h_to_4h_matmul":
+        out = falcon_dense_h_to_4h_matmul(
+            a_t,
+            b_t,
+            core_grid=default_core_grid,
+            fused_activation=None,
+            output_mem_config=out_mem_config,
+            output_dtype=out_dtype,
+        )
+    elif falcon_op == "falcon_lm_head_matmul":
+        out = falcon_lm_head_matmul(
+            a_t, b_t, core_grid=default_core_grid, output_mem_config=out_mem_config, output_dtype=out_dtype
+        )
+    else:
+        raise NotImplementedError(f"falcon matmul op is undefined!")
 
     # Check memory and dtype of inputs and outputs
     assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
