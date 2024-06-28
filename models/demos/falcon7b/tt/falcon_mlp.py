@@ -404,7 +404,6 @@ class TtFalconMLPDecode(nn.Module):
                 self.dense_4h_to_h_weights[device_id],
                 output_mem_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
                 output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
-                compute_kernel_config=self.model_config["MLP_KERNEL_CONFIG"],
                 core_grid=get_falcon_default_core_grid(hidden_states[device_id].device()),
             )
         # remove padding from output
