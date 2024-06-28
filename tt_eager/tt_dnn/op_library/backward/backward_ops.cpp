@@ -14,7 +14,7 @@
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
-#include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
+#include "ttnn/operations/data_movement/pad.hpp"
 #include "tt_numpy/functions.hpp"
 #include "tt_dnn/op_library/copy/copy_op.hpp"
 
@@ -1572,13 +1572,11 @@ std::vector<Tensor> _prod_bw(
     } else if (dim == 1 || dim == -3) {
         Tensor tensor_1_temp = reciprocal_input;
         if (reciprocal_input.get_legacy_shape()[1] % 32 != 0) {
-            const Shape start_index = {0, 0, 0, 0};
-            const Shape required_shape = {
-                reciprocal_input.get_legacy_shape()[0],
-                reciprocal_input.get_legacy_shape()[1] + (32 - (reciprocal_input.get_legacy_shape()[1] % 32)),
-                reciprocal_input.get_legacy_shape()[2],
-                reciprocal_input.get_legacy_shape()[3]};
-            tensor_1_temp = pad(reciprocal_input, required_shape, start_index, 0);
+            std::vector<std::pair<uint32_t, uint32_t>> padding = {{0, 0},
+                          {0, 32 - (reciprocal_input.get_legacy_shape()[1] % 32)},
+                          {0, 0},
+                          {0, 0}};
+            tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, std::nullopt);
         }
         std::vector<int64_t> after_permute_dims = {0, 2, 3, 1};
         Tensor tensor_1 = permute(tensor_1_temp, after_permute_dims, output_mem_config);
@@ -1615,7 +1613,11 @@ std::vector<Tensor> _prod_bw(
             reciprocal_input.get_legacy_shape()[1],
             reciprocal_input.get_legacy_shape()[2],
             reciprocal_input.get_legacy_shape()[3]};
-        tensor_1_temp = pad(reciprocal_input, required_shape, start_index, 0);
+        std::vector<std::pair<uint32_t, uint32_t>> padding = {{0, 0},
+                      {0, 32 - (reciprocal_input.get_legacy_shape()[0] % 32)},
+                      {0, 0},
+                      {0, 0}};
+        tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, std::nullopt);
     }
     std::vector<int64_t> after_permute_dims = {3, 1, 2, 0};
     Tensor tensor_1 = permute(tensor_1_temp, after_permute_dims, output_mem_config);
