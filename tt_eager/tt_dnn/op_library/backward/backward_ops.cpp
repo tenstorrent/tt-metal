@@ -1607,17 +1607,11 @@ std::vector<Tensor> _prod_bw(
     // dim 0
     Tensor tensor_1_temp = reciprocal_input;
     if (reciprocal_input.get_legacy_shape()[0] % 32 != 0) {
-        const Shape start_index = {0, 0, 0, 0};
-        const Shape required_shape = {
-            reciprocal_input.get_legacy_shape()[0] + (32 - (reciprocal_input.get_legacy_shape()[0] % 32)),
-            reciprocal_input.get_legacy_shape()[1],
-            reciprocal_input.get_legacy_shape()[2],
-            reciprocal_input.get_legacy_shape()[3]};
         std::vector<std::pair<uint32_t, uint32_t>> padding = {{0, 0},
                       {0, 32 - (reciprocal_input.get_legacy_shape()[0] % 32)},
                       {0, 0},
                       {0, 0}};
-        tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, std::nullopt);
+        tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0,  std::nullopt);
     }
     std::vector<int64_t> after_permute_dims = {3, 1, 2, 0};
     Tensor tensor_1 = permute(tensor_1_temp, after_permute_dims, output_mem_config);

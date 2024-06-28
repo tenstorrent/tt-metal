@@ -4,7 +4,7 @@
 
 import pytest
 from loguru import logger
-
+import ttnn
 import tt_lib as ttl
 from models.utility_functions import tt2torch_tensor, comp_pcc
 from models.utility_functions import skip_for_grayskull
@@ -103,15 +103,9 @@ def run_topk_pad_test_32(N, C, H, W, k, dtype, device):
     pyt_topk_values, pyt_topk_indices = torch.topk(input, old_k, dim=-1, largest=True, sorted=True)
 
     padding = ((0, 0), (0, 0), (0, 0), (0, 64 - max(32, W)))
-    input_shape_with_tile_padding = input_unpadded.get_legacy_shape()
-    pad_start = tuple(start for start, _ in padding)
-    pad_end = tuple(end for _, end in padding)
 
-    padded_shape = tuple(dim + end for dim, end in zip(input_shape_with_tile_padding, pad_end))
     value = -float("inf")
-    ttl_input = ttl.tensor.pad(
-        input_unpadded.to(ttl.tensor.Layout.TILE).to(device), padded_shape, pad_start, value, use_multicore=True
-    )
+    ttl_input = ttnn.pad(input_unpadded.to(ttl.tensor.Layout.TILE).to(device), padding, value)
 
     ttl_topk_values, ttl_topk_indices = ttl.operations.primary.topk(ttl_input, k)
     assert list(ttl_topk_values.get_legacy_shape()) == [N, C, H, k]

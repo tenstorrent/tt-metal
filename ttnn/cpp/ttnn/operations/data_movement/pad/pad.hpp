@@ -5,13 +5,8 @@
 #pragma once
 
 #include "tt_eager/tensor/types.hpp"
-#include "tt_eager/tt_dnn/op_library/concat/concat_op.hpp"
-#include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
-#include "tt_eager/tt_dnn/op_library/permute/permute_op.hpp"
-#include "tt_eager/tt_dnn/op_library/repeat/repeat_op.hpp"
-#include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
-#include "tt_eager/tt_dnn/op_library/upsample/upsample_op.hpp"
 #include "ttnn/cpp/ttnn/operations/core.hpp"
+#include "tt_eager/tt_dnn/op_library/pad/pad_op.hpp"
 
 #include <ranges>
 
@@ -45,7 +40,68 @@ struct Pad {
     static ttnn::Tensor execute_on_worker_thread(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        std::vector<std::pair<uint32_t, uint32_t>> padding, //intentionally not const&
+        std::vector<uint32_t> output_padded_shape,
+        std::vector<uint32_t> input_tensor_start,
+        const float value,
+        const std::optional<MemoryConfig>& memory_config_arg) {
+
+
+        auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
+
+        auto output_tensor = operation::run(
+            tt::tt_metal::Pad{
+                .output_tensor_shape=tt::tt_metal::Shape(output_padded_shape),
+                .input_tensor_start=tt::tt_metal::Shape(input_tensor_start),
+                .pad_value=value,
+                .output_mem_config=memory_config,
+                .use_multicore=true
+            },
+            {input_tensor}).front();
+
+        return output_tensor;
+
+    }
+
+    static ttnn::Tensor execute_on_worker_thread(
+        uint8_t queue_id,
+        const ttnn::Tensor& input_tensor,
+        const Shape output_padded_shape,
+        const Shape input_tensor_start,
+        const float value,
+        const std::optional<MemoryConfig>& memory_config_arg) {
+
+
+        std::vector<uint32_t> output_padded_vector(output_padded_shape.rank());
+        std::vector<uint32_t> input_start_vector(output_padded_shape.rank());
+
+        for(uint32_t dim=0; dim<output_padded_shape.rank(); dim++) {
+            output_padded_vector[dim] = output_padded_shape[dim];
+            input_start_vector[dim] = input_tensor_start[dim];
+        }
+
+        return execute_on_worker_thread(queue_id, input_tensor, output_padded_vector, input_start_vector, value, memory_config_arg);
+    }
+
+
+    static ttnn::Tensor execute_on_worker_thread(
+        const ttnn::Tensor& input_tensor,
+        const Shape output_padded_shape,
+        const Shape input_tensor_start,
+        const float value,
+        const std::optional<MemoryConfig>& memory_config_arg) {
+
+
+
+        return execute_on_worker_thread(DefaultQueueId, input_tensor, output_padded_shape, input_tensor_start, value, memory_config_arg);
+
+    }
+
+
+
+    static ttnn::Tensor execute_on_worker_thread(
+        uint8_t queue_id,
+        const ttnn::Tensor& input_tensor,
+        std::vector<std::pair<uint32_t, uint32_t>> padding,
         const float value,
         const std::optional<MemoryConfig>& memory_config_arg) {
 
@@ -64,7 +120,7 @@ struct Pad {
             "ttnn.pad: row-major tensors have to use fallback because the kernel currently causes a PCC error");
 
         // Unsqueeze Tensor to 4D if it is not already
-        ttnn::Tensor input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);        
+        ttnn::Tensor input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
         padding.insert(padding.begin(), 4 - original_rank, {0, 0});
         auto input_shape_with_tile_padding = input_tensor_4D.get_shape().with_tile_padding();
         std::vector<uint32_t> output_padded_shape(padding.size());
@@ -72,9 +128,6 @@ struct Pad {
             output_padded_shape[i] = input_shape_with_tile_padding[i] + padding[i].second;
         }
 
-        // Due to the strangeness of tt::tt_metal::pad, we need to split front and back pad
-        // Front will be passed separately. And pad_back is retrieved -> output_padded_shape - pad_front
-        auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
         auto pad_front = padding | std::views::transform([](const auto& p) { return p.first; });
         auto pad_back = padding | std::views::transform([](const auto& p) { return p.second; });
 
@@ -90,17 +143,11 @@ struct Pad {
             "ttnn.pad: for tiled tensors padding end must be a multiple of the tile size on height and width for a "
             "tensor in tile layout");
 
-        // Performing actual padding        
+        // Performing actual padding
         std::vector<uint32_t> pad_front_vec(pad_front.begin(), pad_front.end());
-        auto output_tensor = operation::run(
-            tt::tt_metal::Pad{
-                .output_tensor_shape=tt::tt_metal::Shape(output_padded_shape),
-                .input_tensor_start=tt::tt_metal::Shape(pad_front_vec),
-                .pad_value=value,
-                .output_mem_config=memory_config,
-                .use_multicore=true
-            },
-            {input_tensor_4D}).front();
+
+
+        auto output_tensor = execute_on_worker_thread(queue_id, input_tensor, output_padded_shape, pad_front_vec, value, memory_config_arg);
 
 
         // output_tensor is currently 4D. We have to squeeze back to the original rank
@@ -121,7 +168,9 @@ struct Pad {
         output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(padded_shape));
 
         return output_tensor;
+
     }
+
 
     static ttnn::Tensor execute_on_worker_thread(
       const ttnn::Tensor& input_tensor,
@@ -132,6 +181,8 @@ struct Pad {
         return execute_on_worker_thread(DefaultQueueId, input_tensor, padding, value, memory_config_arg);
 
     }
+
+
 };
 
 }  // namespace data_movement
