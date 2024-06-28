@@ -31,8 +31,6 @@ Device::Device(
     chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal, uint32_t worker_core) :
     id_(device_id), worker_thread_core(worker_core), work_executor(worker_core, device_id) {
     ZoneScoped;
-    TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs <= Device::max_num_hw_cqs, "num_hw_cqs can be between 1 and {}", Device::max_num_hw_cqs);
-    this->build_key_ = tt::Cluster::instance().get_harvesting_mask(device_id);
     tunnel_device_dispatch_workers_ = {};
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
 }
@@ -1606,10 +1604,11 @@ void Device::initialize_synchronous_sw_cmd_queue() {
 bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal) {
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache.is_enabled() ? "": "NOT ");
-    TT_ASSERT(num_hw_cqs > 0 and num_hw_cqs < 3, "num_hw_cqs can be between 1 and 2");
+    TT_FATAL(num_hw_cqs > 0 and num_hw_cqs <= Device::max_num_hw_cqs, "num_hw_cqs can be between 1 and {}", Device::max_num_hw_cqs);
     this->using_fast_dispatch = false;
-    this->build_key_ = tt::Cluster::instance().get_harvesting_mask(this->id());
     this->num_hw_cqs_ = num_hw_cqs;
+    constexpr uint32_t harvesting_map_bits = 12;
+    this->build_key_ = ((uint32_t)this->num_hw_cqs_ << harvesting_map_bits) | tt::Cluster::instance().get_harvesting_mask(this->id());
     this->initialize_cluster();
     this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap);
     this->initialize_build();
