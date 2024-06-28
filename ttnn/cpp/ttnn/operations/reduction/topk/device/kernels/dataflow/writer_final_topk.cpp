@@ -10,11 +10,10 @@ void kernel_main() {
 
     constexpr uint32_t values_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(1);
-    constexpr bool values_is_dram = get_compile_time_arg_val(2) == 1;
-    constexpr bool output_ind_is_dram = get_compile_time_arg_val(3) == 1;
+    constexpr bool values_is_dram = (bool) get_compile_time_arg_val(2);
+    constexpr bool output_ind_is_dram = (bool) get_compile_time_arg_val(3);
     constexpr uint32_t Ht = get_compile_time_arg_val(4);
-    constexpr uint32_t K = get_compile_time_arg_val(5);
-    constexpr uint32_t Kt =  K % 32 == 0 ? K/32 : K/32 + 1;
+    constexpr uint32_t Kt = get_compile_time_arg_val(5);
 
     // can amortize the noc reads by doing them side by side for the two tensors
     constexpr uint32_t onetile = 1;
@@ -42,7 +41,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < Kt; ++i) {
             cb_wait_front(values_cb_index, onetile);
             uint32_t l1_read_addr = get_read_ptr(values_cb_index);
-            noc_async_write_tile(j*1 + i, interleaved_accessor0, l1_read_addr);
+            noc_async_write_tile(j*Kt + i, interleaved_accessor0, l1_read_addr);
             noc_async_write_barrier();
             cb_pop_front(values_cb_index, onetile);
         }
@@ -51,7 +50,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < Kt; ++i) {
             cb_wait_front(output_ind_cb_index, onetile);
             uint32_t l1_read_addr = get_read_ptr(output_ind_cb_index);
-            noc_async_write_tile(j*1 + i, interleaved_accessor1, l1_read_addr);
+            noc_async_write_tile(j*Kt + i, interleaved_accessor1, l1_read_addr);
             noc_async_write_barrier();
             cb_pop_front(output_ind_cb_index, onetile);
         }

@@ -118,7 +118,7 @@ class TtLlamaSDPA(torch.nn.Module):
             # output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
         )  # seqlen, 1, batch, hidden_size
 
-        attb_output = tt_lib.tensor.matmul(
+        attb_output = ttnn.matmul(
             attn_output,
             self.wo,
         )  # seqlen, 1, batch, hidden_size

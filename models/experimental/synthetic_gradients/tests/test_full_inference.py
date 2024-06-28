@@ -18,7 +18,7 @@ epsilon2 = 1e-5
 def ttLinear(weight, bias):
     def linear_(activation):
         weight_T = tt_lib.tensor.transpose(weight, -2, -1)
-        output = tt_lib.tensor.matmul(activation, weight_T)
+        output = ttnn.matmul(activation, weight_T)
         output_plus_bias = ttnn.add(output, bias)
         return output_plus_bias
 

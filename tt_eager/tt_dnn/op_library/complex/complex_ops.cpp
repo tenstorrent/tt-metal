@@ -11,6 +11,7 @@
 #include "tt_eager/tensor/tensor_utils.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace tt {
 
@@ -99,7 +100,7 @@ Tensor complex_recip(const Tensor& input, const MemoryConfig& output_mem_config)
 
     Tensor a_plus_b = ttnn::add(real,imag, std::nullopt, output_mem_config);
     Tensor a_minus_b = ttnn::subtract(real, imag, std::nullopt,output_mem_config);
-    Tensor asqr_plus_bsqr = ttnn::add(square(real,output_mem_config),square(imag,output_mem_config), std::nullopt, output_mem_config);
+    Tensor asqr_plus_bsqr = ttnn::add(ttnn::square(real,output_mem_config),ttnn::square(imag,output_mem_config), std::nullopt, output_mem_config);
     Tensor inv_dr = recip( asqr_plus_bsqr, output_mem_config );
     Tensor conj_im = ttnn::multiply( neg(imag,output_mem_config), inv_dr, std::nullopt, output_mem_config);
     Tensor conj_re = ttnn::multiply( real, inv_dr, std::nullopt, output_mem_config);
@@ -205,7 +206,7 @@ ComplexTensor complex_div(const ComplexTensor& input_a, const ComplexTensor& inp
 ComplexTensor complex_recip(const ComplexTensor& ab, const MemoryConfig& output_mem_config) {
     Tensor a_plus_b = ttnn::add(ab[0],ab[1],std::nullopt,output_mem_config);
     Tensor a_minus_b = ttnn::subtract(ab[0],ab[1],std::nullopt,output_mem_config);
-    Tensor asqr_plus_bsqr = ttnn::add(square(ab[0],output_mem_config),square(ab[1],output_mem_config),
+    Tensor asqr_plus_bsqr = ttnn::add(ttnn::square(ab[0],output_mem_config),ttnn::square(ab[1],output_mem_config),
                                 std::nullopt,output_mem_config);
     Tensor inv_dr = recip( asqr_plus_bsqr, output_mem_config );
     Tensor conj_im = ttnn::multiply( neg(ab[1],output_mem_config), inv_dr, std::nullopt, output_mem_config);
@@ -388,7 +389,7 @@ std::vector<ComplexTensor> angle_bw(const Tensor& grad, const ComplexTensor& inp
     const Tensor &inp_r = input.real();
     const Tensor &inp_i = input.imag();
     Tensor condition_zero = ttnn::logical_and(eqz(input.real(),output_mem_config), eqz(input.imag(),output_mem_config), std::nullopt, output_mem_config);
-    Tensor abs_squared = recip(ttnn::add(square(inp_r, output_mem_config), square(inp_i, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+    Tensor abs_squared = recip(ttnn::add(ttnn::square(inp_r, output_mem_config), ttnn::square(inp_i, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
     Tensor res_real = where(condition_zero, zeros_like(inp_r, output_mem_config), ttnn::multiply(grad, ttnn::multiply(neg(inp_i, output_mem_config), abs_squared, std::nullopt, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
     Tensor res_imag = where(condition_zero, zeros_like(inp_i, output_mem_config), ttnn::multiply(grad, ttnn::multiply(inp_r, abs_squared, std::nullopt, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
     condition_zero.deallocate();

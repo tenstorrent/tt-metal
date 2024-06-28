@@ -45,7 +45,6 @@ namespace tt::tt_metal::detail {
         detail::bind_unary_op(m_tensor, "isneginf", isneginf, R"doc(Returns each element of input tensor ``{0}``, is negative infinity or not.)doc");
         detail::bind_unary_op(m_tensor, "isnan", isnan, R"doc(Returns boolean tensor that is True where tensor ``{0}``, is NaN and False elsewhere.)doc");
         detail::bind_unary_op(m_tensor, "sign", sign, R"doc(Returns tensor with the elementwise signum of the input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "square", square, R"doc(Returns tensor with the square of elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "eqz", eqz, R"doc(Returns tensor with the result of equal to zero of all of the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "nez", nez, R"doc(Returns tensor with the not equal zero of all of the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "gtz", gtz, R"doc(Returns tensor with the greater than zero of all of the elements of the input tensor ``{0}``.)doc");
@@ -82,6 +81,12 @@ namespace tt::tt_metal::detail {
                 FLOAT32 -> BFLOAT16
                 UINT16 -> FLOAT32
                 FLOAT32 -> UINT16
+                INT32 -> FLOAT32
+                FLOAT32 -> INT32
+                UINT16 -> BFLOAT8_B
+                BFLOAT8_B -> UINT16
+                INT32 -> BFLOAT8_B
+                BFLOAT8_B -> INT32
 
             Input tensor must have tt_input_dtype data type.
 

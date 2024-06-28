@@ -36,7 +36,7 @@ run_t3000_llama2_70b_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama2_70b_tests"
 
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/llama2_70b/tests/test_llama_perf_decode.py -m "model_perf_t3000"
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py -m "model_perf_t3000" --timeout=600
 
   # Record the end time
   end_time=$(date +%s)
@@ -50,7 +50,7 @@ run_t3000_falcon40b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon40b_tests"
 
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/falcon40b/tests/test_perf_falcon.py -m "model_perf_t3000"
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/falcon40b/tests/test_perf_falcon.py -m "model_perf_t3000" --timeout=600
 
   # Record the end time
   end_time=$(date +%s)
@@ -81,6 +81,12 @@ run_t3000_cnn_tests() {
 }
 
 main() {
+  # For CI pipeline - source func commands but don't execute tests if not invoked directly
+  if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    echo "Script is being sourced, not executing main function"
+    return 0
+  fi
+
   # Parse the arguments
   while [[ $# -gt 0 ]]; do
     case $1 in

@@ -56,12 +56,12 @@ class Decode_FF1:
         )
 
     def __call__(self, x):
-        ff_out = tt_lib.operations.primary.matmul_1d(
+        ff_out = ttnn.matmul(
             x,
             self.weight,
             program_config=self.prog_config,
-            output_mem_config=WIDTH_SHARDED_MEMCFG,
-            output_dtype=BFP8_DTYPE,
+            memory_config=WIDTH_SHARDED_MEMCFG,
+            dtype=BFP8_DTYPE,
             compute_kernel_config=COMPUTE_KERNEL_CONFIG,
         )
 
@@ -91,12 +91,12 @@ class Decode_FF2:
 
     def __call__(self, x):
         # Assume interleaved input
-        ff_out = tt_lib.operations.primary.matmul_1d(
+        ff_out = ttnn.matmul(
             x,
             self.weight,
             program_config=self.prog_config,
-            output_mem_config=WIDTH_SHARDED_MEMCFG,
-            output_dtype=BFP8_DTYPE,
+            memory_config=WIDTH_SHARDED_MEMCFG,
+            dtype=BFP8_DTYPE,
             compute_kernel_config=COMPUTE_KERNEL_CONFIG,
         )
 
@@ -162,20 +162,20 @@ class Prefill_MLP_128:
 
     def __call__(self, x, x_allgather):
         # Assume interleaved input
-        ff1_out = tt_lib.operations.primary.matmul(
+        ff1_out = ttnn.matmul(
             x,
             self.w1,
             program_config=self.prog_config1,
-            output_dtype=BFP8_DTYPE,
-            output_mem_config=WIDTH_SHARDED_MEMCFG,
+            dtype=BFP8_DTYPE,
+            memory_config=WIDTH_SHARDED_MEMCFG,
             compute_kernel_config=COMPUTE_KERNEL_FP16_CONFIG,
         )
-        ff3_out = tt_lib.operations.primary.matmul(
+        ff3_out = ttnn.matmul(
             x,
             self.w3,
             program_config=self.prog_config3,
-            output_dtype=BFP8_DTYPE,
-            output_mem_config=WIDTH_SHARDED_MEMCFG,
+            dtype=BFP8_DTYPE,
+            memory_config=WIDTH_SHARDED_MEMCFG,
             compute_kernel_config=COMPUTE_KERNEL_FP16_CONFIG,
         )
 
@@ -187,12 +187,12 @@ class Prefill_MLP_128:
 
         out.deallocate()
         x.deallocate()
-        ff2_out = tt_lib.operations.primary.matmul(
+        ff2_out = ttnn.matmul(
             x_allgather,
             self.w2,
             program_config=self.prog_config2,
-            output_dtype=BFP8_DTYPE,
-            output_mem_config=WIDTH_SHARDED_MEMCFG,
+            dtype=BFP8_DTYPE,
+            memory_config=WIDTH_SHARDED_MEMCFG,
             compute_kernel_config=COMPUTE_KERNEL_FP16_CONFIG,
         )
         return out
@@ -341,18 +341,18 @@ class Prefill_MLP_2k:
 
     def __call__(self, x, x_allgather):
         # Assume interleaved input
-        ff1_out = tt_lib.operations.primary.matmul(
+        ff1_out = ttnn.matmul(
             x,
             self.w1,
             program_config=self.prog_config1,
-            output_mem_config=self.block_sharded,
+            memory_config=self.block_sharded,
             compute_kernel_config=COMPUTE_KERNEL_FP16_CONFIG,
         )
-        ff3_out = tt_lib.operations.primary.matmul(
+        ff3_out = ttnn.matmul(
             x,
             self.w3,
             program_config=self.prog_config3,
-            output_mem_config=self.block_sharded,
+            memory_config=self.block_sharded,
             compute_kernel_config=COMPUTE_KERNEL_FP16_CONFIG,
         )
 
@@ -361,7 +361,7 @@ class Prefill_MLP_2k:
         ff3_out.deallocate()
         out.deallocate()
 
-        ff2_out = tt_lib.operations.primary.matmul(
+        ff2_out = ttnn.matmul(
             x_allgather,
             self.w2,
             program_config=self.prog_config2,

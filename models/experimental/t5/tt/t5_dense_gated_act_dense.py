@@ -4,6 +4,7 @@
 
 import torch
 import tt_lib
+import ttnn
 from loguru import logger
 import math
 
@@ -45,8 +46,8 @@ class TtT5DenseGatedActDense(torch.nn.Module):
         self.act = gelu_new
 
     def forward(self, hidden_states):
-        hidden_gelu = self.act(tt_lib.tensor.matmul(hidden_states, self.wi_0_weights), self.device)
-        hidden_linear = tt_lib.tensor.matmul(hidden_states, self.wi_1_weights, output_mem_config=self.mem_config)
+        hidden_gelu = self.act(ttnn.matmul(hidden_states, self.wi_0_weights), self.device)
+        hidden_linear = ttnn.matmul(hidden_states, self.wi_1_weights, memory_config=self.mem_config)
         hidden_states = ttnn.mul(hidden_gelu, hidden_linear, memory_config=self.mem_config)
         # hidden_states = self.dropout(hidden_states)
 
@@ -60,5 +61,5 @@ class TtT5DenseGatedActDense(torch.nn.Module):
         # ):
         #    hidden_states = hidden_states.to(self.wo.weight.dtype)
 
-        hidden_states = tt_lib.tensor.matmul(hidden_states, self.wo_weights, output_mem_config=self.mem_config)
+        hidden_states = ttnn.matmul(hidden_states, self.wo_weights, memory_config=self.mem_config)
         return hidden_states

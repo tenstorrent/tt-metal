@@ -343,14 +343,13 @@ class TtLlamaModel_optimized:
         )
 
         ### Each device does an LM head fracture
-        lm_head_out = tt_lib.operations.primary.matmul_1d(
-            norm_out_replicated,
+        lm_head_out = ttnn.matmul(
             self.lm_head,
             program_config=self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
             if self.llama3
             else self.model_config["LM_HEAD_MM_PROGCFG"],
-            output_mem_config=self.model_config["DRAM_MEMCFG"],
-            output_dtype=ttnn.bfloat16,
+            memory_config=self.model_config["DRAM_MEMCFG"],
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
         norm_out_replicated.deallocate(True)
@@ -447,11 +446,11 @@ class TtLlamaModel_optimized:
         batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
         norm_out_replicated = ttnn.reshape(norm_out_replicated, (1, batch_dim, seq_len // batch_dim, -1))
 
-        lm_head_out = tt_lib.operations.primary.matmul(
+        lm_head_out = ttnn.matmul(
             norm_out_replicated,
             self.lm_head,
             program_config=self.model_config["LM_HEAD_MM_PROGCFG"],
-            output_mem_config=self.model_config["DRAM_MEMCFG"],
+            memory_config=self.model_config["DRAM_MEMCFG"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
         )
         norm_out_replicated.deallocate(True)

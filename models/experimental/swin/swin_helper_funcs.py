@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import tt_lib
+import ttnn
 
 
 def linear(
@@ -11,7 +12,7 @@ def linear(
     bias: tt_lib.tensor.Tensor = None,
 ) -> tt_lib.tensor.Tensor:
     weight = tt_lib.tensor.transpose(weight, -2, -1)
-    x = tt_lib.tensor.matmul(x, weight)
+    x = ttnn.matmul(x, weight)
 
     if bias is not None:
         x = tt_lib.tensor.bcast(x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
