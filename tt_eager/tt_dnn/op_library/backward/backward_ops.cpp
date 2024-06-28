@@ -925,45 +925,6 @@ std::vector<Tensor> bias_gelu_unary_bw(
         grad, input, bias, approximate, output_mem_config);
 }
 
-std::vector<Tensor> _concat_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    const Shape start_index = {0, 0, 0, 0};
-    const Shape end_index = {
-        input.get_legacy_shape()[0] - 1,
-        input.get_legacy_shape()[1] - 1,
-        input.get_legacy_shape()[2] - 1,
-        input.get_legacy_shape()[3] - 1};
-
-    Tensor grad_a = unpad(grad, start_index, end_index);
-    grad_tensor.emplace_back(grad_a);
-
-    Shape start_index_2 = {0, 0, 0, 0};
-    if (dim == 0) {
-        start_index_2 = {input.get_legacy_shape()[0], 0, 0, 0};
-    } else if (dim == 1) {
-        start_index_2 = {input.get_legacy_shape()[0] - 1, input.get_legacy_shape()[1], 0, 0};
-    } else if (dim == 2) {
-        start_index_2 = {
-            input.get_legacy_shape()[0] - 1, input.get_legacy_shape()[1] - 1, input.get_legacy_shape()[2], 0};
-    } else if (dim == 3) {
-        start_index_2 = {0, 0, 0, input.get_legacy_shape()[3]};
-    }
-    const Shape end_index_2 = {
-        grad.get_legacy_shape()[0] - 1,
-        grad.get_legacy_shape()[1] - 1,
-        grad.get_legacy_shape()[2] - 1,
-        grad.get_legacy_shape()[3] - 1};
-    Tensor grad_b = unpad(grad, start_index_2, end_index_2);
-    grad_tensor.emplace_back(grad_b);
-
-    return grad_tensor;
-}
-std::vector<Tensor> concat_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _concat_bw)(grad, input, other, dim, output_mem_config);
-}
-
 std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_a = where(

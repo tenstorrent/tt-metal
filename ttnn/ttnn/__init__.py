@@ -468,6 +468,7 @@ from ttnn.operations.binary_backward import (
     add_bw,
     binary_eq_bw,
     binary_assign_bw,
+    concat_bw,
 )
 
 from ttnn.operations.ternary import (

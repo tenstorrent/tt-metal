@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
@@ -38,7 +38,7 @@ def test_bw_add(input_shapes, input_shapes_2, dimension, device):
 
     grad_data, grad_tensor = data_gen_with_range(pyt_y.shape, -100, 100, device, True, True)
 
-    tt_output_tensor_on_device = tt_lib.tensor.concat_bw(grad_tensor, input_tensor, other_tensor, dimension)
+    tt_output_tensor_on_device = ttnn.concat_bw(grad_tensor, input_tensor, other_tensor, dimension)
 
     pyt_y.backward(gradient=grad_data)
 
