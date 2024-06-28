@@ -21,7 +21,7 @@ import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     prepare_inputs_ttnn,
-    prepare_rotation_mat_ttnn,
+    get_single_rot_mat,
     sample,
     cache_attention,
 )
@@ -183,16 +183,24 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
         # decode_input_11BH = [ttnn.experimental.tensor.tilize_with_val_padding(decode_input_11BH[i], ) for i in range(len(devices))]")
 
     # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
-    rot_mats = prepare_rotation_mat_ttnn(
+    current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
-        model_args.max_seq_len,
         tt_model.device_mesh,
     )
 
     generation_start_pos = 0
     max_generated_tokens = 50
 
-    cache_attention(device_mesh, state_dict, model_args, rot_mats, generation_start_pos, max_generated_tokens, dtype)
+    cache_attention(
+        device_mesh,
+        state_dict,
+        model_args,
+        current_rot_mat,
+        rot_matrix,
+        generation_start_pos,
+        max_generated_tokens,
+        dtype,
+    )
 
     logger.info("Starting inference...")
 
@@ -222,7 +230,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
                 pt_decode_input,
                 model_args.dim,
                 start_pos,
-                model_args.sliding_window,
+                model_args,
                 tt_model.device_mesh,
             )
 
