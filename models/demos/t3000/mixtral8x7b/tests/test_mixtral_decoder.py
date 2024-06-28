@@ -71,7 +71,7 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
             pt_decode_input_bsh,
             model_args.dim,
             start_pos,
-            model_args.sliding_window,
+            model_args,
             tt_model.device_mesh,
         )
         # Run TT model

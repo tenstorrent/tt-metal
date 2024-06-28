@@ -106,7 +106,7 @@ def test_mixtral_model_inference(
             tt_decode_input,
             model_args.dim,
             start_pos,
-            model_args.sliding_window,
+            model_args,
             tt_model.device_mesh,
         )
 
