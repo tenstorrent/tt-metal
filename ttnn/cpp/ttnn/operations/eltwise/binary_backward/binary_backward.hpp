@@ -86,6 +86,21 @@ struct ExecuteBinaryBackward {
         return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, output_memory_config);
         }
 
+    //Type 1: Type 1 with 1 string
+    template <typename... Args>
+
+    static std::vector<ttnn::Tensor> execute_on_worker_thread(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        string value,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
+
+        auto op_type = utils::get_function_type1_w_string(binary_backward_op_type);
+        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
+        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, value, output_memory_config);
+        }
+
     //Type 3 : Q_ID, type1 args, optional output tensor for inputs based on are_required_outputs value
     template <typename... Args>
     static auto input_tensors_to_validate(uint8_t queue_id, const Tensor &grad_tensor, const Tensor &input_tensor_a, const Tensor &input_tensor_b, Args &&...args) {
@@ -189,6 +204,7 @@ constexpr auto binary_assign_bw = ttnn::register_operation<operations::binary_ba
 constexpr auto concat_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::CONCAT_BW>>("ttnn::concat_bw");
 constexpr auto binary_le_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_LE_BW>>("ttnn::binary_le_bw");
 constexpr auto rsub_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::RSUB_BW>>("ttnn::rsub_bw");
+constexpr auto bias_gelu_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BIAS_GELU_BW>>("ttnn::bias_gelu_bw");
 
 //type 2
 constexpr auto addalpha_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::ADDALPHA_BW>>("ttnn::addalpha_bw");

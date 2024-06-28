@@ -39,8 +39,7 @@ def test_bw_binary_eq(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-# @pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
-@pytest.mark.parametrize("are_required_outputs", [[True, True]])
+@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True], [False, False]])
 def test_bw_binary_eq_opt_output(input_shapes, device, are_required_outputs):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
@@ -80,8 +79,7 @@ def test_bw_binary_eq_opt_output(input_shapes, device, are_required_outputs):
         (torch.Size([1, 1, 320, 384])),
     ),
 )
-# @pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
-@pytest.mark.parametrize("are_required_outputs", [[True, True]])
+@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True], [False, False]])
 def test_bw_binary_eq_opt_output_qid(input_shapes, device, are_required_outputs):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)

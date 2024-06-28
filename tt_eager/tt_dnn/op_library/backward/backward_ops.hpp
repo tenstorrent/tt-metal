@@ -244,13 +244,6 @@ std::vector<Tensor> gelu_bw(
     string approximate,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> bias_gelu_bw(
-    const Tensor& grad,
-    const Tensor& input_a,
-    const Tensor& input_b,
-    string approximate,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> bias_gelu_unary_bw(
     const Tensor& grad,
     const Tensor& input,
