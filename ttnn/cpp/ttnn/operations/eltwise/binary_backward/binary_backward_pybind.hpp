@@ -234,6 +234,11 @@ void py_module(py::module& module) {
         module,
         ttnn::add_bw,
         R"doc(Performs backward operations for add on :attr:`input_tensor_b` , attr:`input_tensor_a`, attr:`alpha` tensors with given attr:`grad_tensor`.)doc");
+
+    detail::bind_binary_backward(
+        module,
+        ttnn::remainder_bw,
+        R"doc(Performs backward operations for remainder of :attr:`input_tensor_b` and attr:`input_tensor_a` tensors with given attr:`grad_tensor`.)doc");
 }
 
 }  // namespace binary_backward
