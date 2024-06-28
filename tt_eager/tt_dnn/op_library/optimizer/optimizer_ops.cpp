@@ -37,14 +37,14 @@ std::vector<Tensor> _lamb_optimizer(const Tensor& data, const Tensor& grad, cons
 
     Tensor exp_avg_sq_out = ttnn::add(mul_unary(exp_avg_sq, beta2, output_mem_config),  mul_unary(beta2_out, ttnn::square(grad, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
 
-    Tensor adam_step_mid = ttnn::multiply(exp_avg_out, recip(add_unary(sqrt(exp_avg_sq_out, output_mem_config), eps, output_mem_config),output_mem_config),  std::nullopt, output_mem_config);
+    Tensor adam_step_mid = ttnn::multiply(exp_avg_out, ttnn::reciprocal(add_unary(ttnn::sqrt(exp_avg_sq_out, output_mem_config), eps, output_mem_config),output_mem_config),  std::nullopt, output_mem_config);
     Tensor adam_step = ttnn::add(adam_step_mid, mul_unary(weight_decay, data, output_mem_config), std::nullopt, output_mem_config);
 
     auto rmsnorm = [&output_mem_config](Tensor data) -> Tensor {
         Tensor data_val = ttnn::square(data, output_mem_config);
         data_val = global_sum(data_val,output_mem_config);
         Tensor zeros = zeros_like(data, output_mem_config);
-        data_val = sqrt(bcast(zeros, data_val,  BcastOpMath::ADD, BcastOpDim::HW, output_mem_config), output_mem_config);
+        data_val = ttnn::sqrt(bcast(zeros, data_val,  BcastOpMath::ADD, BcastOpDim::HW, output_mem_config), output_mem_config);
         return data_val;
     };
     Tensor data_val = rmsnorm(data);
@@ -53,8 +53,8 @@ std::vector<Tensor> _lamb_optimizer(const Tensor& data, const Tensor& grad, cons
     Tensor adam_norm = rmsnorm(adam_step);
     Tensor ones = ones_like(weight_norm, output_mem_config);
 
-    Tensor trust_ratio_mid = ttnn::multiply(weight_norm, recip(add_unary(adam_norm, eps, output_mem_config),output_mem_config), std::nullopt, output_mem_config);
-    Tensor trust_ratio = where(gtz(weight_norm, output_mem_config), where(gtz(adam_norm, output_mem_config), trust_ratio_mid, ones, output_mem_config), ones);
+    Tensor trust_ratio_mid = ttnn::multiply(weight_norm, ttnn::reciprocal(add_unary(adam_norm, eps, output_mem_config),output_mem_config), std::nullopt, output_mem_config);
+    Tensor trust_ratio = where(ttnn::gtz(weight_norm, output_mem_config), where(ttnn::gtz(adam_norm, output_mem_config), trust_ratio_mid, ones, output_mem_config), ones);
 
     Tensor param = ttnn::subtract(
         data,
