@@ -14,47 +14,6 @@ class LightweightModule:
         return self.forward(*args, **kwargs)
 
 
-def precompute_freqs(dim: int, end: int, theta: float = 1000000.0):
-    """
-    Precompute the frequency tensor for sine and cosine values with given dimensions.
-
-    Args:
-        dim (int): Dimension of the frequency tensor.
-        end (int): End index for precomputing frequencies.
-        theta (float, optional): Scaling factor for frequency computation. Defaults to 10000.0.
-
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor]: Tensors containing cosine and sine values.
-    """
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-    t = torch.arange(end)
-    freqs = torch.outer(t, freqs).float()
-    return torch.cos(freqs), torch.sin(freqs)
-
-
-def freqs_to_rotation_matrix(cos_freqs, sin_freqs):
-    """
-    Transform cos/sin frequencies to a rotation matrix.
-    """
-    emb_size, emb_dim = cos_freqs.shape
-    dhead = emb_dim * 2
-    rot_emb_matrix = torch.zeros(emb_size, dhead, dhead)
-    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
-    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
-    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
-    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
-
-    rot_emb_matrix = rot_emb_matrix.transpose(-1, -2)  # Necessary for correct rotation when applied as (x @ R)
-    return rot_emb_matrix, emb_size
-
-
-def get_rotation_mat(dhead, end):
-    cos, sin = precompute_freqs(dhead, end)
-    rot_mat, emb_size = freqs_to_rotation_matrix(cos, sin)
-    rot_mat = [rot_mat[i, :, :] for i in range(emb_size)]
-    return rot_mat
-
-
 def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, model_args, device_mesh):
     """
     Prepare inputs for decode mode.
@@ -109,25 +68,6 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, model_args, device_mesh
     )
 
     return xs_1SBH, attn_mask
-
-
-def prepare_rotation_mat_ttnn(head_dim, max_seq_len, device_mesh):
-    """
-    Prepare rotation matricies for decode mode.
-    """
-    rot_mat = get_rotation_mat(dhead=head_dim, end=max_seq_len * 2)
-    rot_mats = [
-        ttnn.from_torch(
-            rot_mat_i.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
-            device=device_mesh,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
-        )
-        for rot_mat_i in rot_mat
-    ]
-
-    return rot_mats
 
 
 # Sample logits from a distribution
@@ -187,7 +127,8 @@ def cache_attention(device_mesh, state_dict, model_args, current_rot_mat, rot_ma
             cache_name = model_args.weight_cache_path(ttnn.bfloat4_b) / (f"attention_mask.{pos}")
 
         padded_layer_past_len = min(nearest_32(pos + 1), model_args.sliding_window)
-        attn_mask = torch.zeros(1, 32, 32, padded_layer_past_len)  # [SB4P]
+        # 32 on dim 2 for 1 tile (padded n_heads)
+        attn_mask = torch.zeros(1, model_args.max_batch_size, 32, padded_layer_past_len)
         attn_mask[:, :, :, pos + 1 :] = torch.finfo(attn_mask.dtype).min
 
         ATTN_MASK_MEMCFG = ttnn.create_sharded_memory_config(
