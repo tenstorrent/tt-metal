@@ -11,20 +11,22 @@ jobs:
     steps:
       - name: Check if organization member
         id: is_organization_member
-        if: github.event.action == 'opened'
         uses: JamesSingleton/is-organization-member@1.0.0
         with:
           organization: tenstorrent
           username: ${{ github.event.issue.user.login }}
           token: ${{ secrets.GITHUB_TOKEN }}
-      - run: gh issue edit "$NUMBER" --add-label "$LABELS"
+      - name: Add community label
+        if: ${{ steps.is_organization_member.outputs.result == 'false' }}
+        run: gh issue edit "$NUMBER" --add-label "$LABELS"
         env:
-          GH_TOKEN: ${€ secrets.GITHUB_TOKEN 3}
-          GH_REPO: ${ github. repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           NUMBER: ${{ github.event.issue.number }}
           LABELS: community
-      - name: Send Slack Notification        
-        uses: slackapi/slack-github-action@v1.26.0
+      - name: Send Slack Notification
+        if: ${{ steps.is_organization_member.outputs.result == 'false' }}
+        uses: slackapi/slack-github-action@v1.26.0        
         with:
           payload: |
             {
