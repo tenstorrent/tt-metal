@@ -75,12 +75,12 @@ class TT_bmm:
             sharded_mem_config=q_mem_config,
         )
 
-        out = tt_lib.operations.primary.matmul(
+        out = ttnn.matmul(
             q,
             k,
             program_config=prog_config,
-            output_mem_config=output_config,
-            output_dtype=ttl.tensor.DataType.BFLOAT16,
+            memory_config=output_config,
+            dtype=ttl.tensor.DataType.BFLOAT16,
         )
 
         return out

@@ -5,6 +5,7 @@
 from pathlib import Path
 import torch
 import tt_lib
+import ttnn
 
 from tt_lib.fallback_ops import fallback_ops
 from tt_lib.fused_ops.softmax import softmax as tt_softmax
@@ -36,15 +37,15 @@ class TtMnistModel(torch.nn.Module):
         # Operand/target width must be a multiple of 32. So using fallback_ops.reshape.
         x = tt_lib.fallback_ops.reshape(x, x.get_legacy_shape()[0], 1, 1, 784)
 
-        x = tt_lib.tensor.matmul(x, self.fc1_weight)
+        x = ttnn.matmul(x, self.fc1_weight)
         x = tt_lib.tensor.bcast(x, self.fc1_bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
         x = tt_lib.tensor.relu(x)
 
-        x = tt_lib.tensor.matmul(x, self.fc2_weight)
+        x = ttnn.matmul(x, self.fc2_weight)
         x = tt_lib.tensor.bcast(x, self.fc2_bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
         x = tt_lib.tensor.relu(x)
 
-        x = tt_lib.tensor.matmul(x, self.fc3_weight)
+        x = ttnn.matmul(x, self.fc3_weight)
         x = tt_lib.tensor.bcast(x, self.fc3_bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
         x = tt_lib.tensor.relu(x)
 

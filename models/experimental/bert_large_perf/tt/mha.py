@@ -11,6 +11,7 @@ from transformers import BertForQuestionAnswering
 import numpy as np
 
 import tt_lib as ttl
+import ttnn
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from tt_lib.fused_ops.softmax import softmax
 from models.utility_functions import (
@@ -106,7 +107,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
     def op1_qkv_fused(activation, qkv_weight, qkv_bias):
         # profiler.start("___op1_qkv_fused")
-        qkv = ttl.tensor.matmul(activation, qkv_weight)
+        qkv = ttnn.matmul(activation, qkv_weight)
         qkv = ttl.tensor.bcast(qkv, qkv_bias, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
         # profiler.end("___op1_qkv_fused")
 

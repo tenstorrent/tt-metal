@@ -4,6 +4,7 @@
 
 import torch
 import tt_lib
+import ttnn
 
 
 def linear(x, weight, bias=None):
@@ -12,7 +13,7 @@ def linear(x, weight, bias=None):
     )
 
     weight = tt_lib.tensor.transpose(weight, -2, -1)
-    x = tt_lib.tensor.matmul(x, weight)
+    x = ttnn.matmul(x, weight)
     if bias is not None:
         x = tt_lib.tensor.bcast(x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
     return x

@@ -9,6 +9,7 @@ from typing import Optional, Tuple, Union
 from dataclasses import dataclass
 
 import tt_lib
+import ttnn
 
 from models.experimental.roberta.tt.roberta_model import TtRobertaModel
 from models.experimental.roberta.roberta_common import torch2tt_tensor
@@ -52,7 +53,7 @@ class TtRobertaForTokenClassification(nn.Module):
 
     def linear(self, x, weight, bias):
         weight = tt_lib.tensor.transpose(weight, -2, -1)
-        x = tt_lib.tensor.matmul(x, weight, self.mem_config)
+        x = ttnn.matmul(x, weight, memory_config=self.mem_config)
         if bias is not None:
             x = tt_lib.tensor.bcast(
                 x,

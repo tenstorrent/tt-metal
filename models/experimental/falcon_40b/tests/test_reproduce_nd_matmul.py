@@ -73,12 +73,12 @@ def test_reproduce_matmul_1d(
     )
 
     # First run for a reference output
-    out = ttl.operations.primary.matmul_1d(
+    out = ttnn.matmul(
         a_t,
         b_t,
         program_config=program_config,
-        output_mem_config=out_mem_config,
-        output_dtype=out_dtype,
+        memory_config=out_mem_config,
+        dtype=out_dtype,
         compute_kernel_config=compute_config,
     )
     ref_out = tt2torch_tensor(out)
@@ -89,12 +89,12 @@ def test_reproduce_matmul_1d(
     for _ in range(loop_count):
         out.deallocate(True)
 
-        out = ttl.operations.primary.matmul_1d(
+        out = ttnn.matmul(
             a_t,
             b_t,
             program_config=program_config,
-            output_mem_config=out_mem_config,
-            output_dtype=out_dtype,
+            memory_config=out_mem_config,
+            dtype=out_dtype,
             compute_kernel_config=compute_config,
         )
 
@@ -174,12 +174,12 @@ def test_reproduce_matmul_2d(
     )
 
     # First run for a reference output
-    out = ttl.operations.primary.matmul(
+    out = ttnn.matmul(
         a_t,
         b_t,
         program_config=program_config,
-        output_mem_config=out_mem_config,
-        output_dtype=out_dtype,
+        memory_config=out_mem_config,
+        dtype=out_dtype,
         compute_kernel_config=compute_config,
     )
     ref_out = tt2torch_tensor(out)
@@ -190,12 +190,12 @@ def test_reproduce_matmul_2d(
     for _ in range(loop_count):
         out.deallocate(True)
 
-        out = ttl.operations.primary.matmul(
+        out = ttnn.matmul(
             a_t,
             b_t,
             program_config=program_config,
-            output_mem_config=out_mem_config,
-            output_dtype=out_dtype,
+            memory_config=out_mem_config,
+            dtype=out_dtype,
             compute_kernel_config=compute_config,
         )
 

@@ -452,11 +452,11 @@ class TtT5Attention(nn.Module):
             if key_value_states is None:
                 # self-attn
                 # (batch_size, n_heads, seq_length, dim_per_head)
-                hidden_states = shape(tt_lib.tensor.matmul(hidden_states, proj_weights, self.mem_config))
+                hidden_states = shape(ttnn.matmul(hidden_states, proj_weights, memory_config=self.mem_config))
             elif past_key_value is None:
                 # cross-attn
                 # (batch_size, n_heads, seq_length, dim_per_head)
-                hidden_states = shape(tt_lib.tensor.matmul(key_value_states, proj_weights, self.mem_config))
+                hidden_states = shape(ttnn.matmul(key_value_states, proj_weights, memory_config=self.mem_config))
 
             if past_key_value is not None:
                 if key_value_states is None:
@@ -470,7 +470,7 @@ class TtT5Attention(nn.Module):
                     # the provided `key_value_states` to support prefix tuning
                     # cross-attn
                     # (batch_size, n_heads, seq_length, dim_per_head)
-                    hidden_states = shape(tt_lib.tensor.matmul(key_value_states, proj_weights, self.mem_config))
+                    hidden_states = shape(ttnn.matmul(key_value_states, proj_weights, memory_config=self.mem_config))
                 else:
                     # cross-attn
                     hidden_states = past_key_value
@@ -478,7 +478,7 @@ class TtT5Attention(nn.Module):
 
         # get query states
         query_states = shape(
-            tt_lib.tensor.matmul(hidden_states, self.q_weights, self.mem_config)
+            ttnn.matmul(hidden_states, self.q_weights, memory_config=self.mem_config)
             # self.q(hidden_states)
         )  # (batch_size, n_heads, seq_length, dim_per_head)
 
@@ -559,7 +559,7 @@ class TtT5Attention(nn.Module):
 
         attn_output = tt_lib.tensor.bmm(attn_weights, value_states, self.mem_config)
         attn_output = unshape(attn_output)  # (batch_size, seq_length, dim)
-        attn_output = tt_lib.tensor.matmul(attn_output, self.o_weights, self.mem_config)
+        attn_output = ttnn.matmul(attn_output, self.o_weights, memory_config=self.mem_config)
 
         present_key_value_state = (key_states, value_states) if (self.is_decoder and use_cache) else None
         outputs = (attn_output,) + (present_key_value_state,) + (position_bias,)

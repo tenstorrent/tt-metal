@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import tt_lib
+import ttnn
 import torch
 import torch.nn as nn
 
@@ -133,7 +134,7 @@ class TtLeNet5(nn.Module):
 
         # fc
         weight_T = tt_lib.tensor.transpose(self.fc_weights, -2, -1)
-        output = tt_lib.tensor.matmul(out, weight_T)
+        output = ttnn.matmul(out, weight_T)
         out = tt_lib.tensor.bcast(
             output,
             self.fc_bias,
@@ -145,7 +146,7 @@ class TtLeNet5(nn.Module):
 
         # fc1
         weight_T = tt_lib.tensor.transpose(self.fc1_weights, -2, -1)
-        output = tt_lib.tensor.matmul(out, weight_T)
+        output = ttnn.matmul(out, weight_T)
         out = tt_lib.tensor.bcast(
             output,
             self.fc1_bias,
@@ -158,7 +159,7 @@ class TtLeNet5(nn.Module):
 
         # fc2
         weight_T = tt_lib.tensor.transpose(self.fc2_weights, -2, -1)
-        output = tt_lib.tensor.matmul(out, weight_T)
+        output = ttnn.matmul(out, weight_T)
         out = tt_lib.tensor.bcast(
             output,
             self.fc2_bias,

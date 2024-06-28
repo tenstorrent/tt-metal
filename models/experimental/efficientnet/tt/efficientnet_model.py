@@ -175,7 +175,7 @@ class TtEfficientNet(torch.nn.Module):
         # tt_lib.tensor.reshape won't work here since input tensor is of shape [1, n, 1, 1]
         x = tt_lib.fallback_ops.reshape(x, x.get_legacy_shape()[0], 1, 1, last_shape)
 
-        x = tt_lib.tensor.matmul(x, self.classifier_weight)
+        x = ttnn.matmul(x, self.classifier_weight)
 
         if self.classifier_bias is not None:
             x = ttnn.add(x, self.classifier_bias)

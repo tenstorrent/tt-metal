@@ -87,7 +87,7 @@ class TtLlamaRotary(torch.nn.Module):
         xq = tt_lib.tensor.pad(xq, [1, 32, 128, self.head_dim], [0, 0, 0, 0], 0.0)
         xq = tt_lib.tensor.transpose(xq, 1, 2)
 
-        xq = tt_lib.operations.primary.matmul(
+        xq = ttnn.matmul(
             xq,
             rot_mat,
             # compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"]
@@ -104,7 +104,7 @@ class TtLlamaRotary(torch.nn.Module):
 
         xk = tt_lib.tensor.transpose(xk, 1, 2)
 
-        xk = tt_lib.operations.primary.matmul(
+        xk = ttnn.matmul(
             xk,
             rot_mat,
             # compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
