@@ -123,18 +123,18 @@ def ResnetLinear(
     if matmul_config is None:
 
         def linear_(act):
-            return tt_lib.tensor.resnet_matmul(act, weight_T, bias, output_mem_config)
+            return ttnn.linear(act, weight_T, bias=bias, memory_config=output_mem_config)
 
     else:
 
         def linear_(act):
-            return tt_lib.operations.primary.matmul_1d(
+            return ttnn.linear(
                 act,
                 weight_T,
                 bias=bias,
                 program_config=matmul_config,
-                output_mem_config=output_mem_config,
-                output_dtype=model_config["ACTIVATIONS_DTYPE"],
+                memory_config=output_mem_config,
+                dtype=model_config["ACTIVATIONS_DTYPE"],
                 compute_kernel_config=compute_kernel_config,
             )
 

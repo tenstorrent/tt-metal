@@ -440,7 +440,7 @@ def get_model_config(
             False,
         ),
     )
-    model_config["ROT_MAT_MM_PROGCFG"] = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+    model_config["ROT_MAT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=[8, 4],
         in0_block_w=4,  # 128 // TILE_SIZE (dynamic)
         out_subblock_h=1,

@@ -31,14 +31,12 @@ class TtFF1:
 
     def __call__(self, x, prog_config):
         # Assume interleaved input
-        ff_out = tt_lib.operations.primary.matmul_1d(
+        ff_out = ttnn.matmul(
             x,
             self.weight,
-            fp32_dest_acc_en=USE_ACC,
-            packer_l1_acc=USE_ACC,
             program_config=prog_config,
-            output_mem_config=WIDTH_SHARDED_MEMCFG,
-            output_dtype=BFP8_DTYPE,
+            memory_config=WIDTH_SHARDED_MEMCFG,
+            dtype=BFP8_DTYPE,
         )
         x.deallocate()
 
