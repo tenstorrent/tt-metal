@@ -23,8 +23,6 @@ def falcon_dense_4h_to_h_matmul(
         compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
         )
     elif is_wormhole_b0():
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
