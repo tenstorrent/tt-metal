@@ -15,6 +15,7 @@
 
 
 #include "ttnn/operations/eltwise/binary/device/binary_op.hpp"
+#include "ttnn/operations/data_movement/pad.hpp"
 
 namespace tt {
 
