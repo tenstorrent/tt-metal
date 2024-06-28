@@ -294,9 +294,7 @@ void Cluster::start_driver(chip_id_t mmio_device_id, tt_device_params &device_pa
 
     TT_FATAL(this->sdesc_per_chip_.size(), "Descriptor must be loaded. Try open_driver()");
 
-    // static TLBs avoided for Blackhole bring up
-    if (this->target_type_ == TargetDevice::Silicon && device_params.init_device &&
-        this->arch_ != tt::ARCH::BLACKHOLE) {
+    if (this->target_type_ == TargetDevice::Silicon && device_params.init_device) {
         ll_api::configure_static_tlbs(
             this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), this->get_driver(mmio_device_id));
     }
