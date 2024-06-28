@@ -6,6 +6,8 @@ import pytest
 from loguru import logger
 
 import ttnn
+from models.demos.falcon7b.tt.falcon_causallm import falcon_lm_head_matmul
+from models.demos.falcon7b.tt.falcon_mlp import falcon_dense_4h_to_h_matmul, falcon_dense_h_to_4h_matmul
 from models.demos.falcon7b.tt.model_utils import get_falcon_default_core_grid
 from models.utility_functions import comp_pcc, tt2torch_tensor, torch2tt_tensor, skip_for_wormhole_b0
 import torch
