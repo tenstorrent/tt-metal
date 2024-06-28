@@ -14,7 +14,7 @@
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
-#include "ttnn/operations/data_movement/pad.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "tt_numpy/functions.hpp"
 #include "tt_dnn/op_library/copy/copy_op.hpp"
 

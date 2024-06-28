@@ -15,9 +15,12 @@
 
 #include <ranges>
 
+
 namespace ttnn {
 namespace operations {
 namespace data_movement {
+
+constexpr uint8_t DefaultQueueId = 0;
 
 
 struct Pad {
@@ -40,6 +43,7 @@ struct Pad {
     }
 
     static ttnn::Tensor execute_on_worker_thread(
+        uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         std::vector<std::pair<uint32_t, uint32_t>> padding, //intentionally not const&
         const float value,
@@ -117,6 +121,16 @@ struct Pad {
         output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(padded_shape));
 
         return output_tensor;
+    }
+
+    static ttnn::Tensor execute_on_worker_thread(
+      const ttnn::Tensor& input_tensor,
+      std::vector<std::pair<uint32_t, uint32_t>> padding, //intentionally not const&
+      const float value,
+      const std::optional<MemoryConfig>& memory_config_arg) {
+
+        return execute_on_worker_thread(DefaultQueueId, input_tensor, padding, value, memory_config_arg);
+
     }
 };
 
