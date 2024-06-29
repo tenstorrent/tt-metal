@@ -208,6 +208,7 @@ constexpr auto bias_gelu_bw = ttnn::register_operation<operations::binary_backwa
 constexpr auto binary_gt_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_GT_BW>>("ttnn::binary_gt_bw");
 constexpr auto binary_ne_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_NE_BW>>("ttnn::binary_ne_bw");
 constexpr auto binary_ge_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_GE_BW>>("ttnn::binary_ge_bw");
+constexpr auto min_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::MIN_BW>>("ttnn::min_bw");
 
 //type 2
 constexpr auto addalpha_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::ADDALPHA_BW>>("ttnn::addalpha_bw");
