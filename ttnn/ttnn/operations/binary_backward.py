@@ -218,4 +218,10 @@ binary_ge_bw = ttnn.register_operation(
     )
 )(ttnn._ttnn.operations.binary_backward.binary_ge_bw)
 
+min_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.min, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.min_bw)
+
 __all__ = []
