@@ -2,35 +2,63 @@ name: "Slack Notification on Community Issue"
 
 on:
   issues:
-    types: [opened, labeled]
+    types: [opened]
+  pull_request:
+    types: [opened]
 
 jobs:
-  label-check:
+  gh-slack-bridge:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Set username and number based on event type
+        id: set-variables
+        run: |
+          if [ "${{ github.event_name }}" = "issues" ]; then
+            echo "USERNAME=${{ github.event.issue.user.login }}" >> $GITHUB_ENV
+            echo "NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
+            echo "EVENT_URL=${{ github.event.issue.html_url }}" >> $GITHUB_ENV
+            echo "EVENT_TYPE=issue" >> $GITHUB_ENV
+            echo "GH_COMMAND=issue" >> $GITHUB_ENV
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "USERNAME=${{ github.event.pull_request.user.login }}" >> $GITHUB_ENV
+            echo "NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+            echo "EVENT_URL=${{ github.event.pull_request.html_url }}" >> $GITHUB_ENV
+            echo "EVENT_TYPE=PR" >> $GITHUB_ENV
+            echo "GH_COMMAND=pr" >> $GITHUB_ENV
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            echo "USERNAME=${{ github.actor }}" >> $GITHUB_ENV
+            echo "EVENT_URL=https://github.com/${{ github.repository }}/commit/${{ github.sha }}" >> $GITHUB_ENV
+            echo "EVENT_TYPE=push" >> $GITHUB_ENV
+          fi
       - name: Check if organization member
         id: is_organization_member
-        uses: JamesSingleton/is-organization-member@1.0.0
-        with:
-          organization: tenstorrent
-          username: ${{ github.event.issue.user.login }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_ORG: tenstorrent
+        run: |
+          http_status=$(curl -o /dev/null -s -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" https://api.github.com/orgs/${{ env.GITHUB_ORG }}/members/${{ env.USERNAME }})
+          if [ "$http_status" -eq 204 ]; then
+            echo "Detected org member"
+            echo "is_member=true" >> $GITHUB_OUTPUT
+          else
+            echo "Detected community member"
+            echo "is_member=false" >> $GITHUB_OUTPUT
+          fi
       - name: Add community label
-        if: ${{ steps.is_organization_member.outputs.result == 'false' }}
-        run: gh issue edit "$NUMBER" --add-label "$LABELS"
+        if: ${{ steps.is_organization_member.outputs.is_member == 'false' && env.GH_COMMAND && env.NUMBER }}
+        run: |
+          gh ${{env.GH_COMMAND}} edit ${{ env.NUMBER }} --add-label ${{ env.LABELS }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          NUMBER: ${{ github.event.issue.number }}
           LABELS: community
       - name: Send Slack Notification
-        if: ${{ steps.is_organization_member.outputs.result == 'false' }}
-        uses: slackapi/slack-github-action@v1.26.0        
+        if: ${{ steps.is_organization_member.outputs.is_member == 'false' }}
+        uses: slackapi/slack-github-action@v1.26.0
         with:
           payload: |
             {
-              "text": "A new issue has been created by a non-org member `${{ github.event.sender.login }}`: ${{ github.event.issue.html_url }}",
+              "text": "A new ${{ env.EVENT_TYPE }} has been created by a non-org member `${{ env.USERNAME }}`: ${{ env.EVENT_URL }}",
               "channel": "C07AZJ5DLL8"
             }
         env:
