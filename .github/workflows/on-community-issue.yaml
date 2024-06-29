@@ -21,6 +21,8 @@ jobs:
           elif [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "USERNAME=${{ github.event.pull_request.user.login }}" >> $GITHUB_ENV
             echo "NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+          else
+            USERNAME="${{ github.actor }}"
           fi
       - name: Check if organization member
         id: is_organization_member
@@ -35,14 +37,13 @@ jobs:
         if: ${{ steps.is_organization_member.outputs.result == 'false' }}
         run: |
           if [ "${{ github.event_name }}" = "issues" ]; then
-            gh issue edit $NUMBER --add-label "member"
+            gh issue edit ${{ env.NUMBER }} --add-label ${{ env.LABELS }}
           elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            gh pr edit $NUMBER --add-label "member"
+            gh pr edit ${{ env.NUMBER }} --add-label ${{ env.LABELS }}
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          NUMBER: ${{ env.NUMBER }}
           LABELS: community
       - name: Send Slack Notification
         if: ${{ steps.is_organization_member.outputs.result == 'false' }}
