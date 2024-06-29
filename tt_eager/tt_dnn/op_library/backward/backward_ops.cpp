@@ -557,11 +557,6 @@ std::vector<Tensor> max_bw(
     return operation::decorate_as_composite(__func__, _max_bw)(grad, input, other, output_mem_config);
 }
 
-std::vector<Tensor> min_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _min_bw)(grad, input, other, output_mem_config);
-}
-
 std::vector<Tensor> _fill_zero_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = zeros_like(grad, output_mem_config);
