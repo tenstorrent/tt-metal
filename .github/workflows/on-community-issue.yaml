@@ -16,13 +16,13 @@ jobs:
         id: set-variables
         run: |
           if [ "${{ github.event_name }}" = "issues" ]; then
-            echo "USERNAME=\"${{ github.event.issue.user.login }}\"" >> $GITHUB_ENV
+            echo "USERNAME=${{ github.event.issue.user.login }}" >> $GITHUB_ENV
             echo "NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
           elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "USERNAME=\"${{ github.event.pull_request.user.login }}\"" >> $GITHUB_ENV
+            echo "USERNAME=${{ github.event.pull_request.user.login }}" >> $GITHUB_ENV
             echo "NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
           else
-            echo "USERNAME=\"${{ github.actor }}\"" >> $GITHUB_ENV
+            echo "USERNAME=${{ github.actor }}" >> $GITHUB_ENV
           fi
       - name: Check if organization member
         id: is_organization_member
