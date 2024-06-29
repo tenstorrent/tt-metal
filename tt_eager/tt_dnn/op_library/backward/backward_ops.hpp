@@ -90,13 +90,6 @@ std::vector<Tensor> unary_div_bw(
     string round_mode,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-std::vector<Tensor> div_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    string round_mode,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 std::vector<Tensor> rdiv_bw(
     const Tensor& grad,
     const Tensor& input,
