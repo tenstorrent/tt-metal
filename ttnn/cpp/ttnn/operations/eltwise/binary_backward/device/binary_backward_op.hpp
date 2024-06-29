@@ -31,7 +31,8 @@ enum class BinaryBackwardOpType {
     BINARY_LE_BW,
     RSUB_BW,
     BIAS_GELU_BW,
-    BINARY_GT_BW
+    BINARY_GT_BW,
+    BINARY_NE_BW
 };
 
 
