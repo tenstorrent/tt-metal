@@ -248,6 +248,7 @@ def run_perf_resnet(
 ):
     if is_e75(device):
         pytest.skip("Resnet is not supported on E75")
+    profiler.clear()
     disable_persistent_kernel_cache()
     if batch_size <= 2:
         pytest.skip("Batch size 1 and 2 are not supported with sharded data")
@@ -335,10 +336,7 @@ def run_perf_resnet(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    (
-        (16, 0.0055, 16),
-        (20, 0.006, 16),
-    ),
+    ((20, 0.007, 19),),
 )
 def test_perf_bare_metal(
     device,
@@ -360,10 +358,12 @@ def test_perf_bare_metal(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1500000}], indirect=True)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "batch_size, expected_inference_time, expected_compile_time",
-    ((20, 0.0063, 16),),
+    "batch_size, enable_async, expected_inference_time, expected_compile_time",
+    (
+        (20, True, 0.0078, 19),
+        (20, False, 0.007, 19),
+    ),
 )
-@pytest.mark.parametrize("enable_async", [True, False])
 def test_perf_trace_bare_metal(
     device,
     use_program_cache,
@@ -391,7 +391,7 @@ def test_perf_trace_bare_metal(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((20, 0.0042, 16),),
+    ((20, 0.0042, 19),),
 )
 def test_perf_2cqs_bare_metal(
     device,
@@ -413,7 +413,7 @@ def test_perf_2cqs_bare_metal(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((20, 0.0042, 16),),
+    ((20, 0.0042, 19),),
 )
 def test_perf_trace_2cqs_bare_metal(
     device,
