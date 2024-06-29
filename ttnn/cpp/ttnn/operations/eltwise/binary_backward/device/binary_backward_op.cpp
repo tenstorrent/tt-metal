@@ -476,6 +476,62 @@ std::vector<Tensor> _min_or_max_bw(
     return grad_tensor;
 }
 
+
+std::vector<Tensor> _div_bw(
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    string round_mode,
+    const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    if (round_mode == "None") {
+        Tensor grad_a = ttnn::multiply(grad, recip(other, output_mem_config), std::nullopt, output_mem_config);
+        Tensor t_inf = ttnn::operations::creation::full_like(input, std::numeric_limits<float>::infinity(), input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
+        Tensor t_nan = ttnn::operations::creation::full_like(input, std::nanf(""), input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(where(
+            eqz(other, output_mem_config),
+            where(
+                eqz(grad, output_mem_config),
+                t_nan,
+                ttnn::multiply(t_inf, sign(grad, output_mem_config), std::nullopt, output_mem_config),
+                output_mem_config),
+            grad_a,
+            output_mem_config));
+        Tensor grad_b = ttnn::multiply(
+            neg(grad, output_mem_config),
+            (ttnn::multiply(input, recip(ttnn::square(other, output_mem_config), output_mem_config), std::nullopt, output_mem_config)),
+            std::nullopt,
+            output_mem_config);
+        grad_tensor.emplace_back(where(
+            eqz(other, output_mem_config),
+            where(
+                eqz(grad, output_mem_config),
+                t_nan,
+                where(
+                    eqz(input, output_mem_config),
+                    t_nan,
+                    ttnn::multiply(ttnn::multiply(neg(t_inf, output_mem_config),
+                            sign(input, output_mem_config),
+                            std::nullopt,
+                            output_mem_config),
+                        sign(grad, output_mem_config),
+                        std::nullopt,
+                        output_mem_config),
+                    output_mem_config),
+                output_mem_config),
+            grad_b,
+            output_mem_config));
+    } else {
+        Tensor grad_a = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(grad_a);
+        Tensor grad_b = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(grad_b);
+    }
+
+    return grad_tensor;
+}
+
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ATAN2_BW:
@@ -540,6 +596,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
     switch (OpType) {
         case BinaryBackwardOpType::BIAS_GELU_BW:
             return _bias_gelu_bw;
+        case BinaryBackwardOpType::DIV_BW:
+            return _div_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
