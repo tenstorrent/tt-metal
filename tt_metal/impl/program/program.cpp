@@ -847,5 +847,7 @@ void Program::compile(Device *device) {
     this->loaded_onto_device = false;
 }
 
+void Program::set_global_id(uint64_t id) { this->global_id = id; }
+
 Program::~Program() {}
 }  // namespace tt::tt_metal

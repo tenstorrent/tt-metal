@@ -365,6 +365,7 @@ int main() {
 
         {
             DeviceZoneScopedMainN("BRISC-FW");
+            DeviceZoneSetCounter(mailboxes->launch.host_assigned_op_id);
 
             // Copies from L1 to IRAM on chips where NCRISC has IRAM
             l1_to_ncrisc_iram_copy(mailboxes->launch.ncrisc_kernel_size16, ncrisc_kernel_start_offset16);

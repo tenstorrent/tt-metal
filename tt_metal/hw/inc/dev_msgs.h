@@ -65,6 +65,8 @@ struct launch_msg_t {  // must be cacheline aligned
     volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX_PROC];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
+    volatile uint16_t host_assigned_op_id;
+
     // Ring buffer of kernel configuration data
     volatile uint32_t kernel_config_base;
     volatile uint16_t rta_offsets[DISPATCH_CLASS_MAX_PROC];
