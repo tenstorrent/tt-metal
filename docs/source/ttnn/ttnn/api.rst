@@ -211,6 +211,7 @@ Pointwise Binary
    ttnn/binary_ne_bw
    ttnn/binary_ge_bw
    ttnn/min_bw
+   ttnn/max_bw
 
 Pointwise Ternary
 =================
