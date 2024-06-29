@@ -154,7 +154,7 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
 
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_ssm_eltwise_mul.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -195,6 +195,8 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
             0,
             0,
             0,
+            0,
+            0,
         };
 
         // Default writer runtime args
@@ -202,10 +204,13 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
             0,
             0,
             0,
+            0,
+            0,
         };
 
         // Default compute runtime args
         std::vector<uint32_t> compute_runtime_args = {
+            0,
             0,
         };
 
@@ -229,6 +234,8 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
             all_reader_runtime_args[i][1] = src1_buffer->address();
             all_reader_runtime_args[i][2] = num_blocks_per_core;
             all_reader_runtime_args[i][3] = num_blocks_written;
+            all_reader_runtime_args[i][4] = bshape[2]/TILE_HEIGHT;
+            all_reader_runtime_args[i][5] = bshape[-1]/TILE_WIDTH;
 
             all_writer_runtime_args[i][0] = dst_buffer->address();
 
@@ -241,7 +248,11 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
                 all_writer_runtime_args[i][2] = num_blocks_written;
             }
 
+            all_writer_runtime_args[i][3] = bshape[2]/TILE_HEIGHT;
+            all_writer_runtime_args[i][4] = hidden_size;
+
             all_compute_runtime_args[i][0] = num_blocks_per_core;
+            all_compute_runtime_args[i][1] = bshape[2]/TILE_HEIGHT;
 
             num_blocks_written += num_blocks_per_core;
         }
