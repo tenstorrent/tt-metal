@@ -1,7 +1,6 @@
 name: "Slack Notification on Community Issue"
 
 on:
-  push:
   issues:
     types: [opened]
   pull_request:
@@ -18,9 +17,15 @@ jobs:
           if [ "${{ github.event_name }}" = "issues" ]; then
             echo "USERNAME=${{ github.event.issue.user.login }}" >> $GITHUB_ENV
             echo "NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
+            echo "EVENT_URL=${{ github.event.issue.html_url }}" >> $GITHUB_ENV
+            echo "EVENT_TYPE=issue" >> $GITHUB_ENV
+            echo "GH_COMMAND=issue" >> $GITHUB_ENV
           elif [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "USERNAME=${{ github.event.pull_request.user.login }}" >> $GITHUB_ENV
             echo "NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+            echo "EVENT_URL=${{ github.event.pull_request.html_url }}" >> $GITHUB_ENV
+            echo "EVENT_TYPE=PR" >> $GITHUB_ENV
+            echo "GH_COMMAND=pr" >> $GITHUB_ENV
           else
             echo "USERNAME=${{ github.actor }}" >> $GITHUB_ENV
           fi
@@ -34,13 +39,9 @@ jobs:
             echo "is_member=false" >> $GITHUB_OUTPUT
           fi
       - name: Add community label
-        if: ${{ steps.is_organization_member.outputs.result == 'false' }}
+        if: ${{ steps.is_organization_member.outputs.result == 'false' }} && ${{ env.GH_COMMAND }} != '' && ${{ env.NUMBER }} != ''
         run: |
-          if [ "${{ github.event_name }}" = "issues" ]; then
-            gh issue edit ${{ env.NUMBER }} --add-label ${{ env.LABELS }}
-          elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            gh pr edit ${{ env.NUMBER }} --add-label ${{ env.LABELS }}
-          fi
+          gh ${{env.GH_COMMAND}} edit ${{ env.NUMBER }} --add-label ${{ env.LABELS }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -51,7 +52,7 @@ jobs:
         with:
           payload: |
             {
-              "text": "A new issue has been created by a non-org member `${{ github.event.sender.login }}`: ${{ github.event.issue.html_url }}",
+              "text": "A new ${{ env.EVENT_TYPE }} has been created by a non-org member `${{ env.USERNAME }}`: ${{ env.EVENT_URL }}",
               "channel": "C07AZJ5DLL8"
             }
         env:
