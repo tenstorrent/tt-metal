@@ -12,10 +12,10 @@ from loguru import logger
 from models.utility_functions import tt2torch_tensor, comp_pcc
 
 
-def run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device):
+def run_ssm_eltwise_mul_test(batch_size, in0_W, in1_W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device):
     torch.manual_seed(1234)
     compute_grid_size = device.compute_with_storage_grid_size()
-    batch_size = 32
+    batch_size = batch_size
     hidden_size = 5120
     latent_size = 32
 
@@ -85,8 +85,12 @@ def run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, in0_mem_config, in1_mem_config
         (32, 32 * 5120),
     ),
 )
-def test_ssm_eltwise_mul(in0_W, in1_W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device):
-    run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device)
+@pytest.mark.parametrize(
+    "batch",
+    (32, 64),
+)
+def test_ssm_eltwise_mul(batch, in0_W, in1_W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device):
+    run_ssm_eltwise_mul_test(batch, in0_W, in1_W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device)
 
 
 def test_ssm_eltwise_mul_with_program_cache(device, use_program_cache):
@@ -94,12 +98,12 @@ def test_ssm_eltwise_mul_with_program_cache(device, use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT16
 
     for _ in range(2):
-        in0_W, in1_W = 32, 5120
-        run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, mem_config, mem_config, mem_config, device)
-        in0_W, in1_W = 32 * 5120, 5120
-        run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, mem_config, mem_config, mem_config, device)
-        in0_W, in1_W = 32, 32 * 5120
-        run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, mem_config, mem_config, mem_config, device)
+        batch, in0_W, in1_W = 64, 32, 5120
+        run_ssm_eltwise_mul_test(batch, in0_W, in1_W, dtype, mem_config, mem_config, mem_config, device)
+        batch, in0_W, in1_W = 64, 32 * 5120, 5120
+        run_ssm_eltwise_mul_test(batch, in0_W, in1_W, dtype, mem_config, mem_config, mem_config, device)
+        batch, in0_W, in1_W = 64, 32, 32 * 5120
+        run_ssm_eltwise_mul_test(batch, in0_W, in1_W, dtype, mem_config, mem_config, mem_config, device)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
