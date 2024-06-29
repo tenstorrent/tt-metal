@@ -474,6 +474,7 @@ from ttnn.operations.binary_backward import (
     bias_gelu_bw,
     binary_gt_bw,
     binary_ne_bw,
+    binary_ge_bw,
 )
 
 from ttnn.operations.ternary import (

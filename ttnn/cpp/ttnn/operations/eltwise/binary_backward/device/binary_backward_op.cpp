@@ -438,6 +438,10 @@ std::vector<Tensor> _binary_ne_bw(const Tensor& grad, const Tensor& input, const
     return _binary_le_bw(grad, input, other, output_mem_config);
 }
 
+std::vector<Tensor> _binary_ge_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    return _binary_le_bw(grad, input, other, output_mem_config);
+}
+
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
@@ -473,6 +477,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _binary_gt_bw;
         case BinaryBackwardOpType::BINARY_NE_BW:
             return _binary_ne_bw;
+        case BinaryBackwardOpType::BINARY_GE_BW:
+            return _binary_ge_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
