@@ -442,6 +442,39 @@ std::vector<Tensor> _binary_ge_bw(const Tensor& grad, const Tensor& input, const
     return _binary_le_bw(grad, input, other, output_mem_config);
 }
 
+// template parameter min_or_max = TRUE for MAX, FALSE for MIN
+template <bool min_or_max>
+std::vector<Tensor> _min_or_max_bw(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    Tensor zeros_t = ttnn::operations::creation::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
+    std::vector<Tensor> grad_tensor;
+    Tensor t_scale_grad = mul_unary(grad, 0.5, output_mem_config);
+    Tensor t_sub = ttnn::subtract(other, input, std::nullopt, output_mem_config);
+    Tensor t_sub_gtz = gtz(t_sub, output_mem_config);
+    Tensor t_sub_eqz = eqz(t_sub, output_mem_config);
+    Tensor t_sub_ltz = ltz(t_sub, output_mem_config);
+    Tensor grad_other =
+        ttnn::add(ttnn::multiply(t_sub_ltz, grad, std::nullopt, output_mem_config),
+            ttnn::multiply(t_sub_eqz, t_scale_grad, std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config);
+    Tensor grad_input =
+        ttnn::add(ttnn::multiply(t_sub_gtz, grad, std::nullopt, output_mem_config),
+            ttnn::multiply(t_sub_eqz, t_scale_grad, std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config);
+
+    if (min_or_max) {
+        // MAX
+        grad_tensor.emplace_back(grad_other);
+        grad_tensor.emplace_back(grad_input);
+    } else {
+        // MIN
+        grad_tensor.emplace_back(grad_input);
+        grad_tensor.emplace_back(grad_other);
+    }
+    return grad_tensor;
+}
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
@@ -479,6 +512,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _binary_ne_bw;
         case BinaryBackwardOpType::BINARY_GE_BW:
             return _binary_ge_bw;
+        case BinaryBackwardOpType::MIN_BW:
+            return _min_or_max_bw<false>;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
