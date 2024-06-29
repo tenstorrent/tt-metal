@@ -27,21 +27,26 @@ jobs:
             echo "EVENT_URL=${{ github.event.pull_request.html_url }}" >> $GITHUB_ENV
             echo "EVENT_TYPE=PR" >> $GITHUB_ENV
             echo "GH_COMMAND=pr" >> $GITHUB_ENV
-          else
+          elif [ "${{ github.event_name }}" = "push" ]; then
             echo "USERNAME=${{ github.actor }}" >> $GITHUB_ENV
-            echo "EVENT_TYPE=Push" >> $GITHUB_ENV
+            echo "EVENT_URL=https://github.com/${{ github.repository }}/commit/${{ github.sha }}" >> $GITHUB_ENV
+            echo "EVENT_TYPE=push" >> $GITHUB_ENV
           fi
       - name: Check if organization member
         id: is_organization_member
+        env:
+          GITHUB_ORG: tenstorrent
         run: |
-          http_status=$(curl -o /dev/null -s -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" https://api.github.com/orgs/tenstorrent/members/${{ env.USERNAME }})
+          http_status=$(curl -o /dev/null -s -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" https://api.github.com/orgs/${{ env.GITHUB_ORG }}/members/${{ env.USERNAME }})
           if [ "$http_status" -eq 204 ]; then
+            echo "Detected org member"
             echo "is_member=true" >> $GITHUB_OUTPUT
           else
+            echo "Detected community member"
             echo "is_member=false" >> $GITHUB_OUTPUT
           fi
       - name: Add community label
-        if: ${{ steps.is_organization_member.outputs.result == 'false' && env.GH_COMMAND && env.NUMBER }}
+        if: ${{ steps.is_organization_member.outputs.is_member == 'false' && env.GH_COMMAND && env.NUMBER }}
         run: |
           gh ${{env.GH_COMMAND}} edit ${{ env.NUMBER }} --add-label ${{ env.LABELS }}
         env:
@@ -49,7 +54,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           LABELS: community
       - name: Send Slack Notification
-        if: ${{ steps.is_organization_member.outputs.result == 'false' }}
+        if: ${{ steps.is_organization_member.outputs.is_member == 'true' }}
         uses: slackapi/slack-github-action@v1.26.0
         with:
           payload: |
