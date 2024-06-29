@@ -844,8 +844,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.unary_div_bw
 
-.. autofunction:: tt_lib.tensor.div_bw
-
 .. autofunction:: tt_lib.tensor.rdiv_bw
 
 .. autofunction:: tt_lib.tensor.sqrt_bw
