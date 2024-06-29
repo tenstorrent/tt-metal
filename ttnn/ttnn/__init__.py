@@ -472,6 +472,7 @@ from ttnn.operations.binary_backward import (
     binary_le_bw,
     rsub_bw,
     bias_gelu_bw,
+    binary_gt_bw,
 )
 
 from ttnn.operations.ternary import (

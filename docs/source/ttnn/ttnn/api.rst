@@ -207,6 +207,7 @@ Pointwise Binary
    ttnn/binary_le_bw
    ttnn/rsub_bw
    ttnn/bias_gelu_bw
+   ttnn/binary_gt_bw
 
 Pointwise Ternary
 =================

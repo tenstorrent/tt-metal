@@ -430,6 +430,16 @@ std::vector<Tensor> _bias_gelu_bw(
 }
 
 
+std::vector<Tensor> _binary_gt_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zero_grad = tt::tt_metal::zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(zero_grad);
+    Tensor zero_input =  tt::tt_metal::zeros_like(input, output_mem_config);
+    grad_tensor.emplace_back(zero_input);
+    return grad_tensor;
+}
+
+
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
         case BinaryBackwardOpType::ATAN2_BW:
@@ -460,6 +470,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _binary_le_bw;
         case BinaryBackwardOpType::RSUB_BW:
             return _rsub_bw;
+        case BinaryBackwardOpType::BINARY_GT_BW:
+            return _binary_gt_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
