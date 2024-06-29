@@ -206,4 +206,10 @@ binary_gt_bw = ttnn.register_operation(
     )
 )(ttnn._ttnn.operations.binary_backward.binary_gt_bw)
 
+binary_ne_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
+        torch.eq, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.binary_ne_bw)
+
 __all__ = []
