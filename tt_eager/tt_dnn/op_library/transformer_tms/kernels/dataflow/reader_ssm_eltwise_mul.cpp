@@ -44,74 +44,78 @@ void kernel_main() {
     constexpr uint32_t bfloat16_one_row_in_face_bytes = 32;
     constexpr uint32_t in0_blocks_per_in1_block = 32;
 
-    #ifdef REPEAT_IN0
-        // in0 only has one tile and read in only once
-        cb_reserve_back(cb_id_in0, onetile);
-        l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(0, s0, l1_write_addr_in0);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, onetile);
-    #endif
+    constexpr uint32_t input_num_blocks_height = 2;
 
-    for (uint32_t i = in1_start_id; i < in1_start_id + in1_num_blocks; i++) {
-        cb_reserve_back(cb_id_in1, onetile);
-        l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-        noc_async_read_tile(i, s1, l1_write_addr_in1);
-
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in1, onetile);
-
-        #ifdef REPEAT_INTERLEAVE_IN1
-            cb_wait_front(cb_in1_transposed, onetile);
-            uint64_t cb_in1_transposed_read_ptr = get_noc_addr(get_read_ptr(cb_in1_transposed));
-
-            // Manually unroll iterating across the tile to eliminate unncessary conditional checking
-            // First + second face
-            for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_face; tile_row_id++) {
-                cb_reserve_back(cb_in1_bcast_row, onetile);
-                uint32_t cb_in1_bcast_row_write_ptr = get_write_ptr(cb_in1_bcast_row);
-
-                #ifndef REPEAT_IN0
-                    cb_reserve_back(cb_id_in0, onetile);
-                    l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                    noc_async_read_tile(i * in0_blocks_per_in1_block + tile_row_id, s0, l1_write_addr_in0);
-                #endif
-                noc_async_read(cb_in1_transposed_read_ptr, cb_in1_bcast_row_write_ptr, bfloat16_one_row_in_face_bytes);
-                noc_async_read(cb_in1_transposed_read_ptr + bfloat16_one_face_bytes, cb_in1_bcast_row_write_ptr + bfloat16_one_face_bytes, bfloat16_one_row_in_face_bytes);
-                noc_async_read_barrier();
-
-                #ifndef REPEAT_IN0
-                    cb_push_back(cb_id_in0, onetile);
-                #endif
-                cb_push_back(cb_in1_bcast_row, onetile);
-
-                cb_in1_transposed_read_ptr += bfloat16_one_row_in_face_bytes;
-            }
-
-            cb_in1_transposed_read_ptr += bfloat16_one_face_bytes;
-            // Third + fourth face
-            for (uint32_t tile_row_id = num_rows_in_face; tile_row_id < 2*num_rows_in_face; tile_row_id++) {
-                cb_reserve_back(cb_in1_bcast_row, onetile);
-                uint32_t cb_in1_bcast_row_write_ptr = get_write_ptr(cb_in1_bcast_row);
-
-                #ifndef REPEAT_IN0
-                    cb_reserve_back(cb_id_in0, onetile);
-                    l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                    noc_async_read_tile(i * in0_blocks_per_in1_block + tile_row_id, s0, l1_write_addr_in0);
-                #endif
-                noc_async_read(cb_in1_transposed_read_ptr, cb_in1_bcast_row_write_ptr, bfloat16_one_row_in_face_bytes);
-                noc_async_read(cb_in1_transposed_read_ptr + bfloat16_one_face_bytes, cb_in1_bcast_row_write_ptr + bfloat16_one_face_bytes, bfloat16_one_row_in_face_bytes);
-                noc_async_read_barrier();
-
-                #ifndef REPEAT_IN0
-                    cb_push_back(cb_id_in0, onetile);
-                #endif
-                cb_push_back(cb_in1_bcast_row, onetile);
-
-                cb_in1_transposed_read_ptr += bfloat16_one_row_in_face_bytes;
-            }
-            cb_pop_front(cb_in1_transposed, onetile);
-
+    for(uint32_t block_h_id = 0; block_h_id < input_num_blocks_height; block_h_id++){
+        #ifdef REPEAT_IN0
+            // in0 only has one tile and read in only once
+            cb_reserve_back(cb_id_in0, onetile);
+            l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+            noc_async_read_tile(block_h_id, s0, l1_write_addr_in0);
+            noc_async_read_barrier();
+            cb_push_back(cb_id_in0, onetile);
         #endif
+
+        for (uint32_t i = in1_start_id; i < in1_start_id + in1_num_blocks; i++) {
+            cb_reserve_back(cb_id_in1, onetile);
+            l1_write_addr_in1 = get_write_ptr(cb_id_in1);
+            noc_async_read_tile(block_h_id*in1_num_blocks + i, s1, l1_write_addr_in1);
+
+            noc_async_read_barrier();
+            cb_push_back(cb_id_in1, onetile);
+
+            #ifdef REPEAT_INTERLEAVE_IN1
+                cb_wait_front(cb_in1_transposed, onetile);
+                uint64_t cb_in1_transposed_read_ptr = get_noc_addr(get_read_ptr(cb_in1_transposed));
+
+                // Manually unroll iterating across the tile to eliminate unncessary conditional checking
+                // First + second face
+                for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_face; tile_row_id++) {
+                    cb_reserve_back(cb_in1_bcast_row, onetile);
+                    uint32_t cb_in1_bcast_row_write_ptr = get_write_ptr(cb_in1_bcast_row);
+
+                    #ifndef REPEAT_IN0
+                        cb_reserve_back(cb_id_in0, onetile);
+                        l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+                        noc_async_read_tile(block_h_id*in1_num_blocks + (i * in0_blocks_per_in1_block + tile_row_id), s0, l1_write_addr_in0);
+                    #endif
+                    noc_async_read(cb_in1_transposed_read_ptr, cb_in1_bcast_row_write_ptr, bfloat16_one_row_in_face_bytes);
+                    noc_async_read(cb_in1_transposed_read_ptr + bfloat16_one_face_bytes, cb_in1_bcast_row_write_ptr + bfloat16_one_face_bytes, bfloat16_one_row_in_face_bytes);
+                    noc_async_read_barrier();
+
+                    #ifndef REPEAT_IN0
+                        cb_push_back(cb_id_in0, onetile);
+                    #endif
+                    cb_push_back(cb_in1_bcast_row, onetile);
+
+                    cb_in1_transposed_read_ptr += bfloat16_one_row_in_face_bytes;
+                }
+
+                cb_in1_transposed_read_ptr += bfloat16_one_face_bytes;
+                // Third + fourth face
+                for (uint32_t tile_row_id = num_rows_in_face; tile_row_id < 2*num_rows_in_face; tile_row_id++) {
+                    cb_reserve_back(cb_in1_bcast_row, onetile);
+                    uint32_t cb_in1_bcast_row_write_ptr = get_write_ptr(cb_in1_bcast_row);
+
+                    #ifndef REPEAT_IN0
+                        cb_reserve_back(cb_id_in0, onetile);
+                        l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+                        noc_async_read_tile(block_h_id*in1_num_blocks + (i * in0_blocks_per_in1_block + tile_row_id), s0, l1_write_addr_in0);
+                    #endif
+                    noc_async_read(cb_in1_transposed_read_ptr, cb_in1_bcast_row_write_ptr, bfloat16_one_row_in_face_bytes);
+                    noc_async_read(cb_in1_transposed_read_ptr + bfloat16_one_face_bytes, cb_in1_bcast_row_write_ptr + bfloat16_one_face_bytes, bfloat16_one_row_in_face_bytes);
+                    noc_async_read_barrier();
+
+                    #ifndef REPEAT_IN0
+                        cb_push_back(cb_id_in0, onetile);
+                    #endif
+                    cb_push_back(cb_in1_bcast_row, onetile);
+
+                    cb_in1_transposed_read_ptr += bfloat16_one_row_in_face_bytes;
+                }
+                cb_pop_front(cb_in1_transposed, onetile);
+
+            #endif
+        }
     }
 }

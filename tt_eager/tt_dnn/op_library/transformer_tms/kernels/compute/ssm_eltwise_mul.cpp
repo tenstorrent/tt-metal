@@ -29,29 +29,33 @@ void MAIN {
     binary_op_init_common(cb_id_in0, cb_id_in1);
 #endif
 
+constexpr uint32_t input_num_blocks_height = 2;
+
+for(uint32_t block_h_id = 0; block_h_id < input_num_blocks_height; block_h_id++){
+
 #ifdef REPEAT_IN0
     // Transpose in0
     cb_wait_front(cb_id_in0, onetile);
-// No need to transpose in0 if in1 is not repeat_interleaved
-#ifdef REPEAT_INTERLEAVE_IN1
-    tile_regs_acquire();
-    tile_regs_wait();
+    // No need to transpose in0 if in1 is not repeat_interleaved
+    #ifdef REPEAT_INTERLEAVE_IN1
+        tile_regs_acquire();
+        tile_regs_wait();
 
-    transpose_wh_init_short(cb_id_in0);
-    unpack_reconfig_data_format_srca(cb_out_transposed, cb_id_in0);
-    pack_reconfig_data_format(cb_id_out, cb_in0_transposed);
-    transpose_wh_tile(cb_id_in0, 0, 0);
+        transpose_wh_init_short(cb_id_in0);
+        unpack_reconfig_data_format_srca(cb_out_transposed, cb_id_in0);
+        pack_reconfig_data_format(cb_id_out, cb_in0_transposed);
+        transpose_wh_tile(cb_id_in0, 0, 0);
 
-    cb_reserve_back(cb_in0_transposed, onetile);
-    pack_tile(0, cb_in0_transposed);
+        cb_reserve_back(cb_in0_transposed, onetile);
+        pack_tile(0, cb_in0_transposed);
 
-    tile_regs_commit();
-    tile_regs_release();
-    cb_push_back(cb_in0_transposed, onetile);
-    cb_pop_front(cb_id_in0, onetile);
+        tile_regs_commit();
+        tile_regs_release();
+        cb_push_back(cb_in0_transposed, onetile);
+        cb_pop_front(cb_id_in0, onetile);
 
-    cb_wait_front(cb_in0_transposed, onetile);
-#endif
+        cb_wait_front(cb_in0_transposed, onetile);
+    #endif
 #endif
 
     for (uint32_t in1_block = 0; in1_block < in1_num_blocks; in1_block++) {
@@ -180,5 +184,6 @@ void MAIN {
     cb_pop_front(cb_id_in0, onetile);
 #endif
 #endif
+}
 }
 }  // namespace NAMESPACE

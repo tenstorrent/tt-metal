@@ -15,7 +15,7 @@ from models.utility_functions import tt2torch_tensor, comp_pcc
 def run_ssm_eltwise_mul_test(in0_W, in1_W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device):
     torch.manual_seed(1234)
     compute_grid_size = device.compute_with_storage_grid_size()
-    batch_size = 32
+    batch_size = 32 * 2
     hidden_size = 5120
     latent_size = 32
 
