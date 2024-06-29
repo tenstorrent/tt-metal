@@ -516,46 +516,6 @@ std::vector<std::optional<Tensor>> where_bw(
     return operation::decorate_as_composite(__func__, _where_bw)(default_queue_id, grad, condition, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 
-// template parameter min_or_max = TRUE for MAX, FALSE for MIN
-template <bool min_or_max>
-std::vector<Tensor> _min_or_max_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    Tensor zeros_t = zeros_like(input, output_mem_config);
-    std::vector<Tensor> grad_tensor;
-    Tensor t_scale_grad = mul_unary(grad, 0.5, output_mem_config);
-    Tensor t_sub = ttnn::subtract(other, input, std::nullopt, output_mem_config);
-    Tensor t_sub_gtz = gtz(t_sub, output_mem_config);
-    Tensor t_sub_eqz = eqz(t_sub, output_mem_config);
-    Tensor t_sub_ltz = ltz(t_sub, output_mem_config);
-    Tensor grad_other =
-        ttnn::add(ttnn::multiply(t_sub_ltz, grad, std::nullopt, output_mem_config),
-            ttnn::multiply(t_sub_eqz, t_scale_grad, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config);
-    Tensor grad_input =
-        ttnn::add(ttnn::multiply(t_sub_gtz, grad, std::nullopt, output_mem_config),
-            ttnn::multiply(t_sub_eqz, t_scale_grad, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config);
-
-    if (min_or_max) {
-        // MAX
-        grad_tensor.emplace_back(grad_other);
-        grad_tensor.emplace_back(grad_input);
-    } else {
-        // MIN
-        grad_tensor.emplace_back(grad_input);
-        grad_tensor.emplace_back(grad_other);
-    }
-    return grad_tensor;
-}
-auto _max_bw = _min_or_max_bw<true>;
-auto _min_bw = _min_or_max_bw<false>;
-
-std::vector<Tensor> max_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _max_bw)(grad, input, other, output_mem_config);
-}
 
 std::vector<Tensor> _fill_zero_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;

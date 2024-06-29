@@ -307,6 +307,11 @@ void py_module(py::module& module) {
         ttnn::min_bw,
         R"doc(Performs backward operations for minimum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_binary_backward(
+        module,
+        ttnn::max_bw,
+        R"doc(Performs backward operations for maximum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
+
 }
 
 }  // namespace binary_backward
