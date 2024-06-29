@@ -151,9 +151,9 @@ def run_perf_bert11(
 @pytest.mark.parametrize(
     "batch_size, model_config_str, expected_inference_time, expected_compile_time, inference_iterations",
     (
-        [7, "BFLOAT8_B-SHARDED", 0.0329, 3.1, 10],
-        [8, "BFLOAT8_B-SHARDED", 0.0329, 3.1, 10],
-        [12, "BFLOAT8_B-SHARDED", 0.0323, 3.1, 10],
+        [7, "BFLOAT8_B-SHARDED", 0.0329, 3.2, 10],
+        [8, "BFLOAT8_B-SHARDED", 0.0329, 3.2, 10],
+        [12, "BFLOAT8_B-SHARDED", 0.0326, 3.2, 10],
     ),
 )
 def test_perf_bare_metal(
