@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from models.demos.mamba.tt.types import ModelMode
 from models.demos.mamba.tt.residual_block import TtResidualBlock
+from models.demos.mamba.reference.decode_model import RMSNorm
 
 
 class TtTensorLoader:
@@ -31,11 +32,14 @@ class TtTensorLoader:
             tt_dtype=ttnn.bfloat16,
             torch_tensor=None,
             return_as_torch=False,
+            return_layer_num=False,
         ):
             if layer_num == None:
                 tensor_name = name
             else:
                 tensor_name = f"layers.{layer_num}.{name}"
+                if return_layer_num:
+                    return layer_num
 
             if self.tt_cache_path is not None:
                 tensor_cache_filepath = str(Path(self.tt_cache_path) / (tensor_name + postfix))
@@ -95,11 +99,19 @@ class MambaTT(torch.nn.Module):
             TtResidualBlock(self.args, device, configs, loader.get_tensor_loader(i)) for i in range(self.num_layers)
         ]
 
+        self.use_torch_rms_norm = False
+
         load_fn = loader.get_tensor_loader()
-        self.norm_f_weights = load_fn(
-            "norm_f.weight",
-            tt_dtype=ttnn.bfloat8_b,
-        )
+        if not self.use_torch_rms_norm:
+            self.norm_f_weights = load_fn(
+                "norm_f.weight",
+                tt_dtype=ttnn.bfloat8_b,
+            )
+        else:
+            self.torch_norm_f_weights = load_fn("norm_f.weight", return_as_torch=True)
+            self.torch_norm_f = RMSNorm(self.args.d_model)
+            self.torch_norm_f.weight = torch.nn.Parameter(self.torch_norm_f_weights)
+
         self.lm_head_weights = load_fn(
             "lm_head.weight",
             lambda x: x.transpose(-1, -2),
@@ -131,18 +143,29 @@ class MambaTT(torch.nn.Module):
         )
 
         for i, layer in enumerate(self.layers):
-            print(f"Running layer {i}")
+            # print(f"Running layer {i}")
             x = layer(x)
 
-        x = ttnn.experimental.tensor.interleaved_to_sharded(x, sharded_mem_config=self.configs["sharded_h"])
-        x = ttnn.experimental.operations.primary.rmsnorm(
-            x,
-            self.args.eps,
-            self.norm_f_weights,
-            program_config=self.configs["SHARDED_NORM_PRGM_CFG"],
-            output_mem_config=self.configs["sharded_h"],
-        )
-        x = ttnn.experimental.tensor.sharded_to_interleaved(x)
+        if not self.use_torch_rms_norm:
+            x = ttnn.experimental.tensor.interleaved_to_sharded(x, sharded_mem_config=self.configs["sharded_h"])
+            x = ttnn.experimental.operations.primary.rmsnorm(
+                x,
+                self.args.eps,
+                self.norm_f_weights,
+                program_config=self.configs["SHARDED_NORM_PRGM_CFG"],
+                output_mem_config=self.configs["sharded_h"],
+            )
+            x = ttnn.experimental.tensor.sharded_to_interleaved(x)
+        else:
+            x = ttnn.to_torch(x)
+            x = self.torch_norm_f(x)
+            x = ttnn.from_torch(
+                x,
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=self.configs["dtype"]["activations"],
+            )
         x = ttnn.linear(
             x,
             self.lm_head_weights,

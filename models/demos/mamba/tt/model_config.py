@@ -27,6 +27,12 @@ def create_model_config(batch_size, hidden_size):
         core_grid=ttnn.CoreGrid(y=row, x=col),
         strategy=ttnn.ShardStrategy.WIDTH,
     )
+    configs["sharded_scan"] = ttnn.create_sharded_memory_config(
+        shape=(1, 1, batch_size, hidden_size * 2 * latent),
+        core_grid=ttnn.CoreGrid(y=8, x=8),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
     configs["SHARDED_NORM_PRGM_CFG"] = ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[col, row],
         subblock_w=(hidden_size // (col * row)) // 32,
@@ -34,7 +40,7 @@ def create_model_config(batch_size, hidden_size):
         block_w=(hidden_size // (col * row)) // 32,
         inplace=False,
     )
-    configs["dtype"] = {"activations": ttnn.bfloat16}
+    configs["dtype"] = {"activations": ttnn.bfloat8_b}
     return configs
 
 

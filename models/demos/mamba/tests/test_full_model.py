@@ -137,10 +137,12 @@ def run_prefill(
     reference_model.args.mode = ModelMode.PREFILL
 
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
-    input_ids = tokenizer("Hello", return_tensors="pt")["input_ids"]
+    # input_ids = tokenizer("Hello", return_tensors="pt")["input_ids"]
     # input_ids = input_ids.repeat(1, seq_len)
-    input_ids = torch.randint(0, 50256, (1, 32)).to(torch.long)
-
+    # input_ids = torch.randint(1, 100, (1, 32)).to(torch.long)
+    sentence = "Here is the reciepe to make a cake: Add flour, sugar, eggs, and milk in a bowl. Mix them well. Pour the mixture in a baking tray. Bake it for 30 minutes. Your cake is ready. You can decorate using fresh fruits and cookies. Enjoy!"
+    input_ids = tokenizer(sentence, return_tensors="pt")["input_ids"]
+    input_ids = input_ids[:, :seq_len]
     mamba_model_pytorch = MambaPytorch(reference_model, num_layers)
     mamba_model_pytorch.eval()
     for _ in range(iterations):
@@ -172,7 +174,7 @@ def run_prefill(
             "state-spaces/mamba-2.8b",
             32,
             0.98,
-            64,
+            1,
             1,
         ),
     ),

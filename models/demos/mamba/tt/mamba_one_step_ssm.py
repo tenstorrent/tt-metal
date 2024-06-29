@@ -11,6 +11,7 @@ from typing import Callable
 from models.demos.mamba.reference.args import ModelArgs
 from models.demos.mamba.reference.prefix_scan import sequential_prefix_scan
 from models.demos.mamba.tt.types import ModelMode
+from models.utility_functions import tt2torch_tensor, comp_pcc
 
 
 class TtMambaSSM(torch.nn.Module):
@@ -28,6 +29,7 @@ class TtMambaSSM(torch.nn.Module):
         self.rank = self.args.dt_rank
         self.seq_len = args.seq_len
         self.mode = args.mode
+        self.layer_num = load_fn("", return_layer_num=True)
 
         """
         We need to split up the x_proj weights because in the reference
@@ -107,13 +109,30 @@ class TtMambaSSM(torch.nn.Module):
         self.core_grid_col = 8
 
     def prefix_scan(self, A: ttnn.Tensor, x: ttnn.Tensor):
+        torch_scan = sequential_prefix_scan(ttnn.to_torch(A), ttnn.to_torch(x))
         return ttnn.from_torch(
-            sequential_prefix_scan(ttnn.to_torch(A), ttnn.to_torch(x)),
+            torch_scan,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+
+    def ttnn_prefix_scan(self, A: ttnn.Tensor, x: ttnn.Tensor):
+        # A = ttnn.experimental.tensor.interleaved_to_sharded(A, sharded_mem_config=self.configs["sharded_scan"])
+        # ttnn.deallocate(A)
+        # x = ttnn.experimental.tensor.interleaved_to_sharded(x, sharded_mem_config=self.configs["sharded_scan"])
+        # ttnn.deallocate(x)
+        A = ttnn.to_memory_config(A, self.configs["sharded_scan"])
+        x = ttnn.to_memory_config(x, self.configs["sharded_scan"])
+        scan_out = ttl.operations.primary.transformers.ssm_prefix_scan(
+            A, x, output_mem_config=self.configs["sharded_scan"], output_dtype=ttnn.bfloat8_b
+        )
+        ttnn.deallocate(A)
+        ttnn.deallocate(x)
+        scan_out = ttnn.to_memory_config(scan_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # ttnn.deallocate(scan_out)
+        return scan_out
 
     def forward(self, x: ttnn.Tensor):
         assert len(x.shape) == 4, "SSM block expects inputs to be rank 4"
@@ -141,13 +160,30 @@ class TtMambaSSM(torch.nn.Module):
         )
         ttnn.deallocate(delta_t0)
 
-        delta_t2 = ttnn.softplus(
-            delta_t1,
-            beta=1.0,
-            threshold=20.0,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(delta_t1)
+        torch_softplus = False
+        if torch_softplus:
+            delta_t1_torch = ttnn.to_torch(delta_t1)
+            ttnn.deallocate(delta_t1)
+
+            dir_name = "models/demos/mamba/data"
+            filename = f"{dir_name}/layer_{self.layer_num}_deltat_torch.pt"
+            # torch.save(delta_t1_torch, filename)
+            delta_t2 = torch.nn.functional.softplus(delta_t1_torch, beta=1.0, threshold=20.0)
+            delta_t2 = ttnn.from_torch(
+                delta_t2,
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=self.configs["dtype"]["activations"],
+            )
+        else:
+            delta_t2 = ttnn.softplus(
+                delta_t1,
+                beta=1.0,
+                threshold=20.0,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(delta_t1)
 
         # calculate abar
         abar0 = ttnn.to_memory_config(self.A, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -162,14 +198,27 @@ class TtMambaSSM(torch.nn.Module):
         )
         ttnn.deallocate(abar0)
 
-        abar2 = ttl.tensor.exp(
-            abar1,
-            fast_and_approx=True,
-            output_mem_config=ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-            ),
-        )
-        ttnn.deallocate(abar1)
+        torch_exp = False
+        if torch_exp:
+            abar2 = ttnn.to_torch(abar1)
+            ttnn.deallocate(abar1)
+            abar2 = torch.exp(abar2)
+            abar2 = ttnn.from_torch(
+                abar2,
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=self.configs["dtype"]["activations"],
+            )
+        else:
+            abar2 = ttl.tensor.exp(
+                abar1,
+                fast_and_approx=True,
+                output_mem_config=ttl.tensor.MemoryConfig(
+                    ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+                ),
+            )
+            ttnn.deallocate(abar1)
 
         # B
         B0 = ttnn.linear(
@@ -209,7 +258,24 @@ class TtMambaSSM(torch.nn.Module):
         ttnn.deallocate(bbar0)
 
         if self.mode == ModelMode.PREFILL:
-            hidden_state1 = self.prefix_scan(abar2, bmulx0)
+            torch_prefix_scan = True
+            if torch_prefix_scan:
+                hidden_state1 = self.prefix_scan(abar2, bmulx0)
+
+            if not torch_prefix_scan:
+                abar2 = ttnn.to_memory_config(abar2, self.configs["sharded_scan"])
+                bmulx0 = ttnn.to_memory_config(bmulx0, self.configs["sharded_scan"])
+                hidden_state_ttnn = ttl.operations.primary.transformers.ssm_prefix_scan(
+                    abar2, bmulx0, output_mem_config=self.configs["sharded_scan"], output_dtype=ttnn.bfloat8_b
+                )
+                hidden_state_ttnn_to_torch = ttnn.to_torch(hidden_state_ttnn)
+                hidden_state1 = ttnn.from_torch(
+                    hidden_state_ttnn_to_torch,
+                    device=self.device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=self.configs["dtype"]["activations"],
+                )
             ttnn.deallocate(abar2)
             ttnn.deallocate(bmulx0)
         else:

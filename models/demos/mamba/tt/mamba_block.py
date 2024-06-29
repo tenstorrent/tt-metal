@@ -122,6 +122,16 @@ class TtMambaBlock(torch.nn.Module):
             dtype=self.configs["dtype"]["activations"],
             activation="silu",
         )
+        # residual_torch = ttnn.to_torch(residual)
+        # ttnn.deallocate(residual)
+        # residual_torch = torch.nn.functional.silu(residual_torch)
+        # residual = ttnn.from_torch(
+        #     residual_torch,
+        #     device=self.device,
+        #     layout=ttnn.TILE_LAYOUT,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     dtype=self.configs["dtype"]["activations"],
+        # )
 
         x_ssm = ttnn.linear(
             x,
@@ -209,11 +219,12 @@ class TtMambaBlock(torch.nn.Module):
                 # x_ssm_host = ttnn.from_device(x_ssm)
                 # ttnn.deallocate(x_ssm)
                 # x_ssm_host = ttnn.to_layout(x_ssm_host, ttnn.ROW_MAJOR_LAYOUT)
-                conv_out_without_bias = self.tt_depthwise_conv1d(x_ssm)
+                conv_out_without_bias_sharded = self.tt_depthwise_conv1d(x_ssm)
                 ttnn.deallocate(x_ssm)
                 conv_out_without_bias = ttnn.to_memory_config(
-                    conv_out_without_bias, memory_config=ttnn.L1_MEMORY_CONFIG
+                    conv_out_without_bias_sharded, memory_config=ttnn.L1_MEMORY_CONFIG
                 )
+                ttnn.deallocate(conv_out_without_bias_sharded)
                 conv_out_with_bias = ttnn.add(
                     conv_out_without_bias,
                     self.conv1d_bias,
@@ -223,8 +234,21 @@ class TtMambaBlock(torch.nn.Module):
                 ttnn.deallocate(conv_out_without_bias)
 
         conv_out_with_bias_l1 = ttnn.to_memory_config(conv_out_with_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-        conv_out_after_silu = ttnn.silu(conv_out_with_bias_l1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(conv_out_with_bias_l1)
+        torch_silu = False
+        if not torch_silu:
+            conv_out_after_silu = ttnn.silu(conv_out_with_bias_l1, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(conv_out_with_bias_l1)
+        else:
+            conv_out_after_silu = ttnn.to_torch(conv_out_with_bias_l1)
+            ttnn.deallocate(conv_out_with_bias_l1)
+            conv_out_after_silu = torch.nn.functional.silu(conv_out_after_silu)
+            conv_out_after_silu = ttnn.from_torch(
+                conv_out_after_silu,
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=self.configs["dtype"]["activations"],
+            )
 
         ssm_output = self.tt_ssm(conv_out_after_silu)
 
