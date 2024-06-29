@@ -38,6 +38,7 @@ def run_perf_bert11(
     model_location_generator,
     device,
 ):
+    profiler.clear()
     model_config = get_model_config(batch_size, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
