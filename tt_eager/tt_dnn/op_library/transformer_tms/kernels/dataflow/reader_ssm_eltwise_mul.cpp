@@ -11,7 +11,9 @@ void kernel_main() {
     uint32_t src1_addr  = get_arg_val<uint32_t>(1);
     uint32_t in1_num_blocks = get_arg_val<uint32_t>(2);
     uint32_t in1_start_id = get_arg_val<uint32_t>(3);
-    uint32_t in1_num_blocks_w = get_arg_val<uint32_t>(4);
+    uint32_t in1_num_blocks_h = get_arg_val<uint32_t>(4);
+    uint32_t in1_num_blocks_w = get_arg_val<uint32_t>(5);
+    uint32_t in0_num_blocks_w = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
@@ -46,9 +48,7 @@ void kernel_main() {
     constexpr uint32_t bfloat16_one_row_in_face_bytes = 32;
     constexpr uint32_t in0_blocks_per_in1_block = 32;
 
-    constexpr uint32_t input_num_blocks_height = 1;
-
-    for(uint32_t block_h_id = 0; block_h_id < input_num_blocks_height; block_h_id++){
+    for(uint32_t block_h_id = 0; block_h_id < in1_num_blocks_h; block_h_id++){
         #ifdef REPEAT_IN0
             // in0 only has one tile and read in only once
             cb_reserve_back(cb_id_in0, onetile);
@@ -66,13 +66,6 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_id_in1, onetile);
 
-
-            // if (i == in1_start_id && block_h_id == 1) {
-            //     cb_wait_front(cb_id_in1, onetile);
-            //     DPRINT << in1_num_blocks_w<< ENDL();
-            //     DPRINT<< TSLICE(cb_id_in1, 0, SliceRange::h0_w0_32()) << ENDL();
-            // }
-
             #ifdef REPEAT_INTERLEAVE_IN1
                 cb_wait_front(cb_in1_transposed, onetile);
                 uint64_t cb_in1_transposed_read_ptr = get_noc_addr(get_read_ptr(cb_in1_transposed));
@@ -86,7 +79,7 @@ void kernel_main() {
                     #ifndef REPEAT_IN0
                         cb_reserve_back(cb_id_in0, onetile);
                         l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                        noc_async_read_tile(block_h_id*5120 + (i * in0_blocks_per_in1_block + tile_row_id), s0, l1_write_addr_in0);
+                        noc_async_read_tile(block_h_id*in0_num_blocks_w + (i * in0_blocks_per_in1_block + tile_row_id), s0, l1_write_addr_in0);
                     #endif
                     noc_async_read(cb_in1_transposed_read_ptr, cb_in1_bcast_row_write_ptr, bfloat16_one_row_in_face_bytes);
                     noc_async_read(cb_in1_transposed_read_ptr + bfloat16_one_face_bytes, cb_in1_bcast_row_write_ptr + bfloat16_one_face_bytes, bfloat16_one_row_in_face_bytes);

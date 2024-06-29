@@ -11,6 +11,7 @@
 namespace NAMESPACE {
 void MAIN {
     uint32_t in1_num_blocks = get_arg_val<uint32_t>(0);
+    uint32_t in1_num_blocks_h = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
@@ -29,9 +30,7 @@ void MAIN {
     binary_op_init_common(cb_id_in0, cb_id_in1);
 #endif
 
-constexpr uint32_t input_num_blocks_height = 1;
-
-for(uint32_t block_h_id = 0; block_h_id < input_num_blocks_height; block_h_id++){
+for(uint32_t block_h_id = 0; block_h_id < in1_num_blocks_h; block_h_id++){
 
 #ifdef REPEAT_IN0
     // Transpose in0
