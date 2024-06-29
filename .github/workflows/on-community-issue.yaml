@@ -1,14 +1,13 @@
 name: "Slack Notification on Community Issue"
 
 on:
-  push:
   issues:
     types: [opened]
   pull_request:
     types: [opened]
 
 jobs:
-  label-check:
+  gh-slack-bridge:
     runs-on: ubuntu-latest
 
     steps:
@@ -54,7 +53,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           LABELS: community
       - name: Send Slack Notification
-        if: ${{ steps.is_organization_member.outputs.is_member == 'true' }}
+        if: ${{ steps.is_organization_member.outputs.is_member == 'false' }}
         uses: slackapi/slack-github-action@v1.26.0
         with:
           payload: |
