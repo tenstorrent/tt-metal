@@ -224,4 +224,10 @@ min_bw = ttnn.register_operation(
     )
 )(ttnn._ttnn.operations.binary_backward.min_bw)
 
+max_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.max, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.max_bw)
+
 __all__ = []

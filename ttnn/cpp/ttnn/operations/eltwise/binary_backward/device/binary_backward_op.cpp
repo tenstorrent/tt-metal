@@ -514,6 +514,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _binary_ge_bw;
         case BinaryBackwardOpType::MIN_BW:
             return _min_or_max_bw<false>;
+        case BinaryBackwardOpType::MAX_BW:
+            return _min_or_max_bw<true>;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
