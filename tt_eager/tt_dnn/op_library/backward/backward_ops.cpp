@@ -1660,18 +1660,6 @@ std::vector<Tensor> selu_bw(const Tensor& grad, const Tensor& input, const Memor
     return operation::decorate_as_composite(__func__, _selu_bw)(grad, input, output_mem_config);
 }
 
-std::vector<Tensor> _binary_ge_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor zero_grad = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(zero_grad);
-    Tensor zero_input = zeros_like(input, output_mem_config);
-    grad_tensor.emplace_back(zero_input);
-    return grad_tensor;
-}
-std::vector<Tensor> binary_ge_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _binary_ge_bw)(grad, input, output_mem_config);
-}
-
 
 // Autoformat support
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
