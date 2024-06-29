@@ -562,8 +562,9 @@ void SSMEltwiseMul::validate(const std::vector<Tensor>& input_tensors) const {
     const auto bshape = input_tensor_b.get_legacy_shape();
     TT_FATAL((ashape[0] == 1 and ashape[1] == 1), "Batch not supported for input a!");
     TT_FATAL((bshape[0] == 1 and bshape[1] == 1), "Batch not supported for input b!");
-    TT_FATAL((ashape[2] == TILE_HEIGHT), "Num of users must be 32 for input a!");
-    TT_FATAL((bshape[2] == TILE_HEIGHT), "Num of users must be 32 for input b!");
+    TT_FATAL((ashape[2] % TILE_HEIGHT == 0), "Num of users must be multiple of 32 for input a!");
+    TT_FATAL((bshape[2] % TILE_HEIGHT == 0), "Num of users must be multiple of 32 for input b!");
+    TT_FATAL((ashape[2] == bshape[2]), "Num of users must match in both of the input!");
     TT_FATAL((ashape[3] != bshape[3]), "Use eltwise mul for same size inputs!");
     TT_FATAL(
         (ashape[3] == TILE_WIDTH || ashape[3] == TILE_WIDTH * HIDDEN_SIZE), "Input a width must be 32 or 32*5120!");
