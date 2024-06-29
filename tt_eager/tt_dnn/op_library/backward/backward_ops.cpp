@@ -279,67 +279,6 @@ std::vector<Tensor> unary_div_bw(
         grad, input, scalar, round_mode, output_mem_config);
 }
 
-std::vector<Tensor> _div_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    string round_mode,
-    const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    if (round_mode == "None") {
-        Tensor grad_a = ttnn::multiply(grad, recip(other, output_mem_config), std::nullopt, output_mem_config);
-        Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
-        Tensor t_nan = full_like(input, std::nanf(""), output_mem_config);
-        grad_tensor.emplace_back(where(
-            eqz(other, output_mem_config),
-            where(
-                eqz(grad, output_mem_config),
-                t_nan,
-                ttnn::multiply(t_inf, sign(grad, output_mem_config), std::nullopt, output_mem_config),
-                output_mem_config),
-            grad_a,
-            output_mem_config));
-        Tensor grad_b = ttnn::multiply(
-            neg(grad, output_mem_config),
-            (ttnn::multiply(input, recip(ttnn::square(other, output_mem_config), output_mem_config), std::nullopt, output_mem_config)),
-            std::nullopt,
-            output_mem_config);
-        grad_tensor.emplace_back(where(
-            eqz(other, output_mem_config),
-            where(
-                eqz(grad, output_mem_config),
-                t_nan,
-                where(
-                    eqz(input, output_mem_config),
-                    t_nan,
-                    ttnn::multiply(ttnn::multiply(neg(t_inf, output_mem_config),
-                            sign(input, output_mem_config),
-                            std::nullopt,
-                            output_mem_config),
-                        sign(grad, output_mem_config),
-                        std::nullopt,
-                        output_mem_config),
-                    output_mem_config),
-                output_mem_config),
-            grad_b,
-            output_mem_config));
-    } else {
-        Tensor grad_a = zeros_like(grad, output_mem_config);
-        grad_tensor.emplace_back(grad_a);
-        Tensor grad_b = zeros_like(grad, output_mem_config);
-        grad_tensor.emplace_back(grad_b);
-    }
-
-    return grad_tensor;
-}
-std::vector<Tensor> div_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    string round_mode,
-    const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _div_bw)(grad, input, other, round_mode, output_mem_config);
-}
 
 std::vector<Tensor> _rdiv_bw(
     const Tensor& grad, const Tensor& input, float scalar, string round_mode, const MemoryConfig& output_mem_config) {
