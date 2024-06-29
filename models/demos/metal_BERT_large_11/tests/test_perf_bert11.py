@@ -17,6 +17,8 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     profiler,
     is_e75,
+    run_for_grayskull,
+    run_for_wormhole_b0,
     skip_for_wormhole_b0,
 )
 from models.perf.perf_utils import prep_perf_report
@@ -49,7 +51,6 @@ def run_perf_bert11(
     first_attention_mask_key = "first_attention_mask"
     first_run_key = "first_run"
     second_run_accum_key = "second_run_accum"
-    second_run_key = "second_run"
     cpu_key = "ref_key"
 
     HF_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False, low_cpu_mem_usage=True)
@@ -147,16 +148,40 @@ def run_perf_bert11(
 
 
 @skip_for_wormhole_b0(reason_str="Didn't test on WH yet")
+@run_for_wormhole_b0(reason_str="WH specific batch size")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, model_config_str, expected_inference_time, expected_compile_time, inference_iterations",
-    (
-        [7, "BFLOAT8_B-SHARDED", 0.0329, 3.2, 10],
-        [8, "BFLOAT8_B-SHARDED", 0.0329, 3.2, 10],
-        [12, "BFLOAT8_B-SHARDED", 0.0326, 3.2, 10],
-    ),
+    ([8, "BFLOAT8_B-SHARDED", 0.0329, 6, 10],),
 )
-def test_perf_bare_metal(
+def test_perf_bare_metal_wh(
+    device,
+    use_program_cache,
+    batch_size,
+    model_config_str,
+    expected_inference_time,
+    expected_compile_time,
+    inference_iterations,
+    model_location_generator,
+):
+    run_perf_bert11(
+        batch_size,
+        model_config_str,
+        expected_inference_time,
+        expected_compile_time,
+        inference_iterations,
+        model_location_generator,
+        device,
+    )
+
+
+@run_for_grayskull(reason_str="Batch size only supported for GS")
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize(
+    "batch_size, model_config_str, expected_inference_time, expected_compile_time, inference_iterations",
+    ([12, "BFLOAT8_B-SHARDED", 0.0327, 6, 10],),
+)
+def test_perf_bare_metal_gs(
     device,
     use_program_cache,
     batch_size,
@@ -168,12 +193,6 @@ def test_perf_bare_metal(
 ):
     if is_e75(device):
         pytest.skip("Bert large 11 is not supported on E75")
-
-    if device.arch() == tt_lib.device.Arch.WORMHOLE_B0:
-        if (batch_size != 8) or (model_config_str != "BFLOAT8_B-SHARDED"):
-            pytest.skip("batch_8-BFLOAT8_B-SHARDED supported for WH B0")
-        elif batch_size == 8 and device.core_grid.y == 7:
-            pytest.skip("This test is only supported for 8x8 grids")
 
     run_perf_bert11(
         batch_size,

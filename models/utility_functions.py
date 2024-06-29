@@ -1034,6 +1034,14 @@ def skip_for_grayskull(reason_str="not working for Grayskull"):
     return pytest.mark.skipif(is_grayskull(), reason=reason_str)
 
 
+def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
+    return pytest.mark.skipif(not is_wormhole_b0(), reason=reason_str)
+
+
+def run_for_grayskull(reason_str="only runs for Grayskull"):
+    return pytest.mark.skipif(not is_grayskull(), reason=reason_str)
+
+
 def get_devices_for_t3000(all_devices, num_devices):
     """
     all_devices comes from fixture which devices in order from 0 to 7.
