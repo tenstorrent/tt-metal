@@ -1470,18 +1470,6 @@ std::vector<Tensor> log1p_bw(const Tensor& grad, const Tensor& input, const Memo
     return operation::decorate_as_composite(__func__, _log1p_bw)(grad, input, output_mem_config);
 }
 
-std::vector<Tensor> _binary_ne_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor zero_grad = zeros_like(grad, output_mem_config);
-    grad_tensor.emplace_back(zero_grad);
-    Tensor zero_input = zeros_like(input, output_mem_config);
-    grad_tensor.emplace_back(zero_input);
-    return grad_tensor;
-}
-std::vector<Tensor> binary_ne_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _binary_ne_bw)(grad, input, output_mem_config);
-}
-
 std::vector<Tensor> _erf_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = mul_unary(
