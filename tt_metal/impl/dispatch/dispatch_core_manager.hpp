@@ -84,8 +84,12 @@ class dispatch_core_manager {
 
     // Ugly to accept num HW CQs here but it is needed to pull the correct number of initially available dispatch cores for assignment
     static dispatch_core_manager &get(uint8_t num_hw_cqs) {
-        static dispatch_core_manager inst = dispatch_core_manager(num_hw_cqs);
-        return inst;
+        static std::unordered_map<uint8_t, std::unique_ptr<dispatch_core_manager>> dispatch_core_managers;
+        if (dispatch_core_managers[num_hw_cqs] == nullptr) {
+            // Need to do this since dispatch_core_manager constructor is private
+            dispatch_core_managers[num_hw_cqs] = std::unique_ptr<dispatch_core_manager>(new dispatch_core_manager(num_hw_cqs));
+        }
+        return *dispatch_core_managers[num_hw_cqs];
     }
 
     /// @brief Gets the location of the kernel desginated to read from the issue queue region from a particular command queue
