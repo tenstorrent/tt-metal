@@ -87,14 +87,14 @@ Example:
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor_a,
                const ttnn::Tensor& input_tensor_b,
-               const string value,
+               const string mode,
                const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
-                return self(grad_tensor, input_tensor_a, value, input_tensor_b, memory_config);
+                return self(grad_tensor, input_tensor_a, mode, input_tensor_b, memory_config);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
-            py::arg("value"),
+            py::arg("mode"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt},
 
@@ -311,6 +311,11 @@ void py_module(py::module& module) {
         module,
         ttnn::max_bw,
         R"doc(Performs backward operations for maximum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
+
+    detail::bind_binary_backward(
+        module,
+        ttnn::div_bw,
+        R"doc(Performs backward operations for divide of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 
 }
 
