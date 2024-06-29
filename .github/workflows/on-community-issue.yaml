@@ -1,6 +1,7 @@
 name: "Slack Notification on Community Issue"
 
 on:
+  push:
   issues:
     types: [opened]
   pull_request:
@@ -28,6 +29,7 @@ jobs:
             echo "GH_COMMAND=pr" >> $GITHUB_ENV
           else
             echo "USERNAME=${{ github.actor }}" >> $GITHUB_ENV
+            echo "EVENT_TYPE=Push" >> $GITHUB_ENV
           fi
       - name: Check if organization member
         id: is_organization_member
@@ -39,7 +41,7 @@ jobs:
             echo "is_member=false" >> $GITHUB_OUTPUT
           fi
       - name: Add community label
-        if: ${{ steps.is_organization_member.outputs.result == 'false' }} && ${{ env.GH_COMMAND }} != '' && ${{ env.NUMBER }} != ''
+        if: ${{ steps.is_organization_member.outputs.result == 'false' && env.GH_COMMAND && env.NUMBER }}
         run: |
           gh ${{env.GH_COMMAND}} edit ${{ env.NUMBER }} --add-label ${{ env.LABELS }}
         env:
