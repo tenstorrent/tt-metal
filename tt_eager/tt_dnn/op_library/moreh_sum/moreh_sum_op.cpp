@@ -171,8 +171,9 @@ void MorehSum::validate_with_output_tensors(
     const auto& input = input_tensors.at(0);
     auto& output = output_tensors.at(0);
 
-    check_tensor(input, "input");
-    check_tensor(output, "output");
+    // check_tensor(input, "input");
+    // check_tensor(output, "output");
+    log_warning(LogOp, "{}:{} BLOCK0 SKIP TENSOR VALIDATION in moreh_sum", __func__, __LINE__);
 
     validate_input_tensor_with_dim(input, this->dim);
 

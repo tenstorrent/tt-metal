@@ -18,8 +18,8 @@ if (NOT CLANG_17)
     message(FATAL_ERROR "clang-17 not found")
 endif()
 
-set(CMAKE_CXX_COMPILER "g++-11")
-set(CMAKE_C_COMPILER "gcc-11")
+set(CMAKE_CXX_COMPILER "/usr/bin/g++-11")
+set(CMAKE_C_COMPILER "/usr/bin/gcc-11")
 
 if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(FATAL_ERROR "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!")
