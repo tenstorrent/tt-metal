@@ -1,0 +1,64 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/core.hpp"
+#include "ttnn/validation.hpp"
+
+#include "tt_eager/tt_dnn/op_library/run_operation.hpp"
+
+#include "device/{{ snake_operation_name }}_op.hpp"
+#include "ttnn/cpp/ttnn/types.hpp"
+
+namespace ttnn {
+namespace operations{% if category %}::{{ category }}{% endif %} {
+
+struct Execute{{ operation_name }} {
+    static inline const std::array<TensorSchema, 1> input_tensor_schemas() {
+        return {ttnn::TensorSchema{4, 4, {ttnn::bfloat8_b, ttnn::bfloat16}, {ttnn::TILE_LAYOUT}, true, false, false, false}};
+    }
+
+    template <typename... Args>
+    static auto input_tensors_to_validate(uint8_t queue_id, const Tensor& input_tensor, Args&&... args) {
+        return std::forward_as_tuple(input_tensor);
+    }
+
+    static inline std::vector<Tensor> execute_on_worker_thread(
+        uint8_t queue_id,
+        const Tensor &input_tensor,
+        const uint16_t k,
+        const int8_t dim,
+        const bool largest,
+        const bool sorted,
+        const std::optional<MemoryConfig>& memory_config,
+        std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors = std::nullopt) {
+
+        PLEASE WRITE CODE HERE
+
+    }
+
+    template <typename... Args>
+    static auto input_tensors_to_validate(const Tensor& input_tensor, Args&&... args) {
+        return std::forward_as_tuple(input_tensor);
+    }
+
+    static inline auto execute_on_worker_thread(
+        const Tensor &input_tensor,
+        const uint16_t k,
+        const int8_t dim,
+        const bool largest,
+        const bool sorted,
+        const std::optional<MemoryConfig>& memory_config,
+        std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
+        return execute_on_worker_thread(0, input_tensor, k, dim, largest, sorted, memory_config, optional_output_tensors);
+    }
+};
+
+}  // namespace operations{% if category %}::{{ category }}{% endif %}
+
+constexpr auto {{ snake_operation_name }} = ttnn::register_operation<{{ full_namespace }}::Execute{{ operation_name }}>("ttnn::{{ snake_operation_name}}");
+
+}  // namespace ttnn
