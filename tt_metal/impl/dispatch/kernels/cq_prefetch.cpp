@@ -278,7 +278,10 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
             // By here, prefetch_q_ready must be false
             // Nothing to fetch, nothing pending, nothing available, stall on host
             DEBUG_STATUS("HQW");
-            while ((fetch_size = *prefetch_q_rd_ptr) == 0);
+            uint32_t heartbeat = 0;
+            while ((fetch_size = *prefetch_q_rd_ptr) == 0) {
+                IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+            }
             fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
             DEBUG_STATUS("HQD");
         }
@@ -841,13 +844,9 @@ uint32_t process_stall(uint32_t cmd_ptr) {
     DEBUG_STATUS("PSW");
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(downstream_sync_sem_id));
-#if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
-#endif
     while (*sem_addr != count) {
-#if defined(COMPILE_FOR_IDLE_ERISC)
-        RISC_POST_HEARTBEAT(heartbeat);
-#endif
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, CQ_PREFETCH_CMD_BARE_MIN_SIZE);
     }
     DEBUG_STATUS("PSD");
 
@@ -1252,6 +1251,7 @@ inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr) {
                                    block_noc_writes_to_clear,
                                    block_next_start_addr,
                                    rd_block_idx);
+        IDLE_ERISC_RETURN(length - sizeof(CQPrefetchHToPrefetchDHeader));
     }
 
     data_ptr += sizeof(CQPrefetchHToPrefetchDHeader);
@@ -1265,8 +1265,11 @@ void kernel_main_h() {
     uint32_t fence = cmddat_q_base;
 
     bool done = false;
+    uint32_t heartbeat = 0;
     while (!done) {
         fetch_q_get_cmds<sizeof(CQPrefetchHToPrefetchDHeader)>(fence, cmd_ptr, pcie_read_ptr);
+
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
 
         volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
         uint32_t cmd_id = cmd->base.cmd_id;
@@ -1280,10 +1283,6 @@ void kernel_main_h() {
             DPRINT << "prefetch terminating_10" << ENDL();
             done = true;
         }
-#if defined(COMPILE_FOR_IDLE_ERISC)
-        uint32_t heartbeat = 0;
-        RISC_POST_HEARTBEAT(heartbeat);
-#endif
     }
 }
 
@@ -1302,10 +1301,13 @@ void kernel_main_d() {
     uint32_t fence = cmddat_q_base;
 
     bool done = false;
+    uint32_t heartbeat = 0;
     while (!done) {
         // cmds come in packed batches based on HostQ reads in prefetch_h
         // once a packed batch ends, we need to jump to the next page
         uint32_t length = relay_cb_get_cmds(fence, cmd_ptr);
+
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
 
         uint32_t amt_processed = 0;
         while (length > amt_processed) {
@@ -1334,10 +1336,6 @@ void kernel_main_d() {
 
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, cmddat_q_page_size);
-#if defined(COMPILE_FOR_IDLE_ERISC)
-        uint32_t heartbeat = 0;
-        RISC_POST_HEARTBEAT(heartbeat);
-#endif
     }
 
     // Set upstream semaphore MSB to signal completion and path teardown
@@ -1353,20 +1351,19 @@ void kernel_main_hd() {
     uint32_t cmd_ptr = cmddat_q_base;
     uint32_t fence = cmddat_q_base;
     bool done = false;
+    uint32_t heartbeat = 0;
     while (!done) {
         DeviceZoneScopedND("KERNEL-MAIN-HD", block_noc_writes_to_clear, rd_block_idx );
         constexpr uint32_t preamble_size = 0;
         fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
+
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
 
         volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
 
         uint32_t stride;
         done = process_cmd<false, false>(cmd_ptr, downstream_data_ptr, stride);
         cmd_ptr += stride;
-#if defined(COMPILE_FOR_IDLE_ERISC)
-        uint32_t heartbeat = 0;
-        RISC_POST_HEARTBEAT(heartbeat);
-#endif
     }
 }
 
@@ -1385,6 +1382,7 @@ void kernel_main() {
     } else {
         ASSERT(0);
     }
+    IDLE_ERISC_RETURN();
 
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_downstream_cb_sem_id>(downstream_cb_pages);

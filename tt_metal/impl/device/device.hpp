@@ -215,14 +215,19 @@ class Device {
     void initialize_build();
     void build_firmware();
     void initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg);
+    void reset_cores();
     void initialize_and_launch_firmware();
-    void initialize_command_queue();
+    void init_command_queue_host();
+    void init_command_queue_device();
     void initialize_synchronous_sw_cmd_queue();
     void configure_kernel_variant(Program& program, string path, std::vector<uint32_t> compile_args, CoreCoord kernel_core, CoreCoord Kernel_physical_core,
                                   CoreType dispatch_core_type, CoreCoord upstream_physical_core, CoreCoord downstream_physical_core, std::map<string, string> defines_in, NOC noc_index, bool is_active_eth_core = false);
     void compile_command_queue_programs();
     void configure_command_queue_programs();
     void clear_l1_state();
+    void get_associated_dispatch_phys_cores(
+        std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &my_dispatch_cores,
+        std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &other_dispatch_cores);
     std::pair<int, int> build_processor_type_to_index(JitBuildProcessorType t) const;
 
     // Puts device into reset
@@ -251,6 +256,8 @@ class Device {
     bool initialized_ = false;
     std::map<uint32_t, std::map<chip_id_t, std::vector<std::vector<std::tuple<tt_cxy_pair, worker_build_settings_t>>>>> tunnel_device_dispatch_workers_;
     std::vector<std::vector<chip_id_t>> tunnels_from_mmio_;
+    bool skip_teardown = false;
+    void set_skip_teardown(bool skip) { skip_teardown = skip; }
 
     JitBuildEnv build_env_;
     JitBuildStateSet firmware_build_states_;

@@ -114,7 +114,8 @@ CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id = 0);
 
 namespace internal_ {
 
-void wait_until_cores_done(chip_id_t device_id, int run_state, std::unordered_set<CoreCoord> &not_done_phys_cores);
+void wait_until_cores_done(
+    chip_id_t device_id, int run_state, std::unordered_set<CoreCoord> &not_done_phys_cores, int timeout_ms = 0);
 
 }  // namespace internal_
 

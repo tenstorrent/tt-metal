@@ -37,6 +37,7 @@ set (TT_METAL_TESTS
     test_core_range_set
     test_compile_sets_kernel_binaries
     test_compile_program
+    test_clean_init
 )
 
 foreach (TEST ${TT_METAL_TESTS})
