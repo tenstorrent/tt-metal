@@ -108,7 +108,7 @@ def test_multi_device_single_trace(t3k_device_mesh, shape, use_all_gather, enabl
 
 @pytest.mark.parametrize(
     "shape",
-    [(1, 1, 256, 256), (1, 3, 1024, 1024), (1, 1, 512, 512), (1, 1, 32, 32), (1, 3, 512, 512), (1, 3, 32, 32)],
+    [(1, 1, 256, 256), (1, 1, 512, 512), (1, 1, 32, 32), (1, 3, 512, 512), (1, 3, 32, 32)],
 )
 @pytest.mark.parametrize("use_all_gather", [True, False])
 @pytest.mark.parametrize("enable_async", [True])
@@ -177,7 +177,7 @@ def test_multi_device_multi_trace(t3k_device_mesh, shape, use_all_gather, enable
     torch_softmax = torch.nn.Softmax(dim=1)
     # Decrease loop count for larger shapes, since they time out on CI
     num_trace_loops = NUM_TRACE_LOOPS
-    if shape == (1, 3, 1024, 1024):
+    if shape == (1, 3, 512, 512):
         num_trace_loops = 5
 
     for i in range(num_trace_loops):

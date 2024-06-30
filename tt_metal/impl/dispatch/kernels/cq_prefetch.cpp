@@ -235,6 +235,7 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
             // by preamble size. After ensuring that the exec_buf command has been read (barrier),
             // exit.
             barrier_and_stall(pending_read_size, fence, cmd_ptr); // STALL_NEXT -> STALLED
+            return;
         }
     }
     if (!cmd_ready) {
