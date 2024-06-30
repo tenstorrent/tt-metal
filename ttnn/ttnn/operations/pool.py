@@ -4,7 +4,6 @@
 
 from typing import Tuple, Union, Dict
 
-import tt_lib as ttl
 
 import sys
 import ttnn
@@ -12,6 +11,7 @@ import ttnn
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import (
     TTPyMaxPool,
     SlidingWindowOpParams,
+    SlidingWindowOpParamsWithParallelConfig,
 )
 
 THIS_MODULE = sys.modules[__name__]
@@ -136,5 +136,7 @@ def _golden_function(input_tensor: ttnn.Tensor):
 global_avg_pool2d = ttnn.register_operation(golden_function=_golden_function)(
     ttnn._ttnn.operations.pool.global_avg_pool2d
 )
+
+max_pool2d = ttnn._ttnn.operations.pool.max_pool2d
 
 __all__ = []

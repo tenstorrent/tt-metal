@@ -508,5 +508,6 @@ from ttnn.operations.conv2d import Conv2d, conv2d, Conv2dConfig, get_conv_output
 from ttnn.operations.pool import (
     MaxPool2d,
     global_avg_pool2d,
+    max_pool2d,
 )
 from ttnn.operations.copy import typecast

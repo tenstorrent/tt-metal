@@ -17,6 +17,7 @@ from models.utility_functions import comp_pcc
 
 from functools import reduce
 import operator
+import ttnn
 
 
 def volume(shape):
@@ -236,7 +237,7 @@ def test_run_max_pool(
     else:
         ttact = ttact.to(device, in_mem_config)
 
-    out_padded = ttl.tensor.max_pool2d(
+    out_padded = ttnn.max_pool2d(
         ttact,
         in_n,
         in_h,
