@@ -538,6 +538,18 @@ def bitwise_not(x, *args, **kwargs):
     return result
 
 
+def bitwise_and(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.bitwise_and(x, value)
+    return result
+
+
+def bitwise_or(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.bitwise_or(x, value)
+    return result
+
+
 def right_shift(x, *args, **kwargs):
     value = kwargs.pop("value")
     result = torch.bitwise_right_shift(x, value)
