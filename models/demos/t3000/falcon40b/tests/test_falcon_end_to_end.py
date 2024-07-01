@@ -65,7 +65,7 @@ def run_test_FalconCausalLM_end_to_end(
     # Prepare input ------------------------------------------------------------------------
     torch.manual_seed(0)
     base_url = ""
-    max_position_embeddings = 2048
+    max_position_embeddings = max(2048, seq_len)
     head_dim = configuration.hidden_size // configuration.num_attention_heads
     num_attention_heads = configuration.num_attention_heads
     num_kv_heads = configuration.num_kv_heads
@@ -401,23 +401,17 @@ def run_test_FalconCausalLM_end_to_end(
     (
         ("prefill", 1, 32, 0),
         ("prefill", 2, 32, 0),
-        # ("prefill", 1, 64, 0),
         ("prefill", 1, 128, 0),
-        # ("prefill", 1, 256, 0),
-        # ("prefill", 1, 512, 0),
-        # ("prefill", 1, 1024, 0),
         ("prefill", 1, 2048, 0),
+        # ("prefill", 1, 8192, 0),  # Do not run in CI: takes too long
         ("decode", 32, 1, 128),
     ),
     ids=[
         "prefill_seq32",
         "prefill_seq32_batch2",
-        # "prefill_seq64",
         "prefill_seq128",
-        # "prefill_seq256",
-        # "prefill_seq512",
-        # "prefill_seq1024",
         "prefill_seq2048",
+        # "prefill_seq8192",
         "decode_batch32",
     ],
 )

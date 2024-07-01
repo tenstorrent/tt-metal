@@ -747,6 +747,8 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     model_config["row_height"] = row_height
     model_config["BATCH_SIZE"] = batch_size
     model_config["SEQ_LEN"] = seq_len
+    model_config["MAX_MM_SEQ_LEN"] = 2048
+    model_config["MM_SEQ_LEN_BATCHED"] = 1024
 
     # Layernorm is an exception that are sharded also here, because the interleaved OP does not fit in L1 for 40b hidden size
     layernorm_num_cores_x = 8

@@ -120,6 +120,15 @@ class TtFalconCausalLM(TtFalconModelShared):
         should_deallocate_ln_tensors = determine_tensor_deallocation(
             self.model_config["layernorm_params"]["slice_size"], hidden_states.get_legacy_shape()[2]
         )
+
+        # Reshape to compute long sequence lengths as multiple MM loops
+        _, _, seq_len, _ = hidden_states.shape
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        mm_seq_len_batched = self.model_config["MM_SEQ_LEN_BATCHED"]
+        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // mm_seq_len_batched
+        if batch_dim != 1:
+            hidden_states = ttnn.reshape(hidden_states, (1, batch_dim, seq_len // batch_dim, -1))
+
         # LM Head
         lm_logits = falcon_prefill_matmul(
             hidden_states,
@@ -134,7 +143,12 @@ class TtFalconCausalLM(TtFalconModelShared):
             overwrite_per_core_k=1,  # TODO: can we increase this?
             overwrite_subblock_w=overwrite_subblock_w,
             overwrite_subblock_h=overwrite_subblock_h,
+            fuse_batch_mm2d=False,
         )
+
+        # Reshape to compute long sequence lengths as multiple MM loops (reverse)
+        if batch_dim != 1:
+            lm_logits = ttnn.reshape(lm_logits, (1, 1, seq_len, -1))
 
         if should_deallocate_ln_tensors:
             hidden_states.deallocate(True)

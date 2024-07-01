@@ -110,12 +110,14 @@ def run_test_FalconMLP_inference(
         ("prefill", 1, 32),
         ("prefill", 1, 128),
         ("prefill", 1, 2048),
+        # ("prefill", 1, 8192),  # Do not run in CI: takes too long
     ),
     ids=(
         "decode_batch32",
         "prefill_seq32",
         "prefill_seq128",
         "prefill_seq2048",
+        # "prefill_seq8192",
     ),
 )
 @pytest.mark.parametrize(

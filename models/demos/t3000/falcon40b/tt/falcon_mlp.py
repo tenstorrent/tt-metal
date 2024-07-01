@@ -111,6 +111,15 @@ class TtFalconMLP:
         should_deallocate_ln_tensors = determine_tensor_deallocation(
             self.model_config["layernorm_params"]["slice_size"], x.get_legacy_shape()[2]
         )
+
+        # Reshape to compute long sequence lengths as multiple MM loops
+        _, _, seq_len, _ = x.shape
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        mm_seq_len_batched = self.model_config["MM_SEQ_LEN_BATCHED"]
+        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // mm_seq_len_batched
+        if batch_dim != 1:
+            x = ttnn.reshape(x, (1, batch_dim, seq_len // batch_dim, self.hidden_size))
+
         hidden_states = falcon_prefill_matmul(
             x,
             self.dense_h_to_4h_weights,
@@ -120,6 +129,7 @@ class TtFalconMLP:
             act=[ttnn.experimental.tensor.FusibleActivation.GELU, True],
             overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
             overwrite_subblock_h=1,
+            fuse_batch_mm2d=False,
         )
         hidden_states = ttnn.all_gather(
             hidden_states,
@@ -138,6 +148,14 @@ class TtFalconMLP:
             output_dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
             overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
             overwrite_subblock_h=1,
+            fuse_batch_mm2d=False,
         )
+
+        # Reshape to compute long sequence lengths as multiple MM loops (reverse)
+        if batch_dim != 1:
+            hidden_states = ttnn.reshape(
+                hidden_states, (1, 1, seq_len, self.hidden_size // self.model_config["NUM_DEVICES"])
+            )
+
         # return TT Tensor
         return hidden_states

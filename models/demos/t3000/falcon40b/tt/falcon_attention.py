@@ -337,6 +337,21 @@ class TtFalconAttention:
         q_len = hidden_states.get_legacy_shape()[2]
         assert layer_past is not None
 
+        print("Reshape")
+
+        print(hidden_states.shape)
+
+        # Reshape to compute long sequence lengths as multiple MM loops
+        _, _, seq_len, _ = hidden_states.shape
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        mm_seq_len_batched = self.model_config["MM_SEQ_LEN_BATCHED"]
+        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // mm_seq_len_batched
+        if batch_dim != 1:
+            hidden_states = ttnn.reshape(hidden_states, (1, batch_dim, seq_len // batch_dim, -1))
+
+        print("qkv proj")
+        print(hidden_states.shape)
+
         # Fused query, key and value projection
         fused_query_key_value = falcon_prefill_matmul(
             hidden_states,
@@ -345,8 +360,20 @@ class TtFalconAttention:
             output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
             output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
             grid=ttnn.CoreGrid(x=8, y=8) if q_len >= 512 else ttnn.CoreGrid(x=8, y=min(q_len // 32, 8)),
-            transpose_mcast=True,
+            overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
+            overwrite_subblock_h=1,
+            fuse_batch_mm2d=False,
         )
+
+        print("Reshape back")
+        print(fused_query_key_value.shape)
+
+        # Reshape to compute long sequence lengths as multiple MM loops (reverse)
+        if batch_dim != 1:
+            fused_query_key_value = ttnn.reshape(fused_query_key_value, (1, 1, seq_len, -1))
+
+        print("nlp_create_qkv_heads")
+        print(fused_query_key_value.shape)
 
         query_layer, key_layer, value_layer = ttnn.experimental.tensor.nlp_create_qkv_heads(
             fused_query_key_value,
@@ -357,9 +384,13 @@ class TtFalconAttention:
         )
         fused_query_key_value.deallocate(True)
 
+        print("rotary_embedding")
+
         # Rotary embeddings
         query_layer = self.rotary_embedding(query_layer)
         key_layer = self.rotary_embedding(key_layer)
+
+        print("fill kvcaches")
 
         # K Cache update
         ttnn.experimental.tensor.fill_cache(
@@ -382,6 +413,8 @@ class TtFalconAttention:
 
         slice_size = self.model_config["attention_params"]["attention_slice_size"]
         num_slices = self.model_config["attention_params"]["attention_num_slices"]
+
+        print("sdpa")
 
         if num_slices > 1:
             for slice_i in range(num_slices):
@@ -436,6 +469,8 @@ class TtFalconAttention:
         key_layer_transposed.deallocate(True)
         value_layer.deallocate(True)
 
+        print("out proj")
+
         # Output projection
         attn_output = ttnn.experimental.tensor.nlp_concat_heads(
             attn_output,
@@ -447,6 +482,15 @@ class TtFalconAttention:
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
+
+        # Reshape to compute long sequence lengths as multiple MM loops
+        _, _, seq_len, _ = attn_output.shape
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        mm_seq_len_batched = self.model_config["MM_SEQ_LEN_BATCHED"]
+        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // mm_seq_len_batched
+        if batch_dim != 1:
+            attn_output = ttnn.reshape(attn_output, (1, batch_dim, seq_len // batch_dim, -1))
+
         attn_output = falcon_prefill_matmul(
             attn_output,
             self.dense_weights,
@@ -455,7 +499,13 @@ class TtFalconAttention:
             output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
             overwrite_subblock_w=1,  # Workaround for non deterministic output/hang; issue: 7066
             overwrite_subblock_h=1,
+            fuse_batch_mm2d=False,
         )
+
+        # Reshape to compute long sequence lengths as multiple MM loops (reverse)
+        if batch_dim != 1:
+            attn_output = ttnn.reshape(attn_output, (1, 1, seq_len, -1))
+
         # There are references to tensors in case seq_len > 512
         # so we won't force deallocation
         should_deallocate_tensors = determine_tensor_deallocation(
