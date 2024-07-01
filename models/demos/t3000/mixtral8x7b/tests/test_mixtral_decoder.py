@@ -76,8 +76,7 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
         )
         # Run TT model
         tt_out_b1sh = tt_model(decode_input_b1sh, start_pos, current_pos, attn_mask, current_rot_mat)
-        # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
-        del decode_input_b1sh, attn_mask
+
         tt_output_torch_b1h = (
             ttnn.to_torch(tt_out_b1sh, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
             .squeeze(1)

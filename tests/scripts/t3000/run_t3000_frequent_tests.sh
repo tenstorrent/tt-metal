@@ -50,7 +50,7 @@ run_t3000_mixtral_tests() {
   echo "LOG_METAL: Running run_t3000_mixtral_tests"
 
   # mixtral8x7b 8 chip decode model test (env flags set inside the test)
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py::test_mixtral_model_inference[wormhole_b0-True-10-1-pcc] ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

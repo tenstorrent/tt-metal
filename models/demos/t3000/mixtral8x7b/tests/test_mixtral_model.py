@@ -36,37 +36,22 @@ class Emb(torch.nn.Module):
         return self.emb(x)
 
 
-@pytest.mark.parametrize(
-    "validation_type",
-    ("pcc", "output"),
-)
-@pytest.mark.parametrize(
-    "n_layers",
-    (1, 32),
-)
-@pytest.mark.parametrize(
-    "iterations",
-    (1, 10),
-)
-def test_mixtral_model_inference(
-    t3k_device_mesh, use_program_cache, reset_seeds, iterations, n_layers, validation_type
-):
-    pcc = 0.97
+def test_mixtral_model_inference(t3k_device_mesh, use_program_cache, reset_seeds):
+    valid_pcc = 0.97
     dtype = ttnn.bfloat8_b
+    iterations = 10
 
     model_args = TtModelArgs(t3k_device_mesh.get_device(0))
-    model_args.n_layers = n_layers
-
     state_dict = model_args.load_state_dict()
-
     tokenizer = Tokenizer(model_args.tokenizer_path)
+
     prompts = ["Once"] * 32
     encoded_prompts = [tokenizer.encode(prompt) for prompt in prompts]
 
-    if validation_type == "pcc":
-        reference_model = Transformer(args=model_args)
-        reference_model.load_state_dict(state_dict)
-        reference_model.eval()
+    # Load reference model
+    reference_model = Transformer(args=model_args)
+    reference_model.load_state_dict(state_dict)
+    reference_model.eval()
 
     # Embedding on host
     embd = Emb()
@@ -112,8 +97,7 @@ def test_mixtral_model_inference(
 
         # Run TT model
         tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask)
-        # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
-        del decode_input, attn_mask
+
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
@@ -124,68 +108,42 @@ def test_mixtral_model_inference(
         )
 
         # Measure PCC
-        if validation_type == "pcc":
-            positions = torch.LongTensor([start_pos])
-            ref_output = reference_model(pt_decode_input, positions).detach().float()
+        positions = torch.LongTensor([start_pos])
+        ref_output = reference_model(pt_decode_input, positions).detach().float()
 
-            passing, pcc_message = comp_pcc(
-                ref_output.view(batch, seqlen, -1), tt_output_torch.view(batch, seqlen, -1), pcc
-            )
-            logger.info(comp_allclose(ref_output, tt_output_torch))
-            logger.info(pcc_message)
+        passing, pcc_message = comp_pcc(
+            ref_output.view(batch, seqlen, -1), tt_output_torch.view(batch, seqlen, -1), valid_pcc
+        )
+        logger.info(comp_allclose(ref_output, tt_output_torch))
+        logger.info(pcc_message)
 
-            reference_top1 = np.argmax(ref_output, axis=-1).squeeze()
-            top1_acc = top_k_accuracy_score(
-                reference_top1, tt_output_torch.squeeze(), k=1, labels=np.arange(tt_output_torch.shape[-1])
-            )
-            top5_acc = top_k_accuracy_score(
-                reference_top1, tt_output_torch.squeeze(), k=5, labels=np.arange(tt_output_torch.shape[-1])
-            )
-            logger.info(f"Mean Top-1: {top1_acc}")
-            logger.info(f"Mean Top-5: {top5_acc}")
+        reference_top1 = np.argmax(ref_output, axis=-1).squeeze()
+        top1_acc = top_k_accuracy_score(
+            reference_top1, tt_output_torch.squeeze(), k=1, labels=np.arange(tt_output_torch.shape[-1])
+        )
+        top5_acc = top_k_accuracy_score(
+            reference_top1, tt_output_torch.squeeze(), k=5, labels=np.arange(tt_output_torch.shape[-1])
+        )
+        logger.info(f"Mean Top-1: {top1_acc}")
+        logger.info(f"Mean Top-5: {top5_acc}")
 
-            ref_token_batch = ref_output.squeeze().argmax(axis=-1)
-            tt_token_batch = tt_output_torch.squeeze().argmax(axis=-1)
-            logger.info(f"ref_output: {tokenizer.decode(ref_token_batch[0].item())}")
-            logger.info(f"tt_output: {tokenizer.decode(tt_token_batch[0].item())}")
-            pt_decode_input = embd(ref_token_batch).view(batch, seqlen, -1)
-            tt_decode_input = pt_decode_input  # teacher forcing for PCC test
+        ref_token_batch = ref_output.squeeze().argmax(axis=-1)
+        tt_token_batch = tt_output_torch.squeeze().argmax(axis=-1)
+        logger.info(f"ref_output: {tokenizer.decode(ref_token_batch[0].item())}")
+        logger.info(f"tt_output: {tokenizer.decode(tt_token_batch[0].item())}")
+        pt_decode_input = embd(ref_token_batch).view(batch, seqlen, -1)
+        tt_decode_input = pt_decode_input  # teacher forcing for PCC test
+
+        if passing:
+            logger.info("Mistral Model Passed!")
         else:
-            tt_token_batch = tt_output_torch.squeeze().argmax(axis=-1)
-            tt_tokens.append(tt_token_batch[0].item())
-            logger.info(f'tt_output_torch: {"".join(tokenizer.decode(tt_tokens))}')
-            tt_decode_input = embd(tt_token_batch).view(batch, seqlen, -1)
-
-        if validation_type == "pcc":
-            if passing:
-                logger.info("Mistral Model Passed!")
-            else:
-                logger.warning("Mistral Model Failed!")
-                all_tests_pass = False
-
-    if validation_type == "output":
-        if iterations == 1:  # First generated token will be a empty character, so just ignore output validation
-            all_tests_pass = True
-        elif iterations == 10:
-            expected_output = "# The 10 Best Places to Live"
-            logger.info(f"Expected output: {expected_output}")
-            if "".join(tokenizer.decode(tt_tokens)) == expected_output:
-                all_tests_pass = True
-            else:
-                all_tests_pass = False
-        elif iterations == 127:  # TODO Check the baseline output for 127 iterations
-            logger.info("Output validation not yet implemented for 127 iterations.")
-            all_tests_pass = True
-        else:
-            logger.info("Output validation not  implemented for this iteration count!")
-            all_tests_pass = True
+            logger.warning("Mistral Model Failed!")
+            all_tests_pass = False
 
     if all_tests_pass:
         logger.info(f"All {generation_length} Mistral decode iterations Passed!")
     else:
         logger.warning("One or more iterations of Mistral decode Failed!")
-        if validation_type == "pcc":
-            assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
-        else:
-            logger.info(f'Generated output: {"".join(tokenizer.decode(tt_tokens))}')
-            assert all_tests_pass, f"Expected output did not match the generated output!"
+        assert (
+            all_tests_pass
+        ), f"PCC value is lower than the expected {valid_pcc} for some of the outputs. Check Warnings!"

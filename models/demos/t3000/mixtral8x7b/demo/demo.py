@@ -171,8 +171,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
 
         # Run ttnn mixtral model
         tt_out_11BH = tt_model(decode_input_11BH, start_pos, current_pos, attn_mask)
-        # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
-        del decode_input_11BH, attn_mask
+
         if embed_on_host:
             # Convert ttnn tensor to torch tensor
             tt_output_torch = (
@@ -246,7 +245,6 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
             for user in range(batch_size):
                 logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
 
-    # TODO Introduce more robust perplexity and top1/top5 accuracy checks
     # When running in CI, check the output against the expected output to avoid accuracy regressions
     if os.getenv("CI") == "true":
         expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs.json"
@@ -267,6 +265,8 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode):
         logger.info("[CI-Only] Output token validation passed!")
 
 
+# Avoid running this test when in CI
+@pytest.mark.skipif(os.getenv("CI") == "True", reason="Non-CI tests")
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
     [
@@ -281,7 +281,7 @@ def test_mixtral8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, ins
     )
 
 
-# On CI only run general weights demo
+# CI only runs general-weights demo
 @pytest.mark.skipif(os.getenv("CI") == "False", reason="CI-only test")
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",

@@ -180,7 +180,6 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
         profiler.end(f"torch_argmax_and_embed_{i}")
 
         profiler.start(f"deallocate_tt_tensors_{i}")
-        # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
-        del decode_input, attn_mask, tt_decode_input
+
         tt_out.deallocate(force=True)
         profiler.end(f"deallocate_tt_tensors_{i}")
