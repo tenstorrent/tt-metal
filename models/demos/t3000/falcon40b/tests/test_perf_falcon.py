@@ -249,6 +249,8 @@ def run_test_FalconCausalLM_end_to_end(
         )
 
     # Run for perf iteration - profiler enabled
+    for device in devices:
+        tt_lib.device.DumpDeviceProfiler(device)
     profiler.enable()
     enable_persistent_kernel_cache()
     logger.info(f"Enable profiler and enable binary and compile cache")
@@ -335,6 +337,8 @@ def run_test_FalconCausalLM_end_to_end(
         ("prefill", 1, 128, 0, 60, 0.46 + 0.04, 60, "BFLOAT16-DRAM"),
         ("prefill", 1, 2048, 0, 60, 1.18 + 0.1, 60, "BFLOAT16-DRAM"),
         ("decode", 32, 1, 128, 60, 0.21 + 0.02, 60, "BFLOAT8_B-SHARDED"),
+        ("prefill", 1, 128, 0, 60, 0.0099 + 0.002, 1, "BFLOAT8_B-DRAM"),
+        ("prefill", 1, 2048, 0, 60, 0.0393 + 0.02, 1, "BFLOAT8_B-DRAM"),
     ),
     ids=[
         "prefill_seq32_bfp8",
@@ -344,6 +348,8 @@ def run_test_FalconCausalLM_end_to_end(
         "prefill_seq128_fp16",
         "prefill_seq2048_fp16",
         "decode_batch32",
+        "prefill_seq128_bfp8_layers_1",
+        "prefill_seq2048_bfp8_layers_1",
     ],
 )
 @pytest.mark.parametrize(
