@@ -376,7 +376,7 @@ tt_lib.tensor.tilize_with_val_padding,40,0.54,1.03,4.61,0.87
 tt_lib.tensor.tilize_with_zero_padding,40,0.01,0.02,0.11,0.0
 tt_lib.tensor.transpose,40,0.88,0.95,1.23,0.99
 tt_lib.tensor.tril,24,99.64,99.76,99.54,1.65
-tt_lib.tensor.triu,40,87.9,89.07,90.23,1.27
+tt_lib.tensor.triu,24,99.97,100.18,99.82,1.2
 tt_lib.tensor.trunc_bw,40,0.94,1.41,1.73,1.49
 tt_lib.tensor.typecast,40,0.76,0.81,1.32,0.92
 tt_lib.tensor.unary_add_bw,40,0.0,0.01,0.1,0.0
