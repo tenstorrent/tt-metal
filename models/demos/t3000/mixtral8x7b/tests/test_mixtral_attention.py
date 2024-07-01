@@ -73,8 +73,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
             attn_mask,
             current_rot_mat,
         )
-        # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
-        del attention_input, attn_mask
+
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
             .squeeze(2)
