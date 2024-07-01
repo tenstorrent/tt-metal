@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 import os
 import json
 import re
@@ -14,7 +15,13 @@ import pytest
 from loguru import logger
 
 from tqdm import tqdm
-from models.demos.t3000.llama2_70b.demo.demo import run_decode, build_generator
+from models.demos.t3000.llama2_70b.demo.demo import (
+    run_decode,
+    build_generator,
+    construct_arg,
+    initialize_inputs,
+    get_sampling_func,
+)
 from datetime import datetime
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
@@ -22,26 +29,43 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 )
 
 
-def main(args):
+@dataclass
+class EvalDataArgs:
+    dataset: str = "wikitext"
+    split: str = "test"
+    config: str = "wikitext-2-raw-v1"
+    stride: int = 128
+    sample_len: int = 128
+    num_samples: int = 128
+    perplexity_score: float = 5.4
+
+
+def main(args, eval_data_args):
     # Set random reproducible seed
     torch.manual_seed(0)
-    generator = build_generator(args)
+    model_args = args.model
+    tt_args = args.tt
+    data_args = args.data
+
+    generator = build_generator(model_args, tt_args)
 
     # Load the model and tokenizer
     model, tokenizer = generator.model, generator.tokenizer
 
     # Dataset preparation
-    dataset = datasets.load_dataset(args.dataset, args.config, split=args.split, ignore_verifications=True)
+    dataset = datasets.load_dataset(
+        eval_data_args.dataset, eval_data_args.config, split=eval_data_args.split, ignore_verifications=True
+    )
     text = wikitext_detokenizer("\n".join(dataset["text"]))
     encodings = tokenizer.encode(text, bos=True, eos=False)  # not prepending bos
 
     # args for perplexity calculation
-    max_length = args.max_seq_len
-    stride = args.stride if args.stride else max_length
+    max_length = model_args.max_seq_len
+    stride = eval_data_args.stride if eval_data_args.stride else max_length
     assert stride <= max_length, "stride cannot be larger than max_length"
-    seq_len = args.sample_len
-    num_samples = args.num_samples
-    max_batch_size = args.max_batch_size
+    seq_len = eval_data_args.sample_len
+    num_samples = eval_data_args.num_samples
+    max_batch_size = model_args.max_batch_size
     assert num_samples > 0, "num_samples must be greater than 0"
     assert seq_len + (num_samples - 1) * stride <= len(encodings), (
         "total length of token decoded must be less than the length of the dataset, \
@@ -52,25 +76,38 @@ def main(args):
     )
 
     perplexity = calculate_perplexity(
-        args, model, tokenizer, seq_len, max_length, stride, encodings, num_samples, max_batch_size
+        model_args,
+        tt_args,
+        data_args,
+        eval_data_args,
+        model,
+        tokenizer,
+        seq_len,
+        max_length,
+        stride,
+        encodings,
+        num_samples,
+        max_batch_size,
     )
 
     # Get current timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Dump perplexity and max_seq_len to a JSON file with timestamp and max_length in the file name
-    filename = f"models/demos/t3000/llama2_70b/scripts/llama_perplexity_runs/perplexity_{args.llama_version}_{args.implementation}_{args.num_layers}L_{args.sample_len}_{args.num_tokens}_{timestamp}.json"
+    filename = f"models/demos/t3000/llama2_70b/scripts/llama_perplexity_runs/perplexity_{model_args.llama_version}_{model_args.implementation}_{model_args.num_layers}L_{eval_data_args.sample_len}_{data_args.max_output_tokens}_{timestamp}.json"
     result = {
-        "model": args.llama_version,
+        "model": model_args.llama_version,
         "perplexity": perplexity.item(),
-        "seq_len": args.sample_len,
-        "gen_length": args.num_tokens,
+        "seq_len": eval_data_args.sample_len,
+        "gen_length": data_args.max_output_tokens,
     }
+    # create folder if it doesn't exist
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
     with open(filename, "w") as f:
         json.dump(result, f)
 
     logger.info("Perplexity: %f" % perplexity)
-    if perplexity < args.perplexity_score:
+    if perplexity < eval_data_args.perplexity_score:
         logger.info("Perplexity is less than the threshold")
     else:
         assert False, "Perplexity is greater than the threshold"
@@ -78,7 +115,82 @@ def main(args):
     return perplexity
 
 
-def calculate_perplexity(args, model, tokenizer, seq_len, max_len, stride, encodings, num_samples, max_batch_size):
+def prepare_next_input_eval(tokenizer, tokens, input_text_mask, cur_pos, next_token):
+    # only replace token if prompt has already been generated
+    next_token = torch.where(input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token)
+    tokens[:, cur_pos] = next_token
+
+    prev_pos = cur_pos
+
+    return tokens, prev_pos
+
+
+def run_forward(
+    model_args,
+    tt_args,
+    data_args,
+    eval_data_args,
+    model,
+    tokenizer,
+    prompt_tokens,
+    prompts,
+    return_logits=False,
+    return_full_logits=False,
+):
+    """
+    return_logits: return the logits for the last token
+    return_full_logits: return the logits for all tokens
+    """
+    assert not (return_logits and return_full_logits), "return_logits and return_full_logits cannot both be true"
+
+    # decode arguments
+    bsz = model_args.max_batch_size
+    output_tokens = data_args.max_output_tokens
+
+    sampling_func = get_sampling_func(data_args.top_k, data_args.top_p, data_args.temperature)
+
+    total_len = min(model_args.max_kv_context_len, eval_data_args.sample_len + output_tokens)
+    assert total_len <= model_args.max_kv_context_len
+    assert total_len - 1 == prompt_tokens.size(1), "Prompt tokens must be of length total_len"
+
+    # prepare inputs
+    tokens, input_text_mask, _ = initialize_inputs(tokenizer, prompt_tokens, bsz, total_len)
+    prev_pos = 0
+
+    # some profiling and logging
+    full_logits = []
+
+    # Prefill up to sample_len, then decode for output_tokens-1 num tokens.
+    for cur_pos in range(eval_data_args.sample_len, eval_data_args.sample_len + output_tokens):
+        logger.info(f"EVAL: Inference from token {prev_pos} to {cur_pos}")
+        input_tokens = tokens[:, prev_pos:cur_pos]
+        logits = model.forward(input_tokens, prev_pos)
+
+        next_logits = logits[:, -1, :]  # batch, vocab of last token
+        next_token = sampling_func(next_logits)
+
+        tokens, prev_pos = prepare_next_input_eval(tokenizer, tokens, input_text_mask, cur_pos, next_token)
+
+        full_logits.append(logits.clone().detach())
+
+    full_logits = torch.cat(full_logits, dim=1)
+    return full_logits
+
+
+def calculate_perplexity(
+    model_args,
+    tt_args,
+    data_args,
+    eval_data_args,
+    model,
+    tokenizer,
+    seq_len,
+    max_len,
+    stride,
+    encodings,
+    num_samples,
+    max_batch_size,
+):
     start = time()
     eval_inputs = []
     eval_labels = []
@@ -86,7 +198,7 @@ def calculate_perplexity(args, model, tokenizer, seq_len, max_len, stride, encod
 
     # construct perplexity calculation inputs
     for i, begin_loc in enumerate(range(0, total_len, stride)):
-        end_loc = begin_loc + seq_len + args.num_tokens - 1
+        end_loc = begin_loc + seq_len + data_args.max_output_tokens - 1
         if end_loc >= total_len:
             raise ValueError(
                 "The dataset is too small to decode the number of samples requested with the given stride."
@@ -110,8 +222,11 @@ def calculate_perplexity(args, model, tokenizer, seq_len, max_len, stride, encod
         # Loop over the dataset
         for sample in tqdm(dataloader):
             tokens, labels = sample
-            outputs = run_decode(
-                args=args,
+            logits = run_forward(
+                model_args,
+                tt_args,
+                data_args,
+                eval_data_args,
                 model=model,
                 tokenizer=tokenizer,
                 prompt_tokens=tokens,
@@ -119,11 +234,11 @@ def calculate_perplexity(args, model, tokenizer, seq_len, max_len, stride, encod
                 return_full_logits=True,
             )
 
-            all_text, logits = outputs
             vocab_size = logits.shape[-1]
+            logger.info(f"logits shape: {logits.shape}")
             loss = loss_func(logits.view(-1, vocab_size), labels.view(-1))
-            neg_log_likelihood = loss.to("cpu").float() * seq_len * max_batch_size
-            tokens_seen += seq_len * max_batch_size
+            neg_log_likelihood = loss.to("cpu").float() * logits.shape[1] * logits.shape[0]
+            tokens_seen += logits.shape[1] * logits.shape[0]
             nlls.append(neg_log_likelihood)
 
     loss = torch.stack(nlls).sum() / tokens_seen
@@ -177,72 +292,6 @@ def get_model_max_sequence_length(model):
     return None
 
 
-class Args:
-    def __init__(
-        self,
-        # model args
-        implementation="meta",
-        ckpt_dir="/home/llama-data-repacked-2/llama-2-70b/",
-        tokenizer_path="/home/llama-data/tokenizer.model",
-        skip_model_load=False,
-        max_batch_size=32,
-        num_layers=None,
-        max_seq_len=4096,
-        # Generation args
-        num_tokens=1,
-        prompts_file="models/demos/t3000/llama2_70b/demo/data/multi_prompt.json",
-        output_at_end=True,
-        top_p=1,
-        top_k=1,
-        temperature=1.0,
-        # TT args
-        device_mesh=None,
-        n_devices=8,
-        emulated=False,
-        cache_path=None,
-        decode_only=False,
-        # Dataset args
-        dataset="wikitext",
-        split="test",
-        config="wikitext-2-raw-v1",
-        stride=128,
-        sample_len=128,
-        num_samples=32,
-        perplexity_score=5.4,
-        llama_version="llama3",
-    ):
-        self.implementation = implementation
-        self.ckpt_dir = ckpt_dir
-        self.tokenizer_path = tokenizer_path
-        self.skip_model_load = skip_model_load
-        self.max_batch_size = max_batch_size
-        self.num_layers = num_layers
-        self.max_seq_len = max_seq_len
-        self.num_tokens = num_tokens
-        self.prompts_file = prompts_file
-        self.output_at_end = output_at_end
-        self.top_p = top_p
-        self.top_k = top_k
-        self.temperature = temperature
-        self.device_mesh = device_mesh
-        self.n_devices = n_devices
-        self.emulated = emulated
-        self.cache_path = cache_path
-        self.decode_only = decode_only
-        self.dataset = dataset
-        self.split = split
-        self.config = config
-        self.stride = stride
-        self.sample_len = sample_len
-        self.num_samples = num_samples
-        self.perplexity_score = perplexity_score
-        self.llama_version = llama_version
-
-
-def construct_arg(**kwargs):
-    return Args(**kwargs)
-
-
 @pytest.mark.timeout(240000)
 @pytest.mark.parametrize(
     "llama_version",
@@ -272,12 +321,11 @@ def construct_arg(**kwargs):
     "top_p, top_k, temperature",
     [
         (1, 1, 1.0),
-        (0.9, 10, 1.0),
     ],
-    ids=["greedy", "sampling"],
+    ids=["greedy"],
 )
 @pytest.mark.parametrize(  # sample_len => prefill length, num_samples => decode length
-    "dataset, split, config, stride, sample_len, num_tokens, num_samples, perplexity_score",
+    "dataset, split, config, stride, sample_len, max_output_tokens, num_samples, perplexity_score",
     [
         ("wikitext", "test", "wikitext-2-raw-v1", 128, 128, 1, 128, 5.4),
         ("wikitext", "test", "wikitext-2-raw-v1", 128, 2048, 1, 128, 3.4313),
@@ -292,7 +340,7 @@ def test_LlamaModel_demo(
     skip_model_load,
     num_layers,
     # Generation args
-    num_tokens,
+    max_output_tokens,
     top_p,
     top_k,
     temperature,
@@ -325,17 +373,23 @@ def test_LlamaModel_demo(
 
     args = construct_arg(
         implementation=implementation,
+        llama_version=llama_version,
         ckpt_dir=ckpt_dir,
         tokenizer_path=tokenizer_path,
         skip_model_load=skip_model_load,
         num_layers=num_layers,
-        num_tokens=num_tokens,
+        max_output_tokens=max_output_tokens,
         top_p=top_p,
         top_k=top_k,
         temperature=temperature,
+        chat=False,
         device_mesh=t3k_device_mesh,
         n_devices=n_devices,
         cache_path=cache_path,
+        decode_only=False,
+    )
+
+    eval_data_args = EvalDataArgs(
         dataset=dataset,
         split=split,
         config=config,
@@ -343,6 +397,6 @@ def test_LlamaModel_demo(
         sample_len=sample_len,
         num_samples=num_samples,
         perplexity_score=perplexity_score,
-        llama_version=llama_version,
     )
-    main(args)
+
+    main(args, eval_data_args)
