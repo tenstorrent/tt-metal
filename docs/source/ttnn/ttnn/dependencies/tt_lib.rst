@@ -946,8 +946,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.celu_bw
 
-.. autofunction:: tt_lib.tensor.binary_lt_bw
-
 .. autofunction:: tt_lib.tensor.log10_bw
 
 .. autofunction:: tt_lib.tensor.log1p_bw

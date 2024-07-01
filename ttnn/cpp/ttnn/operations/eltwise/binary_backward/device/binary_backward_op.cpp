@@ -400,7 +400,7 @@ std::vector<Tensor> _concat_bw(
     return grad_tensor;
 }
 
-std::vector<Tensor> _binary_le_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _binary_comp_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor zero_grad = tt::tt_metal::zeros_like(grad, output_mem_config);
     grad_tensor.emplace_back(zero_grad);
@@ -431,15 +431,23 @@ std::vector<Tensor> _bias_gelu_bw(
 
 
 std::vector<Tensor> _binary_gt_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    return _binary_le_bw(grad, input, other, output_mem_config);
+    return _binary_comp_bw(grad, input, other, output_mem_config);
 }
 
 std::vector<Tensor> _binary_ne_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    return _binary_le_bw(grad, input, other, output_mem_config);
+    return _binary_comp_bw(grad, input, other, output_mem_config);
 }
 
 std::vector<Tensor> _binary_ge_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    return _binary_le_bw(grad, input, other, output_mem_config);
+    return _binary_comp_bw(grad, input, other, output_mem_config);
+}
+
+std::vector<Tensor> _binary_le_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    return _binary_comp_bw(grad, input, other, output_mem_config);
+}
+
+std::vector<Tensor> _binary_lt_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    return _binary_comp_bw(grad, input, other, output_mem_config);
 }
 
 // template parameter min_or_max = TRUE for MAX, FALSE for MIN
@@ -564,6 +572,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _rsub_bw;
         case BinaryBackwardOpType::BINARY_GT_BW:
             return _binary_gt_bw;
+        case BinaryBackwardOpType::BINARY_LT_BW:
+            return _binary_lt_bw;
         case BinaryBackwardOpType::BINARY_NE_BW:
             return _binary_ne_bw;
         case BinaryBackwardOpType::BINARY_GE_BW:
