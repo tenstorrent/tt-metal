@@ -64,8 +64,8 @@ def test_bw_add_with_opt_output(input_shapes, device, are_required_outputs):
         input_tensor,
         other_tensor,
         are_required_outputs=are_required_outputs,
-        optional_input_a_grad=input_grad,
-        optional_input_b_grad=other_grad,
+        input_a_grad=input_grad,
+        input_b_grad=other_grad,
         queue_id=cq_id,
     )
 

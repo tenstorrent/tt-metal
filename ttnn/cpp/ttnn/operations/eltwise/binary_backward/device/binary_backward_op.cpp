@@ -551,6 +551,71 @@ std::vector<Tensor> _lerp_bw(
     return grad_tensor;
 }
 
+std::vector<std::optional<Tensor>> _mul_bw(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    std::vector<std::optional<Tensor>> result;
+
+    if (are_required_outputs.at(0)) {
+        if(input_grad.has_value()){
+            ttnn::multiply(queue_id, grad, other, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, input_grad);
+        } else {
+            input_grad = ttnn::multiply(queue_id, grad, other, std::nullopt, output_mem_config);
+        }
+        result.emplace_back(input_grad);
+    } else {
+        result.emplace_back(std::nullopt);
+    }
+    if (are_required_outputs.at(1)) {
+        if(other_grad.has_value()){
+            ttnn::multiply(queue_id, grad, input, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, other_grad);
+        } else {
+            other_grad = ttnn::multiply(queue_id, grad, input, std::nullopt, output_mem_config);
+        }
+        result.emplace_back(other_grad);
+    } else {
+        result.emplace_back(std::nullopt);
+    }
+
+    return std::move(result);
+}
+
+std::vector<ttnn::Tensor> _mul_bw_inter(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+
+    auto result = _mul_bw(0, grad, input, other, output_mem_config, {true, true}, std::nullopt, std::nullopt);
+
+    std::vector<ttnn::Tensor> output_tensors;
+    output_tensors.reserve(result.size());
+
+    for (const auto& opt_tensor : result) {
+        if (opt_tensor) {
+            output_tensors.emplace_back(*opt_tensor);
+        } else {
+            output_tensors.emplace_back();
+        }
+    }
+    return output_tensors;
+}
+
+std::vector<std::optional<Tensor>> _mul_bw_overload(
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    const MemoryConfig& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+        uint8_t default_queue_id = 0;
+    return _mul_bw(default_queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
+}
+
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
@@ -594,6 +659,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _min_or_max_bw<false>;
         case BinaryBackwardOpType::MAX_BW:
             return _min_or_max_bw<true>;
+        case BinaryBackwardOpType::MUL_BW:
+            return _mul_bw_inter;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
@@ -654,6 +721,8 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, 
             return _add_bw;
         case BinaryBackwardOpType::BINARY_EQ_BW:
             return _binary_eq_bw;
+        case BinaryBackwardOpType::MUL_BW:
+            return _mul_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
@@ -666,6 +735,8 @@ std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tens
             return _add_bw_overload;
         case BinaryBackwardOpType::BINARY_EQ_BW:
             return _binary_eq_bw_overload;
+        case BinaryBackwardOpType::MUL_BW:
+            return _mul_bw_overload;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;

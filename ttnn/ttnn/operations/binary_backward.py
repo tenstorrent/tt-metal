@@ -252,4 +252,10 @@ lerp_bw = ttnn.register_operation(
     )
 )(ttnn._ttnn.operations.binary_backward.lerp_bw)
 
+mul_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
+        torch.mul, grad, a, b, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.mul_bw)
+
 __all__ = []

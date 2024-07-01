@@ -58,44 +58,6 @@ namespace tt::tt_metal::detail{
                     "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
             )doc");
 
-    m_tensor.def("mul_bw",
-        [](const Tensor& grad,
-           const Tensor& input_a,
-           const Tensor& input_b,
-           const MemoryConfig& output_mem_config,
-           const std::vector<bool>& are_required_outputs,
-           std::optional<Tensor> input_a_grad,
-           std::optional<Tensor> input_b_grad,
-           uint8_t queue_id) {
-            return mul_bw(queue_id, grad, input_a, input_b, output_mem_config, are_required_outputs, input_a_grad, input_b_grad);
-        },
-            py::arg("grad").noconvert(),
-            py::arg("input_a").noconvert(),
-            py::arg("input_b").noconvert(),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("are_required_outputs").noconvert() = std::vector<bool>{true, true},
-            py::arg("input_a_grad").noconvert() = std::nullopt,
-            py::arg("input_b_grad").noconvert() = std::nullopt,
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-                Performs backward operations for multiplication of two input tensors with given ``grad``
-
-                Input tensors must have BFLOAT16 data type.
-
-                Output tensors will have BFLOAT16 data type.
-
-                .. csv-table::
-                    :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                    "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                    "input_a", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                    "input_b", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                    "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                    "are_required_outputs", "Boolean values for the required outputs: input_a_grad, input_b_grad ", "List of bool", "Default value is [True, True]", "No"
-                    "input_a_grad", "Optional Output Tensor for input_a gradient", "Tensor", "Default value is None", "No"
-                    "input_b_grad", "Optional Output Tensor for input_b gradient", "Tensor", "Default value is None", "No"
-                    "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-            )doc");
 
         m_tensor.def("exp_bw",
             [](const Tensor& grad,

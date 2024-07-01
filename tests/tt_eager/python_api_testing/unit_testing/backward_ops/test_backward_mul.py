@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 
 
@@ -21,7 +21,7 @@ def test_bw_mul(input_shapes, device):
     in_data_b, input_tensor_b = data_gen_with_range(input_shapes, -5, 5, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
-    tt_output_tensor_on_device = tt_lib.tensor.mul_bw(grad_tensor, input_tensor_a, input_tensor_b)
+    tt_output_tensor_on_device = ttnn.mul_bw(grad_tensor, input_tensor_a, input_tensor_b)
 
     in_data_a.retain_grad()
     in_data_b.retain_grad()
@@ -44,7 +44,7 @@ def test_bw_mul(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
+@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True], [False, False]])
 @pytest.mark.parametrize("pass_queue_id", [True, False])
 def test_bw_mul_opt_output(input_shapes, device, are_required_outputs, pass_queue_id):
     in_data_a, input_tensor_a = data_gen_with_range(input_shapes, -90, 80, device, True)
@@ -61,7 +61,7 @@ def test_bw_mul_opt_output(input_shapes, device, are_required_outputs, pass_queu
 
     cq_id = 0
     if pass_queue_id:
-        tt_output_tensor_on_device = tt_lib.tensor.mul_bw(
+        tt_output_tensor_on_device = ttnn.mul_bw(
             grad_tensor,
             input_tensor_a,
             input_tensor_b,
@@ -71,7 +71,7 @@ def test_bw_mul_opt_output(input_shapes, device, are_required_outputs, pass_queu
             queue_id=cq_id,
         )
     else:
-        tt_output_tensor_on_device = tt_lib.tensor.mul_bw(
+        tt_output_tensor_on_device = ttnn.mul_bw(
             grad_tensor,
             input_tensor_a,
             input_tensor_b,

@@ -129,12 +129,12 @@ struct ExecuteBinaryBackward {
         const Tensor &input_tensor_b_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-        std::optional<Tensor> optional_input_a_grad = std::nullopt,
-        std::optional<Tensor> optional_input_b_grad = std::nullopt) {
+        std::optional<Tensor> input_a_grad = std::nullopt,
+        std::optional<Tensor> input_b_grad = std::nullopt) {
 
         auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
         auto op_type = utils::get_function_type3(binary_backward_op_type);
-        return op_type(queue_id, grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
+        return op_type(queue_id, grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config, are_required_outputs, input_a_grad, input_b_grad);
     }
 
     //Type 3 : type1 args, optional output tensor for inputs based on are_required_outputs value
@@ -149,12 +149,12 @@ struct ExecuteBinaryBackward {
         const Tensor &input_tensor_b_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-        std::optional<Tensor> optional_input_a_grad = std::nullopt,
-        std::optional<Tensor> optional_input_b_grad = std::nullopt) {
+        std::optional<Tensor> input_a_grad = std::nullopt,
+        std::optional<Tensor> input_b_grad = std::nullopt) {
 
         auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
         auto op_type = utils::get_function_type3_wo_qid(binary_backward_op_type);
-        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
+        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config, are_required_outputs, input_a_grad, input_b_grad);
     }
 
     //Type 2 : Q_ID, type1 args, optional output tensor for inputs based on are_required_outputs value
@@ -171,12 +171,12 @@ struct ExecuteBinaryBackward {
         float alpha,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-        std::optional<Tensor> optional_input_a_grad = std::nullopt,
-        std::optional<Tensor> optional_input_b_grad = std::nullopt) {
+        std::optional<Tensor> input_a_grad = std::nullopt,
+        std::optional<Tensor> input_b_grad = std::nullopt) {
 
         auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
         auto op_type = utils::get_function_type2(binary_backward_op_type);
-        return op_type(queue_id, grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, output_memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
+        return op_type(queue_id, grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, output_memory_config, are_required_outputs, input_a_grad, input_b_grad);
     }
 
     //Type 2 : type1 args, optional output tensor for inputs based on are_required_outputs value
@@ -192,12 +192,12 @@ struct ExecuteBinaryBackward {
         float alpha,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-        std::optional<Tensor> optional_input_a_grad = std::nullopt,
-        std::optional<Tensor> optional_input_b_grad = std::nullopt) {
+        std::optional<Tensor> input_a_grad = std::nullopt,
+        std::optional<Tensor> input_b_grad = std::nullopt) {
 
         auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
         auto op_type = utils::get_function_type2_wo_qid(binary_backward_op_type);
-        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, output_memory_config, are_required_outputs, optional_input_a_grad, optional_input_b_grad);
+        return op_type(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, alpha, output_memory_config, are_required_outputs, input_a_grad, input_b_grad);
     }
 
 };
@@ -235,5 +235,6 @@ constexpr auto addalpha_bw = ttnn::register_operation<operations::binary_backwar
 //type 3
 constexpr auto add_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::ADD_BW>>("ttnn::add_bw");
 constexpr auto binary_eq_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::BINARY_EQ_BW>>("ttnn::binary_eq_bw");
+constexpr auto mul_bw = ttnn::register_operation<operations::binary_backward::ExecuteBinaryBackward<operations::binary_backward::BinaryBackwardOpType::MUL_BW>>("ttnn::mul_bw");
 
 }  // namespace ttnn
