@@ -505,9 +505,5 @@ from ttnn.operations.ccl import all_gather
 from ttnn.operations import transformer
 from ttnn.operations import kv_cache
 from ttnn.operations.conv2d import Conv2d, conv2d, Conv2dConfig, get_conv_output_dim
-from ttnn.operations.pool import (
-    MaxPool2d,
-    global_avg_pool2d,
-    max_pool2d,
-)
+from ttnn.operations.pool import MaxPool2d, global_avg_pool2d, max_pool2d, average_pool_2d
 from ttnn.operations.copy import typecast

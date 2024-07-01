@@ -715,24 +715,6 @@ void TensorModule(py::module& m_tensor) {
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
     )doc");
 
-    // Pools
-    // m_tensor.def(
-    //     "average_pool_2d",
-    //     &average_pool_2d,
-    //     py::arg().noconvert(),
-    //     py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    //     py::arg("output_dtype").noconvert() = std::nullopt,
-    //     R"doc(
-    //     Average Pool 2D
-    //     It operates on tensors whose that have channels as the last dimension
-
-    //     +----------+----------------------------+------------+-------------------------------+----------+
-    //     | Argument | Description                | Data type  | Valid range                   | Required |
-    //     +==========+============================+============+===============================+==========+
-    //     | act      | Input activations tensor   | Tensor     |                               | Yes      |
-    //     +----------+----------------------------+------------+-------------------------------+----------+
-    // )doc");
-
     // Upsample
     m_tensor.def(
         "upsample",
