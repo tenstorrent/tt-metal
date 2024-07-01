@@ -36,7 +36,8 @@ struct Embedding {
         const Tensor& weight_arg,
         const std::optional<int>& pad_token = std::nullopt,
         const Layout& layout = ttnn::ROW_MAJOR_LAYOUT,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt) {
         auto embeddings_type = EmbeddingsType::GENERIC;
         if (pad_token.has_value()) {
             embeddings_type = EmbeddingsType::PADDED;
@@ -58,7 +59,9 @@ struct Embedding {
                                   .embeddings_type = embeddings_type,
                                   .pad_token = pad_token,
                                   .output_dtype = weight.get_dtype()},
-                              {input_tensor, weight})
+                              {input_tensor, weight},
+                              {},
+                              {optional_output_tensor})
                               .at(0);
         embeddings = ttnn::reshape(embeddings, ttnn::Shape{{batch_size, sentence_size, hidden_embedding_dim}});
         return embeddings;
