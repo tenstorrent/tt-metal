@@ -36,7 +36,7 @@ run_t3000_llama2_70b_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama2_70b_tests"
 
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py -m "model_perf_t3000" --timeout=9000
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py -m "model_perf_t3000" --timeout=90
 
   # Record the end time
   end_time=$(date +%s)
@@ -59,14 +59,15 @@ run_t3000_falcon40b_tests() {
 }
 
 run_t3000_llm_tests() {
+  # Run llama2-70b tests
+  run_t3000_llama2_70b_tests
+
   # Run falcon7b tests
   run_t3000_falcon7b_tests
 
   # Run mixtral tests
   run_t3000_mixtral_tests
 
-  # Run llama2-70b tests
-  run_t3000_llama2_70b_tests
 
   # Run falcon40b tests
   run_t3000_falcon40b_tests
