@@ -689,22 +689,6 @@ std::vector<Tensor> exp2_bw(const Tensor& grad, const Tensor& input, const Memor
 }
 
 // lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight
-std::vector<Tensor> _lerp(
-    const Tensor& grad, const Tensor& input, const Tensor& end, float weight, const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    float sub_scalar = 1.0f - weight;
-    Tensor result_1 = mul_unary(grad, sub_scalar, output_mem_config);
-    grad_tensor.emplace_back(result_1);
-    Tensor result_2 = mul_unary(grad, weight, output_mem_config);
-    grad_tensor.emplace_back(result_2);
-    return grad_tensor;
-}
-std::vector<Tensor> lerp_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& end, float weight, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _lerp)(grad, input, end, weight, output_mem_config);
-}
-
-// lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight
 std::vector<Tensor> _lerp_overload(
     const Tensor& grad,
     const Tensor& input,

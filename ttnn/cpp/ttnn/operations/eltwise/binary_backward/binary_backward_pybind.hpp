@@ -220,6 +220,11 @@ void py_module(py::module& module) {
 
     detail::bind_binary_backward(
         module,
+        ttnn::lerp_bw,
+        R"doc(Performs backward operations for lerp on :attr:`input_tensor_a` , attr:`input_tensor_b`, attr:`weight` with given attr:`grad_tensor`.)doc");
+
+    detail::bind_binary_backward(
+        module,
         ttnn::xlogy_bw,
         R"doc(Performs backward operations for xlogy of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 

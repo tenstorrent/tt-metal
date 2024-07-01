@@ -898,8 +898,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.bias_gelu_unary_bw
 
-.. autofunction:: tt_lib.tensor.lerp_bw
-
 .. autofunction:: tt_lib.tensor.hardsigmoid_bw
 
 .. autofunction:: tt_lib.tensor.i0_bw

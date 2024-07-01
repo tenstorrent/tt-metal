@@ -246,4 +246,10 @@ div_bw = ttnn.register_operation(
     )
 )(ttnn._ttnn.operations.binary_backward.div_bw)
 
+lerp_bw = ttnn.register_operation(
+    golden_function=lambda grad, a, b, weight, *args, **kwargs: _golden_function_backward_with_float(
+        torch.add, grad, a, b, weight, *args, **kwargs
+    )
+)(ttnn._ttnn.operations.binary_backward.lerp_bw)
+
 __all__ = []
