@@ -273,14 +273,6 @@ std::vector<Tensor> bias_gelu_unary_bw(
     string approximate,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight, weight is float
-std::vector<Tensor> lerp_bw(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& end,
-    float weight,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 // lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight, weight is tensor
 std::vector<Tensor> lerp_bw(
     const Tensor& grad,

@@ -539,6 +539,18 @@ std::vector<Tensor> _div_bw(
     return grad_tensor;
 }
 
+// lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight
+std::vector<Tensor> _lerp_bw(
+    const Tensor& grad, const Tensor& input, const Tensor& end, float weight, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    float sub_scalar = 1.0f - weight;
+    Tensor result_1 = ttnn::multiply(grad, sub_scalar, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result_1);
+    Tensor result_2 = ttnn::multiply(grad, weight, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result_2);
+    return grad_tensor;
+}
+
 
 std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> get_function_type1(BinaryBackwardOpType OpType){
     switch (OpType) {
@@ -596,6 +608,8 @@ std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tens
             return _addalpha_bw_inter;
         case BinaryBackwardOpType::CONCAT_BW:
             return _concat_bw;
+        case BinaryBackwardOpType::LERP_BW:
+            return _lerp_bw;
         default:
             TT_ASSERT(false && "Undefined op type");
             return 0;
