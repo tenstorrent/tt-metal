@@ -13,40 +13,65 @@ namespace tt::tt_metal::detail {
 void TensorModuleCompositeOPs(py::module& m_tensor) {
     m_tensor.def(
         "pow",
-        py::overload_cast<const Tensor&, float, const MemoryConfig&>(&tt::tt_metal::pow),
+        [](const Tensor& input,
+           const float exponent,
+           const MemoryConfig& output_mem_config,
+           std::optional<Tensor> output_tensor,
+           uint8_t queue_id) {
+            return pow(queue_id, input, exponent, output_mem_config, output_tensor);
+        },
         py::arg("input"),
         py::arg("exponent"),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("output_tensor").noconvert() = std::nullopt,
+        py::arg("queue_id").noconvert() = 0,
         R"doc(
-                    Returns a new tensor filled with power of input ``input`` raised to value of ``exponent``.
+            Returns a tensor filled with power of input ``input`` raised to value of ``exponent``.
 
-                    Output tensor will have BFLOAT16 data type.
+            Input tensor must have BFLOAT16 data type.
 
-                    .. csv-table::
-                        :header: "Argument", "Description", "Data type", "Valid range", "Required"
+            Output tensor will have BFLOAT16 data type.
 
-                        "input", "Input tensor for which power is computed", "Tensor", "Tensor of any shape", "Yes"
-                        "exponent", "exponent value", "float", "positive floating point value", "Yes"
-                        "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                )doc");
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Input tensor for which power is computed", "Tensor", "Tensor of any shape", "Yes"
+                "exponent", "exponent value", "float", "positive floating point value", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
+                "queue_id", "Command queue id", "integer", "default to 0", "No"
+        )doc");
     m_tensor.def(
         "pow",
-        py::overload_cast<const Tensor&, int, const MemoryConfig&>(&tt::tt_metal::pow),
+        [](const Tensor& input,
+           const int exponent,
+           const MemoryConfig& output_mem_config,
+           std::optional<Tensor> output_tensor,
+           uint8_t queue_id) {
+            return pow(queue_id, input, exponent, output_mem_config, output_tensor);
+        },
         py::arg("input"),
         py::arg("exponent"),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("output_tensor").noconvert() = std::nullopt,
+        py::arg("queue_id").noconvert() = 0,
         R"doc(
-                    Returns a new tensor filled with power of input ``input`` raised to value of ``exponent``.
+            Returns a tensor filled with power of input ``input`` raised to value of ``exponent``.
 
-                    Output tensor will have BFLOAT16 data type.
+            Input tensor must have BFLOAT16 data type.
 
-                    .. csv-table::
-                        :header: "Argument", "Description", "Data type", "Valid range", "Required"
+            Output tensor will have BFLOAT16 data type.
 
-                        "input", "Input tensor for which power is computed", "Tensor", "Tensor of any shape", "Yes"
-                        "exponent", "exponent value", "integer", "positive integer value", "Yes"
-                        "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                )doc");
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Input tensor for which power is computed", "Tensor", "Tensor of any shape", "Yes"
+                "exponent", "exponent value", "integer", "positive integer value", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_tensor", "optional output tensor", "Tensor", "default is None", "No"
+                "queue_id", "Command queue id", "integer", "default to 0", "No"
+        )doc");
+
     m_tensor.def(
         "sfpu_eps",
         &tt::tt_metal::sfpu_eps,

@@ -576,19 +576,37 @@ Tensor triu(
 
 // power_fp : power with floating point exponent
 Tensor power_fp(
+    uint8_t queue_id,
     const Tensor& input_a,
     float exponent,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 
 Tensor pow(
     const Tensor& input_a,
     float exponent,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 
 Tensor pow(
     const Tensor& input_a,
     int exponent,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+
+Tensor pow(
+    uint8_t queue_id,
+    const Tensor& input_a,
+    float exponent,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
+
+Tensor pow(
+    uint8_t queue_id,
+    const Tensor& input_a,
+    int exponent,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<Tensor> output_tensor = std::nullopt);
 
 Tensor argmax(
     const Tensor& input_a,
