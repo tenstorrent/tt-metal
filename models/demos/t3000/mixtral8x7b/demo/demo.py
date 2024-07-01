@@ -4,7 +4,6 @@
 import os
 import torch
 import json
-import tt_lib as ttl
 import pytest
 from loguru import logger
 from time import time
@@ -20,6 +19,8 @@ if os.getenv("CI") == "true":
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
+    load_inputs,
+    preprocess_inputs,
     prepare_inputs_ttnn,
     get_single_rot_mat,
     sample,
@@ -40,67 +41,6 @@ class Emb(torch.nn.Module):
 
     def forward(self, x):
         return self.emb(x)
-
-
-# load from json, return as a list
-def load_inputs(user_input, batch):
-    if isinstance(user_input, str):
-        with open(user_input, "r") as f:
-            user_input = json.load(f)
-    assert len(user_input) >= batch, f"Number of users (batch) must be {batch}!"
-    in_prompt = []
-    for i in range(batch):
-        in_prompt.append(user_input[i]["prompt"])
-    return in_prompt
-
-
-def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, device_mesh):
-    """
-    Run tokenizer on inputs, and create embeddings for the first token of each input
-    """
-    if instruct:
-        # Pre append [INST] and post append [/INST] to the encoded prompts if instruct mode
-        encoded_prompts = [tokenizer.encode("[INST] " + prompt + " [/INST]") for prompt in input_prompts]
-    else:
-        encoded_prompts = [tokenizer.encode(prompt) for prompt in input_prompts]
-
-    prompt_lens = [len(x) for x in encoded_prompts]
-
-    # Pad the inputs to the max length prompt
-    max_prompt_len = max(prompt_lens)
-    input_tokens = torch.full((len(input_prompts), max_prompt_len), tokenizer.pad_id, dtype=torch.int32)
-
-    logger.info(f"# of users: {len(encoded_prompts)}")
-    for i, encoded in enumerate(encoded_prompts):
-        # Right padding
-        input_tokens[i, : len(encoded)] = torch.tensor(encoded).to(input_tokens)
-
-    input_mask_bool = input_tokens != tokenizer.pad_id
-    input_mask = input_mask_bool.int()  # from_torch doesn't support bool type
-
-    # convert to ttnn tensor
-    # Encoded input tokens need to be uint32 for embedding. Otherwise the dtype conversion to bfloat16 will change the tokenizer ID
-    input_tokens_tt = [
-        ttnn.from_torch(
-            input_tokens[:, i].unsqueeze(0),
-            device=device_mesh,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
-        )
-        for i in range(max_prompt_len)
-    ]
-    input_mask_tt = [
-        ttnn.from_torch(
-            input_mask[:, i].unsqueeze(0),
-            device=device_mesh,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
-        )
-        for i in range(max_prompt_len)
-    ]
-    return input_tokens_tt, max_prompt_len, input_mask_tt, input_tokens, input_mask_bool
 
 
 @torch.no_grad()

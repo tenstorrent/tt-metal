@@ -5,6 +5,7 @@ import torch
 from loguru import logger
 import json
 
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import load_inputs
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.demos.t3000.mixtral8x7b.reference.model import Transformer
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
@@ -17,18 +18,6 @@ class Emb(torch.nn.Module):
 
     def forward(self, x):
         return self.emb(x)
-
-
-# load from json, return as a list
-def load_inputs(user_input, batch):
-    if isinstance(user_input, str):
-        with open(user_input, "r") as f:
-            user_input = json.load(f)
-    assert len(user_input) >= batch, f"Number of users (batch) must be {batch}!"
-    in_prompt = []
-    for i in range(batch):
-        in_prompt.append(user_input[i]["prompt"])
-    return in_prompt
 
 
 def preprocess_inputs(input_prompts, tokenizer, model_args, embd):
